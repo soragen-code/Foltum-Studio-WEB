@@ -10,7 +10,18 @@ export function StructureStage({ project, onRefresh }: { project: any; onRefresh
   const [error, setError] = useState('')
   const [expandedSeason, setExpandedSeason] = useState<string | null>(null)
   const [editingEp, setEditingEp] = useState<string | null>(null)
+  const [totalDuration, setTotalDuration] = useState<number>(30)
   const isApproved = project?.structureApproved ?? false
+
+  const durationOptions = [
+    { value: 10, label: '~10 мин' },
+    { value: 15, label: '~15 мин' },
+    { value: 30, label: '~30 мин' },
+    { value: 45, label: '~45 мин' },
+    { value: 60, label: '~1 час' },
+    { value: 90, label: '~1.5 часа' },
+    { value: 120, label: '~2 часа' },
+  ]
 
   const generateStructure = async () => {
     setGenerating(true)
@@ -19,7 +30,7 @@ export function StructureStage({ project, onRefresh }: { project: any; onRefresh
       const res = await fetch('/api/ai/structure', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: project?.id, synopsis: project?.synopsis }),
+        body: JSON.stringify({ projectId: project?.id, synopsis: project?.synopsis, totalDurationMinutes: totalDuration }),
       })
       const data = await res.json()
       if (data?.seasons) {
@@ -51,14 +62,39 @@ export function StructureStage({ project, onRefresh }: { project: any; onRefresh
         {error && <div className="mt-4 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
 
         {!isApproved && (seasons?.length ?? 0) === 0 && (
-          <button
-            onClick={generateStructure}
-            disabled={generating}
-            className="mt-4 flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
-          >
-            {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-            Generate Structure
-          </button>
+          <div className="mt-4 space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-2">
+                Хронометраж сериала
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {durationOptions.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setTotalDuration(opt.value)}
+                    className={`rounded-lg border px-3 py-1.5 text-sm transition ${
+                      totalDuration === opt.value
+                        ? 'border-primary bg-primary/10 text-primary font-semibold'
+                        : 'border-border bg-muted/30 text-muted-foreground hover:bg-muted/60'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">
+                AI подберёт количество сезонов, эпизодов и длительность каждого эпизода
+              </p>
+            </div>
+            <button
+              onClick={generateStructure}
+              disabled={generating}
+              className="flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
+            >
+              {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+              Generate Structure
+            </button>
+          </div>
         )}
       </div>
 

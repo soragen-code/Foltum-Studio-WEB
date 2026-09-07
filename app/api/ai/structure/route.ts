@@ -4,7 +4,16 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { chatJSON } from "@/lib/ai";
 
-const SYSTEM = `You are a professional showrunner structuring a short-form vertical drama series (TikTok/Reels, 1-3 min episodes).
+function buildSystemPrompt(totalMinutes: number): string {
+  return `You are a professional showrunner structuring a short-form vertical drama series (TikTok/Reels style).
+
+The creator wants the TOTAL series runtime to be approximately ${totalMinutes} minutes.
+Each episode should be 1-3 minutes long. Calculate the number of seasons and episodes accordingly:
+- Total episodes ≈ ${totalMinutes} / 2 (average 2 min per episode)
+- If total episodes ≤ 12 → 1 season
+- If total episodes 13-24 → 2 seasons
+- If total episodes 25+ → 3 seasons
+- Distribute episodes roughly evenly across seasons
 
 Given a synopsis, produce a detailed season/episode breakdown. Return ONLY valid JSON:
 
@@ -26,12 +35,12 @@ Given a synopsis, produce a detailed season/episode breakdown. Return ONLY valid
 }
 
 Rules:
-- 1-3 seasons depending on story scope
-- 6-12 episodes per season
+- Follow the target runtime of ~${totalMinutes} minutes total
 - Each episode must have a cliffhanger or hook
 - Titles should be evocative and short
 - Descriptions should be specific to the story, not generic
 - Build dramatic tension across the season arc`;
+}
 
 export async function POST(request: Request) {
   try {
@@ -39,7 +48,7 @@ export async function POST(request: Request) {
     if (!session?.user?.email)
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const { projectId, synopsis } = await request.json();
+    const { projectId, synopsis, totalDurationMinutes } = await request.json();
     if (!projectId)
       return NextResponse.json({ error: "Project ID required" }, { status: 400 });
 
@@ -48,9 +57,12 @@ export async function POST(request: Request) {
     if (!synopsisText)
       return NextResponse.json({ error: "No synopsis available" }, { status: 400 });
 
+    const minutes = Math.max(5, Math.min(300, Number(totalDurationMinutes) || 30));
+    const systemPrompt = buildSystemPrompt(minutes);
+
     const data = await chatJSON<{ seasons: any[] }>(
-      SYSTEM,
-      `Create an episode structure for this synopsis:\n\n${synopsisText}`,
+      systemPrompt,
+      `Create an episode structure for this synopsis (target total runtime: ~${minutes} min):\n\n${synopsisText}`,
       { temperature: 0.8, maxTokens: 4096 }
     );
 
