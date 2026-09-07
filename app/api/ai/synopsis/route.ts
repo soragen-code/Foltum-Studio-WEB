@@ -2,6 +2,8 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
+import { parseBody, synopsisSchema } from "@/lib/validations";
 import { chat } from "@/lib/ai";
 
 const SYSTEM = `You are a professional screenwriter and showrunner. You write compelling, cinematic synopses for short-form vertical drama series (think TikTok / Reels format, episodes 1-3 minutes).
@@ -24,9 +26,12 @@ export async function POST(request: Request) {
     if (!session?.user?.email)
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const { projectId, prompt, correction, currentSynopsis } = await request.json();
-    if (!projectId)
-      return NextResponse.json({ error: "Project ID required" }, { status: 400 });
+    const limited = rateLimitByUser(request, "ai:synopsis", session.user.email, RATE_LIMITS.ai);
+    if (limited) return limited;
+
+    const parsed = await parseBody(request, synopsisSchema);
+    if (!parsed.ok) return parsed.response;
+    const { projectId, prompt, correction, currentSynopsis } = parsed.data;
 
     let userMessage: string;
     if (correction && currentSynopsis) {

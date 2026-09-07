@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { rateLimitByIp, RATE_LIMITS } from "@/lib/rate-limit";
 import {
   WFP_PURCHASE_URL,
   WFP_CURRENCY,
@@ -12,6 +13,9 @@ import {
 } from "@/lib/wayforpay";
 
 export async function POST(request: Request) {
+  const limited = rateLimitByIp(request, "payment:create", RATE_LIMITS.payment);
+  if (limited) return limited;
+
   try {
     const session = await auth();
     if (!session?.user?.email) {

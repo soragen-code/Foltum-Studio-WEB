@@ -4,6 +4,7 @@ export const maxDuration = 300;
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { chatJSON } from "@/lib/ai";
 import { generateImage } from "@/lib/replicate";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
@@ -37,6 +38,9 @@ export async function POST(request: Request) {
     const session = await auth();
     if (!session?.user?.email)
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const limited = rateLimitByUser(request, "ai:characters-regenerate", session.user.email, RATE_LIMITS.ai);
+    if (limited) return limited;
 
     const { characterId, projectId } = await request.json();
     if (!characterId)

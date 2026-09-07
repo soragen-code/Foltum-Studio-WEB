@@ -2,6 +2,8 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
+import { parseBody, scenesSchema } from "@/lib/validations";
 import { chatJSON } from "@/lib/ai";
 
 const EPISODE_MIN_SECONDS = Number(process.env.EPISODE_MIN_SECONDS ?? 60);
@@ -53,9 +55,12 @@ export async function POST(request: Request) {
     if (!session?.user?.email)
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const { projectId, episodeId } = await request.json();
-    if (!episodeId)
-      return NextResponse.json({ error: "Episode ID required" }, { status: 400 });
+    const limited = rateLimitByUser(request, "ai:scenes", session.user.email, RATE_LIMITS.ai);
+    if (limited) return limited;
+
+    const parsed = await parseBody(request, scenesSchema);
+    if (!parsed.ok) return parsed.response;
+    const { projectId, episodeId } = parsed.data;
 
     const episode = await prisma.episode.findUnique({
       where: { id: episodeId },

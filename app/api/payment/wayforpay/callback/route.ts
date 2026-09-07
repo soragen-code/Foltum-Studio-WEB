@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { verifyCallbackSignature, buildAcceptResponse } from "@/lib/wayforpay";
+import { rateLimitByIp, RATE_LIMITS } from "@/lib/rate-limit";
 
 /**
  * WayForPay serviceUrl webhook.
@@ -11,6 +12,9 @@ import { verifyCallbackSignature, buildAcceptResponse } from "@/lib/wayforpay";
  *  3. reply with a signed JSON { orderReference, status: "accept", time, signature }.
  */
 export async function POST(request: Request) {
+  const limited = rateLimitByIp(request, "payment:callback", RATE_LIMITS.payment);
+  if (limited) return limited;
+
   try {
     // WayForPay may send JSON or form-encoded/raw JSON body.
     let body: Record<string, any> = {};

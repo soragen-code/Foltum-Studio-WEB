@@ -4,6 +4,8 @@ export const maxDuration = 800; // Vercel Pro / Fluid compute max — background
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
+import { parseBody, generateVideoSchema } from "@/lib/validations";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runVideoJob } from "@/lib/workers/video-job";
 
@@ -32,10 +34,15 @@ export async function POST(request: Request) {
     if (!session?.user?.email)
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+    const limited = rateLimitByUser(request, "ai:generate-video", session.user.email, RATE_LIMITS.ai);
+    if (limited) return limited;
+
     const user = await prisma.user.findUnique({ where: { email: session.user.email } });
     if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
 
-    const { projectId, sceneId, language } = await request.json();
+    const parsed = await parseBody(request, generateVideoSchema);
+    if (!parsed.ok) return parsed.response;
+    const { projectId, sceneId, language } = parsed.data;
     // Only two spoken languages are offered in the UI; default English.
     const spokenLang = language === "ru" ? "ru" : "en";
 

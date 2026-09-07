@@ -4,6 +4,8 @@ export const maxDuration = 800; // per-scene audio mux + concatenation can take 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
+import { parseBody, assembleEpisodeSchema } from "@/lib/validations";
 import { concatVideos, muxAudioIntoVideo } from "@/lib/replicate";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 
@@ -17,7 +19,12 @@ export async function POST(request: Request) {
     if (!session?.user?.email)
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const { episodeId } = await request.json();
+    const limited = rateLimitByUser(request, "ai:assemble-episode", session.user.email, RATE_LIMITS.ai);
+    if (limited) return limited;
+
+    const parsed = await parseBody(request, assembleEpisodeSchema);
+    if (!parsed.ok) return parsed.response;
+    const { episodeId } = parsed.data;
     if (!episodeId)
       return NextResponse.json({ error: "Episode ID required" }, { status: 400 });
 

@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from 'next/server'
 import { auth } from '@/auth'
 import { prisma } from '@/lib/db'
+import { parseBody, createProjectSchema } from '@/lib/validations'
 
 export async function GET() {
   try {
@@ -32,10 +33,9 @@ export async function POST(request: Request) {
     const user = await prisma.user.findUnique({ where: { email: session.user.email } })
     if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 })
 
-    const { name, tier } = await request.json()
-    if (!name) {
-      return NextResponse.json({ error: 'Project name is required' }, { status: 400 })
-    }
+    const parsed = await parseBody(request, createProjectSchema)
+    if (!parsed.ok) return parsed.response
+    const { name, tier } = parsed.data
 
     const project = await prisma.project.create({
       data: {

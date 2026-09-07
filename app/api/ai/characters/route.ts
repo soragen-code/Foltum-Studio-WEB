@@ -4,6 +4,8 @@ export const maxDuration = 800; // Vercel Pro / Fluid compute max — background
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
+import { parseBody, charactersSchema } from "@/lib/validations";
 import { chatJSON } from "@/lib/ai";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runCharacterImagesJob } from "@/lib/workers/character-images-job";
@@ -50,15 +52,12 @@ export async function POST(request: Request) {
     if (!session?.user?.email)
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    let body: any;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
-    }
-    const { projectId, synopsis } = body ?? {};
-    if (!projectId)
-      return NextResponse.json({ error: "Project ID required" }, { status: 400 });
+    const limited = rateLimitByUser(request, "ai:characters", session.user.email, RATE_LIMITS.ai);
+    if (limited) return limited;
+
+    const parsed = await parseBody(request, charactersSchema);
+    if (!parsed.ok) return parsed.response;
+    const { projectId, synopsis } = parsed.data;
 
     const project = await prisma.project.findUnique({ where: { id: projectId } });
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
