@@ -102,3 +102,30 @@ export async function generateImage(input: FluxInput): Promise<string> {
   if (output && typeof output === "object" && "url" in (output as any)) return String((output as any).url);
   throw new Error("Unexpected FLUX output format");
 }
+
+
+/* ------------------------------------------------------------------ */
+/*  FFmpeg (Replicate) — concatenate scene videos into an episode     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Concatenate multiple videos (in order) into one mp4 via the
+ * `foixasoftware/ffmpeg` model on Replicate. Returns the output URL.
+ * Model version can be overridden via REPLICATE_FFMPEG_MODEL env var.
+ */
+export async function concatVideos(videoUrls: string[]): Promise<string> {
+  if (videoUrls.length === 0) throw new Error("No videos to concatenate");
+  const replicate = getReplicate();
+
+  const model =
+    (process.env.REPLICATE_FFMPEG_MODEL as `${string}/${string}:${string}` | undefined) ??
+    "foixasoftware/ffmpeg:94f358189c0f452ae3e2be1bef374a497fc2c749a48ab61fe4e8b6319d1e561c";
+
+  const output = await replicate.run(model, { input: { videos: videoUrls } });
+
+  if (typeof output === "string") return output;
+  if (Array.isArray(output) && output.length > 0) return String(output[0]);
+  if (output && typeof (output as any).url === "function") return (output as any).url();
+  if (output && typeof output === "object" && "url" in (output as any)) return String((output as any).url);
+  throw new Error("Unexpected ffmpeg output format");
+}
