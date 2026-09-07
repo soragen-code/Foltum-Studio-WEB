@@ -1,13 +1,84 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Loader2, Play, Check, RefreshCw, Edit2, Film, ChevronDown, ChevronRight } from 'lucide-react'
+
+/** Expected total wall-clock for a Seedance video (used for ETA text and pacing). */
+const VIDEO_EXPECTED_SECONDS = 190 // 10s init + 180s generation
+
+/**
+ * Simulated progress curve for a single opaque long-running call:
+ *  - 0 → 10%   over the first 10 s   (initializing)
+ *  - 10 → 80%  over the next 180 s   (generating)
+ *  - 80 → 95%  asymptotically, holds until the response arrives
+ *  - 95 → 100% is set by the caller when the request completes
+ */
+function simulatedVideoProgress(elapsedSec: number): number {
+  if (elapsedSec <= 10) return (elapsedSec / 10) * 10
+  if (elapsedSec <= 190) return 10 + ((elapsedSec - 10) / 180) * 70
+  // Slow creep from 80 toward 95, never reaching it on its own
+  const over = elapsedSec - 190
+  return Math.min(95, 80 + 15 * (1 - Math.exp(-over / 120)))
+}
+
+function formatEta(sec: number): string {
+  if (sec <= 0) return 'almost done'
+  if (sec < 60) return `~${Math.ceil(sec / 10) * 10} sec remaining`
+  const min = Math.ceil(sec / 60)
+  return `~${min} min remaining`
+}
+
+/** Animated (simulated) progress bar for video generation, using app design tokens. */
+function VideoProgressBar({ done }: { done: boolean }) {
+  const [startedAt] = useState(() => Date.now())
+  const [elapsed, setElapsed] = useState(0)
+
+  useEffect(() => {
+    if (done) return
+    const id = setInterval(() => setElapsed((Date.now() - startedAt) / 1000), 500)
+    return () => clearInterval(id)
+  }, [done, startedAt])
+
+  const pct = done ? 100 : simulatedVideoProgress(elapsed)
+  const remaining = VIDEO_EXPECTED_SECONDS - elapsed
+  const phase = done
+    ? 'Video ready'
+    : elapsed <= 10
+    ? 'Initializing video model...'
+    : elapsed <= 190
+    ? `Generating video... ${formatEta(remaining)}`
+    : 'Finalizing... this is taking a bit longer than usual'
+
+  return (
+    <div className="mb-3 space-y-2">
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <span className="flex items-center gap-2 truncate">
+          {done ? (
+            <Check className="h-3 w-3 flex-shrink-0 text-green-400" />
+          ) : (
+            <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-primary" />
+          )}
+          <span className="truncate">{phase}</span>
+        </span>
+        <span className="ml-3 flex-shrink-0 tabular-nums">{Math.round(pct)}%</span>
+      </div>
+      <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+        <div
+          className="h-full rounded-full bg-primary transition-all duration-500 ease-out"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  )
+}
 
 export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: () => void }) {
   const [selectedEpisode, setSelectedEpisode] = useState<any>(null)
   const [scenes, setScenes] = useState<any[]>([])
   const [generating, setGenerating] = useState(false)
   const [generatingVideo, setGeneratingVideo] = useState<string | null>(null)
+  // Scene id whose video just finished — shows the bar at 100% briefly before hiding it
+  const [videoJustDone, setVideoJustDone] = useState<string | null>(null)
   const [assembling, setAssembling] = useState(false)
   const [error, setError] = useState('')
   const [expandedSeason, setExpandedSeason] = useState<string | null>(null)
@@ -51,8 +122,13 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
         setScenes((prev) =>
           (prev ?? []).map((s: any) => (s?.id === sceneId ? data.scene : s))
         )
+        // Jump to 100% and keep the bar visible for a moment
+        setVideoJustDone(sceneId)
+        setTimeout(() => setVideoJustDone((cur) => (cur === sceneId ? null : cur)), 1500)
+      } else {
+        setError(data?.error ?? 'Video generation failed')
       }
-    } catch {}
+    } catch { setError('Network error') }
     finally { setGeneratingVideo(null) }
   }
 
@@ -172,7 +248,8 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
                       src={selectedEpisode.videoUrl}
                       controls
                       playsInline
-                      preload="metadata"
+                      preload="auto"
+                      poster={selectedEpisode?.posterUrl ?? undefined}
                       className="h-full w-full object-contain"
                     />
                   </div>
@@ -214,10 +291,16 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
                         src={scene.videoUrl}
                         controls
                         playsInline
-                        preload="metadata"
+                        preload="auto"
+                        poster={scene?.posterUrl ?? undefined}
                         className="h-full w-full object-contain"
                       />
                     </div>
+                  )}
+
+                  {generatingVideo === scene?.id && <VideoProgressBar done={false} />}
+                  {generatingVideo !== scene?.id && videoJustDone === scene?.id && (
+                    <VideoProgressBar done />
                   )}
 
                   <div className="flex gap-2">

@@ -51,95 +51,195 @@ function imagePrompt(appearance: string, name: string, shotType: "front" | "prof
 /** Helper: pause for ms */
 function sleep(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
 
-/** Generate 3 images for a character and upload to S3 — sequentially to respect rate limits */
-async function generateCharacterImages(
+const SHOTS = ["front", "profile", "full"] as const;
+type Shot = (typeof SHOTS)[number];
+const ASPECT_RATIOS: Record<Shot, string> = { front: "3:4", profile: "3:4", full: "9:16" };
+const SHOT_LABELS: Record<Shot, string> = { front: "front portrait", profile: "side profile", full: "full-body shot" };
+const SHOT_FIELDS: Record<Shot, "imageFront" | "imageProfile" | "imageFull"> = {
+  front: "imageFront",
+  profile: "imageProfile",
+  full: "imageFull",
+};
+
+/** Generate a single character image and upload it to S3 */
+async function generateSingleImage(
   projectId: string,
   characterId: string,
   name: string,
-  appearance: string
-): Promise<{ imageFront: string; imageProfile: string; imageFull: string }> {
-  const shots = ["front", "profile", "full"] as const;
-  const aspectRatios: Record<string, string> = { front: "3:4", profile: "3:4", full: "9:16" };
-  const map: Record<string, string> = {};
-
-  for (const shot of shots) {
-    const prompt = imagePrompt(appearance, name, shot);
-    console.log(`[FLUX] Generating ${shot} for ${name}...`);
-    const replicateUrl = await generateImage({ prompt, aspect_ratio: aspectRatios[shot] });
-    const s3Key = `media/public/characters/${projectId}/${characterId}/${shot}.webp`;
-    const s3Url = await uploadRemoteToS3(replicateUrl, s3Key, "image/webp");
-    map[shot] = s3Url;
-    console.log(`[FLUX] ${shot} for ${name} done: ${s3Url.slice(0, 60)}...`);
-    // Small delay between requests to respect rate limits
-    await sleep(2000);
-  }
-
-  return { imageFront: map.front, imageProfile: map.profile, imageFull: map.full };
+  appearance: string,
+  shot: Shot
+): Promise<string> {
+  const prompt = imagePrompt(appearance, name, shot);
+  console.log(`[FLUX] Generating ${shot} for ${name}...`);
+  const replicateUrl = await generateImage({ prompt, aspect_ratio: ASPECT_RATIOS[shot] });
+  const s3Key = `media/public/characters/${projectId}/${characterId}/${shot}.webp`;
+  const s3Url = await uploadRemoteToS3(replicateUrl, s3Key, "image/webp");
+  console.log(`[FLUX] ${shot} for ${name} done: ${s3Url.slice(0, 60)}...`);
+  return s3Url;
 }
 
+/**
+ * POST /api/ai/characters
+ *
+ * Streams progress as Server-Sent Events (text/event-stream). Event payloads (JSON in `data:`):
+ *  - { type: "progress", step: "text" | "image", message, current, total }
+ *  - { type: "characters_text", characters }   — text profiles ready, images still empty
+ *  - { type: "image", characterId, field, url, current, total } — one image finished
+ *  - { type: "done", characters }
+ *  - { type: "error", message }
+ */
 export async function POST(request: Request) {
+  // Validate auth/input before opening the stream so we can return proper HTTP status codes.
+  const session = await auth();
+  if (!session?.user?.email)
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  let body: any;
   try {
-    const session = await auth();
-    if (!session?.user?.email)
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-    const { projectId, synopsis } = await request.json();
-    if (!projectId)
-      return NextResponse.json({ error: "Project ID required" }, { status: 400 });
-
-    const project = await prisma.project.findUnique({ where: { id: projectId } });
-    const synopsisText = synopsis || project?.synopsis || "";
-    if (!synopsisText)
-      return NextResponse.json({ error: "No synopsis available" }, { status: 400 });
-
-    // Delete existing characters
-    await prisma.character.deleteMany({ where: { projectId } });
-
-    const data = await chatJSON<{ characters: any[] }>(
-      SYSTEM,
-      `Extract and design characters from this synopsis:\n\n${synopsisText}`,
-      { temperature: 0.85, maxTokens: 3000 }
-    );
-
-    // Create all characters in DB first (to get IDs)
-    const dbChars = [];
-    for (const c of data.characters) {
-      const char = await prisma.character.create({
-        data: {
-          projectId,
-          name: c.name,
-          description: c.description,
-          role: c.role,
-          personality: c.personality,
-          appearance: c.appearance,
-          imageFront: "",
-          imageProfile: "",
-          imageFull: "",
-        },
-      });
-      dbChars.push({ db: char, raw: c });
-    }
-
-    // Generate images for characters SEQUENTIALLY (rate-limit safe)
-    const updated = [];
-    for (const { db, raw } of dbChars) {
-      try {
-        const images = await generateCharacterImages(projectId, db.id, raw.name, raw.appearance);
-        const updatedChar = await prisma.character.update({
-          where: { id: db.id },
-          data: images,
-        });
-        updated.push(updatedChar);
-      } catch (imgErr) {
-        console.error(`Image gen failed for ${raw.name}:`, imgErr);
-        // Return character with empty images rather than failing entirely
-        updated.push(db);
-      }
-    }
-
-    return NextResponse.json({ characters: updated });
-  } catch (err: any) {
-    console.error("Character generation error:", err);
-    return NextResponse.json({ error: "Generation failed" }, { status: 500 });
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
+  const { projectId, synopsis } = body ?? {};
+  if (!projectId)
+    return NextResponse.json({ error: "Project ID required" }, { status: 400 });
+
+  const project = await prisma.project.findUnique({ where: { id: projectId } });
+  const synopsisText = synopsis || project?.synopsis || "";
+  if (!synopsisText)
+    return NextResponse.json({ error: "No synopsis available" }, { status: 400 });
+
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      let closed = false;
+      const send = (payload: Record<string, unknown>) => {
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+        } catch {
+          closed = true;
+        }
+      };
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        try { controller.close(); } catch {}
+      };
+
+      // Keep-alive comments so proxies don't drop the idle connection during long image jobs.
+      const keepAlive = setInterval(() => {
+        if (closed) return;
+        try { controller.enqueue(encoder.encode(`: ping\n\n`)); } catch { closed = true; }
+      }, 15000);
+
+      try {
+        // Step 0: text generation. Total is unknown until we know N, so send a provisional total.
+        send({ type: "progress", step: "text", message: "Generating character profiles...", current: 0, total: 1 });
+
+        // Delete existing characters
+        await prisma.character.deleteMany({ where: { projectId } });
+
+        const data = await chatJSON<{ characters: any[] }>(
+          SYSTEM,
+          `Extract and design characters from this synopsis:\n\n${synopsisText}`,
+          { temperature: 0.85, maxTokens: 3000 }
+        );
+
+        const rawChars: any[] = Array.isArray(data?.characters) ? data.characters : [];
+        if (rawChars.length === 0) {
+          send({ type: "error", message: "AI returned no characters" });
+          return;
+        }
+
+        // Create all characters in DB first (to get IDs)
+        const dbChars: { db: any; raw: any }[] = [];
+        for (const c of rawChars) {
+          const char = await prisma.character.create({
+            data: {
+              projectId,
+              name: c.name,
+              description: c.description,
+              role: c.role,
+              personality: c.personality,
+              appearance: c.appearance,
+              imageFront: "",
+              imageProfile: "",
+              imageFull: "",
+            },
+          });
+          dbChars.push({ db: char, raw: c });
+        }
+
+        const total = 1 + dbChars.length * SHOTS.length;
+        let current = 1; // text step complete
+
+        send({ type: "progress", step: "text", message: "Character profiles ready", current, total });
+        send({ type: "characters_text", characters: dbChars.map((d) => d.db), current, total });
+
+        // Generate images SEQUENTIALLY (rate-limit safe), streaming each result as it lands.
+        for (const { db, raw } of dbChars) {
+          const images: Partial<Record<"imageFront" | "imageProfile" | "imageFull", string>> = {};
+          for (const shot of SHOTS) {
+            send({
+              type: "progress",
+              step: "image",
+              message: `Generating ${SHOT_LABELS[shot]} for ${raw.name}...`,
+              current,
+              total,
+              characterId: db.id,
+            });
+            try {
+              const url = await generateSingleImage(projectId, db.id, raw.name, raw.appearance, shot);
+              images[SHOT_FIELDS[shot]] = url;
+              current += 1;
+              send({ type: "image", characterId: db.id, field: SHOT_FIELDS[shot], url, current, total });
+            } catch (imgErr) {
+              console.error(`Image gen failed (${shot}) for ${raw.name}:`, imgErr);
+              current += 1;
+              send({
+                type: "progress",
+                step: "image",
+                message: `Failed to generate ${SHOT_LABELS[shot]} for ${raw.name}, skipping`,
+                current,
+                total,
+                characterId: db.id,
+              });
+            }
+            // Small delay between requests to respect rate limits
+            await sleep(2000);
+          }
+          if (Object.keys(images).length > 0) {
+            try {
+              await prisma.character.update({ where: { id: db.id }, data: images });
+            } catch (dbErr) {
+              console.error(`DB update failed for ${raw.name}:`, dbErr);
+            }
+          }
+        }
+
+        const finalChars = await prisma.character.findMany({
+          where: { projectId },
+          orderBy: { createdAt: "asc" },
+        });
+        send({ type: "done", characters: finalChars, current: total, total });
+      } catch (err: any) {
+        console.error("Character generation error:", err);
+        send({ type: "error", message: "Generation failed" });
+      } finally {
+        clearInterval(keepAlive);
+        close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
 }
