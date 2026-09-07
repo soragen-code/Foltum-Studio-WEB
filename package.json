@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "prisma generate && next build --webpack",
+    "build": "prisma generate && (prisma db execute --schema prisma/schema.prisma --file prisma/patch.sql || echo 'patch.sql skipped') && next build --webpack",
     "start": "next start",
     "lint": "eslint .",
     "postinstall": "prisma generate"

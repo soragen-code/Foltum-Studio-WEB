@@ -99,6 +99,10 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
   /** sceneId -> job being polled (or just finished, kept briefly for the 100% state) */
   const [videoJobs, setVideoJobs] = useState<Record<string, JobInfo>>({})
   const [startingVideo, setStartingVideo] = useState<string | null>(null)
+  // Per-scene spoken language for native audio ("en" default, or "ru"). Local override
+  // of whatever is stored on the scene; applied when the scene's video is generated.
+  const [sceneLang, setSceneLang] = useState<Record<string, string>>({})
+  const langOf = (scene: any): string => sceneLang[scene?.id] ?? scene?.language ?? 'en'
   const pollTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const [error, setError] = useState('')
   const [expandedSeason, setExpandedSeason] = useState<string | null>(null)
@@ -243,14 +247,14 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.id])
 
-  const generateVideo = async (sceneId: string) => {
+  const generateVideo = async (sceneId: string, language?: string) => {
     setStartingVideo(sceneId)
     setError('')
     try {
       const res = await fetch('/api/ai/generate-video', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: project?.id, sceneId }),
+        body: JSON.stringify({ projectId: project?.id, sceneId, language }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data?.jobId) {
@@ -302,6 +306,19 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
     return !!j && (j.status === 'processing' || j.status === 'pending')
   }
 
+  /**
+   * Is ANY work running for this episode — scene-list generation, a scene video
+   * rendering, or assembly? Used to keep an activity spinner in the episode tree so
+   * it never disappears when you switch to another episode to start it too.
+   */
+  const isEpisodeBusy = (ep: any): boolean => {
+    const epId = ep?.id
+    if (!epId) return false
+    if (generatingEps[epId] || assemblingEps[epId]) return true
+    const scs = scenesByEp[epId] ?? ep?.scenes ?? []
+    return scs.some((s: any) => isSceneBusy(s?.id))
+  }
+
   const allAccepted = (scenes ?? []).length > 0 && (scenes ?? []).every((s: any) => s?.status === 'accepted')
 
   return (
@@ -343,7 +360,11 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
                     >
                       <Film className="h-3 w-3 flex-shrink-0" />
                       <span className="truncate">Ep. {ep?.number}: {ep?.title ?? 'Untitled'}</span>
-                      {ep?.videoUrl && <Check className="ml-auto h-3 w-3 text-green-400" />}
+                      {isEpisodeBusy(ep) ? (
+                        <Loader2 className="ml-auto h-3 w-3 flex-shrink-0 animate-spin text-primary" />
+                      ) : (
+                        ep?.videoUrl && <Check className="ml-auto h-3 w-3 text-green-400" />
+                      )}
                     </button>
                   ))}
                 </div>
@@ -457,11 +478,29 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
                     <JobProgressBar job={videoJobs[scene?.id]} expectedTotalSec={VIDEO_EXPECTED_SEC} className="mb-3" />
                   )}
 
-                  <div className="flex gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     {scene?.status !== 'accepted' && (
                       <>
+                        {/* Per-scene spoken language for the native voices (EN default, RU optional) */}
+                        <div className="flex items-center overflow-hidden rounded-lg border border-border text-xs">
+                          {(['en', 'ru'] as const).map((lng) => (
+                            <button
+                              key={lng}
+                              type="button"
+                              onClick={() => setSceneLang((prev) => ({ ...prev, [scene?.id]: lng }))}
+                              disabled={isSceneBusy(scene?.id)}
+                              className={`px-2.5 py-1.5 font-medium transition disabled:opacity-50 ${
+                                langOf(scene) === lng
+                                  ? 'bg-primary text-primary-foreground'
+                                  : 'bg-card text-muted-foreground hover:bg-muted/40'
+                              }`}
+                            >
+                              {lng === 'en' ? 'EN' : 'RU'}
+                            </button>
+                          ))}
+                        </div>
                         <button
-                          onClick={() => generateVideo(scene?.id ?? '')}
+                          onClick={() => generateVideo(scene?.id ?? '', langOf(scene))}
                           disabled={isSceneBusy(scene?.id)}
                           className="flex items-center gap-1 rounded-lg bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
                         >

@@ -136,10 +136,51 @@ export function detectSpokenLanguage(text: string | null | undefined): string {
   return "English";
 }
 
+/** Map the UI's two-letter language code to a full language name for the prompt. */
+export function languageName(code: string | null | undefined): string {
+  switch ((code ?? "").toLowerCase()) {
+    case "ru":
+      return "Russian";
+    case "en":
+      return "English";
+    default:
+      return "";
+  }
+}
+
+/**
+ * Translate a scripted dialogue block into `targetLanguage`, preserving the
+ * "Speaker: line" structure and stage directions in [brackets]. Only the spoken
+ * words are translated. Returns the original block unchanged on any failure.
+ */
+export async function translateDialogue(
+  dialogue: string | null | undefined,
+  targetLanguage: string
+): Promise<string> {
+  const block = (dialogue ?? "").trim();
+  if (!block || !targetLanguage) return block;
+  try {
+    // Lazy import so the pure prompt builders stay dependency-free / testable.
+    const { chat } = await import("@/lib/ai");
+    const out = await chat(
+      `You are a professional screenplay translator. Translate ALL spoken dialogue into ${targetLanguage}. ` +
+        `Keep the exact same line structure: preserve "Speaker:" name prefixes (do NOT translate character names) ` +
+        `and keep any [stage directions] in brackets. Translate ONLY the spoken words, naturally and idiomatically ` +
+        `for ${targetLanguage}. Return ONLY the translated dialogue block, nothing else.`,
+      block,
+      { temperature: 0.3, maxTokens: 2048 }
+    );
+    return (out ?? "").trim() || block;
+  } catch {
+    return block;
+  }
+}
+
 export function buildNativeAudioPrompt(
   basePrompt: string,
   dialogue: string | null | undefined,
-  characters: VoiceCharacter[]
+  characters: VoiceCharacter[],
+  explicitLanguage?: string
 ): string {
   const base = (basePrompt ?? "").trim();
   const lines = parseDialogue(dialogue);
@@ -154,7 +195,10 @@ export function buildNativeAudioPrompt(
     return `${base}\n\nAudio: cinematic diegetic ambient sound and room tone only. No background music, no voiceover, no subtitles.`;
   }
 
-  const language = detectSpokenLanguage(lines.map((l) => l.text).join(" "));
+  // Explicit selection (from the per-scene EN/RU picker) wins; else auto-detect.
+  const language =
+    (explicitLanguage && explicitLanguage.trim()) ||
+    detectSpokenLanguage(lines.map((l) => l.text).join(" "));
 
   const spoken = lines
     .map((l) => {

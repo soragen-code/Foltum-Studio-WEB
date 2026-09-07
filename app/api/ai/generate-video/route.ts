@@ -35,7 +35,9 @@ export async function POST(request: Request) {
     const user = await prisma.user.findUnique({ where: { email: session.user.email } });
     if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
 
-    const { projectId, sceneId } = await request.json();
+    const { projectId, sceneId, language } = await request.json();
+    // Only two spoken languages are offered in the UI; default English.
+    const spokenLang = language === "ru" ? "ru" : "en";
 
     const project = await prisma.project.findFirst({ where: { id: projectId } });
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
@@ -87,7 +89,7 @@ export async function POST(request: Request) {
       },
     });
 
-    await prisma.scene.update({ where: { id: sceneId }, data: { status: "generating" } });
+    await prisma.scene.update({ where: { id: sceneId }, data: { status: "generating", language: spokenLang } });
 
     const job = await prisma.generationJob.create({
       data: {

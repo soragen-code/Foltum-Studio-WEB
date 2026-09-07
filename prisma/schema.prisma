@@ -149,6 +149,7 @@ model Scene {
   videoUrl      String?  // generated scene video URL (silent, Seedance)
   audioUrl      String?  // ElevenLabs voiceover for the scene dialogue
   videoIsPublic Boolean  @default(false)
+  language      String   @default("en") // spoken language for native audio: "en" or "ru"
   status        String   @default("pending") // pending, generating, generated, accepted
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt

@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { startVideoPrediction, getPredictionState } from "@/lib/replicate";
-import { renderSceneVoiceover, buildNativeAudioPrompt } from "@/lib/voiceover";
+import { renderSceneVoiceover, buildNativeAudioPrompt, translateDialogue, detectSpokenLanguage, languageName } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
 import { getBucketConfig } from "@/lib/aws-config";
 import { updateJob, completeJob, failJob, heartbeatJob, runInBackground } from "@/lib/jobs";
@@ -92,7 +92,14 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     let prompt = scene.videoPrompt;
     if (NATIVE_AUDIO) {
       const links = await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true } });
-      prompt = buildNativeAudioPrompt(scene.videoPrompt, scene.dialogue, links.map((l) => l.character));
+      // Per-scene spoken language chosen in the UI ("en" default / "ru").
+      const targetLangName = languageName((scene as any).language) || "English";
+      // Speak the dialogue in the selected language — translate it if it isn't already.
+      let dialogue = scene.dialogue;
+      if (dialogue && detectSpokenLanguage(dialogue) !== targetLangName) {
+        dialogue = await translateDialogue(dialogue, targetLangName);
+      }
+      prompt = buildNativeAudioPrompt(scene.videoPrompt, dialogue, links.map((l) => l.character), targetLangName);
     }
 
     // 1. Start video — native audio (voices + ambience) or silent (legacy TTS overlay)
