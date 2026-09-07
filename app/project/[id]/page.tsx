@@ -1,0 +1,38 @@
+import { auth } from '@/auth'
+import { redirect } from 'next/navigation'
+import { prisma } from '@/lib/db'
+import { ProjectWizard } from './_components/project-wizard'
+
+export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
+  const session = await auth()
+  if (!session?.user) redirect('/login')
+  const { id } = await params
+
+  const user = await prisma.user.findUnique({ where: { email: session.user.email! } })
+  if (!user) redirect('/login')
+
+  const project = await prisma.project.findFirst({
+    where: { id, userId: user.id },
+    include: {
+      characters: true,
+      seasons: {
+        include: {
+          episodes: {
+            include: {
+              scenes: {
+                include: { characters: { include: { character: true } } },
+                orderBy: { number: 'asc' },
+              },
+            },
+            orderBy: { number: 'asc' },
+          },
+        },
+        orderBy: { number: 'asc' },
+      },
+    },
+  })
+
+  if (!project) redirect('/dashboard')
+
+  return <ProjectWizard project={JSON.parse(JSON.stringify(project))} />
+}
