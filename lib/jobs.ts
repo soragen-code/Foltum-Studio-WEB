@@ -31,42 +31,46 @@ export function getBaseUrl(): string {
 }
 
 /**
- * Fire-and-forget call to an internal worker route.
+ * Run a long task in the background of the CURRENT serverless invocation.
  *
- * On Vercel the function may be frozen right after the response is sent, so the
- * outgoing request is scheduled with `after()` (runs after the response is flushed
- * but keeps the function alive). We wait only until the request has been
- * delivered (short timeout), never for the worker to finish.
+ * `after()` lets the route return its response immediately while Vercel keeps
+ * the function alive (up to the route's `maxDuration`) until `fn` settles.
+ * This avoids the self-HTTP-call pattern, where aborting the outgoing request
+ * would make Vercel kill the worker invocation mid-way.
+ *
+ * NOTE: the calling route MUST export `maxDuration = 300`.
  */
-export function triggerWorker(path: string, payload: Record<string, unknown>): void {
-  const url = `${getBaseUrl()}${path}`;
-  const run = async () => {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8_000);
-    try {
-      await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          [WORKER_SECRET_HEADER]: getWorkerSecret(),
-        },
-        body: JSON.stringify(payload),
-        signal: controller.signal,
-        cache: "no-store",
-      });
-    } catch (err: any) {
-      // AbortError is expected — the worker keeps running after we disconnect.
-      if (err?.name !== "AbortError") console.error(`[jobs] failed to trigger worker ${path}:`, err?.message ?? err);
-    } finally {
-      clearTimeout(timer);
-    }
-  };
-
+export function runInBackground(fn: () => Promise<void>): void {
+  const run = () => fn().catch((err) => console.error("[jobs] background task failed:", err));
   try {
     after(run);
   } catch {
     // Outside of a request scope (e.g. tests) — just fire it.
-    run().catch(() => {});
+    run();
+  }
+}
+
+/** Jobs that haven't been touched for this long are considered dead (function killed). */
+export const STALE_JOB_MS = 6 * 60 * 1000;
+
+/**
+ * Mark "processing"/"pending" jobs that stopped updating as failed.
+ * Called before checking for active jobs so a dead job never blocks a new one.
+ */
+export async function failStaleJobs(where: { projectId?: string; sceneId?: string; type?: string }): Promise<number> {
+  try {
+    const res = await prisma.generationJob.updateMany({
+      where: {
+        ...where,
+        status: { in: ["pending", "processing"] },
+        updatedAt: { lt: new Date(Date.now() - STALE_JOB_MS) },
+      },
+      data: { status: "failed", message: "Failed", error: "Generation timed out (worker stopped responding)" },
+    });
+    return res.count;
+  } catch (err) {
+    console.error("[jobs] failStaleJobs error:", err);
+    return 0;
   }
 }
 

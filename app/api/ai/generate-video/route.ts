@@ -1,10 +1,11 @@
 export const dynamic = "force-dynamic";
-export const maxDuration = 60; // only creates the job; the worker does the heavy lifting
+export const maxDuration = 300; // the job runs in the background of this invocation via after()
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { triggerWorker } from "@/lib/jobs";
+import { runInBackground, failStaleJobs } from "@/lib/jobs";
+import { runVideoJob } from "@/lib/workers/video-job";
 
 /** Tier determines credit cost AND video quality */
 const VIDEO_TIERS: Record<string, { cost: number; duration: number; resolution: string }> = {
@@ -17,7 +18,7 @@ const VIDEO_TIERS: Record<string, { cost: number; duration: number; resolution: 
  * POST /api/ai/generate-video  { projectId, sceneId }
  *
  * 1. Validates credits, deducts them
- * 2. Creates a GenerationJob (type "video") and triggers the background worker
+ * 2. Creates a GenerationJob (type "video") and starts the job in the background (after())
  * 3. Returns { jobId } immediately — the frontend polls GET /api/jobs/[jobId]
  */
 export async function POST(request: Request) {
@@ -40,6 +41,9 @@ export async function POST(request: Request) {
     if (!sceneData) return NextResponse.json({ error: "Scene not found" }, { status: 404 });
     if (!sceneData.videoPrompt)
       return NextResponse.json({ error: "Scene has no video prompt" }, { status: 400 });
+
+    // Dead jobs (killed function) must not block new generations
+    await failStaleJobs({ sceneId, type: "video" });
 
     // Already running for this scene? Return the existing job instead of charging again.
     const active = await prisma.generationJob.findFirst({
@@ -78,15 +82,18 @@ export async function POST(request: Request) {
       },
     });
 
-    triggerWorker("/api/ai/workers/generate-video", {
-      jobId: job.id,
-      sceneId,
-      projectId,
-      userId: user.id,
-      cost: config.cost,
-      duration: config.duration,
-      resolution: config.resolution,
-    });
+    // Runs after the response is flushed; Vercel keeps this invocation alive up to maxDuration
+    runInBackground(() =>
+      runVideoJob({
+        jobId: job.id,
+        sceneId,
+        projectId,
+        userId: user.id,
+        cost: config.cost,
+        duration: config.duration,
+        resolution: config.resolution,
+      })
+    );
 
     return NextResponse.json({ jobId: job.id, creditsRemaining: (user.credits ?? 0) - config.cost });
   } catch (err: any) {

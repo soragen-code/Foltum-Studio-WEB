@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { failStaleJobs } from "@/lib/jobs";
 
 /**
  * GET /api/jobs?projectId=...&type=characters|video&active=1
@@ -17,6 +18,9 @@ export async function GET(request: Request) {
   const type = url.searchParams.get("type");
   const active = url.searchParams.get("active") === "1";
   if (!projectId) return NextResponse.json({ error: "projectId required" }, { status: 400 });
+
+  // Dead jobs must not be resumed by the frontend
+  await failStaleJobs({ projectId });
 
   const jobs = await prisma.generationJob.findMany({
     where: {

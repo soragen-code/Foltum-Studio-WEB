@@ -3,6 +3,7 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { failStaleJobs, STALE_JOB_MS } from "@/lib/jobs";
 
 /**
  * GET /api/jobs/[id] — status polling for a GenerationJob.
@@ -14,7 +15,12 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await params;
-  const job = await prisma.generationJob.findUnique({ where: { id } });
+  let job = await prisma.generationJob.findUnique({ where: { id } });
+  // Stale processing job (function was killed) → mark failed so the UI stops waiting
+  if (job && ["pending", "processing"].includes(job.status) && Date.now() - job.updatedAt.getTime() > STALE_JOB_MS) {
+    await failStaleJobs({ projectId: job.projectId, type: job.type });
+    job = await prisma.generationJob.findUnique({ where: { id } });
+  }
   if (!job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
 
   let characters: any[] | undefined;

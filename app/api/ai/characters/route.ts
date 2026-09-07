@@ -1,11 +1,12 @@
 export const dynamic = "force-dynamic";
-export const maxDuration = 60; // only the (fast) text step runs here
+export const maxDuration = 300; // image generation runs in the background of this invocation via after()
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { chatJSON } from "@/lib/ai";
-import { triggerWorker } from "@/lib/jobs";
+import { runInBackground, failStaleJobs } from "@/lib/jobs";
+import { runCharacterImagesJob } from "@/lib/workers/character-images-job";
 
 const SYSTEM = `You are a character designer for a short-form vertical drama series.
 
@@ -66,6 +67,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "No synopsis available" }, { status: 400 });
 
     // Don't start a second run while one is still processing for this project
+    await failStaleJobs({ projectId, type: "characters" });
     const active = await prisma.generationJob.findFirst({
       where: { projectId, type: "characters", status: { in: ["pending", "processing"] } },
       orderBy: { createdAt: "desc" },
@@ -117,11 +119,14 @@ export async function POST(request: Request) {
       },
     });
 
-    triggerWorker("/api/ai/workers/character-images", {
-      jobId: job.id,
-      projectId,
-      characterIds: characters.map((c) => c.id),
-    });
+    // Runs after the response is flushed; Vercel keeps this invocation alive up to maxDuration
+    runInBackground(() =>
+      runCharacterImagesJob({
+        jobId: job.id,
+        projectId,
+        characterIds: characters.map((c) => c.id),
+      })
+    );
 
     return NextResponse.json({ jobId: job.id, characters });
   } catch (err: any) {
