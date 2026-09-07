@@ -91,7 +91,6 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
   }
 
   const allAccepted = (scenes ?? []).length > 0 && (scenes ?? []).every((s: any) => s?.status === 'accepted')
-  const placeholderVideo = 'https://placehold.co/640x360/1a1a2e/eab308?text=Scene+Video'
 
   return (
     <div className="space-y-6">
@@ -165,6 +164,21 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
                 )}
               </div>
 
+              {selectedEpisode?.videoUrl && (
+                <div className="overflow-hidden rounded-xl border border-border bg-card p-4" style={{ boxShadow: 'var(--shadow-sm)' }}>
+                  <p className="mb-2 text-xs font-medium text-muted-foreground">Assembled Episode</p>
+                  <div className="aspect-[9/16] max-h-[500px] overflow-hidden rounded-lg bg-muted">
+                    <video
+                      src={selectedEpisode.videoUrl}
+                      controls
+                      playsInline
+                      preload="metadata"
+                      className="h-full w-full object-contain"
+                    />
+                  </div>
+                </div>
+              )}
+
               {error && <div className="rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
 
               {(scenes ?? []).map((scene: any) => (
@@ -195,12 +209,13 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
                   </div>
 
                   {scene?.videoUrl && (
-                    <div className="mb-3 aspect-video overflow-hidden rounded-lg bg-muted">
-                      <img
+                    <div className="mb-3 aspect-[9/16] max-h-[400px] overflow-hidden rounded-lg bg-muted">
+                      <video
                         src={scene.videoUrl}
-                        alt={`Scene ${scene?.number}`}
-                        className="h-full w-full object-cover"
-                        onError={(e: any) => { e.target.src = placeholderVideo }}
+                        controls
+                        playsInline
+                        preload="metadata"
+                        className="h-full w-full object-contain"
                       />
                     </div>
                   )}
