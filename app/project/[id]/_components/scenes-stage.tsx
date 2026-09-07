@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Loader2, Play, Check, RefreshCw, Edit2, Film, ChevronDown, ChevronRight } from 'lucide-react'
 
 /** Expected total wall-clock for a Seedance video (used for ETA text and pacing). */
@@ -69,6 +69,85 @@ function VideoProgressBar({ done }: { done: boolean }) {
         />
       </div>
     </div>
+  )
+}
+
+/**
+ * Scene player: silent Seedance video + ElevenLabs voiceover kept in sync.
+ * The <audio> element is hidden and mirrors the video's play/pause/seek/rate.
+ */
+function SceneVideoPlayer({
+  videoUrl,
+  audioUrl,
+  poster,
+  className,
+}: {
+  videoUrl: string
+  audioUrl?: string | null
+  poster?: string | null
+  className?: string
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null)
+  const audioRef = useRef<HTMLAudioElement>(null)
+
+  const syncTime = () => {
+    const v = videoRef.current
+    const a = audioRef.current
+    if (!v || !a) return
+    if (Math.abs(a.currentTime - v.currentTime) > 0.25) a.currentTime = v.currentTime
+  }
+
+  const handlePlay = () => {
+    const a = audioRef.current
+    if (!a) return
+    syncTime()
+    a.play().catch(() => {})
+  }
+  const handlePause = () => audioRef.current?.pause()
+  const handleRateChange = () => {
+    const v = videoRef.current
+    const a = audioRef.current
+    if (v && a) a.playbackRate = v.playbackRate
+  }
+  const handleVolumeChange = () => {
+    const v = videoRef.current
+    const a = audioRef.current
+    if (v && a) {
+      a.volume = v.volume
+      a.muted = v.muted
+    }
+  }
+  const handleEnded = () => {
+    const a = audioRef.current
+    if (a) {
+      a.pause()
+      a.currentTime = 0
+    }
+  }
+
+  // Stop the voiceover if the component unmounts mid-playback
+  useEffect(() => () => audioRef.current?.pause(), [])
+
+  return (
+    <>
+      <video
+        ref={videoRef}
+        src={videoUrl}
+        controls
+        playsInline
+        preload="auto"
+        poster={poster ?? undefined}
+        className={className}
+        onPlay={handlePlay}
+        onPause={handlePause}
+        onSeeked={syncTime}
+        onSeeking={handlePause}
+        onRateChange={handleRateChange}
+        onVolumeChange={handleVolumeChange}
+        onEnded={handleEnded}
+      />
+      {audioUrl && <audio ref={audioRef} src={audioUrl} preload="auto" className="hidden" />}
+    </>
   )
 }
 
@@ -283,16 +362,17 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
                     {scene?.dialogue && <p><span className="font-medium text-foreground">Dialogue:</span> {scene.dialogue}</p>}
                     {scene?.locationDesc && <p><span className="font-medium text-foreground">Location:</span> {scene.locationDesc}</p>}
                     {scene?.videoPrompt && <p><span className="font-medium text-foreground">Prompt:</span> {scene.videoPrompt}</p>}
+                    {scene?.videoUrl && scene?.audioUrl && (
+                      <p className="text-[11px] text-primary/80">🎙 Voiceover (ElevenLabs) — plays in sync with the video</p>
+                    )}
                   </div>
 
                   {scene?.videoUrl && (
                     <div className="mb-3 aspect-[9/16] max-h-[400px] overflow-hidden rounded-lg bg-muted">
-                      <video
-                        src={scene.videoUrl}
-                        controls
-                        playsInline
-                        preload="auto"
-                        poster={scene?.posterUrl ?? undefined}
+                      <SceneVideoPlayer
+                        videoUrl={scene.videoUrl}
+                        audioUrl={scene?.audioUrl}
+                        poster={scene?.posterUrl}
                         className="h-full w-full object-contain"
                       />
                     </div>

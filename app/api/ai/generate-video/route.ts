@@ -5,15 +5,18 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { generateVideo } from "@/lib/replicate";
-import { uploadRemoteToS3 } from "@/lib/s3-upload";
+import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
+import { generateSpeech } from "@/lib/elevenlabs";
 import { getBucketConfig } from "@/lib/aws-config";
 
 /**
  * Generate a scene video using Seedance 2.5 via Replicate.
  * 1. Deduct credits based on project tier
- * 2. Call Seedance 2.5 with the scene's videoPrompt
- * 3. Upload the generated video to S3
- * 4. Save the S3 URL to the scene record
+ * 2. Call Seedance 2.5 with the scene's videoPrompt (generate_audio: false —
+ *    Seedance's own audio track triggers copyright rejections)
+ * 3. If the scene has dialogue, generate a voiceover via ElevenLabs TTS
+ * 4. Upload video (and voiceover) to S3
+ * 5. Save both URLs to the scene record; the frontend plays them in sync
  */
 export async function POST(request: Request) {
   try {
@@ -74,19 +77,33 @@ export async function POST(request: Request) {
       duration: config.duration,
       resolution: config.resolution,
       aspect_ratio: "9:16", // vertical drama format
-      generate_audio: true,
+      generate_audio: false, // silent video — voiceover is added via ElevenLabs
       watermark: false,
     });
 
     // Upload to S3 for permanent storage
     const { folderPrefix } = getBucketConfig();
-    const s3Key = `${folderPrefix}public/videos/${project.id}/${sceneData.episodeId}/scene-${sceneData.number}-${Date.now()}.mp4`;
-    const videoUrl = await uploadRemoteToS3(replicateVideoUrl, s3Key, "video/mp4");
+    const stamp = Date.now();
+    const baseKey = `${folderPrefix}public/videos/${project.id}/${sceneData.episodeId}/scene-${sceneData.number}-${stamp}`;
+    const videoUrl = await uploadRemoteToS3(replicateVideoUrl, `${baseKey}.mp4`, "video/mp4");
+
+    // Voiceover via ElevenLabs (only when the scene has dialogue).
+    // A TTS failure must not lose the already-generated (and paid for) video.
+    let audioUrl: string | null = null;
+    const dialogue = (sceneData.dialogue ?? "").trim();
+    if (dialogue) {
+      try {
+        const audioBuffer = await generateSpeech(dialogue);
+        audioUrl = await uploadBufferToS3(audioBuffer, `${baseKey}.mp3`, "audio/mpeg");
+      } catch (ttsErr: any) {
+        console.error("ElevenLabs voiceover failed (video kept without audio):", ttsErr?.message ?? ttsErr);
+      }
+    }
 
     // Save to DB
     const scene = await prisma.scene.update({
       where: { id: sceneId },
-      data: { videoUrl, status: "generated" },
+      data: { videoUrl, audioUrl, status: "generated" },
     });
 
     return NextResponse.json({ scene, creditsRemaining: (user.credits ?? 0) - config.cost });

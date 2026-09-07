@@ -146,7 +146,8 @@ model Scene {
   dialogue      String?  @db.Text
   locationDesc  String?  @db.Text
   videoPrompt   String?  @db.Text
-  videoUrl      String?  // generated scene video URL
+  videoUrl      String?  // generated scene video URL (silent, Seedance)
+  audioUrl      String?  // ElevenLabs voiceover for the scene dialogue
   videoIsPublic Boolean  @default(false)
   status        String   @default("pending") // pending, generating, generated, accepted
   createdAt     DateTime @default(now())

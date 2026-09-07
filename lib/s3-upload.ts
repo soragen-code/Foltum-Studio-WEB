@@ -31,3 +31,27 @@ export async function uploadRemoteToS3(
 
   return `https://${bucketName}.s3.${region}.amazonaws.com/${key}`;
 }
+
+/**
+ * Upload an in-memory buffer to S3.
+ * Returns the public S3 URL.
+ */
+export async function uploadBufferToS3(
+  buffer: Buffer,
+  key: string,
+  contentType: string
+): Promise<string> {
+  const { bucketName } = getBucketConfig();
+  const region = process.env.AWS_REGION ?? "us-east-1";
+
+  await s3.send(
+    new PutObjectCommand({
+      Bucket: bucketName,
+      Key: key,
+      Body: buffer,
+      ContentType: contentType,
+    })
+  );
+
+  return `https://${bucketName}.s3.${region}.amazonaws.com/${key}`;
+}
