@@ -42,13 +42,18 @@ export async function POST(request: Request) {
     if (scenes.some((s) => !s.videoUrl))
       return NextResponse.json({ error: "Some scenes have no generated video" }, { status: 400 });
 
-    // Each scene stores a SILENT Seedance video (s.videoUrl) plus a separate
-    // ElevenLabs voiceover (s.audioUrl). Before concatenating we mux the voiceover
-    // back into each clip (and add a silent track to dialogue-free scenes) so the
-    // assembled episode actually has sound. Sequential to stay friendly to rate limits.
+    // Native-audio mode: each clip already carries in-scene voices + ambience, so it is
+    // used as-is (muxing a silent track would DROP that audio).
+    // Legacy mode: a scene has a SILENT video (s.videoUrl) + separate ElevenLabs voiceover
+    // (s.audioUrl); mux the voiceover in first. Dialogue-free legacy clips get a silent
+    // track so every input to the concatenator has a uniform video+audio layout.
     const clipsWithAudio: string[] = [];
     for (const s of scenes) {
-      clipsWithAudio.push(await muxAudioIntoVideo(s.videoUrl as string, s.audioUrl));
+      if (s.audioUrl) {
+        clipsWithAudio.push(await muxAudioIntoVideo(s.videoUrl as string, s.audioUrl));
+      } else {
+        clipsWithAudio.push(s.videoUrl as string);
+      }
     }
 
     // Concatenate via Replicate (ffmpeg)

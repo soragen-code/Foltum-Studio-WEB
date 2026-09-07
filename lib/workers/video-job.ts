@@ -1,9 +1,16 @@
 import { prisma } from "@/lib/db";
 import { startVideoPrediction, getPredictionState } from "@/lib/replicate";
-import { renderSceneVoiceover } from "@/lib/voiceover";
+import { renderSceneVoiceover, buildNativeAudioPrompt } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
 import { getBucketConfig } from "@/lib/aws-config";
 import { updateJob, completeJob, failJob, heartbeatJob, runInBackground } from "@/lib/jobs";
+
+/**
+ * When true (default), the video model generates the dialogue + ambient audio NATIVELY,
+ * so speech comes from the characters' mouths and blends with the environment (cinematic).
+ * When false, falls back to the legacy path: silent video + ElevenLabs voiceover laid on top.
+ */
+const NATIVE_AUDIO = (process.env.NATIVE_SCENE_AUDIO ?? "true").toLowerCase() !== "false";
 
 export interface VideoJobParams {
   jobId: string;
@@ -75,16 +82,26 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     await updateJob(jobId, {
       status: "processing",
       progress: 5,
-      message: "Generating video with Seedance (this takes ~3-5 min)...",
+      message: NATIVE_AUDIO
+        ? "Generating cinematic video with in-scene voices (this takes ~3-5 min)..."
+        : "Generating video with Seedance (this takes ~3-5 min)...",
     });
 
-    // 1. Start video (silent)
+    // In native-audio mode, embed the spoken dialogue into the prompt so the
+    // characters actually speak on camera (lip-synced) with diegetic ambient sound.
+    let prompt = scene.videoPrompt;
+    if (NATIVE_AUDIO) {
+      const links = await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true } });
+      prompt = buildNativeAudioPrompt(scene.videoPrompt, scene.dialogue, links.map((l) => l.character));
+    }
+
+    // 1. Start video — native audio (voices + ambience) or silent (legacy TTS overlay)
     const predictionId = await startVideoPrediction({
-      prompt: scene.videoPrompt,
+      prompt,
       duration: Number(params.duration ?? 5),
       resolution: String(params.resolution ?? "480p"),
       aspect_ratio: "9:16",
-      generate_audio: false, // voiceover is added via ElevenLabs
+      generate_audio: NATIVE_AUDIO, // characters speak in-clip; legacy path adds ElevenLabs later
       watermark: false,
     });
 
@@ -120,17 +137,17 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, replicateVi
   const { sceneId, projectId } = state;
   await updateJob(jobId, {
     progress: 60,
-    message: "Video ready. Recording voiceover...",
+    message: NATIVE_AUDIO ? "Video ready. Finalizing..." : "Video ready. Recording voiceover...",
     resultData: JSON.stringify({ ...state, finalizing: true }),
   });
 
   const scene = await prisma.scene.findUnique({ where: { id: sceneId } });
   if (!scene) throw new Error("Scene not found");
 
-  // Voiceover (optional, non-fatal) — real human actor voices per character,
-  // speaker labels / stage directions are never read aloud.
+  // Native-audio mode: speech + ambience are already baked into the clip — no overlay.
+  // Legacy mode: render per-character ElevenLabs voiceover (labels/directions never read aloud).
   let audioBuffer: Buffer | null = null;
-  if ((scene.dialogue ?? "").trim()) {
+  if (!NATIVE_AUDIO && (scene.dialogue ?? "").trim()) {
     try {
       const links = await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true } });
       audioBuffer = await renderSceneVoiceover(scene.dialogue, links.map((l) => l.character));

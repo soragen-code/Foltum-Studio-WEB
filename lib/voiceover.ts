@@ -107,6 +107,44 @@ export function parseDialogue(raw: string | null | undefined): DialogueLine[] {
   return lines;
 }
 
+/**
+ * Build a Seedance prompt that makes the characters SPEAK their lines on-screen,
+ * with lip movement and diegetic ambient sound — so the audio is native to the clip
+ * (coming from the actors' mouths, blended with the environment) rather than a track
+ * laid on top. Background music is explicitly suppressed to avoid copyright issues.
+ *
+ * The scripted dialogue is cleaned of speaker labels and stage directions; each line
+ * is re-attached to its speaker by name so the model knows who says what.
+ */
+export function buildNativeAudioPrompt(
+  basePrompt: string,
+  dialogue: string | null | undefined,
+  characters: VoiceCharacter[]
+): string {
+  const base = (basePrompt ?? "").trim();
+  const lines = parseDialogue(dialogue);
+
+  const AUDIO_DIRECTION =
+    "Audio: fully diegetic and cinematic — spoken dialogue comes from the characters' mouths, " +
+    "lip-synced and synchronized on screen, mixed naturally with the location's ambient sound and room tone. " +
+    "No background music, no narration voiceover, no on-screen text or subtitles.";
+
+  if (!lines.length) {
+    // No dialogue — still ask for lifelike ambient sound, no music.
+    return `${base}\n\nAudio: cinematic diegetic ambient sound and room tone only. No background music, no voiceover, no subtitles.`;
+  }
+
+  const spoken = lines
+    .map((l) => {
+      const character = findCharacter(l.speaker, characters);
+      const who = character?.name ?? l.speaker ?? "Character";
+      return `${who} says (speaking on camera, lips moving): "${l.text}"`;
+    })
+    .join("\n");
+
+  return `${base}\n\nThe characters speak the following lines out loud, on camera, in sync with their lip movements:\n${spoken}\n\n${AUDIO_DIRECTION}`;
+}
+
 function findCharacter(speaker: string | null, characters: VoiceCharacter[]): VoiceCharacter | undefined {
   if (!speaker) return undefined;
   const s = speaker.toLowerCase();

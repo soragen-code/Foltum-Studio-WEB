@@ -305,11 +305,6 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
             <div className="flex h-60 items-center justify-center rounded-xl border border-dashed border-border text-sm text-muted-foreground">
               Select an episode from the left
             </div>
-          ) : generating ? (
-            <div className="flex h-60 items-center justify-center rounded-xl border border-border bg-card">
-              <Loader2 className="h-6 w-6 animate-spin text-primary" />
-              <span className="ml-2 text-sm">Generating scenes...</span>
-            </div>
           ) : (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
@@ -322,6 +317,24 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
                   </span>
                 )}
               </div>
+
+              {/* Non-destructive loading banner: the panel stays mounted so nothing
+                  flashes away and back while scenes are (re)generated. */}
+              {generating && (
+                <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                  {(scenes ?? []).length ? 'Regenerating scenes…' : 'Generating scenes…'}
+                </div>
+              )}
+
+              {/* Skeleton placeholders keep the layout height stable on first generation */}
+              {generating && (scenes ?? []).length === 0 && (
+                <div className="space-y-4">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="h-28 animate-pulse rounded-xl border border-border bg-card" />
+                  ))}
+                </div>
+              )}
 
               {selectedEpisode?.videoUrl && (
                 <div className="overflow-hidden rounded-xl border border-border bg-card p-4" style={{ boxShadow: 'var(--shadow-sm)' }}>
