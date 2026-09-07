@@ -14,7 +14,11 @@ Return ONLY valid JSON:
 {
   "personality": "Updated personality (2-3 sentences)",
   "appearance": "Updated detailed physical appearance for AI image generation (2-3 sentences)"
-}`;
+}
+
+IMPORTANT LANGUAGE RULES:
+- Write "personality" in the SAME LANGUAGE as the existing character data. If it's in Russian — write in Russian.
+- The "appearance" field must ALWAYS be in English — it is used as a prompt for AI image generation.`;
 
 function imagePrompt(appearance: string, name: string, shotType: "front" | "profile" | "full"): string {
   const base = `Cinematic character portrait, dramatic lighting, dark moody atmosphere, film still quality. Character: ${appearance}.`;

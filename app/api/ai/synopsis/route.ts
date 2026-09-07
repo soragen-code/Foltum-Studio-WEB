@@ -14,7 +14,9 @@ When given an idea, produce a rich synopsis (300-600 words) that covers:
 - Target format (number of seasons, episodes per season)
 
 Write in vivid, engaging prose. Be specific — avoid generic descriptions.
-If a correction/revision is requested, rewrite the synopsis incorporating the feedback while keeping what works.`;
+If a correction/revision is requested, rewrite the synopsis incorporating the feedback while keeping what works.
+
+IMPORTANT: Write the synopsis in the SAME LANGUAGE as the user's input. If they write in Russian — respond in Russian. If in English — respond in English. Match their language exactly.`;
 
 export async function POST(request: Request) {
   try {

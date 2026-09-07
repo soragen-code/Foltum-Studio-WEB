@@ -26,7 +26,11 @@ Rules:
 - Video prompts should be detailed enough for AI video generation (Seedance/Minimax style)
 - Include camera directions in video prompts (close-up, wide shot, tracking, etc.)
 - Build tension within each episode toward the cliffhanger
-- Some scenes can have no dialogue (use [NO DIALOGUE] or [VISUAL MONTAGE])`;
+- Some scenes can have no dialogue (use [NO DIALOGUE] or [VISUAL MONTAGE])
+
+IMPORTANT LANGUAGE RULES:
+- Write dialogue and locationDesc in the SAME LANGUAGE as the synopsis/episode description. If they are in Russian — write in Russian.
+- EXCEPTION: The "videoPrompt" field must ALWAYS be in English — it is used as a prompt for AI video generation (Seedance) and works best in English.`;
 
 export async function POST(request: Request) {
   try {

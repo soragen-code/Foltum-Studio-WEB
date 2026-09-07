@@ -119,16 +119,19 @@ export function CharactersStage({ project, onRefresh }: { project: any; onRefres
                   <p><span className="font-medium text-foreground">Personality:</span> {char?.personality ?? 'N/A'}</p>
                 </div>
                 <div className="mb-3 grid grid-cols-3 gap-2">
-                  {[char?.imageFront, char?.imageProfile, char?.imageFull].map((img, i) => (
-                    <div key={i} className="aspect-[3/4] overflow-hidden rounded-lg bg-muted">
-                      <img
-                        src={img ?? placeholder}
-                        alt={`${char?.name ?? 'Character'} view ${i + 1}`}
-                        className="h-full w-full object-cover"
-                        onError={(e: any) => { e.target.src = placeholder }}
-                      />
-                    </div>
-                  ))}
+                  {[char?.imageFront, char?.imageProfile, char?.imageFull].map((img, i) => {
+                    const src = img && img.length > 0 ? img : placeholder
+                    return (
+                      <div key={i} className="aspect-[3/4] overflow-hidden rounded-lg bg-muted">
+                        <img
+                          src={src}
+                          alt={`${char?.name ?? 'Character'} view ${i + 1}`}
+                          className="h-full w-full object-cover"
+                          onError={(e: any) => { e.target.src = placeholder }}
+                        />
+                      </div>
+                    )
+                  })}
                 </div>
                 {!isLocked && (
                   <div className="flex gap-2">

@@ -39,7 +39,9 @@ Rules:
 - Each episode must have a cliffhanger or hook
 - Titles should be evocative and short
 - Descriptions should be specific to the story, not generic
-- Build dramatic tension across the season arc`;
+- Build dramatic tension across the season arc
+
+IMPORTANT: Write ALL text (titles, descriptions, cliffhangers) in the SAME LANGUAGE as the synopsis provided. If the synopsis is in Russian — write in Russian. If in English — write in English. Match the language exactly.`;
 }
 
 export async function POST(request: Request) {

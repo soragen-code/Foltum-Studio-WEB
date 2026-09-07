@@ -29,7 +29,11 @@ Rules:
 - Make appearances vivid and specific enough for AI image generation
 - Each character should have clear visual distinctiveness
 - Personality descriptions should reveal inner conflicts
-- Roles should follow classical story structure`;
+- Roles should follow classical story structure
+
+IMPORTANT LANGUAGE RULES:
+- Write name, description, role, personality in the SAME LANGUAGE as the synopsis. If synopsis is in Russian — write those fields in Russian.
+- EXCEPTION: The "appearance" field must ALWAYS be in English — it is used as a prompt for AI image generation and works best in English.`;
 
 /** Build a FLUX prompt for a specific shot type */
 function imagePrompt(appearance: string, name: string, shotType: "front" | "profile" | "full"): string {
