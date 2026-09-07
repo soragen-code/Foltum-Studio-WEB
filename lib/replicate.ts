@@ -82,6 +82,63 @@ export async function generateVideo(input: SeedanceInput): Promise<string> {
   throw new Error("generateVideo: exhausted retries");
 }
 
+/** Build the Seedance input payload (shared by run and create). */
+function seedanceInput(input: SeedanceInput) {
+  return {
+    prompt: input.prompt,
+    duration: input.duration ?? 5,
+    resolution: input.resolution ?? "720p",
+    aspect_ratio: input.aspect_ratio ?? "9:16",
+    generate_audio: input.generate_audio ?? true,
+    watermark: input.watermark ?? false,
+    output_format: "mp4",
+    ...(input.image ? { image: input.image } : {}),
+    ...(input.seed !== undefined ? { seed: input.seed } : {}),
+  };
+}
+
+/**
+ * Start a Seedance prediction WITHOUT waiting for it. Returns the prediction id,
+ * so the caller can poll (and survive a serverless function restart).
+ */
+export async function startVideoPrediction(input: SeedanceInput): Promise<string> {
+  const replicate = getReplicate();
+  const maxRetries = 2;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const prediction = await replicate.predictions.create({
+        model: "bytedance/seedance-2.5",
+        input: seedanceInput(input),
+      });
+      return prediction.id;
+    } catch (err: any) {
+      const is429 = err?.message?.includes("429") || err?.response?.status === 429;
+      if (is429 && attempt < maxRetries) {
+        await sleep((attempt + 1) * 15_000);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("startVideoPrediction: exhausted retries");
+}
+
+export interface PredictionState {
+  status: "starting" | "processing" | "succeeded" | "failed" | "canceled";
+  /** Output URL when succeeded */
+  url?: string;
+  error?: string;
+}
+
+/** Fetch the current state of a prediction. */
+export async function getPredictionState(id: string): Promise<PredictionState> {
+  const p = await getReplicate().predictions.get(id);
+  const status = p.status as PredictionState["status"];
+  if (status === "succeeded") return { status, url: extractUrl(p.output) };
+  if (status === "failed" || status === "canceled") return { status, error: String(p.error ?? status) };
+  return { status };
+}
+
 /* ------------------------------------------------------------------ */
 /*  FLUX 1.1 Pro — image generation (character portraits)            */
 /* ------------------------------------------------------------------ */

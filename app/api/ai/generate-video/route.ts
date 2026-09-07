@@ -1,5 +1,5 @@
 export const dynamic = "force-dynamic";
-export const maxDuration = 300; // the job runs in the background of this invocation via after()
+export const maxDuration = 800; // Vercel Pro / Fluid compute max — background job runs inside this invocation via after()
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";

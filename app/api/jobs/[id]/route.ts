@@ -1,9 +1,11 @@
 export const dynamic = "force-dynamic";
+export const maxDuration = 800; // may host a resumed video finalization via after()
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { failStaleJobs, STALE_JOB_MS } from "@/lib/jobs";
+import { resumeVideoJob } from "@/lib/workers/video-job";
 
 /**
  * GET /api/jobs/[id] — status polling for a GenerationJob.
@@ -16,6 +18,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
   const { id } = await params;
   let job = await prisma.generationJob.findUnique({ where: { id } });
+  // Video job whose worker went quiet → pick the Replicate prediction up from here (resume / heartbeat)
+  if (job && (await resumeVideoJob(job))) {
+    job = await prisma.generationJob.findUnique({ where: { id } });
+  }
   // Stale processing job (function was killed) → mark failed so the UI stops waiting
   if (job && ["pending", "processing"].includes(job.status) && Date.now() - job.updatedAt.getTime() > STALE_JOB_MS) {
     await failStaleJobs({ projectId: job.projectId, type: job.type });

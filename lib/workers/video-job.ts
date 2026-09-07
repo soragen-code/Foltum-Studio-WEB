@@ -1,9 +1,9 @@
 import { prisma } from "@/lib/db";
-import { generateVideo } from "@/lib/replicate";
-import { generateSpeech } from "@/lib/elevenlabs";
+import { startVideoPrediction, getPredictionState } from "@/lib/replicate";
+import { renderSceneVoiceover } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
 import { getBucketConfig } from "@/lib/aws-config";
-import { updateJob, completeJob, failJob } from "@/lib/jobs";
+import { updateJob, completeJob, failJob, heartbeatJob, runInBackground } from "@/lib/jobs";
 
 export interface VideoJobParams {
   jobId: string;
@@ -15,14 +15,54 @@ export interface VideoJobParams {
   resolution?: string;
 }
 
+/** Persisted in GenerationJob.resultData while the job is running, so it can be resumed. */
+interface VideoJobState {
+  predictionId: string;
+  sceneId: string;
+  projectId: string;
+  userId?: string;
+  cost?: number;
+  startedAt: number;
+  /** set once finalization (TTS + upload) has begun, to avoid running it twice */
+  finalizing?: boolean;
+}
+
+const POLL_INTERVAL_MS = 8_000;
+/** Typical Seedance time — only used to animate the progress bar while waiting. */
+const EXPECTED_VIDEO_MS = Number(process.env.SEEDANCE_EXPECTED_MS ?? 5 * 60 * 1000);
+/** Hard cap for waiting on Replicate. */
+const MAX_WAIT_MS = Number(process.env.SEEDANCE_MAX_WAIT_MS ?? 12 * 60 * 1000);
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function parseState(resultData: string | null | undefined): VideoJobState | null {
+  if (!resultData) return null;
+  try {
+    const s = JSON.parse(resultData);
+    return s && typeof s.predictionId === "string" ? (s as VideoJobState) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Progress 5 → 55 while the video model works, based on elapsed time. */
+function waitingProgress(startedAt: number): number {
+  const ratio = Math.min(1, (Date.now() - startedAt) / EXPECTED_VIDEO_MS);
+  return 5 + Math.round(ratio * 50);
+}
+
 /**
  * Background video job (runs inside the same serverless invocation via `after()`).
  *
- * 1. Seedance video (silent — generate_audio: false)      → progress 60%
- * 2. ElevenLabs voiceover if the scene has dialogue        → progress 80%
- * 3. Upload both to S3, update the Scene row               → progress 95%
- * 4. Job completed with resultData { videoUrl, audioUrl }
+ * 1. Start Seedance prediction (silent — generate_audio: false), persist predictionId
+ * 2. Poll Replicate, heart-beating the job (progress 5→55) so it is never marked stale
+ * 3. finalize(): human voiceover via ElevenLabs (60%) → S3 upload (80%) → Scene update (95%) → completed
  * On failure: scene status reset, credits refunded, job marked failed.
+ *
+ * If the function dies mid-way, GET /api/jobs/[id] calls `resumeVideoJob()` which
+ * picks the prediction up by id and finishes the work.
  */
 export async function runVideoJob(params: VideoJobParams): Promise<void> {
   const { jobId, sceneId, projectId, userId } = params;
@@ -35,11 +75,11 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     await updateJob(jobId, {
       status: "processing",
       progress: 5,
-      message: "Generating video with Seedance (this takes ~3 min)...",
+      message: "Generating video with Seedance (this takes ~3-5 min)...",
     });
 
-    // 1. Video (silent)
-    const replicateVideoUrl = await generateVideo({
+    // 1. Start video (silent)
+    const predictionId = await startVideoPrediction({
       prompt: scene.videoPrompt,
       duration: Number(params.duration ?? 5),
       resolution: String(params.resolution ?? "480p"),
@@ -47,53 +87,151 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       generate_audio: false, // voiceover is added via ElevenLabs
       watermark: false,
     });
-    await updateJob(jobId, { progress: 60, message: "Video ready. Generating voiceover..." });
 
-    // 2. Voiceover (optional, non-fatal)
-    let audioBuffer: Buffer | null = null;
-    const dialogue = (scene.dialogue ?? "").trim();
-    if (dialogue) {
-      try {
-        audioBuffer = await generateSpeech(dialogue);
-      } catch (ttsErr: any) {
-        console.error("[video-job] ElevenLabs failed (video kept without audio):", ttsErr?.message ?? ttsErr);
-      }
-    }
-    await updateJob(jobId, { progress: 80, message: "Uploading to storage..." });
+    const state: VideoJobState = { predictionId, sceneId, projectId, userId, cost, startedAt: Date.now() };
+    await updateJob(jobId, { resultData: JSON.stringify(state) });
 
-    // 3. Upload + save
-    const { folderPrefix } = getBucketConfig();
-    const baseKey = `${folderPrefix}public/videos/${projectId}/${scene.episodeId}/scene-${scene.number}-${Date.now()}`;
-    const videoUrl = await uploadRemoteToS3(replicateVideoUrl, `${baseKey}.mp4`, "video/mp4");
-    let audioUrl: string | null = null;
-    if (audioBuffer) {
-      try {
-        audioUrl = await uploadBufferToS3(audioBuffer, `${baseKey}.mp3`, "audio/mpeg");
-      } catch (upErr: any) {
-        console.error("[video-job] audio upload failed:", upErr?.message ?? upErr);
-      }
-    }
-    await updateJob(jobId, { progress: 95, message: "Saving scene..." });
+    // 2. Wait for the model
+    const videoUrl = await waitForPrediction(jobId, state);
 
-    const updated = await prisma.scene.update({
-      where: { id: sceneId },
-      data: { videoUrl, audioUrl, status: "generated" },
-    });
-
-    await completeJob(jobId, { videoUrl, audioUrl, scene: updated }, "Video ready");
+    // 3. Finalize
+    await finalizeVideoJob(jobId, state, videoUrl);
   } catch (err: any) {
-    console.error("[video-job] failed:", err);
+    await handleFailure(jobId, { sceneId, userId, cost }, err);
+  }
+}
+
+/** Poll Replicate until the prediction settles; heartbeats the job on every tick. */
+async function waitForPrediction(jobId: string, state: VideoJobState): Promise<string> {
+  while (true) {
+    const p = await getPredictionState(state.predictionId);
+    if (p.status === "succeeded" && p.url) return p.url;
+    if (p.status === "failed" || p.status === "canceled") throw new Error(p.error || "Video model failed");
+    if (Date.now() - state.startedAt > MAX_WAIT_MS) throw new Error("Video model timed out");
+
+    await updateJob(jobId, { progress: waitingProgress(state.startedAt) });
+    await heartbeatJob(jobId);
+    await sleep(POLL_INTERVAL_MS);
+  }
+}
+
+/** TTS + upload + scene update. Idempotent guard via state.finalizing. */
+async function finalizeVideoJob(jobId: string, state: VideoJobState, replicateVideoUrl: string): Promise<void> {
+  const { sceneId, projectId } = state;
+  await updateJob(jobId, {
+    progress: 60,
+    message: "Video ready. Recording voiceover...",
+    resultData: JSON.stringify({ ...state, finalizing: true }),
+  });
+
+  const scene = await prisma.scene.findUnique({ where: { id: sceneId } });
+  if (!scene) throw new Error("Scene not found");
+
+  // Voiceover (optional, non-fatal) — real human actor voices per character,
+  // speaker labels / stage directions are never read aloud.
+  let audioBuffer: Buffer | null = null;
+  if ((scene.dialogue ?? "").trim()) {
     try {
-      await prisma.scene.update({ where: { id: sceneId }, data: { status: "pending" } });
-    } catch {}
+      const links = await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true } });
+      audioBuffer = await renderSceneVoiceover(scene.dialogue, links.map((l) => l.character));
+    } catch (ttsErr: any) {
+      console.error("[video-job] ElevenLabs failed (video kept without audio):", ttsErr?.message ?? ttsErr);
+    }
+  }
+  await updateJob(jobId, { progress: 80, message: "Uploading to storage..." });
+
+  const { folderPrefix } = getBucketConfig();
+  const baseKey = `${folderPrefix}public/videos/${projectId}/${scene.episodeId}/scene-${scene.number}-${Date.now()}`;
+  const videoUrl = await uploadRemoteToS3(replicateVideoUrl, `${baseKey}.mp4`, "video/mp4");
+  let audioUrl: string | null = null;
+  if (audioBuffer) {
     try {
-      if (userId && cost > 0) {
-        await prisma.user.update({ where: { id: userId }, data: { credits: { increment: cost } } });
-        await prisma.creditTransaction.create({
-          data: { userId, amount: cost, description: "Refund: video generation failed" },
-        });
+      audioUrl = await uploadBufferToS3(audioBuffer, `${baseKey}.mp3`, "audio/mpeg");
+    } catch (upErr: any) {
+      console.error("[video-job] audio upload failed:", upErr?.message ?? upErr);
+    }
+  }
+  await updateJob(jobId, { progress: 95, message: "Saving scene..." });
+
+  const updated = await prisma.scene.update({
+    where: { id: sceneId },
+    data: { videoUrl, audioUrl, status: "generated" },
+  });
+
+  await completeJob(jobId, { videoUrl, audioUrl, scene: updated }, "Video ready");
+}
+
+async function handleFailure(
+  jobId: string,
+  ctx: { sceneId: string; userId?: string; cost?: number },
+  err: any
+): Promise<void> {
+  console.error("[video-job] failed:", err);
+  const cost = Number(ctx.cost ?? 0);
+  try {
+    await prisma.scene.update({ where: { id: ctx.sceneId }, data: { status: "pending" } });
+  } catch {}
+  try {
+    if (ctx.userId && cost > 0) {
+      await prisma.user.update({ where: { id: ctx.userId }, data: { credits: { increment: cost } } });
+      await prisma.creditTransaction.create({
+        data: { userId: ctx.userId, amount: cost, description: "Refund: video generation failed" },
+      });
+    }
+  } catch {}
+  await failJob(jobId, err?.message ?? "Video generation failed");
+}
+
+/**
+ * Called from the polling endpoint for a "processing" video job whose function may have died.
+ * Returns true if the job was touched (resumed / heart-beaten / failed) — i.e. the caller
+ * should re-read it — or false if there is nothing to resume.
+ */
+export async function resumeVideoJob(job: {
+  id: string;
+  type: string;
+  status: string;
+  resultData: string | null;
+  updatedAt: Date;
+}): Promise<boolean> {
+  if (job.type !== "video" || job.status !== "processing") return false;
+  const state = parseState(job.resultData);
+  if (!state) return false;
+
+  // Only step in when the worker has gone quiet (no heartbeat for > 1 poll interval x3)
+  if (Date.now() - job.updatedAt.getTime() < POLL_INTERVAL_MS * 3) return false;
+
+  try {
+    if (state.finalizing) {
+      // Finalization died (TTS/upload). It's cheap to redo — restart it.
+      const p = await getPredictionState(state.predictionId);
+      if (p.status === "succeeded" && p.url) {
+        await heartbeatJob(job.id);
+        runInBackground(() => finalizeVideoJob(job.id, state, p.url!).catch((e) => handleFailure(job.id, state, e)));
+        return true;
       }
-    } catch {}
-    await failJob(jobId, err?.message ?? "Video generation failed");
+    }
+
+    const p = await getPredictionState(state.predictionId);
+    if (p.status === "succeeded" && p.url) {
+      await heartbeatJob(job.id);
+      runInBackground(() => finalizeVideoJob(job.id, state, p.url!).catch((e) => handleFailure(job.id, state, e)));
+      return true;
+    }
+    if (p.status === "failed" || p.status === "canceled") {
+      await handleFailure(job.id, state, new Error(p.error || "Video model failed"));
+      return true;
+    }
+    if (Date.now() - state.startedAt > MAX_WAIT_MS) {
+      await handleFailure(job.id, state, new Error("Video model timed out"));
+      return true;
+    }
+    // Still rendering — keep the job alive from the poller side
+    await updateJob(job.id, { progress: waitingProgress(state.startedAt) });
+    await heartbeatJob(job.id);
+    return true;
+  } catch (e) {
+    console.error("[video-job] resume error:", e);
+    return false;
   }
 }

@@ -38,7 +38,7 @@ export function getBaseUrl(): string {
  * This avoids the self-HTTP-call pattern, where aborting the outgoing request
  * would make Vercel kill the worker invocation mid-way.
  *
- * NOTE: the calling route MUST export `maxDuration = 300`.
+ * NOTE: the calling route MUST export `maxDuration = JOB_MAX_DURATION`.
  */
 export function runInBackground(fn: () => Promise<void>): void {
   const run = () => fn().catch((err) => console.error("[jobs] background task failed:", err));
@@ -51,7 +51,17 @@ export function runInBackground(fn: () => Promise<void>): void {
 }
 
 /** Jobs that haven't been touched for this long are considered dead (function killed). */
-export const STALE_JOB_MS = 6 * 60 * 1000;
+export const STALE_JOB_MS = 3 * 60 * 1000;
+
+/** Route-level `maxDuration` for routes that host background jobs (Vercel Pro / Fluid compute allows up to 800s). */
+export const JOB_MAX_DURATION = 800;
+
+/** Touch a job so it is not considered stale (progress unchanged). */
+export async function heartbeatJob(jobId: string): Promise<void> {
+  try {
+    await prisma.generationJob.update({ where: { id: jobId }, data: { updatedAt: new Date() } });
+  } catch {}
+}
 
 /**
  * Mark "processing"/"pending" jobs that stopped updating as failed.
