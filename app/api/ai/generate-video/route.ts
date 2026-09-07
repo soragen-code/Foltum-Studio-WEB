@@ -14,6 +14,11 @@ const VIDEO_TIERS: Record<string, { cost: number; duration: number; resolution: 
   maximum: { cost: 8, duration: 10, resolution: "720p" },
 };
 
+/** Minimum total episode length (sum of its scenes), seconds. */
+const EPISODE_MIN_SECONDS = Number(process.env.EPISODE_MIN_SECONDS ?? 60);
+/** Seedance 2.5 accepts up to 30 s per clip; keep a safe upper bound. */
+const SCENE_MAX_SECONDS = Number(process.env.SCENE_MAX_SECONDS ?? 15);
+
 /**
  * POST /api/ai/generate-video  { projectId, sceneId }
  *
@@ -35,12 +40,25 @@ export async function POST(request: Request) {
     const project = await prisma.project.findFirst({ where: { id: projectId } });
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
-    const config = VIDEO_TIERS[project.tier] ?? VIDEO_TIERS.minimum;
+    const tier = VIDEO_TIERS[project.tier] ?? VIDEO_TIERS.minimum;
 
     const sceneData = await prisma.scene.findUnique({ where: { id: sceneId } });
     if (!sceneData) return NextResponse.json({ error: "Scene not found" }, { status: 404 });
     if (!sceneData.videoPrompt)
       return NextResponse.json({ error: "Scene has no video prompt" }, { status: 400 });
+
+    // Episode must run at least EPISODE_MIN_SECONDS in total → each scene gets its share,
+    // never shorter than the tier's base duration. Credits scale with the extra seconds.
+    const sceneCount = Math.max(1, await prisma.scene.count({ where: { episodeId: sceneData.episodeId } }));
+    const duration = Math.min(
+      SCENE_MAX_SECONDS,
+      Math.max(tier.duration, Math.ceil(EPISODE_MIN_SECONDS / sceneCount))
+    );
+    const config = {
+      resolution: tier.resolution,
+      duration,
+      cost: Math.max(tier.cost, Math.ceil((tier.cost * duration) / tier.duration)),
+    };
 
     // Dead jobs (killed function) must not block new generations
     await failStaleJobs({ sceneId, type: "video" });
