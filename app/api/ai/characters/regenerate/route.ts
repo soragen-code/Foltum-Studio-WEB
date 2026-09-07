@@ -1,8 +1,12 @@
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
+
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { chatJSON } from "@/lib/ai";
+import { generateImage } from "@/lib/replicate";
+import { uploadRemoteToS3 } from "@/lib/s3-upload";
 
 const SYSTEM = `You are a character designer. Given a character's current data and the project synopsis, regenerate a fresh take on their appearance and personality while keeping their name and role.
 
@@ -11,6 +15,18 @@ Return ONLY valid JSON:
   "personality": "Updated personality (2-3 sentences)",
   "appearance": "Updated detailed physical appearance for AI image generation (2-3 sentences)"
 }`;
+
+function imagePrompt(appearance: string, name: string, shotType: "front" | "profile" | "full"): string {
+  const base = `Cinematic character portrait, dramatic lighting, dark moody atmosphere, film still quality. Character: ${appearance}.`;
+  switch (shotType) {
+    case "front":
+      return `${base} Close-up front view, facing camera directly, eye contact, shallow depth of field, studio portrait.`;
+    case "profile":
+      return `${base} Side profile view, dramatic rim lighting, silhouette edge, cinematic composition.`;
+    case "full":
+      return `${base} Full body shot, standing pose, environmental portrait, wide angle, atmospheric background.`;
+  }
+}
 
 export async function POST(request: Request) {
   try {
@@ -46,15 +62,34 @@ Generate a fresh, different take on this character's appearance and personality.
       { temperature: 1.0, maxTokens: 1000 }
     );
 
-    const placeholder = "https://placehold.co/300x400/1a1a2e/eab308?text=";
+    // Generate 3 new images in parallel
+    const shots = ["front", "profile", "full"] as const;
+    const aspectRatios = { front: "3:4", profile: "3:4", full: "9:16" };
+    const pid = existing.projectId;
+
+    const imgResults = await Promise.all(
+      shots.map(async (shot) => {
+        const prompt = imagePrompt(data.appearance, existing.name, shot);
+        const replicateUrl = await generateImage({
+          prompt,
+          aspect_ratio: aspectRatios[shot],
+        });
+        const s3Key = `media/public/characters/${pid}/${existing.id}/${shot}_${Date.now()}.webp`;
+        const s3Url = await uploadRemoteToS3(replicateUrl, s3Key, "image/webp");
+        return { shot, url: s3Url };
+      })
+    );
+
+    const imgMap = Object.fromEntries(imgResults.map((r) => [r.shot, r.url]));
+
     const character = await prisma.character.update({
       where: { id: characterId },
       data: {
         personality: data.personality,
         appearance: data.appearance,
-        imageFront: placeholder + encodeURIComponent(existing.name + " Front v2"),
-        imageProfile: placeholder + encodeURIComponent(existing.name + " Profile v2"),
-        imageFull: placeholder + encodeURIComponent(existing.name + " Full v2"),
+        imageFront: imgMap.front,
+        imageProfile: imgMap.profile,
+        imageFull: imgMap.full,
       },
     });
 
