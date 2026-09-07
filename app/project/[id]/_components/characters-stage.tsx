@@ -1,6 +1,7 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useJobPolling, JobProgressBar } from './use-job-polling'
 import { Loader2, RefreshCw, Upload, Lock, Check, User, Wand2, ImageOff } from 'lucide-react'
 
 /** Renders the 3 character image slots with proper fallback */
@@ -60,147 +61,65 @@ interface CharacterData {
   isLocked: boolean
 }
 
-interface GenProgress {
-  current: number
-  total: number
-  message: string
-}
-
-/** Progress bar using the app design tokens (bg-muted track, bg-primary fill) */
-function ProgressBar({ progress }: { progress: GenProgress }) {
-  const total = Math.max(progress.total, 1)
-  const pct = Math.min(100, Math.max(0, Math.round((progress.current / total) * 100)))
-  return (
-    <div className="mt-4 space-y-2">
-      <div className="flex items-center justify-between text-xs text-muted-foreground">
-        <span className="flex items-center gap-2 truncate">
-          <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-primary" />
-          <span className="truncate">{progress.message}</span>
-        </span>
-        <span className="ml-3 flex-shrink-0 tabular-nums">
-          {Math.min(progress.current, total)} / {total} · {pct}%
-        </span>
-      </div>
-      <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-        <div
-          className="h-full rounded-full bg-primary transition-all duration-500 ease-out"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-    </div>
-  )
-}
-
-/** Parse SSE `data:` lines from a buffered chunk; returns parsed payloads and the leftover buffer */
-function parseSSEChunk(buffer: string): { events: any[]; rest: string } {
-  const events: any[] = []
-  const blocks = buffer.split('\n\n')
-  const rest = blocks.pop() ?? ''
-  for (const block of blocks) {
-    for (const line of block.split('\n')) {
-      if (!line.startsWith('data:')) continue
-      const json = line.slice(5).trim()
-      if (!json) continue
-      try { events.push(JSON.parse(json)) } catch {}
-    }
-  }
-  return { events, rest }
-}
+const CHARACTERS_EXPECTED_SEC = 180 // ~9 FLUX images sequentially
 
 export function CharactersStage({ project, onRefresh }: { project: any; onRefresh: () => void }) {
   const [characters, setCharacters] = useState<CharacterData[]>(project?.characters ?? [])
-  const [generating, setGenerating] = useState(false)
-  const [progress, setProgress] = useState<GenProgress | null>(null)
+  const [starting, setStarting] = useState(false)
   const [locking, setLocking] = useState(false)
   const [error, setError] = useState('')
   const isLocked = project?.charactersLocked ?? false
 
+  const { job, isActive, start: startPolling, clear: clearJob } = useJobPolling({
+    onUpdate: (res) => {
+      // The poll endpoint returns the current characters with image URLs so far
+      if (Array.isArray(res.characters)) setCharacters(res.characters)
+    },
+    onFinish: (res) => {
+      if (res.job.status === 'failed') setError(res.job.error ?? 'Image generation failed')
+      if (Array.isArray(res.characters)) setCharacters(res.characters)
+      onRefresh()
+      // Keep the finished bar visible briefly, then hide it
+      setTimeout(() => clearJob(), 2500)
+    },
+  })
+
+  const generating = starting || isActive
+
+  // Resume polling if a character job is still running for this project (user navigated away and back)
+  useEffect(() => {
+    if (!project?.id) return
+    let cancelled = false
+    fetch(`/api/jobs?projectId=${project.id}&type=characters&active=1`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled) return
+        const active = data?.jobs?.[0]
+        if (active?.id) startPolling(active.id)
+      })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [project?.id, startPolling])
+
   const generateCharacters = async () => {
-    setGenerating(true)
+    setStarting(true)
     setError('')
-    setProgress({ current: 0, total: 1, message: 'Starting character generation...' })
-    let gotDone = false
     try {
       const res = await fetch('/api/ai/characters', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projectId: project?.id, synopsis: project?.synopsis }),
       })
-
-      // Non-stream error responses (401/400/500 before the stream opens)
-      const contentType = res.headers.get('content-type') ?? ''
-      if (!res.ok || !contentType.includes('text/event-stream') || !res.body) {
-        let msg = 'Generation failed'
-        try { const data = await res.json(); msg = data?.error ?? msg } catch {}
-        setError(msg)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data?.jobId) {
+        setError(data?.error ?? 'Generation failed')
         return
       }
-
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      const handleEvent = (evt: any) => {
-        switch (evt?.type) {
-          case 'progress':
-            setProgress({ current: evt.current ?? 0, total: evt.total ?? 1, message: evt.message ?? '' })
-            break
-          case 'characters_text':
-            // Show cards immediately with empty images
-            setCharacters(Array.isArray(evt.characters) ? evt.characters : [])
-            setProgress((p) => ({
-              current: evt.current ?? p?.current ?? 1,
-              total: evt.total ?? p?.total ?? 1,
-              message: p?.message ?? 'Character profiles ready',
-            }))
-            break
-          case 'image':
-            // Patch a single image field on the matching character
-            setCharacters((prev) =>
-              (prev ?? []).map((c) =>
-                c?.id === evt.characterId ? { ...c, [evt.field]: evt.url } : c
-              )
-            )
-            setProgress((p) => ({
-              current: evt.current ?? p?.current ?? 0,
-              total: evt.total ?? p?.total ?? 1,
-              message: p?.message ?? '',
-            }))
-            break
-          case 'done':
-            gotDone = true
-            if (Array.isArray(evt.characters)) setCharacters(evt.characters)
-            setProgress({ current: evt.total ?? 1, total: evt.total ?? 1, message: 'All done' })
-            break
-          case 'error':
-            setError(evt.message ?? 'Generation failed')
-            break
-        }
-      }
-
-      while (true) {
-        const { value, done } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const { events, rest } = parseSSEChunk(buffer)
-        buffer = rest
-        events.forEach(handleEvent)
-      }
-      // Flush any trailing event without a final blank line
-      if (buffer.trim()) {
-        const { events } = parseSSEChunk(buffer + '\n\n')
-        events.forEach(handleEvent)
-      }
-
-      if (!gotDone) {
-        // Stream ended without a "done" event (e.g. connection dropped) — refetch persisted state
-        onRefresh()
-      }
+      // Show the text profiles immediately; images arrive via polling
+      if (Array.isArray(data.characters)) setCharacters(data.characters)
+      startPolling(data.jobId)
     } catch { setError('Network error') }
-    finally {
-      setGenerating(false)
-      setProgress(null)
-    }
+    finally { setStarting(false) }
   }
 
   const regenCharacter = async (charId: string) => {
@@ -255,7 +174,12 @@ export function CharactersStage({ project, onRefresh }: { project: any; onRefres
 
         {error && <div className="mt-4 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
 
-        {generating && progress && <ProgressBar progress={progress} />}
+        {starting && !job && (
+          <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin text-primary" /> Generating character profiles...
+          </div>
+        )}
+        {job && <JobProgressBar job={job} expectedTotalSec={CHARACTERS_EXPECTED_SEC} className="mt-4" />}
 
         {!isLocked && (characters?.length ?? 0) === 0 && (
           <button

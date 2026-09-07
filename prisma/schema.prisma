@@ -204,3 +204,22 @@ model Payment {
 
   @@index([userId])
 }
+
+/// Background generation job (characters / video). Frontend polls GET /api/jobs/[id].
+model GenerationJob {
+  id          String   @id @default(cuid())
+  type        String   // "characters" | "video" | "image"
+  status      String   @default("pending") // "pending" | "processing" | "completed" | "failed"
+  progress    Int      @default(0) // 0-100
+  message     String?  // current step description
+  projectId   String
+  characterId String?  // for character jobs
+  sceneId     String?  // for video/scene jobs
+  resultData  String?  @db.Text // JSON string
+  error       String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([projectId, status])
+  @@index([sceneId])
+}
