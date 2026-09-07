@@ -1,10 +1,10 @@
 export const dynamic = "force-dynamic";
-export const maxDuration = 300; // video concatenation can take a while
+export const maxDuration = 800; // per-scene audio mux + concatenation can take a while
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { concatVideos } from "@/lib/replicate";
+import { concatVideos, muxAudioIntoVideo } from "@/lib/replicate";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 
 /**
@@ -39,13 +39,21 @@ export async function POST(request: Request) {
     if (!allAccepted)
       return NextResponse.json({ error: "All scenes must be accepted first" }, { status: 400 });
 
-    const videoUrls = scenes.map((s) => s.videoUrl).filter((u): u is string => !!u);
-    if (videoUrls.length !== scenes.length)
+    if (scenes.some((s) => !s.videoUrl))
       return NextResponse.json({ error: "Some scenes have no generated video" }, { status: 400 });
+
+    // Each scene stores a SILENT Seedance video (s.videoUrl) plus a separate
+    // ElevenLabs voiceover (s.audioUrl). Before concatenating we mux the voiceover
+    // back into each clip (and add a silent track to dialogue-free scenes) so the
+    // assembled episode actually has sound. Sequential to stay friendly to rate limits.
+    const clipsWithAudio: string[] = [];
+    for (const s of scenes) {
+      clipsWithAudio.push(await muxAudioIntoVideo(s.videoUrl as string, s.audioUrl));
+    }
 
     // Concatenate via Replicate (ffmpeg)
     const mergedUrl =
-      videoUrls.length === 1 ? videoUrls[0] : await concatVideos(videoUrls);
+      clipsWithAudio.length === 1 ? clipsWithAudio[0] : await concatVideos(clipsWithAudio);
 
     // Persist to S3
     const projectId = episode.season?.projectId ?? "unknown";

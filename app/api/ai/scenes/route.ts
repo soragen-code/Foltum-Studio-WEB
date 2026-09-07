@@ -36,6 +36,13 @@ Rules:
 - Build tension within each episode toward the cliffhanger
 - Some scenes can have no dialogue (use [NO DIALOGUE] or [VISUAL MONTAGE])
 
+CONTINUITY & SCOPE (critical — the scenes must feel like ONE coherent episode, not random clips):
+- Dramatize ONLY the events described in THIS episode's description below. Do NOT include, foreshadow in detail, or resolve events that belong to other episodes in the provided episode list — those are told in their own episodes.
+- The ${SCENES_PER_EPISODE} scenes are a SINGLE CONTINUOUS SEQUENCE. Each scene must follow causally and chronologically from the previous one (same story thread, consistent time and place unless a transition is clearly motivated). Scene N+1 continues what scene N set up — no unexplained jumps in time, location, or character state.
+- Open by picking up naturally from where the previous episode left off (its cliffhanger, given below), and end on the beat that sets up THIS episode's cliffhanger.
+- Keep characters, locations, and props consistent from scene to scene. Reuse the same character names and appearances throughout.
+- Think of the whole episode as one ~${EPISODE_MIN_SECONDS}-second continuous scene split into ${SCENES_PER_EPISODE} consecutive shots, not ${SCENES_PER_EPISODE} independent mini-stories.
+
 IMPORTANT LANGUAGE RULES:
 - Write dialogue and locationDesc in the SAME LANGUAGE as the synopsis/episode description. If they are in Russian — write in Russian.
 - EXCEPTION: The "videoPrompt" field must ALWAYS be in English — it is used as a prompt for AI video generation (Seedance) and works best in English.`;
@@ -60,6 +67,32 @@ export async function POST(request: Request) {
     const pid = projectId || episode.season?.projectId;
     const synopsis = episode.season?.project?.synopsis ?? "";
 
+    // Fetch the whole season's episode list (for scope boundaries) and the
+    // previous episode (for a smooth continuation into this one).
+    const seasonEpisodes = episode.seasonId
+      ? await prisma.episode.findMany({
+          where: { seasonId: episode.seasonId },
+          orderBy: { number: "asc" },
+          select: { number: true, title: true, description: true, cliffhanger: true },
+        })
+      : [];
+
+    const episodeListText = seasonEpisodes
+      .map(
+        (e) =>
+          `  Episode ${e.number}: "${e.title}" — ${e.description ?? "(no description)"}${
+            e.number === episode.number ? "   <<< THIS EPISODE — dramatize ONLY this" : ""
+          }`
+      )
+      .join("\n");
+
+    const prevEpisode = seasonEpisodes
+      .filter((e) => e.number < episode.number)
+      .sort((a, b) => b.number - a.number)[0];
+    const prevContext = prevEpisode
+      ? `Previous Episode ${prevEpisode.number} ("${prevEpisode.title}") ended on this cliffhanger — continue naturally from it:\n"${prevEpisode.cliffhanger ?? prevEpisode.description ?? "N/A"}"`
+      : "This is the FIRST episode — open the story from the beginning.";
+
     const characters = await prisma.character.findMany({
       where: { projectId: pid },
       select: { name: true, role: true, description: true, appearance: true },
@@ -74,15 +107,23 @@ export async function POST(request: Request) {
 Characters:
 ${charSummary || "No characters defined yet."}
 
+Full episode list for this season (for scope only — each episode is told in its OWN episode, do NOT borrow their events):
+${episodeListText || "  (single episode)"}
+
+${prevContext}
+
+>>> GENERATE SCENES ONLY FOR THIS EPISODE <<<
 Episode ${episode.number}: "${episode.title}"
 Description: ${episode.description}
-Cliffhanger: ${episode.cliffhanger ?? "N/A"}
+This episode's ending cliffhanger (build toward it): ${episode.cliffhanger ?? "N/A"}
 
-Generate scenes for this episode.`;
+Produce exactly ${SCENES_PER_EPISODE} consecutive, causally-linked scenes that dramatize ONLY this episode's description as one continuous sequence — from a natural continuation of the previous episode to this episode's cliffhanger.`;
 
     const data = await chatJSON<{ scenes: any[] }>(SYSTEM, userMsg, {
       temperature: 0.85,
-      maxTokens: 4096,
+      // ${SCENES_PER_EPISODE} scenes (≈12) each with dialogue/location/videoPrompt
+      // need more room than the 4k default, or the JSON gets truncated.
+      maxTokens: 8192,
     });
 
     // Clear existing scenes

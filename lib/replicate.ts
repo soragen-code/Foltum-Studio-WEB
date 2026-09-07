@@ -192,8 +192,69 @@ export async function generateImage(input: FluxInput): Promise<string> {
 
 
 /* ------------------------------------------------------------------ */
-/*  FFmpeg (Replicate) — concatenate scene videos into an episode     */
+/*  FFmpeg (Replicate) — mux voiceover into a scene, concat episodes   */
 /* ------------------------------------------------------------------ */
+
+/** Command-capable ffmpeg model (accepts file1..file4 + a raw `command`). */
+const FFMPEG_CMD_MODEL =
+  (process.env.REPLICATE_FFMPEG_CMD_MODEL as `${string}/${string}:${string}` | undefined) ??
+  "magpai-app/cog-ffmpeg:efd0b79b577bcd58ae7d035bce9de5c4659a59e09faafac4d426d61c04249251";
+
+/** Pull the first output URL from the command-ffmpeg model's response shape. */
+function extractCmdUrl(output: unknown): string {
+  if (typeof output === "string") return output;
+  if (Array.isArray(output) && output.length > 0) return extractCmdUrl(output[0]);
+  if (output && typeof (output as any).url === "function") return String((output as any).url());
+  if (output && typeof output === "object") {
+    const o = output as any;
+    if ("url" in o) return String(o.url);
+    // model returns { files: [...] } / { output1: ... }
+    if (Array.isArray(o.files) && o.files.length) return extractCmdUrl(o.files[0]);
+    if (o.output1) return extractCmdUrl(o.output1);
+  }
+  throw new Error("Cannot extract URL from ffmpeg-command output: " + JSON.stringify(output).slice(0, 200));
+}
+
+/**
+ * Produce a scene clip that CARRIES ITS AUDIO, so a concatenated episode has sound.
+ * - With `audioUrl`: muxes the voiceover onto the (silent) Seedance video.
+ * - Without `audioUrl`: attaches a silent stereo track, so every clip fed to the
+ *   concatenator has a uniform video+audio stream layout (mixed audio/no-audio
+ *   inputs make the concat step drop audio or fail).
+ * The video is stream-copied (fast, lossless); audio is (re)encoded to AAC.
+ * Returns the output mp4 URL.
+ */
+export async function muxAudioIntoVideo(videoUrl: string, audioUrl?: string | null): Promise<string> {
+  const replicate = getReplicate();
+  const command = audioUrl
+    ? // real voiceover: map video from file1, audio from file2, end at shortest
+      "ffmpeg -y -i file1 -i file2 -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -b:a 192k -shortest output1"
+    : // no dialogue: synthesize a silent track for the full video duration
+      "ffmpeg -y -i file1 -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -shortest output1";
+
+  const input: Record<string, unknown> = {
+    file1: videoUrl,
+    command,
+    output1: "output1.mp4",
+  };
+  if (audioUrl) input.file2 = audioUrl;
+
+  const maxRetries = 2;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const output = await replicate.run(FFMPEG_CMD_MODEL, { input });
+      return extractCmdUrl(output);
+    } catch (err: any) {
+      const is429 = err?.message?.includes("429") || err?.response?.status === 429;
+      if (is429 && attempt < maxRetries) {
+        await sleep((attempt + 1) * 12_000);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("muxAudioIntoVideo: exhausted retries");
+}
 
 /**
  * Concatenate multiple videos (in order) into one mp4 via the
