@@ -69,7 +69,10 @@ export function CharactersStage({ project, onRefresh }: { project: any; onRefres
     finally { setLocking(false) }
   }
 
-  const placeholder = 'https://placehold.co/300x400/1a1a2e/eab308?text=Character'
+  // Inline data-URI placeholder — no external dependency
+  const placeholderSvg = `data:image/svg+xml,${encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400" viewBox="0 0 300 400"><rect width="300" height="400" fill="%231a1a2e"/><circle cx="150" cy="140" r="50" fill="%23eab308" opacity="0.3"/><rect x="90" y="210" width="120" height="80" rx="10" fill="%23eab308" opacity="0.2"/><text x="150" y="340" text-anchor="middle" fill="%23eab308" font-family="sans-serif" font-size="14" opacity="0.6">No Image</text></svg>'
+  )}`
 
   return (
     <div className="space-y-6">
@@ -120,15 +123,26 @@ export function CharactersStage({ project, onRefresh }: { project: any; onRefres
                 </div>
                 <div className="mb-3 grid grid-cols-3 gap-2">
                   {[char?.imageFront, char?.imageProfile, char?.imageFull].map((img, i) => {
-                    const src = img && img.length > 0 ? img : placeholder
+                    const hasImage = typeof img === 'string' && img.length > 5 && img.startsWith('http')
                     return (
                       <div key={i} className="aspect-[3/4] overflow-hidden rounded-lg bg-muted">
-                        <img
-                          src={src}
-                          alt={`${char?.name ?? 'Character'} view ${i + 1}`}
-                          className="h-full w-full object-cover"
-                          onError={(e: any) => { e.target.src = placeholder }}
-                        />
+                        {hasImage ? (
+                          <img
+                            src={img!}
+                            alt={`${char?.name ?? 'Character'} view ${i + 1}`}
+                            className="h-full w-full object-cover"
+                            onError={(e: any) => {
+                              e.target.onerror = null
+                              e.target.src = placeholderSvg
+                            }}
+                          />
+                        ) : (
+                          <img
+                            src={placeholderSvg}
+                            alt="No image"
+                            className="h-full w-full object-cover"
+                          />
+                        )}
                       </div>
                     )
                   })}
