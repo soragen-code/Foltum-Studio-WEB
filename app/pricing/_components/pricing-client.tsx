@@ -10,7 +10,7 @@ const plans = [
   {
     id: 'basic',
     name: 'Basic',
-    price: '$9.99',
+    price: '₴399',
     period: '/month',
     credits: 100,
     icon: Zap,
@@ -22,7 +22,7 @@ const plans = [
   {
     id: 'pro',
     name: 'Pro',
-    price: '$29.99',
+    price: '₴1199',
     period: '/month',
     credits: 400,
     icon: Sparkles,
@@ -35,7 +35,7 @@ const plans = [
   {
     id: 'studio',
     name: 'Studio',
-    price: '$79.99',
+    price: '₴3199',
     period: '/month',
     credits: 1500,
     icon: Crown,
@@ -47,60 +47,109 @@ const plans = [
 ]
 
 const creditPacks = [
-  { id: 'pack50', credits: 50, price: '$5' },
-  { id: 'pack200', credits: 200, price: '$15' },
-  { id: 'pack500', credits: 500, price: '$30' },
+  { id: 'pack50', credits: 50, price: '₴199' },
+  { id: 'pack200', credits: 200, price: '₴599' },
+  { id: 'pack500', credits: 500, price: '₴1199' },
 ]
+
+function postToWayForPay(action: string, fields: Record<string, any>) {
+  const form = document.createElement('form')
+  form.method = 'POST'
+  form.action = action
+  form.acceptCharset = 'utf-8'
+
+  const append = (name: string, value: any) => {
+    const input = document.createElement('input')
+    input.type = 'hidden'
+    input.name = name
+    input.value = String(value)
+    form.appendChild(input)
+  }
+
+  Object.entries(fields).forEach(([key, value]) => {
+    if (Array.isArray(value)) {
+      value.forEach((v) => append(key, v))
+    } else {
+      append(key, value)
+    }
+  })
+
+  document.body.appendChild(form)
+  form.submit()
+}
 
 export function PricingClient() {
   const [credits, setCredits] = useState(0)
   const [buying, setBuying] = useState<string | null>(null)
 
-  useEffect(() => {
+  const refreshCredits = () =>
     fetch('/api/user/credits')
       .then((r) => r.json())
       .then((d: any) => setCredits(d?.credits ?? 0))
       .catch(() => {})
+
+  useEffect(() => {
+    refreshCredits()
   }, [])
 
-  const handleSubscribe = async (planId: string) => {
-    setBuying(planId)
-    // STUB: WayForPay integration
-    await new Promise((r) => setTimeout(r, 1500))
-    toast.success('Payment simulation successful! (WayForPay stub)')
+  // When WayForPay redirects the user back (returnUrl carries ?order=...),
+  // poll the order status so the balance updates as soon as the webhook lands.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const order = params.get('order')
+    if (!order) return
 
-    const plan = plans.find((p) => p.id === planId)
-    if (plan) {
+    let attempts = 0
+    const check = async () => {
+      attempts += 1
       try {
-        await fetch('/api/credits/add', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ amount: plan.credits, description: `${plan.name} subscription` }),
-        })
-        setCredits((prev) => prev + plan.credits)
+        const res = await fetch(`/api/payment/wayforpay/status?order=${encodeURIComponent(order)}`)
+        if (res.ok) {
+          const d = await res.json()
+          if (d.status === 'approved') {
+            toast.success(`Payment successful! +${d.credits} credits added.`)
+            await refreshCredits()
+            window.history.replaceState({}, '', '/pricing')
+            return
+          }
+          if (d.status === 'declined') {
+            toast.error('Payment was declined.')
+            window.history.replaceState({}, '', '/pricing')
+            return
+          }
+        }
       } catch {}
+      if (attempts < 10) setTimeout(check, 2000)
+      else window.history.replaceState({}, '', '/pricing')
     }
-    setBuying(null)
+    check()
+  }, [])
+
+  const startPayment = async (productId: string) => {
+    setBuying(productId)
+    try {
+      const res = await fetch('/api/payment/wayforpay/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productId }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        toast.error(err?.error ?? 'Could not start payment')
+        setBuying(null)
+        return
+      }
+      const { action, fields } = await res.json()
+      // Redirects the browser to the WayForPay secure checkout.
+      postToWayForPay(action, fields)
+    } catch {
+      toast.error('Payment error. Please try again.')
+      setBuying(null)
+    }
   }
 
-  const handleBuyCredits = async (packId: string) => {
-    setBuying(packId)
-    await new Promise((r) => setTimeout(r, 1000))
-    toast.success('Credits purchased! (WayForPay stub)')
-
-    const pack = creditPacks.find((p) => p.id === packId)
-    if (pack) {
-      try {
-        await fetch('/api/credits/add', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ amount: pack.credits, description: `Purchased ${pack.credits} credits` }),
-        })
-        setCredits((prev) => prev + pack.credits)
-      } catch {}
-    }
-    setBuying(null)
-  }
+  const handleSubscribe = (planId: string) => startPayment(planId)
+  const handleBuyCredits = (packId: string) => startPayment(packId)
 
   return (
     <div className="min-h-screen bg-background">

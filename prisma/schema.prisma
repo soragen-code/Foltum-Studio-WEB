@@ -25,6 +25,7 @@ model User {
   sessions      Session[]
   projects      Project[]
   creditTransactions CreditTransaction[]
+  payments      Payment[]
 }
 
 model Account {
@@ -176,6 +177,29 @@ model CreditTransaction {
   createdAt   DateTime @default(now())
 
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Payment {
+  id             String   @id @default(cuid())
+  orderReference String   @unique
+  userId         String
+  productId      String   // plan or credit-pack id
+  productName    String
+  amount         Float    // charged amount (UAH)
+  currency       String   @default("UAH")
+  credits        Int      // credits to grant on success
+  kind           String   // "subscription" | "credits"
+  tier           String?  // subscription tier when kind = subscription
+  status         String   @default("pending") // pending, approved, declined, refunded, expired
+  transactionStatus String?
+  reasonCode     String?
+  processed      Boolean  @default(false) // credits already granted (idempotency)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
 }
