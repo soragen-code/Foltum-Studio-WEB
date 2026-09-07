@@ -11,6 +11,18 @@ export function getReplicate(): Replicate {
   return _client;
 }
 
+/** Small helper: pause for ms milliseconds */
+function sleep(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
+
+/** Extract a URL string from various Replicate output shapes */
+function extractUrl(output: unknown): string {
+  if (typeof output === "string") return output;
+  if (Array.isArray(output) && output.length > 0) return String(output[0]);
+  if (output && typeof (output as any).url === "function") return String((output as any).url());
+  if (output && typeof output === "object" && "url" in (output as any)) return String((output as any).url);
+  throw new Error("Cannot extract URL from Replicate output: " + JSON.stringify(output).slice(0, 200));
+}
+
 /* ------------------------------------------------------------------ */
 /*  Seedance 2.5 — video generation                                  */
 /* ------------------------------------------------------------------ */
@@ -38,28 +50,36 @@ export interface SeedanceInput {
  */
 export async function generateVideo(input: SeedanceInput): Promise<string> {
   const replicate = getReplicate();
+  const maxRetries = 2;
 
-  const output = await replicate.run("bytedance/seedance-2.5", {
-    input: {
-      prompt: input.prompt,
-      duration: input.duration ?? 5,
-      resolution: input.resolution ?? "720p",
-      aspect_ratio: input.aspect_ratio ?? "9:16", // vertical drama format
-      generate_audio: input.generate_audio ?? true,
-      watermark: input.watermark ?? false,
-      output_format: "mp4",
-      ...(input.image ? { image: input.image } : {}),
-      ...(input.seed !== undefined ? { seed: input.seed } : {}),
-    },
-  });
-
-  // Output is typically a URL string or an array with one URL
-  if (typeof output === "string") return output;
-  if (Array.isArray(output) && output.length > 0) return String(output[0]);
-  // FileOutput object with .url()
-  if (output && typeof (output as any).url === "function") return (output as any).url();
-  if (output && typeof output === "object" && "url" in (output as any)) return String((output as any).url);
-  throw new Error("Unexpected Seedance output format");
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const output = await replicate.run("bytedance/seedance-2.5", {
+        input: {
+          prompt: input.prompt,
+          duration: input.duration ?? 5,
+          resolution: input.resolution ?? "720p",
+          aspect_ratio: input.aspect_ratio ?? "9:16",
+          generate_audio: input.generate_audio ?? true,
+          watermark: input.watermark ?? false,
+          output_format: "mp4",
+          ...(input.image ? { image: input.image } : {}),
+          ...(input.seed !== undefined ? { seed: input.seed } : {}),
+        },
+      });
+      return extractUrl(output);
+    } catch (err: any) {
+      const is429 = err?.message?.includes("429") || err?.response?.status === 429;
+      if (is429 && attempt < maxRetries) {
+        const delay = (attempt + 1) * 15_000;
+        console.log(`Seedance rate-limited, retry ${attempt + 1}/${maxRetries} in ${delay / 1000}s`);
+        await sleep(delay);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("generateVideo: exhausted retries");
 }
 
 /* ------------------------------------------------------------------ */
@@ -79,28 +99,38 @@ export interface FluxInput {
 
 /**
  * Generate an image using FLUX 1.1 Pro via Replicate.
- * Returns the URL of the generated image.
+ * Returns the URL of the generated image. Includes retry logic for rate limits.
  */
 export async function generateImage(input: FluxInput): Promise<string> {
   const replicate = getReplicate();
+  const maxRetries = 3;
 
-  const output = await replicate.run("black-forest-labs/flux-1.1-pro", {
-    input: {
-      prompt: input.prompt,
-      aspect_ratio: input.aspect_ratio ?? "3:4",
-      output_format: "webp",
-      output_quality: 90,
-      safety_tolerance: 2,
-      prompt_upsampling: true,
-      ...(input.seed !== undefined ? { seed: input.seed } : {}),
-    },
-  });
-
-  if (typeof output === "string") return output;
-  if (Array.isArray(output) && output.length > 0) return String(output[0]);
-  if (output && typeof (output as any).url === "function") return (output as any).url();
-  if (output && typeof output === "object" && "url" in (output as any)) return String((output as any).url);
-  throw new Error("Unexpected FLUX output format");
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const output = await replicate.run("black-forest-labs/flux-1.1-pro", {
+        input: {
+          prompt: input.prompt,
+          aspect_ratio: input.aspect_ratio ?? "3:4",
+          output_format: "webp",
+          output_quality: 90,
+          safety_tolerance: 2,
+          prompt_upsampling: true,
+          ...(input.seed !== undefined ? { seed: input.seed } : {}),
+        },
+      });
+      return extractUrl(output);
+    } catch (err: any) {
+      const is429 = err?.message?.includes("429") || err?.response?.status === 429;
+      if (is429 && attempt < maxRetries) {
+        const delay = (attempt + 1) * 12_000; // 12s, 24s, 36s
+        console.log(`FLUX rate-limited, retry ${attempt + 1}/${maxRetries} in ${delay / 1000}s`);
+        await sleep(delay);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("generateImage: exhausted retries");
 }
 
 
