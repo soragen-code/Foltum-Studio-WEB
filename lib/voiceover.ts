@@ -116,6 +116,26 @@ export function parseDialogue(raw: string | null | undefined): DialogueLine[] {
  * The scripted dialogue is cleaned of speaker labels and stage directions; each line
  * is re-attached to its speaker by name so the model knows who says what.
  */
+/**
+ * Detect the spoken language of a dialogue block so the video model pronounces it
+ * natively instead of applying the wrong (usually English) phonetics — the main
+ * cause of "the words are broken / mispronounced" with native audio.
+ */
+export function detectSpokenLanguage(text: string | null | undefined): string {
+  const t = text ?? "";
+  const hasCyrillic = /[\u0400-\u04FF]/.test(t);
+  if (hasCyrillic) {
+    // Ukrainian-specific letters distinguish it from Russian.
+    if (/[іїєґІЇЄҐ]/.test(t)) return "Ukrainian";
+    return "Russian";
+  }
+  if (/[\u4E00-\u9FFF]/.test(t)) return "Chinese";
+  if (/[\u3040-\u30FF]/.test(t)) return "Japanese";
+  if (/[\uAC00-\uD7AF]/.test(t)) return "Korean";
+  if (/[áéíóúñ¿¡]/i.test(t)) return "Spanish";
+  return "English";
+}
+
 export function buildNativeAudioPrompt(
   basePrompt: string,
   dialogue: string | null | undefined,
@@ -134,15 +154,25 @@ export function buildNativeAudioPrompt(
     return `${base}\n\nAudio: cinematic diegetic ambient sound and room tone only. No background music, no voiceover, no subtitles.`;
   }
 
+  const language = detectSpokenLanguage(lines.map((l) => l.text).join(" "));
+
   const spoken = lines
     .map((l) => {
       const character = findCharacter(l.speaker, characters);
       const who = character?.name ?? l.speaker ?? "Character";
-      return `${who} says (speaking on camera, lips moving): "${l.text}"`;
+      // Language tagged per line + line kept verbatim in quotes so the model reads
+      // exactly these words with correct native pronunciation.
+      return `${who} (speaking on camera, lips moving) says in ${language}: "${l.text}"`;
     })
     .join("\n");
 
-  return `${base}\n\nThe characters speak the following lines out loud, on camera, in sync with their lip movements:\n${spoken}\n\n${AUDIO_DIRECTION}`;
+  const LANGUAGE_DIRECTION =
+    `All spoken dialogue is in ${language}, pronounced by native ${language} speakers with correct, ` +
+    `clear, natural articulation. Speak the quoted lines exactly and verbatim, word for word, without ` +
+    `translating, paraphrasing, mispronouncing, adding, dropping or altering any words. ` +
+    `Do NOT read the character names or any text outside the quotation marks aloud.`;
+
+  return `${base}\n\nThe characters speak the following lines out loud, on camera, in sync with their lip movements. ${LANGUAGE_DIRECTION}\n${spoken}\n\n${AUDIO_DIRECTION}`;
 }
 
 function findCharacter(speaker: string | null, characters: VoiceCharacter[]): VoiceCharacter | undefined {
