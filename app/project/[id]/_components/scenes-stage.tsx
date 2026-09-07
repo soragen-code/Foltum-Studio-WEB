@@ -86,29 +86,71 @@ function SceneVideoPlayer({
 }
 
 export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: () => void }) {
-  const [selectedEpisode, setSelectedEpisode] = useState<any>(null)
-  const [scenes, setScenes] = useState<any[]>([])
-  const [generating, setGenerating] = useState(false)
+  const [selectedEpisodeId, setSelectedEpisodeId] = useState<string | null>(null)
+  /** episodeId -> its scenes. Kept per-episode so switching episodes is instant and
+   *  never wipes/reflows the panel (no flashing), and lets several episodes render at once. */
+  const [scenesByEp, setScenesByEp] = useState<Record<string, any[]>>({})
+  /** episodeId -> true while its scenes are being (re)generated (independent per episode). */
+  const [generatingEps, setGeneratingEps] = useState<Record<string, boolean>>({})
+  /** episodeId -> true while it is being assembled. */
+  const [assemblingEps, setAssemblingEps] = useState<Record<string, boolean>>({})
+  /** episodeId -> freshly assembled video URL (optimistic, before project refetch lands). */
+  const [episodeVideo, setEpisodeVideo] = useState<Record<string, string>>({})
   /** sceneId -> job being polled (or just finished, kept briefly for the 100% state) */
   const [videoJobs, setVideoJobs] = useState<Record<string, JobInfo>>({})
   const [startingVideo, setStartingVideo] = useState<string | null>(null)
   const pollTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
-  const [assembling, setAssembling] = useState(false)
   const [error, setError] = useState('')
   const [expandedSeason, setExpandedSeason] = useState<string | null>(null)
 
   const allSeasons = project?.seasons ?? []
+  const allEpisodes: any[] = allSeasons.flatMap((s: any) => s?.episodes ?? [])
+  const findEpisode = (epId: string | null) =>
+    epId ? allEpisodes.find((e: any) => e?.id === epId) ?? null : null
 
-  const selectEpisode = async (episode: any) => {
-    setSelectedEpisode(episode)
-    setScenes(episode?.scenes ?? [])
-    if ((episode?.scenes?.length ?? 0) === 0) {
-      await generateScenes(episode?.id)
-    }
+  // Derived view for the currently-open episode (no stale local copy → no flash on refresh).
+  const selectedEpisodeRaw = findEpisode(selectedEpisodeId)
+  const selectedEpisode = selectedEpisodeRaw
+    ? { ...selectedEpisodeRaw, videoUrl: episodeVideo[selectedEpisodeId!] ?? selectedEpisodeRaw.videoUrl }
+    : null
+  const scenes: any[] = selectedEpisodeId
+    ? scenesByEp[selectedEpisodeId] ?? selectedEpisodeRaw?.scenes ?? []
+    : []
+  const generating = selectedEpisodeId ? !!generatingEps[selectedEpisodeId] : false
+  const assembling = selectedEpisodeId ? !!assemblingEps[selectedEpisodeId] : false
+
+  /** Replace/patch the scene list of a specific episode. */
+  const setEpScenes = (epId: string, next: any[]) =>
+    setScenesByEp((prev) => ({ ...prev, [epId]: next }))
+
+  /** Patch a single scene wherever it lives (works across episodes rendering concurrently). */
+  const patchScene = (sceneId: string, patch: any) =>
+    setScenesByEp((prev) => {
+      const next = { ...prev }
+      for (const epId of Object.keys(next)) {
+        const arr = next[epId]
+        if (arr?.some((s: any) => s?.id === sceneId)) {
+          next[epId] = arr.map((s: any) =>
+            s?.id === sceneId ? { ...s, ...(typeof patch === 'function' ? patch(s) : patch) } : s
+          )
+        }
+      }
+      return next
+    })
+
+  const selectEpisode = (episode: any) => {
+    const epId = episode?.id
+    if (!epId) return
+    setSelectedEpisodeId(epId)
+    // Seed this episode's scenes once (from what the server already sent) — instant, no wipe.
+    const existing = scenesByEp[epId] ?? episode?.scenes ?? []
+    if (!scenesByEp[epId]) setScenesByEp((prev) => ({ ...prev, [epId]: existing }))
+    if (existing.length === 0 && !generatingEps[epId]) generateScenes(epId)
   }
 
   const generateScenes = async (episodeId: string) => {
-    setGenerating(true)
+    if (!episodeId || generatingEps[episodeId]) return
+    setGeneratingEps((prev) => ({ ...prev, [episodeId]: true }))
     setError('')
     try {
       const res = await fetch('/api/ai/scenes', {
@@ -117,10 +159,10 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
         body: JSON.stringify({ projectId: project?.id, episodeId }),
       })
       const data = await res.json()
-      if (data?.scenes) setScenes(data.scenes)
+      if (data?.scenes) setEpScenes(episodeId, data.scenes)
       else setError(data?.error ?? 'Generation failed')
     } catch { setError('Network error') }
-    finally { setGenerating(false) }
+    finally { setGeneratingEps((prev) => ({ ...prev, [episodeId]: false })) }
   }
 
   const stopPolling = (sceneId: string) => {
@@ -144,7 +186,7 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
             if (data.job.status === 'failed') setError(data.job.error ?? 'Video generation failed')
             const updatedScene = data.scene ?? data.job.result?.scene
             if (updatedScene) {
-              setScenes((prev) => (prev ?? []).map((sc: any) => (sc?.id === sceneId ? { ...sc, ...updatedScene } : sc)))
+              patchScene(sceneId, updatedScene)
             }
             // Keep the 100% / failed bar visible briefly, then hide it
             setTimeout(() => {
@@ -168,17 +210,29 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
   // Stop all pollers on unmount
   useEffect(() => () => { Object.values(pollTimers.current).forEach(clearTimeout) }, [])
 
-  // On episode change: resume polling for any video jobs still running for its scenes
+  // Resume polling for EVERY active video job across the project (any episode),
+  // so multiple episodes can render at once and survive a refresh without flicker.
   useEffect(() => {
-    if (!project?.id || !selectedEpisode?.id) return
-    const sceneIds = new Set((selectedEpisode?.scenes ?? scenes ?? []).map((sc: any) => sc?.id))
+    if (!project?.id) return
+    // Map sceneId -> episodeId from the server data, so we can seed the right episode.
+    const sceneToEp: Record<string, string> = {}
+    for (const ep of allEpisodes) {
+      for (const sc of ep?.scenes ?? []) if (sc?.id) sceneToEp[sc.id] = ep.id
+    }
     let cancelled = false
     fetch(`/api/jobs?projectId=${project.id}&type=video&active=1`, { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (cancelled) return
         for (const j of data?.jobs ?? []) {
-          if (j?.sceneId && sceneIds.has(j.sceneId) && !pollTimers.current[j.sceneId]) {
+          if (j?.sceneId && !pollTimers.current[j.sceneId]) {
+            // Make sure the owning episode's scenes are loaded so patchScene can update them.
+            const epId = sceneToEp[j.sceneId]
+            if (epId) {
+              setScenesByEp((prev) =>
+                prev[epId] ? prev : { ...prev, [epId]: findEpisode(epId)?.scenes ?? [] }
+              )
+            }
             setVideoJobs((prev) => ({ ...prev, [j.sceneId]: j }))
             pollVideoJob(j.sceneId, j.id)
           }
@@ -187,7 +241,7 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
       .catch(() => {})
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project?.id, selectedEpisode?.id])
+  }, [project?.id])
 
   const generateVideo = async (sceneId: string) => {
     setStartingVideo(sceneId)
@@ -203,7 +257,7 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
         setError(data?.error ?? 'Video generation failed')
         return
       }
-      setScenes((prev) => (prev ?? []).map((sc: any) => (sc?.id === sceneId ? { ...sc, status: 'generating' } : sc)))
+      patchScene(sceneId, { status: 'generating' })
       pollVideoJob(sceneId, data.jobId)
     } catch { setError('Network error') }
     finally { setStartingVideo(null) }
@@ -218,29 +272,28 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
       })
       const data = await res.json()
       if (data?.scene) {
-        setScenes((prev) =>
-          (prev ?? []).map((s: any) => (s?.id === sceneId ? data.scene : s))
-        )
+        patchScene(sceneId, data.scene)
       }
     } catch {}
   }
 
-  const assembleEpisode = async () => {
-    if (!selectedEpisode?.id) return
-    setAssembling(true)
+  const assembleEpisode = async (episodeId?: string) => {
+    const epId = episodeId ?? selectedEpisodeId
+    if (!epId) return
+    setAssemblingEps((prev) => ({ ...prev, [epId]: true }))
     try {
       const res = await fetch('/api/ai/assemble-episode', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ episodeId: selectedEpisode.id }),
+        body: JSON.stringify({ episodeId: epId }),
       })
       const data = await res.json()
       if (data?.videoUrl) {
-        setSelectedEpisode({ ...(selectedEpisode ?? {}), videoUrl: data.videoUrl })
+        setEpisodeVideo((prev) => ({ ...prev, [epId]: data.videoUrl }))
         onRefresh()
       }
     } catch { setError('Assembly failed') }
-    finally { setAssembling(false) }
+    finally { setAssemblingEps((prev) => ({ ...prev, [epId]: false })) }
   }
 
   const isSceneBusy = (sceneId: string) => {
@@ -435,7 +488,7 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
 
               {allAccepted && !selectedEpisode?.videoUrl && (
                 <button
-                  onClick={assembleEpisode}
+                  onClick={() => assembleEpisode()}
                   disabled={assembling}
                   className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary py-3 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
                 >
