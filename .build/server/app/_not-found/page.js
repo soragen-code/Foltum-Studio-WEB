@@ -1,0 +1,12 @@
+var R=require("../../chunks/ssr/[turbopack]_runtime.js")("server/app/_not-found/page.js")
+R.c("server/chunks/ssr/[root-of-the-server]__1kqcvl3._.js")
+R.c("server/chunks/ssr/1qjk_next_dist_1ffe5d0._.js")
+R.c("server/chunks/ssr/[root-of-the-server]__1ic75b2._.js")
+R.c("server/chunks/ssr/[root-of-the-server]__0p35caj._.js")
+R.c("server/chunks/ssr/[root-of-the-server]__1vo3_-f._.js")
+R.c("server/chunks/ssr/1qjk_next_dist_client_components_1vwq-u0._.js")
+R.c("server/chunks/ssr/1qjk_next_dist_client_components_builtin_forbidden_1jwsn09.js")
+R.c("server/chunks/ssr/1qjk_next_dist_client_components_builtin_unauthorized_017m5b6.js")
+R.c("server/chunks/ssr/1622_Foltum-Studio-WEB__next-internal_server_app__not-found_page_actions_1ha8x8c.js")
+R.m(89931)
+module.exports=R.m(89931).exports
