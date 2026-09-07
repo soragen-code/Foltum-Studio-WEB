@@ -1,7 +1,37 @@
 'use client'
 
 import { useState } from 'react'
-import { Loader2, RefreshCw, Upload, Lock, Check, User, Wand2 } from 'lucide-react'
+import { Loader2, RefreshCw, Upload, Lock, Check, User, Wand2, ImageOff } from 'lucide-react'
+
+/** Renders the 3 character image slots with proper fallback */
+function CharacterImages({ char, ImagePlaceholder }: { char: any; ImagePlaceholder: React.FC }) {
+  const [broken, setBroken] = useState<Record<number, boolean>>({})
+  const images = [char?.imageFront, char?.imageProfile, char?.imageFull]
+  const labels = ['Front', 'Profile', 'Full']
+
+  return (
+    <div className="mb-3 grid grid-cols-3 gap-2">
+      {images.map((img, i) => {
+        const validUrl = typeof img === 'string' && img.startsWith('http') && img.length > 10
+        const showImg = validUrl && !broken[i]
+        return (
+          <div key={i} className="aspect-[3/4] overflow-hidden rounded-lg bg-muted">
+            {showImg ? (
+              <img
+                src={img}
+                alt={`${char?.name ?? 'Character'} — ${labels[i]}`}
+                className="h-full w-full object-cover"
+                onError={() => setBroken((prev) => ({ ...prev, [i]: true }))}
+              />
+            ) : (
+              <ImagePlaceholder />
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
 
 interface CharacterData {
   id?: string
@@ -69,10 +99,13 @@ export function CharactersStage({ project, onRefresh }: { project: any; onRefres
     finally { setLocking(false) }
   }
 
-  // Inline data-URI placeholder — no external dependency
-  const placeholderSvg = `data:image/svg+xml,${encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="400" viewBox="0 0 300 400"><rect width="300" height="400" fill="%231a1a2e"/><circle cx="150" cy="140" r="50" fill="%23eab308" opacity="0.3"/><rect x="90" y="210" width="120" height="80" rx="10" fill="%23eab308" opacity="0.2"/><text x="150" y="340" text-anchor="middle" fill="%23eab308" font-family="sans-serif" font-size="14" opacity="0.6">No Image</text></svg>'
-  )}`
+  // No-image placeholder rendered as a native div (no external URLs, no data-URI)
+  const ImagePlaceholder = () => (
+    <div className="flex h-full w-full flex-col items-center justify-center gap-2 bg-muted/50">
+      <User className="h-8 w-8 text-muted-foreground/40" />
+      <span className="text-[10px] text-muted-foreground/50">No image</span>
+    </div>
+  )
 
   return (
     <div className="space-y-6">
@@ -121,32 +154,7 @@ export function CharactersStage({ project, onRefresh }: { project: any; onRefres
                   <p><span className="font-medium text-foreground">Appearance:</span> {char?.appearance ?? 'N/A'}</p>
                   <p><span className="font-medium text-foreground">Personality:</span> {char?.personality ?? 'N/A'}</p>
                 </div>
-                <div className="mb-3 grid grid-cols-3 gap-2">
-                  {[char?.imageFront, char?.imageProfile, char?.imageFull].map((img, i) => {
-                    const hasImage = typeof img === 'string' && img.length > 5 && img.startsWith('http')
-                    return (
-                      <div key={i} className="aspect-[3/4] overflow-hidden rounded-lg bg-muted">
-                        {hasImage ? (
-                          <img
-                            src={img!}
-                            alt={`${char?.name ?? 'Character'} view ${i + 1}`}
-                            className="h-full w-full object-cover"
-                            onError={(e: any) => {
-                              e.target.onerror = null
-                              e.target.src = placeholderSvg
-                            }}
-                          />
-                        ) : (
-                          <img
-                            src={placeholderSvg}
-                            alt="No image"
-                            className="h-full w-full object-cover"
-                          />
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
+                <CharacterImages char={char} ImagePlaceholder={ImagePlaceholder} />
                 {!isLocked && (
                   <div className="flex gap-2">
                     <button
