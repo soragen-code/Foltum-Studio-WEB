@@ -89,7 +89,14 @@ export async function POST(request: Request) {
       },
     });
 
-    await prisma.scene.update({ where: { id: sceneId }, data: { status: "generating", language: spokenLang } });
+    // Persist the chosen spoken language separately so an unmigrated DB (missing
+    // "language" column) can never block video generation.
+    try {
+      await prisma.scene.update({ where: { id: sceneId }, data: { language: spokenLang } });
+    } catch (e) {
+      console.warn("Could not persist scene.language (column missing?):", (e as any)?.message);
+    }
+    await prisma.scene.update({ where: { id: sceneId }, data: { status: "generating" } });
 
     const job = await prisma.generationJob.create({
       data: {
