@@ -102,27 +102,83 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       prompt = buildNativeAudioPrompt(scene.videoPrompt, dialogue, links.map((l) => l.character), targetLangName);
     }
 
-    // 1. Start video — native audio (voices + ambience) or silent (legacy TTS overlay)
-    const predictionId = await startVideoPrediction({
-      prompt,
-      duration: Number(params.duration ?? 5),
-      resolution: String(params.resolution ?? "480p"),
-      aspect_ratio: "9:16",
-      generate_audio: NATIVE_AUDIO, // characters speak in-clip; legacy path adds ElevenLabs later
-      watermark: false,
-    });
+    // Steer the model away from anything its output-moderation flags as copyrighted.
+    const basePrompt = withCopyrightSafety(prompt);
 
-    const state: VideoJobState = { predictionId, sceneId, projectId, userId, cost, startedAt: Date.now() };
-    await updateJob(jobId, { resultData: JSON.stringify(state) });
+    // 1-2. Start + wait, retrying automatically if the OUTPUT is rejected by the
+    // model's copyright/moderation filter (that check is partly non-deterministic —
+    // a fresh generation with stronger "original content" framing usually passes).
+    const MAX_ATTEMPTS = 3;
+    let videoUrl = "";
+    let state: VideoJobState | null = null;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      // Escalate the anti-copyright framing on each retry.
+      const attemptPrompt = attempt === 1 ? basePrompt : withCopyrightSafety(prompt, attempt);
+      const predictionId = await startVideoPrediction({
+        prompt: attemptPrompt,
+        duration: Number(params.duration ?? 5),
+        resolution: String(params.resolution ?? "480p"),
+        aspect_ratio: "9:16",
+        generate_audio: NATIVE_AUDIO, // characters speak in-clip; legacy path adds ElevenLabs later
+        watermark: false,
+      });
+      state = { predictionId, sceneId, projectId, userId, cost, startedAt: Date.now() };
+      await updateJob(jobId, { resultData: JSON.stringify(state) });
 
-    // 2. Wait for the model
-    const videoUrl = await waitForPrediction(jobId, state);
+      try {
+        videoUrl = await waitForPrediction(jobId, state);
+        break; // success
+      } catch (err: any) {
+        const last = attempt >= MAX_ATTEMPTS;
+        if (isCopyrightError(err) && !last) {
+          await updateJob(jobId, {
+            progress: 5,
+            message: `Output flagged by copyright filter — retrying with adjusted prompt (attempt ${attempt + 1}/${MAX_ATTEMPTS})...`,
+          });
+          continue;
+        }
+        // Not a copyright issue, or we're out of retries → surface a clear message.
+        throw isCopyrightError(err)
+          ? new Error(
+              "The video model's copyright filter blocked the result after several attempts. " +
+                "Try rephrasing the scene prompt to avoid references to real people, brands, logos or well-known films/characters."
+            )
+          : err;
+      }
+    }
 
     // 3. Finalize
-    await finalizeVideoJob(jobId, state, videoUrl);
+    await finalizeVideoJob(jobId, state!, videoUrl);
   } catch (err: any) {
     await handleFailure(jobId, { sceneId, userId, cost }, err);
   }
+}
+
+/** Does this error come from the model's copyright / content-moderation filter? */
+function isCopyrightError(err: any): boolean {
+  const m = String(err?.message ?? err ?? "").toLowerCase();
+  return (
+    m.includes("copyright") ||
+    m.includes("content policy") ||
+    m.includes("moderation") ||
+    m.includes("flagged") ||
+    m.includes("sensitive")
+  );
+}
+
+/** Append an "original, non-infringing content" instruction that steers the model
+ *  away from outputs its filter would flag. Stronger wording on retries. */
+function withCopyrightSafety(prompt: string, attempt = 1): string {
+  const base =
+    "All characters, settings and elements are entirely original and fictional. " +
+    "No real people, no celebrity likenesses, no brand names, no logos, no trademarks, " +
+    "no copyrighted or well-known franchise characters, and no on-screen text or watermarks.";
+  const strong =
+    attempt > 1
+      ? " Generic, everyday appearance and wardrobe; a neutral, non-branded environment; " +
+        "nothing resembling any existing film, show, game or public figure."
+      : "";
+  return `${prompt}\n\n[Content: ${base}${strong}]`;
 }
 
 /** Poll Replicate until the prediction settles; heartbeats the job on every tick. */
