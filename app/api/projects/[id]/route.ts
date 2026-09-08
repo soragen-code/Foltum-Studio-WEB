@@ -17,7 +17,7 @@ export async function GET(
     const project = await prisma.project.findFirst({
       where: { id, userId: user.id },
       include: {
-        characters: true,
+        characters: { orderBy: { createdAt: 'asc' } },
         seasons: {
           include: {
             episodes: {
