@@ -171,6 +171,52 @@ export async function startKlingPrediction(input: KlingInput): Promise<string> {
   return prediction.id;
 }
 
+/* ------------------------------------------------------------------ */
+/*  sync/lipsync-2 — overlay speech onto a video's lips                 */
+/*  Real schema: required video (.mp4) + audio (.wav); sync_mode        */
+/*  ['loop','bounce','cut_off','silence','remap'] handles a duration    */
+/*  mismatch between audio and video WITHOUT time-stretching speech;    */
+/*  temperature 0-1 (expressiveness); output = single video URL.        */
+/* ------------------------------------------------------------------ */
+
+const LIPSYNC_VERSION_ID =
+  process.env.REPLICATE_LIPSYNC_VERSION ??
+  "4f8dc3cfda4ff844a6158ac347d21fcd025210f6dad4b16265fc53074ee4f77f"; // sync/lipsync-2
+/** Model id string exported so callers/diagnostics can tag lipsync attempts. */
+export const LIPSYNC_MODEL = "sync/lipsync-2";
+
+export interface LipsyncInput {
+  /** Silent (or any) video whose lips will be re-synced. */
+  video: string;
+  /** Speech audio track to sync the lips to. */
+  audio: string;
+  /**
+   * How to reconcile a duration mismatch. "silence" keeps the FULL video length
+   * and pads shorter speech with silence — no pitch/speed distortion of the voice.
+   */
+  sync_mode?: "loop" | "bounce" | "cut_off" | "silence" | "remap";
+  /** Expressiveness 0-1. Default 0.5. */
+  temperature?: number;
+}
+
+/**
+ * Start a sync/lipsync-2 prediction WITHOUT waiting. Returns the prediction id so the
+ * caller reuses the SAME polling/finalize path (standard Replicate prediction id + mp4).
+ */
+export async function startLipsyncPrediction(input: LipsyncInput): Promise<string> {
+  if (!input.video || !input.audio) throw new Error("Lipsync requires both a video and an audio URL");
+  const prediction = await getReplicate().predictions.create({
+    version: LIPSYNC_VERSION_ID,
+    input: {
+      video: input.video,
+      audio: input.audio,
+      sync_mode: input.sync_mode ?? "silence",
+      temperature: input.temperature ?? 0.5,
+    },
+  });
+  return prediction.id;
+}
+
 /** Separate start lets scene-reference jobs persist prediction IDs before polling. */
 export async function startImagePrediction(input: FluxInput): Promise<string> {
   const prediction = await getReplicate().predictions.create({
