@@ -41,8 +41,8 @@ export const POWER_TIER_CONFIG: Record<PowerTier, PowerTierConfig> = {
   LOW: {
     id: "LOW",
     legacyTier: "minimum",
-    label: "Low",
-    description: "480p, самая дешёвая генерация — черновики и быстрые пробы.",
+    label: "480p",
+    description: "Черновое качество — быстрые пробы и тесты, самая низкая цена.",
     resolution: "480p",
     baseDuration: 5,
     costPerScene: 1,
@@ -51,8 +51,8 @@ export const POWER_TIER_CONFIG: Record<PowerTier, PowerTierConfig> = {
   MEDIUM: {
     id: "MEDIUM",
     legacyTier: "medium",
-    label: "Medium",
-    description: "720p, сбалансированное качество и цена — рекомендуем по умолчанию.",
+    label: "720p",
+    description: "Полное качество Seedance 2.5 (максимум модели) — для готового сериала.",
     resolution: "720p",
     baseDuration: 5,
     costPerScene: 3,
@@ -61,8 +61,8 @@ export const POWER_TIER_CONFIG: Record<PowerTier, PowerTierConfig> = {
   HIGH: {
     id: "HIGH",
     legacyTier: "maximum",
-    label: "High",
-    description: "720p, более длинные клипы и максимальный бюджет на сцену.",
+    label: "720p+",
+    description: "720p с расширенным бюджетом на сцену (только для старых проектов).",
     resolution: "720p",
     baseDuration: 10,
     costPerScene: 8,

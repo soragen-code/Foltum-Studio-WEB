@@ -62,13 +62,13 @@ export function ProjectWizard({ project: initialProject }: { project: any }) {
           <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
             <span
               className="inline-flex items-center gap-1 rounded bg-muted px-2 py-0.5 uppercase"
-              title={`Мощность: ${power.label} · ${power.resolution} · ${power.costPerScene} кр./сцена`}
+              title={`Качество видео: ${power.resolution}`}
               data-testid="power-badge"
             >
               <Gauge className="h-3 w-3" />
               {power.label}
             </span>
-            <span className="hidden sm:inline">{power.resolution} · {power.costPerScene} кр./сцена</span>
+            <span className="hidden sm:inline">качество {power.resolution}</span>
           </div>
         </div>
 

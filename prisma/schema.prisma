@@ -203,6 +203,8 @@ model Scene {
   episodeId     String
   number        Int
   dialogue      String?  @db.Text
+  dialogueEn    String?  @db.Text // stage 4: English lines actually spoken by Seedance (dialogue = story-language text for UI/subtitles)
+  subtitled     Boolean  @default(false) // stage 4: subtitles already burned into videoUrl
   locationDesc  String?  @db.Text
   videoPrompt   String?  @db.Text
   videoUrl      String?  // generated scene video URL (Seedance native audio)

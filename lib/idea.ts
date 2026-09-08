@@ -186,10 +186,11 @@ export function normalizeCastExpansion(raw: unknown, existingNames: string[]): C
 
 const ORIGINALITY_RULES = `ORIGINALITY (strict):
 - All characters are ORIGINAL. Never use or reference real people, celebrities, public figures, existing franchises, brands, trademarks or well-known fictional characters. Do not write "looks like <celebrity>".
-- Names must be invented and plausible for the story's setting.`;
+- Names must be invented and plausible for the story's setting.
+- NAMES ARE WESTERN: every character gets an English-language / Western first name and surname (e.g. "Emily Carter", "Daniel Hayes", "Margaret Whitmore"), written in Latin letters even when the story language is Russian. NEVER Russian or Slavic names (no Иван, Марина, Петров, -ова/-ов surnames). The setting may be anywhere, but the cast is named Western.`;
 
 const CHARACTER_FIELD_RULES = `Character card fields (all REQUIRED, non-empty):
-- "name": full name
+- "name": full Western name in Latin letters (first name + surname), see ORIGINALITY
 - "age": age as text (e.g. "34" or "late 40s"), in the story language
 - "role": role in the story (protagonist, antagonist, ally, mentor, etc.), in the story language
 - "appearance": ALWAYS in ENGLISH, 2-3 sentences, concrete and photoreal: age, ethnicity/skin tone, build, face, hair, eyes, clothing style, distinguishing features. Used verbatim as a prompt for AI image generation.
