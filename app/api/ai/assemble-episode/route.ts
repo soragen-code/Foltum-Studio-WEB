@@ -9,7 +9,13 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, assembleEpisodeSchema } from "@/lib/validations";
 import { assembleEpisodeLocally } from "@/lib/ffmpeg";
+import { parseDialogue } from "@/lib/voiceover";
 import { uploadBufferToS3 } from "@/lib/s3-upload";
+
+/** Clean a scene's dialogue into plain spoken text for the burned-in subtitle. */
+function subtitleFor(dialogue: string | null | undefined): string {
+  return parseDialogue(dialogue).map((l) => l.text).join(" ").trim();
+}
 
 /**
  * Assemble a full episode from all accepted scene videos (in scene order).
@@ -62,7 +68,11 @@ export async function POST(request: Request) {
 
     // Mux voiceovers + concatenate with local ffmpeg (audio-preserving).
     const result = await assembleEpisodeLocally(
-      scenes.map((s) => ({ videoUrl: s.videoUrl as string, audioUrl: s.audioUrl }))
+      scenes.map((s) => ({
+        videoUrl: s.videoUrl as string,
+        audioUrl: s.audioUrl,
+        subtitle: subtitleFor(s.dialogue),
+      }))
     );
     workDir = result.workDir;
     console.log(

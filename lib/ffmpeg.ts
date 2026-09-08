@@ -28,12 +28,13 @@ function getFfmpegPath(): string {
   return "ffmpeg";
 }
 
-async function runFfmpeg(args: string[], label: string): Promise<string> {
+async function runFfmpeg(args: string[], label: string, opts?: { cwd?: string }): Promise<string> {
   const bin = getFfmpegPath();
   try {
     const { stderr } = await execFileAsync(bin, ["-hide_banner", "-nostdin", "-y", ...args], {
       maxBuffer: 32 * 1024 * 1024,
       timeout: 10 * 60 * 1000,
+      ...(opts?.cwd ? { cwd: opts.cwd } : {}),
     });
     return stderr ?? "";
   } catch (err: any) {
@@ -47,6 +48,41 @@ export async function downloadToFile(url: string, dest: string): Promise<void> {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to download ${url}: ${res.status}`);
   await fs.writeFile(dest, Buffer.from(await res.arrayBuffer()));
+}
+
+/**
+ * Extract the LAST frame of a video as a JPEG buffer.
+ *
+ * Used for one-take frame-chaining: the last frame of scene N is fed to Seedance as the
+ * first-frame (`image`) of scene N+1, so the next clip starts exactly where the previous
+ * one ended and the whole episode reads as a single continuous take.
+ *
+ * `-sseof -1` seeks to the last second and `-update 1` keeps overwriting the output with
+ * each decoded frame, so the file left on disk is the very last frame of the clip.
+ */
+export async function extractLastFrameBuffer(videoUrl: string): Promise<Buffer> {
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "lastframe-"));
+  const videoPath = path.join(workDir, "src.mp4");
+  const outPath = path.join(workDir, "last.jpg");
+  try {
+    await downloadToFile(videoUrl, videoPath);
+    // Try the fast seek-from-end approach first.
+    try {
+      await runFfmpeg(
+        ["-sseof", "-1", "-i", videoPath, "-update", "1", "-q:v", "2", "-frames:v", "1", outPath],
+        "extract last frame (sseof)"
+      );
+    } catch {
+      // Fallback: reverse the last chunk and grab its first frame.
+      await runFfmpeg(
+        ["-i", videoPath, "-vf", "reverse", "-q:v", "2", "-frames:v", "1", outPath],
+        "extract last frame (reverse)"
+      );
+    }
+    return await fs.readFile(outPath);
+  } finally {
+    await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 export interface MediaInfo {
@@ -92,6 +128,102 @@ export interface SceneClipInput {
   videoUrl: string;
   /** Separate voiceover (e.g. ElevenLabs mp3). Takes priority over the clip's own audio. */
   audioUrl?: string | null;
+  /** Cleaned spoken text for this scene — burned in as a subtitle over the clip's segment. */
+  subtitle?: string | null;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Subtitles                                                          */
+/* ------------------------------------------------------------------ */
+
+/** Format seconds as an SRT timestamp: HH:MM:SS,mmm */
+function srtTime(sec: number): string {
+  const s = Math.max(0, sec);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = Math.floor(s % 60);
+  const ms = Math.round((s - Math.floor(s)) * 1000);
+  const p = (n: number, w = 2) => String(n).padStart(w, "0");
+  return `${p(h)}:${p(m)}:${p(ss)},${p(ms, 3)}`;
+}
+
+/** Wrap a subtitle line to ~2 lines so it stays readable on a 9:16 frame. */
+function wrapSubtitle(text: string, max = 38): string {
+  const words = text.replace(/\s+/g, " ").trim().split(" ");
+  const lines: string[] = [];
+  let cur = "";
+  for (const w of words) {
+    if ((cur + " " + w).trim().length > max && cur) {
+      lines.push(cur);
+      cur = w;
+    } else {
+      cur = (cur + " " + w).trim();
+    }
+  }
+  if (cur) lines.push(cur);
+  // Keep at most 2 lines; if longer, collapse the tail into the second line.
+  if (lines.length > 2) return [lines[0], lines.slice(1).join(" ")].join("\n");
+  return lines.join("\n");
+}
+
+/**
+ * Build an SRT whose cues are timed to each clip's position on the FINAL timeline.
+ * With a crossfade of `transition` seconds, clip i begins at
+ *   start_i = start_{i-1} + dur_{i-1} - transition  (start_0 = 0)
+ * The cue is shown for the fully-visible middle of the clip (skipping the fade in/out)
+ * so text never overlaps a transition.
+ */
+function buildSrt(subtitles: (string | null | undefined)[], infos: MediaInfo[], transition: number): string {
+  const t = infos.length > 1 ? transition : 0;
+  const starts: number[] = [];
+  let running = 0;
+  for (let i = 0; i < infos.length; i++) {
+    if (i === 0) starts.push(0);
+    else {
+      running = Math.max(0, running - t);
+      starts.push(running);
+    }
+    running = starts[i] + (infos[i].duration || 0);
+  }
+
+  const cues: string[] = [];
+  let idx = 1;
+  for (let i = 0; i < subtitles.length; i++) {
+    const raw = (subtitles[i] ?? "").replace(/\s+/g, " ").trim();
+    if (!raw) continue;
+    const dur = infos[i]?.duration || 0;
+    if (dur <= 0) continue;
+    // Show text over the stable middle of the clip, clear of the fades.
+    const pad = infos.length > 1 ? Math.min(0.25, t) : 0;
+    const from = starts[i] + pad;
+    const to = Math.max(from + 0.4, starts[i] + dur - pad);
+    cues.push(`${idx}\n${srtTime(from)} --> ${srtTime(to)}\n${wrapSubtitle(raw)}\n`);
+    idx++;
+  }
+  return cues.join("\n");
+}
+
+/**
+ * Burn an SRT into a video. Runs with cwd=workDir and a bare filename so the
+ * subtitles filter never has to escape ':' / '/' in an absolute path.
+ * Video is re-encoded; audio is stream-copied. Returns the output path.
+ */
+async function burnSubtitles(inputPath: string, srtName: string, outPath: string, workDir: string): Promise<void> {
+  const style =
+    "FontName=DejaVu Sans,Fontsize=15,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000," +
+    "BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=64";
+  await runFfmpeg(
+    [
+      "-i", inputPath,
+      "-vf", `subtitles=${srtName}:force_style='${style}'`,
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+      "-c:a", "copy",
+      "-movflags", "+faststart",
+      outPath,
+    ],
+    "burn subtitles",
+    { cwd: workDir }
+  );
 }
 
 export interface AssembleResult {
@@ -162,8 +294,13 @@ async function normalizeClip(
   return "silence";
 }
 
-/** Crossfade length between consecutive shots, in seconds. */
-export const TRANSITION_SEC = 0.5;
+/**
+ * Blend length between consecutive shots, in seconds. Kept SHORT (a match-cut, not an
+ * obvious dissolve): with frame-chaining the last frame of one clip already matches the
+ * first frame of the next, so a tiny 0.2s blend hides the seam and the episode reads as
+ * one continuous take rather than a slideshow of dissolves.
+ */
+export const TRANSITION_SEC = 0.2;
 
 /**
  * Join uniform clips with smooth dissolves: N clips → N-1 chained `xfade=transition=fade`
@@ -295,20 +432,43 @@ export async function assembleEpisodeLocally(scenes: SceneClipInput[]): Promise<
     if (audioPath) await fs.rm(audioPath, { force: true });
   }
 
-  const outputPath = path.join(workDir, "episode.mp4");
+  // Probe every normalized clip up-front — needed both for the crossfade math and for
+  // timing the burned-in subtitles to each clip's position on the final timeline.
+  const infos = await Promise.all(normalized.map((c) => probeMedia(c)));
+
+  const joinedPath = path.join(workDir, "joined.mp4");
   if (normalized.length === 1) {
-    await fs.copyFile(normalized[0], outputPath);
+    await fs.copyFile(normalized[0], joinedPath);
   } else {
-    const infos = await Promise.all(normalized.map((c) => probeMedia(c)));
     try {
-      await crossfadeClips(normalized, infos, outputPath, TRANSITION_SEC);
+      await crossfadeClips(normalized, infos, joinedPath, TRANSITION_SEC);
     } catch (err) {
       // Crossfade is best-effort: never fail the whole assembly because of a transition.
       console.warn("[ffmpeg] xfade failed — falling back to hard cuts:", (err as Error).message);
-      await fs.rm(outputPath, { force: true });
-      await concatClips(normalized, workDir, outputPath);
+      await fs.rm(joinedPath, { force: true });
+      await concatClips(normalized, workDir, joinedPath);
     }
   }
+
+  // Burn per-scene subtitles (timed to each clip's segment). Always on — the assembled
+  // episode should read like a finished film. Best-effort: keep the video if it fails.
+  const outputPath = path.join(workDir, "episode.mp4");
+  const hasSubs = scenes.some((s) => (s.subtitle ?? "").trim());
+  if (hasSubs) {
+    try {
+      const srt = buildSrt(scenes.map((s) => s.subtitle), infos, TRANSITION_SEC);
+      const srtName = "subs.srt";
+      await fs.writeFile(path.join(workDir, srtName), srt, "utf8");
+      await burnSubtitles(joinedPath, srtName, outputPath, workDir);
+    } catch (err) {
+      console.warn("[ffmpeg] subtitle burn failed — using video without subtitles:", (err as Error).message);
+      await fs.rm(outputPath, { force: true }).catch(() => {});
+      await fs.copyFile(joinedPath, outputPath);
+    }
+  } else {
+    await fs.copyFile(joinedPath, outputPath);
+  }
+  await fs.rm(joinedPath, { force: true }).catch(() => {});
 
   const info = await probeMedia(outputPath);
   if (!info.hasVideo) throw new Error("Assembled episode has no video stream");

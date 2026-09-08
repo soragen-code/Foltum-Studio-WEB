@@ -2,16 +2,20 @@ import { prisma } from "@/lib/db";
 import { startVideoPrediction, getPredictionState } from "@/lib/replicate";
 import { renderSceneVoiceover, buildNativeAudioPrompt, translateDialogue, detectSpokenLanguage, languageName } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
+import { extractLastFrameBuffer } from "@/lib/ffmpeg";
 import { getBucketConfig } from "@/lib/aws-config";
 import { sanitizeVideoPrompt } from "@/lib/sanitize-prompt";
 import { updateJob, completeJob, failJob, heartbeatJob, runInBackground } from "@/lib/jobs";
 
 /**
- * When true (default), the video model generates the dialogue + ambient audio NATIVELY,
- * so speech comes from the characters' mouths and blends with the environment (cinematic).
- * When false, falls back to the legacy path: silent video + ElevenLabs voiceover laid on top.
+ * DEFAULT is FALSE: the video model generates SILENT clips (generate_audio:false) and the
+ * dialogue is a separate ElevenLabs voiceover laid on top. This is deliberate — Seedance's
+ * copyright/moderation filter is most often tripped by the model's IMPROVISED SOUNDTRACK, not
+ * the visuals, so dropping generated audio removes almost all copyright blocks and the wasted
+ * retries → generation succeeds first time and is much faster.
+ * Set NATIVE_SCENE_AUDIO=true to re-enable in-clip native voices (legacy, block-prone).
  */
-const NATIVE_AUDIO = (process.env.NATIVE_SCENE_AUDIO ?? "true").toLowerCase() !== "false";
+const NATIVE_AUDIO = (process.env.NATIVE_SCENE_AUDIO ?? "false").toLowerCase() === "true";
 
 export interface VideoJobParams {
   jobId: string;
@@ -115,6 +119,23 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     // Steer the model away from anything its output-moderation flags as copyrighted.
     const basePrompt = withCopyrightSafety(prompt);
 
+    // ── One-take frame-chaining ────────────────────────────────────────────────
+    // Feed the LAST FRAME of the previous scene as the FIRST FRAME of this one, so the
+    // clip literally starts where the last one ended and the episode reads as a single
+    // continuous take instead of separate shots glued together.
+    let chainImage: string | undefined;
+    if (scene.number > 1) {
+      const prev = await prisma.scene.findFirst({
+        where: { episodeId: scene.episodeId, number: { lt: scene.number }, lastFrameUrl: { not: null } },
+        orderBy: { number: "desc" },
+        select: { lastFrameUrl: true, number: true },
+      });
+      if (prev?.lastFrameUrl) {
+        chainImage = prev.lastFrameUrl;
+        console.log(`[video-job] scene ${scene.number}: chaining from scene ${prev.number}'s last frame`);
+      }
+    }
+
     // 1-2. Start + wait, retrying automatically if the OUTPUT is rejected by the
     // model's copyright/moderation filter (that check is partly non-deterministic —
     // a fresh generation with stronger "original content" framing usually passes).
@@ -139,6 +160,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
         aspect_ratio: "9:16",
         generate_audio: NATIVE_AUDIO && !silentFallback, // characters speak in-clip; legacy path adds ElevenLabs later
         watermark: false,
+        ...(chainImage ? { image: chainImage } : {}), // one-take continuity: start from previous scene's last frame
       });
       state = { predictionId, sceneId, projectId, userId, cost, startedAt: Date.now() };
       await updateJob(jobId, { resultData: JSON.stringify(state) });
@@ -255,6 +277,17 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, replicateVi
     where: { id: sceneId },
     data: { videoUrl, audioUrl, status: "generated" },
   });
+
+  // One-take frame-chaining: capture this scene's LAST FRAME so the NEXT scene can start
+  // from it. Best-effort — never fail the job over a thumbnail.
+  try {
+    const frame = await extractLastFrameBuffer(videoUrl);
+    const lastFrameUrl = await uploadBufferToS3(frame, `${baseKey}-lastframe.jpg`, "image/jpeg");
+    await prisma.scene.update({ where: { id: sceneId }, data: { lastFrameUrl } });
+    console.log(`[video-job] scene ${scene.number}: stored last frame for chaining`);
+  } catch (frameErr: any) {
+    console.warn("[video-job] last-frame extraction failed (non-fatal):", frameErr?.message ?? frameErr);
+  }
 
   await completeJob(jobId, { videoUrl, audioUrl, scene: updated }, "Video ready");
 }
