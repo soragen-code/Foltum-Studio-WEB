@@ -40,7 +40,7 @@ export interface VideoJobState {
 
 const POLL_INTERVAL_MS = 8_000;
 /** Typical Seedance time — only used to animate the progress bar while waiting. */
-const EXPECTED_VIDEO_MS = Number(process.env.SEEDANCE_EXPECTED_MS ?? 5 * 60 * 1000);
+const EXPECTED_VIDEO_MS = Number(process.env.SEEDANCE_EXPECTED_MS ?? 10 * 60 * 1000);
 /** Hard cap for waiting on Replicate. */
 // End-to-end budget, not an invocation timer. Check provider terminal state BEFORE enforcing it.
 export const VIDEO_DEADLINE_MS = 30 * 60 * 1000;

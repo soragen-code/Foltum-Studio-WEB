@@ -4,7 +4,7 @@ const Module = require("node:module");
 const originalLoad = Module._load;
 let row: any, provider: any, refunds: number, publications: number, reads: number, cancels: number;
 let pending: Promise<void>[], uploadFailure = false, lookupFailure = false;
-let submissions = 0;
+let submissions = 0, lastVideoInput: any = null;
 let clock = 1_000_000;
 const base = () => ({ predictionId: "existing", sceneId: "scene", projectId: "project", userId: "test", cost: 1, startedAt: clock - 600_000, diagnostics: [{ phase: "video", predictionId: "existing", status: "processing", input: { generate_audio: true } }] });
 const matches = (where: any) => {
@@ -34,7 +34,7 @@ const mocks: any = {
   "@/lib/replicate": {
     getPredictionState: async () => { reads++; if (lookupFailure) throw Error("status GET unavailable"); return provider; },
     cancelVideoPrediction: async () => { cancels++; provider = { status: "canceled" }; },
-    startVideoPrediction: async (input: any) => { submissions++; assert.equal(input.generate_audio, true); return "existing"; },
+    startVideoPrediction: async (input: any) => { submissions++; lastVideoInput = input; assert.equal(input.generate_audio, true); return "existing"; },
   },
   "@/lib/jobs": { runInBackground: (fn: any) => pending.push(fn()), updateJob: async () => {}, heartbeatJob: async () => {} },
   "@/lib/s3-upload": {
@@ -115,4 +115,12 @@ test("submission: prediction сохраняется и функция возвр
   await runVideoJob({ jobId: "job", sceneId: "scene", projectId: "project", userId: "test", cost: 1 });
   assert.equal(submissions, 1); assert.equal(reads, 0); assert.equal(refunds, 0);
   assert.equal(row.status, "processing"); assert.equal(JSON.parse(row.resultData).predictionId, "existing");
+});
+
+test("submission: заданная длительность (15 с) передаётся в Seedance без изменений", async () => {
+  reset();
+  await runVideoJob({ jobId: "job", sceneId: "scene", projectId: "project", userId: "test", cost: 3, duration: 15 });
+  assert.equal(submissions, 1);
+  assert.equal(lastVideoInput.duration, 15);
+  assert.equal(lastVideoInput.generate_audio, true);
 });

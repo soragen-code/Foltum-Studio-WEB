@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Loader2, Play, Check, RefreshCw, Edit2, Film, ChevronDown, ChevronRight, Zap } from 'lucide-react'
 import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from './use-job-polling'
 
-const VIDEO_EXPECTED_SEC = 200 // ~3 min Seedance + TTS + upload
+const VIDEO_EXPECTED_SEC = 600 // ~10 min: Seedance renders a 15 s clip with native audio + upload
 
 /**
  * Scene player: Seedance video with native audio (speech + ambience baked into the clip).

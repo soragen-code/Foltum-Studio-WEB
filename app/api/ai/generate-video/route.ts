@@ -19,7 +19,9 @@ const VIDEO_TIERS: Record<string, { cost: number; duration: number; resolution: 
 /** Minimum total episode length (sum of its scenes), seconds. */
 const EPISODE_MIN_SECONDS = Number(process.env.EPISODE_MIN_SECONDS ?? 60);
 /** Seedance 2.5 accepts up to 30 s per clip; keep a safe upper bound. */
-const SCENE_MAX_SECONDS = Number(process.env.SCENE_MAX_SECONDS ?? 15);
+const SCENE_MAX_SECONDS = Number(process.env.SCENE_MAX_SECONDS ?? 30);
+/** Each scene clip runs at least this long (Seedance 2.5 supports it natively). */
+const SCENE_MIN_SECONDS = Number(process.env.SCENE_MIN_SECONDS ?? 15);
 
 /**
  * POST /api/ai/generate-video  { projectId, sceneId }
@@ -61,7 +63,7 @@ export async function POST(request: Request) {
     const sceneCount = Math.max(1, await prisma.scene.count({ where: { episodeId: sceneData.episodeId } }));
     const duration = Math.min(
       SCENE_MAX_SECONDS,
-      Math.max(tier.duration, Math.ceil(EPISODE_MIN_SECONDS / sceneCount))
+      Math.max(SCENE_MIN_SECONDS, tier.duration, Math.ceil(EPISODE_MIN_SECONDS / sceneCount))
     );
     const config = {
       resolution: tier.resolution,
