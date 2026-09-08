@@ -39,8 +39,41 @@ export function characterImagePrompt(appearance: string, shot: "front" | "profil
 
 /** Photoreal 9:16 location reference (no people) — used by Seedance as an environment reference. */
 export function locationImagePrompt(visualPrompt: string, name = ""): string {
-  return `${VISUAL_STYLE}\nLocation establishing shot: ${sanitizeVideoPrompt(visualPrompt, { keep: [name] }).prompt}. Wide vertical composition, eye-level camera, ` +
-    `no people, no animals, no text, no signs with readable words, no logos. Real physical environment with authentic wear and detail.`;
+  return locationAnglePrompt(visualPrompt, name, "wide");
+}
+
+/**
+ * Camera angles of one location reference set. The wide shot is generated first; the other
+ * angles are generated WITH the wide shot as Seedream image_input, so the place, time of day,
+ * weather, light direction and palette stay identical — only the camera moves.
+ */
+export const LOCATION_ANGLES = [
+  { key: "imageUrl", angle: "wide", label: "Общий план" },
+  { key: "imageReverse", angle: "reverse", label: "Обратный ракурс" },
+  { key: "imageDetail", angle: "detail", label: "Средний план" },
+] as const;
+export type LocationAngle = (typeof LOCATION_ANGLES)[number]["angle"];
+export type LocationImageKey = (typeof LOCATION_ANGLES)[number]["key"];
+
+const LIGHT_LOCK = "Lighting is FIXED for this location: one time of day, one weather, one light direction and colour temperature — never changes between angles.";
+
+export function locationAnglePrompt(visualPrompt: string, name = "", angle: LocationAngle): string {
+  const place = sanitizeVideoPrompt(visualPrompt, { keep: [name] }).prompt;
+  const noPeople = "no people, no animals, no text, no signs with readable words, no logos. Real physical environment with authentic wear and detail.";
+  if (angle === "wide")
+    return `${VISUAL_STYLE}\nLocation establishing shot: ${place}. Wide vertical composition, eye-level camera, ${noPeople} ${LIGHT_LOCK}`;
+  if (angle === "reverse")
+    return `${VISUAL_STYLE}\nThe SAME location as the reference image, photographed from the opposite side (reverse angle, camera turned ~180°): ${place}. ` +
+      `Same architecture, materials, props, time of day, weather and light direction as the reference — only the camera position changed. Eye-level, vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;
+  return `${VISUAL_STYLE}\nThe SAME location as the reference image, medium shot from a 45° side angle at the spot where characters would talk: ${place}. ` +
+    `Same materials, props, time of day, weather and light direction as the reference — only the framing is closer. Vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;
+}
+
+/** All valid reference angles of a location, wide first. */
+export function locationAngleImages(loc: { imageUrl?: string | null; imageReverse?: string | null; imageDetail?: string | null }): { angle: LocationAngle; label: string; url: string }[] {
+  return LOCATION_ANGLES
+    .map((a) => ({ angle: a.angle, label: a.label, url: (loc as Record<string, string | null | undefined>)[a.key] ?? "" }))
+    .filter((a) => isStyledAsset(a.url));
 }
 
 export function isStyledAsset(url?: string | null): boolean {

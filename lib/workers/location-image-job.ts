@@ -2,13 +2,14 @@ import { prisma } from "@/lib/db";
 import { generateImage } from "@/lib/replicate";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob } from "@/lib/jobs";
-import { locationImagePrompt, VISUAL_STYLE_ID } from "@/lib/visual-style";
+import { locationAnglePrompt, LOCATION_ANGLES, VISUAL_STYLE_ID } from "@/lib/visual-style";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Background job: one photoreal 9:16 PNG reference per location (Seedream, C2PA kept),
- * uploaded to S3 and written to Location.imageUrl. Job type "location_image".
+ * Background job: a photoreal 9:16 PNG reference SET per location (Seedream, C2PA kept):
+ * wide establishing shot + reverse angle + medium angle of the same place with identical light,
+ * uploaded to S3 and written to Location.imageUrl / imageReverse / imageDetail. Job type "location_image".
  */
 export async function runLocationImagesJob({ jobId, projectId, locationIds }: { jobId: string; projectId: string; locationIds: string[] }): Promise<void> {
   try {
@@ -21,10 +22,24 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds }: { 
     for (const loc of locations) {
       await updateJob(jobId, { progress: pct(), message: `Референс локации «${loc.name}» (${done + 1}/${total})…` });
       try {
-        const replicateUrl = await generateImage({ prompt: locationImagePrompt(loc.visualPrompt ?? loc.description ?? loc.name, loc.name), aspect_ratio: "9:16" }, { jobId });
-        const s3Key = `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${Date.now()}.png`;
-        const url = await uploadRemoteToS3(replicateUrl, s3Key, "image/png");
-        await prisma.location.update({ where: { id: loc.id }, data: { imageUrl: url } });
+        const visual = loc.visualPrompt ?? loc.description ?? loc.name;
+        // 1) wide establishing angle — the anchor for the light and the place
+        const wideRemote = await generateImage({ prompt: locationAnglePrompt(visual, loc.name, "wide"), aspect_ratio: "9:16" }, { jobId });
+        const stamp = Date.now();
+        const wideUrl = await uploadRemoteToS3(wideRemote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${stamp}-wide.png`, "image/png");
+        await prisma.location.update({ where: { id: loc.id }, data: { imageUrl: wideUrl, imageReverse: null, imageDetail: null } });
+        // 2) other angles of the SAME place: the wide shot is passed as image_input so light/materials stay identical
+        for (const a of LOCATION_ANGLES.filter((x) => x.angle !== "wide")) {
+          await updateJob(jobId, { progress: pct(), message: `Референс локации «${loc.name}» — ${a.label.toLowerCase()} (${done + 1}/${total})...` });
+          try {
+            const remote = await generateImage({ prompt: locationAnglePrompt(visual, loc.name, a.angle), aspect_ratio: "9:16", image_input: [wideRemote] }, { jobId });
+            const url = await uploadRemoteToS3(remote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${stamp}-${a.angle}.png`, "image/png");
+            await prisma.location.update({ where: { id: loc.id }, data: { [a.key]: url } });
+          } catch (e: any) {
+            // the wide angle alone is still a valid reference — log and continue
+            console.error(`[location-images] ${a.angle} angle failed for ${loc.name}:`, e?.message ?? e);
+          }
+        }
       } catch (e: any) {
         failed += 1;
         console.error(`[location-images] failed for ${loc.name}:`, e?.message ?? e);

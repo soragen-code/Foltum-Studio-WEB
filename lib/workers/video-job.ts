@@ -5,7 +5,7 @@ import { buildNativeAudioPrompt, translateDialogue, detectSpokenLanguage, langua
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
 import { extractLastFrameBuffer, extractAudioBuffer } from "@/lib/ffmpeg";
 import { getBucketConfig } from "@/lib/aws-config";
-import { VISUAL_STYLE_ID, styledVisualPrompt, isStyledAsset, canChainFrame } from "@/lib/visual-style";
+import { VISUAL_STYLE_ID, styledVisualPrompt, isStyledAsset, canChainFrame, locationAngleImages } from "@/lib/visual-style";
 import { GenerationAttempt, safeProviderError, classifyProviderError, logAttempt, safeDiagnosticInput } from "@/lib/generation-diagnostics";
 import { updateJob, heartbeatJob, runInBackground } from "@/lib/jobs";
 
@@ -131,17 +131,21 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       const styled = links.filter(l => isStyledAsset(l.character.imageFront));
       const individuals = styled.filter(l => l.character.tier !== "CROWD");
       const crowds = styled.filter(l => l.character.tier === "CROWD");
-      const episodeLoc = await prisma.episode.findUnique({ where: { id: scene.episodeId }, select: { location: { select: { id: true, name: true, imageUrl: true } } } });
-      const location = episodeLoc?.location?.imageUrl && isStyledAsset(episodeLoc.location.imageUrl) ? episodeLoc.location : null;
+      const episodeLoc = await prisma.episode.findUnique({ where: { id: scene.episodeId }, select: { location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true } } } });
+      // Stage 3b: every generated angle of the SAME location goes in as a reference, so the place,
+      // the time of day and the light stay identical between shots — only the camera angle changes.
+      const locationAngles = episodeLoc?.location ? locationAngleImages(episodeLoc.location) : [];
+      const location = locationAngles.length ? episodeLoc!.location! : null;
       if (individuals.length || location || crowds.length) {
         const refs: { url: string; note: string; kind: string; id: string }[] = [
           ...individuals.map(l => ({ url: l.character.imageFront!, kind: "character", id: l.characterId, note: `defines ${l.character.name}'s photorealistic appearance and identity; use the scene's staging and camera.` })),
-          ...(location ? [{ url: location.imageUrl!, kind: "location", id: location.id, note: `defines the location's environment (${location.name}): architecture, materials, light and palette. Stage the scene inside it.` }] : []),
+          ...locationAngles.map(a => ({ url: a.url, kind: "location", id: location!.id, note: `the location "${location!.name}" — ${a.angle} angle. Same place, same time of day, same light and palette as the other location references. Keep the camera inside this location and match this lighting exactly.` })),
           ...crowds.map(l => ({ url: l.character.imageFront!, kind: "crowd", id: l.characterId, note: `defines the look of the group "${l.character.name}" (extras): who they are and how they are dressed.` })),
         ].slice(0, MAX_REFERENCE_IMAGES);
         referenceImages = refs.map(r => r.url);
         reference = { mode: "character_references", characterIds: refs.filter(r => r.kind !== "location").map(r => r.id), locationId: location?.id ?? null, kinds: refs.map(r => r.kind) };
         prompt += "\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
+        if (location) prompt += "\nCamera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location references. Only the camera angle changes between shots.";
       } else {
         // One new scene composition, never overwrite the user's old portraits or frames.
         // This is original text-to-image design, not a way to bypass a provider refusal.

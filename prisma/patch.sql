@@ -70,3 +70,7 @@ DO $$ BEGIN
     ALTER TABLE "Episode" ADD CONSTRAINT "Episode_locationId_fkey" FOREIGN KEY ("locationId") REFERENCES "Location"("id") ON DELETE SET NULL ON UPDATE CASCADE;
   END IF;
 END $$;
+
+-- Stage 3b: location references from several camera angles (same light).
+ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "imageReverse" TEXT;
+ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "imageDetail" TEXT;

@@ -26,6 +26,9 @@ export interface LocationCardData {
   description?: string | null
   visualPrompt?: string | null
   imageUrl?: string | null
+  /** Stage 3b: extra angles of the same place, same light (reverse + medium). */
+  imageReverse?: string | null
+  imageDetail?: string | null
 }
 
 /** Tier badge (and group size for crowds) shown on character cards. */

@@ -243,6 +243,7 @@ export async function startImagePrediction(input: FluxInput): Promise<string> {
       aspect_ratio: input.aspect_ratio ?? "9:16",
       size: "2K",
       output_format: "png",
+      ...(input.image_input?.length ? { image_input: input.image_input } : {}),
     },
   });
   return prediction.id;
@@ -281,6 +282,8 @@ export interface FluxInput {
   /** Number of inference steps. Default 28. (unused by Seedream) */
   num_inference_steps?: number;
   seed?: number;
+  /** Seedream multi-reference input (1-14 URLs): the output keeps the place/light of these images. */
+  image_input?: string[];
 }
 
 /**

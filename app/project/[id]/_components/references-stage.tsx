@@ -350,6 +350,14 @@ export function ReferencesStage({ project, onRefresh }: { project: any; onRefres
                       {gen && has && (
                         <div className="absolute inset-0 flex items-center justify-center bg-background/60"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div>
                       )}
+                      {has && (validUrl(loc.imageReverse) || validUrl(loc.imageDetail)) && (
+                        <div className="absolute bottom-1 right-1 flex gap-1" data-testid="location-angles">
+                          {[{ url: loc.imageReverse, label: 'Обратный ракурс' }, { url: loc.imageDetail, label: 'Средний план' }].filter((a) => validUrl(a.url)).map((a) => (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img key={a.label} src={a.url as string} alt={`${loc.name} — ${a.label}`} title={a.label} className="h-14 w-8 rounded border border-background object-cover shadow" />
+                          ))}
+                        </div>
+                      )}
                     </div>
                   }
                   footer={
@@ -364,6 +372,7 @@ export function ReferencesStage({ project, onRefresh }: { project: any; onRefres
                         {gen ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
                         {gen ? 'Генерация…' : has ? `Перегенерировать (${CHARACTER_REFERENCE_COST} кр.)` : `Сгенерировать референс (${CHARACTER_REFERENCE_COST} кр.)`}
                       </button>
+                      <p className="mt-2 text-[11px] text-muted-foreground">3 ракурса одного места (общий, обратный, средний), одно освещение — все уходят в Seedance как референсы.</p>
                     </div>
                   }
                 />
