@@ -87,13 +87,22 @@ export function useJobPolling({
   return { job, isActive, start, stop, clear: () => setJob(null) }
 }
 
-/** Estimate remaining time from elapsed time and progress (linear extrapolation). */
+/**
+ * Estimate remaining time. Progress is time-based on the server (it resets when the video
+ * model retries after a copyright-filter rejection), so linear extrapolation from
+ * elapsed/progress explodes on retries ("~85 min remaining"). Use the expected duration
+ * for the CURRENT attempt instead, and never show more than 2× the expected total.
+ */
 export function estimateRemaining(job: JobInfo, expectedTotalSec: number): string {
   const elapsed = (Date.now() - new Date(job.createdAt).getTime()) / 1000
   const p = Math.max(0, Math.min(100, job.progress))
+  const retrying = /retry|attempt/i.test(job.message ?? '')
   let remaining: number
-  if (p >= 10 && elapsed > 5) {
-    remaining = (elapsed / p) * (100 - p)
+  if (retrying) {
+    // A fresh attempt just started: progress tells how far this attempt is, not the total.
+    remaining = expectedTotalSec * (1 - p / 100)
+  } else if (p >= 10 && elapsed > 5) {
+    remaining = Math.min((elapsed / p) * (100 - p), expectedTotalSec * 2)
   } else {
     remaining = Math.max(0, expectedTotalSec - elapsed)
   }
