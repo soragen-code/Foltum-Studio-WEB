@@ -127,7 +127,27 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
   const [episodeVideo, setEpisodeVideo] = useState<Record<string, string>>({})
   /** sceneId -> job being polled (or just finished, kept briefly for the 100% state) */
   const [videoJobs, setVideoJobs] = useState<Record<string, JobInfo>>({})
-  const [startingVideo, setStartingVideo] = useState<string | null>(null)
+  /**
+   * sceneId -> true while the user has requested generation for that scene, held from
+   * the moment the button is clicked until the job reaches a terminal state or the
+   * start explicitly fails. This is a STABLE, per-scene flag (a map, not a single
+   * slot) so that:
+   *  - several scenes can be generating at once, each keeping its own spinner;
+   *  - starting a second scene never clears the first one's spinner;
+   *  - the spinner never blinks off in the gap between the start POST resolving and
+   *    the first status poll populating `videoJobs` (it is NOT cleared by polls/refetches).
+   * It is cleared only on a terminal poll status (completed/failed) or a start error.
+   */
+  const [activeGen, setActiveGen] = useState<Record<string, boolean>>({})
+  const markGenerating = (sceneId: string) =>
+    setActiveGen((prev) => (prev[sceneId] ? prev : { ...prev, [sceneId]: true }))
+  const clearGenerating = (sceneId: string) =>
+    setActiveGen((prev) => {
+      if (!prev[sceneId]) return prev
+      const next = { ...prev }
+      delete next[sceneId]
+      return next
+    })
   /** episodeId -> true while the "Generate all scenes" batch request is being dispatched. */
   const [startingBatch, setStartingBatch] = useState<Record<string, boolean>>({})
   // Per-scene spoken language for native audio ("en" default, or "ru"). Local override
@@ -214,12 +234,14 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
     const tick = async () => {
       try {
         const res = await fetch(`/api/jobs/${jobId}`, { cache: 'no-store' })
-        if (res.status === 404) { stopPolling(sceneId); return }
+        if (res.status === 404) { stopPolling(sceneId); clearGenerating(sceneId); return }
         const data: JobPollResponse = await res.json()
         if (data?.job) {
           setVideoJobs((prev) => ({ ...prev, [sceneId]: data.job }))
           if (data.job.status === 'completed' || data.job.status === 'failed') {
             stopPolling(sceneId)
+            // Terminal: the request is done, so release the optimistic spinner flag.
+            clearGenerating(sceneId)
             if (data.job.status === 'failed') setError(data.job.error ?? 'Video generation failed')
             const updatedScene = data.scene ?? data.job.result?.scene
             if (updatedScene) {
@@ -270,6 +292,7 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
                 prev[epId] ? prev : { ...prev, [epId]: findEpisode(epId)?.scenes ?? [] }
               )
             }
+            markGenerating(j.sceneId)
             setVideoJobs((prev) => ({ ...prev, [j.sceneId]: j }))
             pollVideoJob(j.sceneId, j.id)
           }
@@ -281,19 +304,26 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
   }, [project?.id])
 
   const generateVideo = async (sceneId: string, language?: string) => {
-    setStartingVideo(sceneId)
+    if (!sceneId || isSceneBusy(sceneId)) return // already generating — don't reset the spinner or double-fire
+    // Optimistically mark this scene as generating RIGHT NOW and keep it marked until a
+    // terminal poll or an explicit start failure — this closes the gap between the start
+    // POST resolving and the first status poll, so the spinner never blinks off.
+    markGenerating(sceneId)
     setError('')
     try {
       const res = await postJobStart('/api/ai/generate-video', { projectId: project?.id, sceneId, language })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data?.jobId) {
         setError(data?.error ?? 'Video generation failed')
+        clearGenerating(sceneId)
         return
       }
       patchScene(sceneId, { status: 'generating' })
       pollVideoJob(sceneId, data.jobId)
-    } catch { setError('Network error — please check your connection and try again') }
-    finally { setStartingVideo(null) }
+    } catch {
+      setError('Network error — please check your connection and try again')
+      clearGenerating(sceneId)
+    }
   }
 
   /**
@@ -315,6 +345,7 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
         return
       }
       for (const j of data.jobs as Array<{ sceneId: string; jobId: string }>) {
+        markGenerating(j.sceneId)
         patchScene(j.sceneId, { status: 'generating' })
         pollVideoJob(j.sceneId, j.jobId)
       }
@@ -362,7 +393,8 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
   }
 
   const isSceneBusy = (sceneId: string) => {
-    if (startingVideo === sceneId) return true
+    // Stable optimistic flag OR an in-flight job — union so there is never a gap in between.
+    if (activeGen[sceneId]) return true
     const j = videoJobs[sceneId]
     return !!j && (j.status === 'processing' || j.status === 'pending')
   }
@@ -582,7 +614,7 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
                     </div>
                   )}
 
-                  {startingVideo === scene?.id && !videoJobs[scene?.id] && (
+                  {activeGen[scene?.id] && !videoJobs[scene?.id] && (
                     <div className="mb-3 flex items-center gap-2 text-xs text-muted-foreground">
                       <Loader2 className="h-3 w-3 animate-spin text-primary" /> Starting video generation...
                     </div>
