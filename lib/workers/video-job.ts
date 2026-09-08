@@ -124,12 +124,20 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       // Escalate the anti-copyright framing on each retry.
       const attemptPrompt = attempt === 1 ? basePrompt : withCopyrightSafety(prompt, attempt);
+      // The filter judges the OUTPUT (video + generated soundtrack), not the prompt. A clip
+      // with fully generic visuals can still be rejected because the model's improvised
+      // score/ambience resembles existing music. On the last attempt drop generated audio
+      // so a silent-but-valid clip beats a hard failure (audio can be re-added later).
+      const silentFallback = NATIVE_AUDIO && attempt === MAX_ATTEMPTS;
+      if (silentFallback) {
+        await updateJob(jobId, { message: "Final attempt: generating without model audio (copyright-safe)..." });
+      }
       const predictionId = await startVideoPrediction({
         prompt: attemptPrompt,
         duration: Number(params.duration ?? 5),
         resolution: String(params.resolution ?? "480p"),
         aspect_ratio: "9:16",
-        generate_audio: NATIVE_AUDIO, // characters speak in-clip; legacy path adds ElevenLabs later
+        generate_audio: NATIVE_AUDIO && !silentFallback, // characters speak in-clip; legacy path adds ElevenLabs later
         watermark: false,
       });
       state = { predictionId, sceneId, projectId, userId, cost, startedAt: Date.now() };
