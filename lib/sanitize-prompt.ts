@@ -281,7 +281,22 @@ export function sanitizeVideoPrompt(input: string, options: SanitizeOptions = {}
   // Logos / trademarks in general.
   text = apply(text, /\b(?:visible|prominent|recognizable|famous|brand(?:ed)?)\s+(?:logos?|trademarks?|brand(?:ing| names?)?|insignia)\b/gi, "no logos", keep, changes, "logo");
 
-  // 5. Tidy: doubled generic phrases, whitespace, dangling punctuation.
+  // 5. Production meta-language. Words like "episode", "cliffhanger", "next shot", "series"
+  // describe the SHOW, not the picture — they hint at TV/film content and were the only
+  // thing shared by consecutive filter rejections of an otherwise plain close-up.
+  const META: Rule[] = [
+    { pattern: /,?\s*(?:setting|which sets|that sets|to set)\s+up\s+(?:the\s+)?(?:cliffhanger|hook|reveal|twist)(?:\s+(?:for|of)\s+(?:the\s+)?(?:next|following|upcoming)\s+(?:episode|scene|shot|chapter|part|season))?/gi, replacement: "" },
+    { pattern: /\b(?:for|in|into|to|of|from|with)\s+(?:the\s+)?(?:next|previous|following|upcoming|final|last|first)\s+(?:episode|scene|shot|clip|chapter|season|series|sequence)s?\b/gi, replacement: "" },
+    { pattern: /\b(?:the\s+)?(?:next|previous|following|upcoming)\s+(?:episode|scene|shot|clip|chapter|season|series)s?\b/gi, replacement: "what follows" },
+    { pattern: /\bcliff-?hangers?\b/gi, replacement: "unresolved tension" },
+    { pattern: /\b(?:tv|television|web|drama|streaming)\s+(?:series|show|serial)s?\b/gi, replacement: "story" },
+    { pattern: /\bepisodes?\b/gi, replacement: "sequence" },
+    { pattern: /\bseason\s+\d+\b/gi, replacement: "" },
+    { pattern: /\b(?:match|smash|hard|jump)\s+cut(?:\s+to)?\b:?/gi, replacement: "then" },
+  ];
+  for (const r of META) text = apply(text, r.pattern, r.replacement, keep, changes, "meta");
+
+  // 6. Tidy: doubled generic phrases, whitespace, dangling punctuation.
   text = text
     .replace(/\b(a woman|a man|a person|an artist|a filmmaker|an original (?:story|character))\s+\1\b/g, "$1")
     .replace(/\b(?:an? )?(?:athletic-brand-free|designer-label-free)\s+(sneakers?|shoes?|trainers?|jacket|hoodie|dress|bag|handbag|suit|coat|shirt|t-shirt|cap|sunglasses|logo)s?\b/gi, "plain unbranded $1")
