@@ -54,6 +54,10 @@ export interface MediaInfo {
   hasAudio: boolean;
   /** Container duration in seconds (0 if unknown). */
   duration: number;
+  /** Video geometry / frame rate (0 if unknown). */
+  width: number;
+  height: number;
+  fps: number;
 }
 
 /** Probe a media file using ffmpeg's `-i` listing (ffmpeg-static ships no ffprobe). */
@@ -71,10 +75,16 @@ export async function probeMedia(file: string): Promise<MediaInfo> {
   }
   const m = out.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
   const duration = m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : 0;
+  const videoLine = out.match(/Stream #\d+:\d+.*?: Video:.*$/m)?.[0] ?? "";
+  const dim = videoLine.match(/[ ,](\d{2,5})x(\d{2,5})(?:[ ,\[]|$)/);
+  const fpsM = videoLine.match(/(\d+(?:\.\d+)?)\s*fps/);
   return {
-    hasVideo: /Stream #\d+:\d+.*?: Video:/.test(out),
+    hasVideo: videoLine.length > 0,
     hasAudio: /Stream #\d+:\d+.*?: Audio:/.test(out),
     duration,
+    width: dim ? Number(dim[1]) : 0,
+    height: dim ? Number(dim[2]) : 0,
+    fps: fpsM ? Number(fpsM[1]) : 0,
   };
 }
 
@@ -152,9 +162,72 @@ async function normalizeClip(
   return "silence";
 }
 
+/** Crossfade length between consecutive shots, in seconds. */
+export const TRANSITION_SEC = 0.5;
+
 /**
- * Concatenate uniform clips. First try a lossless stream copy (fast — clips come from the
- * same generator with identical encoding); if that fails, re-encode via the concat filter.
+ * Join uniform clips with smooth dissolves: N clips → N-1 chained `xfade=transition=fade`
+ * filters on video and matching `acrossfade` filters on audio. Every input is first
+ * normalized to the geometry / frame rate of the first clip (xfade requires identical
+ * size, fps and timebase). Each transition overlaps the clips by `fade` seconds, so the
+ * k-th transition starts at `sum(d_0..d_{k-1}) - k * fade`.
+ */
+async function crossfadeClips(
+  clips: string[],
+  infos: MediaInfo[],
+  outPath: string,
+  fade: number
+): Promise<void> {
+  const n = clips.length;
+  const ref = infos[0];
+  const w = ref.width || 720;
+  const h = ref.height || 1280;
+  const fps = ref.fps > 0 ? Math.round(ref.fps) : 24;
+
+  // Never let a transition eat more than half of the shortest shot.
+  const minDur = Math.min(...infos.map((i) => i.duration).filter((d) => d > 0));
+  const d = Math.max(0.1, Math.min(fade, (Number.isFinite(minDur) ? minDur : fade) / 2));
+
+  const parts: string[] = [];
+  for (let i = 0; i < n; i++) {
+    parts.push(
+      `[${i}:v:0]scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
+        `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},format=yuv420p,settb=AVTB[v${i}]`
+    );
+    parts.push(`[${i}:a:0]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,asetpts=PTS-STARTPTS[a${i}]`);
+  }
+
+  let vPrev = "v0";
+  let aPrev = "a0";
+  let elapsed = infos[0].duration;
+  for (let i = 1; i < n; i++) {
+    const offset = Math.max(0, elapsed - d);
+    const vOut = i === n - 1 ? "vout" : `vx${i}`;
+    const aOut = i === n - 1 ? "aout" : `ax${i}`;
+    parts.push(`[${vPrev}][v${i}]xfade=transition=fade:duration=${d.toFixed(3)}:offset=${offset.toFixed(3)}[${vOut}]`);
+    parts.push(`[${aPrev}][a${i}]acrossfade=d=${d.toFixed(3)}:c1=tri:c2=tri[${aOut}]`);
+    vPrev = vOut;
+    aPrev = aOut;
+    elapsed = elapsed + infos[i].duration - d;
+  }
+
+  await runFfmpeg(
+    [
+      ...clips.flatMap((c) => ["-i", c]),
+      "-filter_complex", parts.join(";"),
+      "-map", "[vout]", "-map", "[aout]",
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-r", String(fps),
+      "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+      "-movflags", "+faststart",
+      outPath,
+    ],
+    "xfade crossfade"
+  );
+}
+
+/**
+ * Fallback: hard-cut concatenation of uniform clips. First try a lossless stream copy;
+ * if that fails, re-encode via the concat filter.
  */
 async function concatClips(clips: string[], workDir: string, outPath: string): Promise<void> {
   const listPath = path.join(workDir, "concat.txt");
@@ -192,7 +265,7 @@ async function concatClips(clips: string[], workDir: string, outPath: string): P
 
 /**
  * Download all scene clips (+ voiceovers), give every clip a uniform audio track and
- * concatenate them in order. Caller must `fs.rm(result.workDir, { recursive: true })`.
+ * join them in order with dissolve transitions. Caller must `fs.rm(result.workDir, { recursive: true })`.
  */
 export async function assembleEpisodeLocally(scenes: SceneClipInput[]): Promise<AssembleResult> {
   if (scenes.length === 0) throw new Error("No scenes to assemble");
@@ -226,7 +299,15 @@ export async function assembleEpisodeLocally(scenes: SceneClipInput[]): Promise<
   if (normalized.length === 1) {
     await fs.copyFile(normalized[0], outputPath);
   } else {
-    await concatClips(normalized, workDir, outputPath);
+    const infos = await Promise.all(normalized.map((c) => probeMedia(c)));
+    try {
+      await crossfadeClips(normalized, infos, outputPath, TRANSITION_SEC);
+    } catch (err) {
+      // Crossfade is best-effort: never fail the whole assembly because of a transition.
+      console.warn("[ffmpeg] xfade failed — falling back to hard cuts:", (err as Error).message);
+      await fs.rm(outputPath, { force: true });
+      await concatClips(normalized, workDir, outputPath);
+    }
   }
 
   const info = await probeMedia(outputPath);
