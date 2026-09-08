@@ -59,10 +59,7 @@ export async function POST(request: Request) {
     if (scenes.length === 0)
       return NextResponse.json({ error: "Episode has no scenes" }, { status: 400 });
 
-    const allAccepted = scenes.every((s) => s.status === "accepted" || (s.status === "generated" && s.videoUrl));
-    if (!allAccepted)
-      return NextResponse.json({ error: "All scenes must be accepted first" }, { status: 400 });
-
+    // A scene is usable when it has a clip: accepted, generated, or text-revised ("pending") but still holding its last clip.
     if (scenes.some((s) => !s.videoUrl))
       return NextResponse.json({ error: "Some scenes have no generated video" }, { status: 400 });
 

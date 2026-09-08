@@ -99,13 +99,16 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
     } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setRevising(false) }
   }
 
+  const loadPlan = useCallback(async () => {
+    const r = await fetch(`/api/ai/episodes/${episode.id}/generate-all`, { cache: 'no-store' })
+    const d = await r.json(); if (!r.ok) throw new Error(d?.error ?? 'Ошибка')
+    setPlan(d); return d
+  }, [episode.id])
+  // Preload the cost plan so "Изменить сцену" → regen confirmation can show the price at once.
+  useEffect(() => { loadPlan().catch(() => {}) }, [loadPlan])
   const openModal = async () => {
     setError(null)
-    try {
-      const r = await fetch(`/api/ai/episodes/${episode.id}/generate-all`, { cache: 'no-store' })
-      const d = await r.json(); if (!r.ok) throw new Error(d?.error ?? 'Ошибка')
-      setPlan(d); setModal(true)
-    } catch (e: any) { setError(e?.message ?? 'Ошибка') }
+    try { await loadPlan(); setModal(true) } catch (e: any) { setError(e?.message ?? 'Ошибка') }
   }
   const generateAll = async () => {
     setStartingAll(true); setError(null)
