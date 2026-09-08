@@ -1,19 +1,30 @@
 export const dynamic = "force-dynamic";
-export const maxDuration = 800; // per-scene audio mux + concatenation can take a while
+export const runtime = "nodejs";
+export const maxDuration = 800; // download + per-scene audio mux + concatenation can take a while
 
 import { NextResponse } from "next/server";
+import { promises as fs } from "fs";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, assembleEpisodeSchema } from "@/lib/validations";
-import { concatVideos, muxAudioIntoVideo } from "@/lib/replicate";
-import { uploadRemoteToS3 } from "@/lib/s3-upload";
+import { assembleEpisodeLocally } from "@/lib/ffmpeg";
+import { uploadBufferToS3 } from "@/lib/s3-upload";
 
 /**
- * Assemble a full episode by concatenating all accepted scene videos
- * (in scene order) via Replicate's ffmpeg model, then store in S3.
+ * Assemble a full episode from all accepted scene videos (in scene order).
+ *
+ * Scene clips are generated WITHOUT audio (Seedance `generate_audio: false`); the
+ * dialogue is a separate ElevenLabs voiceover in `scene.audioUrl`. Assembly therefore:
+ *   1. muxes each scene's voiceover into its clip (clips without a voiceover keep their
+ *      own audio if they have one, otherwise get a silent track) so every clip has a
+ *      uniform video + AAC audio layout,
+ *   2. concatenates the clips with local ffmpeg — the audio stream is verified to be
+ *      present in the result,
+ *   3. uploads the file to S3 and stores the URL on the episode.
  */
 export async function POST(request: Request) {
+  let workDir: string | null = null;
   try {
     const session = await auth();
     if (!session?.user?.email)
@@ -49,28 +60,21 @@ export async function POST(request: Request) {
     if (scenes.some((s) => !s.videoUrl))
       return NextResponse.json({ error: "Some scenes have no generated video" }, { status: 400 });
 
-    // Native-audio mode: each clip already carries in-scene voices + ambience, so it is
-    // used as-is (muxing a silent track would DROP that audio).
-    // Legacy mode: a scene has a SILENT video (s.videoUrl) + separate ElevenLabs voiceover
-    // (s.audioUrl); mux the voiceover in first. Dialogue-free legacy clips get a silent
-    // track so every input to the concatenator has a uniform video+audio layout.
-    const clipsWithAudio: string[] = [];
-    for (const s of scenes) {
-      if (s.audioUrl) {
-        clipsWithAudio.push(await muxAudioIntoVideo(s.videoUrl as string, s.audioUrl));
-      } else {
-        clipsWithAudio.push(s.videoUrl as string);
-      }
-    }
-
-    // Concatenate via Replicate (ffmpeg)
-    const mergedUrl =
-      clipsWithAudio.length === 1 ? clipsWithAudio[0] : await concatVideos(clipsWithAudio);
+    // Mux voiceovers + concatenate with local ffmpeg (audio-preserving).
+    const result = await assembleEpisodeLocally(
+      scenes.map((s) => ({ videoUrl: s.videoUrl as string, audioUrl: s.audioUrl }))
+    );
+    workDir = result.workDir;
+    console.log(
+      `[assemble-episode] ${episodeId}: ${scenes.length} scenes, audio=${result.audioSources.join(",")}, ` +
+        `duration=${result.info.duration.toFixed(1)}s, hasAudio=${result.info.hasAudio}`
+    );
 
     // Persist to S3
     const projectId = episode.season?.projectId ?? "unknown";
     const s3Key = `media/public/episodes/${projectId}/${episodeId}/episode_${Date.now()}.mp4`;
-    const videoUrl = await uploadRemoteToS3(mergedUrl, s3Key, "video/mp4");
+    const buffer = await fs.readFile(result.outputPath);
+    const videoUrl = await uploadBufferToS3(buffer, s3Key, "video/mp4");
 
     await prisma.episode.update({
       where: { id: episodeId },
@@ -81,5 +85,7 @@ export async function POST(request: Request) {
   } catch (err: any) {
     console.error("Episode assembly error:", err);
     return NextResponse.json({ error: "Assembly failed" }, { status: 500 });
+  } finally {
+    if (workDir) await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
 }

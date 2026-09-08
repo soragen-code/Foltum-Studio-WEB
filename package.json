@@ -84,6 +84,7 @@
     "dayjs": "1.11.13",
     "dotenv": "16.5.0",
     "embla-carousel-react": "8.3.0",
+    "ffmpeg-static": "^5.3.0",
     "formik": "2.4.5",
     "framer-motion": "12.23.12",
     "gray-matter": "4.0.3",

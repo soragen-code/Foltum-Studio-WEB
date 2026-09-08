@@ -11,7 +11,12 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
   images: { unoptimized: true },
-  serverExternalPackages: ['@prisma/client', 'prisma'],
+  serverExternalPackages: ['@prisma/client', 'prisma', 'ffmpeg-static'],
+  // ffmpeg-static locates its binary via __dirname at runtime, so file tracing cannot see it —
+  // include it explicitly for the episode-assembly function (local mux + concat).
+  outputFileTracingIncludes: {
+    '/api/ai/assemble-episode': ['./node_modules/ffmpeg-static/ffmpeg'],
+  },
   // Next 16 BLOCKS unlisted origins on /_next/* and /__nextjs* in dev — including the /_next/hmr
   // WEBSOCKET upgrade, and Turbopack gates client module wiring on that socket, so a blocked origin
   // means the page renders but never hydrates, with no console error (the block writes a raw
