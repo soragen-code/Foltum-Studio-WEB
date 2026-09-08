@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Loader2, Wand2, ChevronDown, ChevronRight, MapPin, Pencil, ArrowRight, Film, Check, Camera } from 'lucide-react'
 import { JOB_POLL_INTERVAL_MS } from './use-job-polling'
+import { TrailerCard } from './trailer-card'
 
 type EpChar = { character: { id: string; name: string; imageFront?: string | null } }
 export type SeasonEpisode = {
@@ -204,6 +205,7 @@ export function SeasonStage({ project }: { project: any; onRefresh?: () => void 
 
   return (
     <div className="space-y-6" data-testid="season-stage">
+      <TrailerCard project={project} />
       <div className="rounded-xl border border-border bg-card p-4 sm:p-6">
         <h2 className="font-display text-xl font-bold">Сценарий сезона</h2>
         <p className="mt-1 text-sm text-muted-foreground">

@@ -202,7 +202,7 @@ R3. A talking scene = a SUBSTANTIVE exchange of ${TALK_MIN_SENTENCES}–${TALK_M
 R4. "videoPrompt" is ENGLISH and consists of EXACTLY these 9 lines, each on its own row, in this order, each starting with its bracket tag:
     [SHOT TYPE]: framing + camera movement, vertical 9:16
     [VISUAL STYLE]: the short visualIdentity sentence — the SAME text in every scene
-    [LIGHTING]: ...
+    [LIGHTING]: time of day, light sources, weather — IDENTICAL wording in every scene of the episode (the whole episode is one continuous time; the location references lock the light, only the camera angle changes)
     [BLOCKING]: where each character stands/moves
     [GAZE]: where each character looks
     [NON-VERBAL]: facial expression, gestures, breathing
