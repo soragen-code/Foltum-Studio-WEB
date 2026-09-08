@@ -27,6 +27,7 @@ import {
   type EpisodeOutline,
   type EpisodeScript,
   type SeasonStructure,
+  matchCharacter,
 } from "@/lib/season";
 
 export const SEASON_JOB_TYPE = "season_script";
@@ -89,7 +90,7 @@ export async function persistEpisodeScript(
   characters: { id: string; name: string }[],
   language: string
 ) {
-  const byName = new Map(characters.map((c) => [c.name.toLowerCase(), c.id]));
+  const idOf = (n: string) => matchCharacter(characters, n)?.id;
   const text = renderEpisodeScriptText(outline, script);
   await prisma.$transaction(async (tx) => {
     await tx.scene.deleteMany({ where: { episodeId } });
@@ -108,10 +109,10 @@ export async function persistEpisodeScript(
           status: "pending",
         },
       });
-      const ids = Array.from(new Set(s.characters.map((n) => byName.get(n.toLowerCase())).filter((x): x is string => !!x)));
+      const ids = Array.from(new Set(s.characters.map(idOf).filter((x): x is string => !!x)));
       if (ids.length) await tx.sceneCharacter.createMany({ data: ids.map((characterId) => ({ sceneId: scene.id, characterId })), skipDuplicates: true });
     }
-    const epIds = Array.from(new Set(outline.characters.map((n) => byName.get(n.toLowerCase())).filter((x): x is string => !!x)));
+    const epIds = Array.from(new Set(outline.characters.map(idOf).filter((x): x is string => !!x)));
     await tx.episodeCharacter.deleteMany({ where: { episodeId } });
     if (epIds.length) await tx.episodeCharacter.createMany({ data: epIds.map((characterId) => ({ episodeId, characterId })), skipDuplicates: true });
     await tx.episode.update({

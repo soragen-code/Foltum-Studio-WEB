@@ -1,5 +1,5 @@
 /** Stage 2 unit checks: season/episode schemas, timing validation, cost plan. Run: npx tsx scripts/test-stage2.ts */
-import { episodeScriptSchema, validateEpisodeScript, normalizeEpisodeScript, spokenWordCount, sceneClipPlan, seasonStructureSchema } from "../lib/season";
+import { episodeScriptSchema, validateEpisodeScript, normalizeEpisodeScript, spokenWordCount, sceneClipPlan, seasonStructureSchema , matchCharacter } from "../lib/season";
 const assert = (c: unknown, m: string) => { if (!c) { console.error("FAIL:", m); process.exit(1); } console.log("ok:", m); };
 const prompt = "[SHOT TYPE]: Medium close-up\n[VISUAL STYLE]: x\n[LIGHTING]: y\n[BLOCKING]: z\n[GAZE]: a\n[NON-VERBAL]: b\n[ACTION]: c\n[CHARACTER]: d\n[TRANSITION]: e";
 const talk = 'АННА (тихо): "Ты знал об этом с самого начала и молчал всё это время?"\nМАРК (резко): "Я молчал, потому что иначе ты бы ушла ещё тогда, той зимой."';
@@ -27,3 +27,13 @@ assert(locationReviseSchema.safeParse({ locationName: "Порт", locationDesc: 
 assert(renderScriptFromScenes({ number: 1, title: "T", logline: "L", locationName: "Маяк", cliffhanger: "C" }, ["Анна"], ok.scenes).includes("СЦЕНА 12"), "script text renders 12 scenes");
 assert(GENERATE_ALL_CONCURRENCY >= 2 && GENERATE_ALL_CONCURRENCY <= 3, `queue concurrency ${GENERATE_ALL_CONCURRENCY}`);
 console.log("ALL STAGE2 EXTENDED CHECKS PASSED");
+
+// matchCharacter: LLM short names resolve to full project names
+{
+  const chars = [{ name: "Валерия Соколова" }, { name: "Ольга Смирнова" }, { name: "Александр Князев" }];
+  if (matchCharacter(chars, "Валерия")?.name !== "Валерия Соколова") throw new Error("matchCharacter first name");
+  if (matchCharacter(chars, "ВАЛЕРИЯ СОКОЛОВА")?.name !== "Валерия Соколова") throw new Error("matchCharacter case");
+  if (matchCharacter(chars, "Смирнова")?.name !== "Ольга Смирнова") throw new Error("matchCharacter surname");
+  if (matchCharacter(chars, "Незнакомец")) throw new Error("matchCharacter unknown should be undefined");
+  console.log("ok: matchCharacter");
+}

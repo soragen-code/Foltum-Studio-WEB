@@ -88,13 +88,32 @@ export function validateEpisodeScript(script: EpisodeScript): string[] {
   return problems;
 }
 
+
+/**
+ * Resolve a character name as written by the LLM ("Валерия", "ВАЛЕРИЯ Соколова") to one of the project's
+ * characters. Exact (case-insensitive) match first, then unique first-name / substring match.
+ */
+export function matchCharacter<T extends { name: string }>(characters: T[], raw: string): T | undefined {
+  const norm = (x: string) => x.toLowerCase().replace(/[«»"'().,]/g, " ").replace(/\s+/g, " ").trim();
+  const q = norm(raw);
+  if (!q) return undefined;
+  const exact = characters.find((c) => norm(c.name) === q);
+  if (exact) return exact;
+  const qFirst = q.split(" ")[0];
+  const partial = characters.filter((c) => {
+    const n = norm(c.name);
+    return n.includes(q) || q.includes(n) || n.split(" ")[0] === qFirst;
+  });
+  return partial.length === 1 ? partial[0] : undefined;
+}
+
 /** Fix what can be fixed mechanically (numbering, [VISUAL STYLE] / [CHARACTER] lines, duration clamp). */
 export function normalizeEpisodeScript(script: EpisodeScript, characters?: CharacterCard[]): EpisodeScript {
   const repairPrompt = (s: SceneScript) => {
     let vp = s.videoPrompt.trim();
     if (!vp.includes("[VISUAL STYLE]")) vp = `[VISUAL STYLE]: ${script.visualIdentity}\n${vp}`;
     if (!vp.includes("[CHARACTER]") && characters?.length) {
-      const visible = characters.filter((c) => s.characters.includes(c.name));
+      const visible = s.characters.map((n) => matchCharacter(characters, n)).filter((c): c is CharacterCard => !!c);
       const desc = (visible.length ? visible : []).map((c) => `${c.name} (${c.age}): ${c.appearance}`).join("; ");
       if (desc) {
         // Insert before [TRANSITION] when present, otherwise append.
