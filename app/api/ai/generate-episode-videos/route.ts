@@ -7,13 +7,13 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runVideoJob } from "@/lib/workers/video-job";
+import { resolvePowerTier } from "@/lib/power-tier";
 
-/** Tier determines credit cost AND video quality (mirrors generate-video). */
-const VIDEO_TIERS: Record<string, { cost: number; duration: number; resolution: string }> = {
-  minimum: { cost: 1, duration: 5, resolution: "480p" },
-  medium: { cost: 3, duration: 5, resolution: "720p" },
-  maximum: { cost: 8, duration: 10, resolution: "720p" },
-};
+/** Tier (power) determines credit cost AND video quality — single config in lib/power-tier.ts. */
+function videoTierFor(project: { powerTier?: string | null; tier?: string | null }) {
+  const cfg = resolvePowerTier(project);
+  return { cost: cfg.costPerScene, duration: cfg.baseDuration, resolution: cfg.resolution, power: cfg.id };
+}
 
 const EPISODE_MIN_SECONDS = Number(process.env.EPISODE_MIN_SECONDS ?? 60);
 const SCENE_MAX_SECONDS = Number(process.env.SCENE_MAX_SECONDS ?? 15);
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
     const project = await prisma.project.findFirst({ where: { id: projectId } });
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
-    const tier = VIDEO_TIERS[project.tier] ?? VIDEO_TIERS.minimum;
+    const tier = videoTierFor(project);
 
     const scenes = await prisma.scene.findMany({
       where: { episodeId },
@@ -101,7 +101,7 @@ export async function POST(request: Request) {
         data: {
           userId: user.id,
           amount: -perSceneCost,
-          description: `Batch video generation — scene ${scene.number} (${project.tier} tier)`,
+          description: `Batch video generation — scene ${scene.number} (${tier.power} power)`,
         },
       });
 

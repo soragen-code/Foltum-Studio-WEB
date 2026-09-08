@@ -72,6 +72,22 @@ export const structureSchema = z.object({
   totalDurationMinutes: z.coerce.number().min(1).max(600).optional().nullable(),
 });
 
+/* Stage 1 (new flow) */
+export const ideaSchema = z.object({
+  projectId: cuidSchema,
+  idea: z.string().trim().min(10, "Idea is too short").max(10_000),
+});
+
+export const ideaReviseSchema = z.object({
+  projectId: cuidSchema,
+  instruction: z.string().trim().min(2, "Instruction is required").max(4_000),
+});
+
+export const characterReviseSchema = z.object({
+  characterId: cuidSchema,
+  instruction: z.string().trim().min(2, "Instruction is required").max(4_000),
+});
+
 export const acceptSceneSchema = z.object({
   sceneId: cuidSchema,
 });
@@ -91,6 +107,8 @@ export const createProjectSchema = z.object({
     .min(1, "Project name is required")
     .max(200, "Project name must be at most 200 characters"),
   tier: z.enum(["minimum", "medium", "maximum"]).optional().nullable(),
+  /** New flow: power tier. When present it wins over `tier`. */
+  powerTier: z.enum(["LOW", "MEDIUM", "HIGH"]).optional().nullable(),
   synopsis: z.string().max(20_000).optional().nullable(),
   description: z.string().max(5_000).optional().nullable(),
 });

@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { auth } from '@/auth'
 import { prisma } from '@/lib/db'
 import { parseBody, createProjectSchema } from '@/lib/validations'
+import { legacyTierToPower, powerToLegacyTier, DEFAULT_POWER_TIER } from '@/lib/power-tier'
 
 export async function GET() {
   try {
@@ -35,14 +36,19 @@ export async function POST(request: Request) {
 
     const parsed = await parseBody(request, createProjectSchema)
     if (!parsed.ok) return parsed.response
-    const { name, tier } = parsed.data
+    const { name, tier, powerTier } = parsed.data
 
+    // New flow: powerTier (LOW/MEDIUM/HIGH) is the source of truth; legacy `tier`
+    // is kept in sync so the dashboard and older routes keep working.
+    const power = powerTier ?? (tier ? legacyTierToPower(tier) : DEFAULT_POWER_TIER)
     const project = await prisma.project.create({
       data: {
         userId: user.id,
         name,
-        tier: tier ?? 'minimum',
-        stage: 'synopsis',
+        tier: powerToLegacyTier(power),
+        powerTier: power,
+        // New projects start at the "idea" step of the new flow; legacy projects keep their old stages.
+        stage: 'idea',
       },
     })
 

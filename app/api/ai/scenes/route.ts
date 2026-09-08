@@ -166,14 +166,27 @@ export async function POST(request: Request) {
 
     const characters = await prisma.character.findMany({
       where: { projectId: pid },
-      select: { name: true, role: true, description: true, appearance: true },
+      select: { name: true, role: true, description: true, appearance: true, personality: true, age: true, firstAppearance: true },
     });
 
+    // New-flow characters carry age / personality / firstAppearance — include them when present.
     const charSummary = characters
-      .map((c) => `- ${c.name} (${c.role}): ${c.description}. Appearance: ${c.appearance}`)
+      .map((c) => {
+        const extra = [
+          c.age ? `Age: ${c.age}` : "",
+          c.personality ? `Personality: ${c.personality}` : "",
+          c.firstAppearance && c.firstAppearance !== c.description ? `First appears: ${c.firstAppearance}` : "",
+        ].filter(Boolean);
+        return `- ${c.name} (${c.role}): ${c.description ?? ""}. Appearance: ${c.appearance}${extra.length ? ". " + extra.join(". ") : ""}`;
+      })
       .join("\n");
 
-    const userMsg = `Project synopsis: ${synopsis}
+    const projectLanguage = episode.season?.project?.language;
+    const languageHint = projectLanguage
+      ? `\nProject language: "${projectLanguage}" — write "dialogue" and "locationDesc" in this language.`
+      : "";
+
+    const userMsg = `Project synopsis: ${synopsis}${languageHint}
 
 Characters:
 ${charSummary || "No characters defined yet."}

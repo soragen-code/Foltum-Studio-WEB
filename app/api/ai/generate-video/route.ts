@@ -8,13 +8,13 @@ import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, generateVideoSchema } from "@/lib/validations";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runVideoJob } from "@/lib/workers/video-job";
+import { resolvePowerTier } from "@/lib/power-tier";
 
-/** Tier determines credit cost AND video quality */
-const VIDEO_TIERS: Record<string, { cost: number; duration: number; resolution: string }> = {
-  minimum: { cost: 1, duration: 5, resolution: "480p" },
-  medium: { cost: 3, duration: 5, resolution: "720p" },
-  maximum: { cost: 8, duration: 10, resolution: "720p" },
-};
+/** Tier (power) determines credit cost AND video quality — single config in lib/power-tier.ts. */
+function videoTierFor(project: { powerTier?: string | null; tier?: string | null }) {
+  const cfg = resolvePowerTier(project);
+  return { cost: cfg.costPerScene, duration: cfg.baseDuration, resolution: cfg.resolution, power: cfg.id };
+}
 
 /** Minimum total episode length (sum of its scenes), seconds. */
 const EPISODE_MIN_SECONDS = Number(process.env.EPISODE_MIN_SECONDS ?? 60);
@@ -54,7 +54,7 @@ export async function POST(request: Request) {
     const project = await prisma.project.findFirst({ where: { id: projectId } });
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
-    const tier = VIDEO_TIERS[project.tier] ?? VIDEO_TIERS.minimum;
+    const tier = videoTierFor(project);
 
     const sceneData = await prisma.scene.findUnique({ where: { id: sceneId } });
     if (!sceneData) return NextResponse.json({ error: "Scene not found" }, { status: 404 });
@@ -100,7 +100,7 @@ export async function POST(request: Request) {
       data: {
         userId: user.id,
         amount: -config.cost,
-        description: `Video generation for scene ${sceneData.number} (${project.tier} tier)`,
+        description: `Video generation for scene ${sceneData.number} (${tier.power} power)`,
       },
     });
 

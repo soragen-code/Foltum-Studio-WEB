@@ -68,9 +68,15 @@ model Project {
   userId      String
   name        String
   tier        String   @default("minimum") // minimum, medium, maximum
-  stage       String   @default("synopsis") // synopsis, characters, structure, scenes
+  stage       String   @default("synopsis") // legacy: synopsis, characters, structure, scenes | new flow: idea, references, structure, scenes
+  // New flow (stage 1): power tier LOW/MEDIUM/HIGH — see lib/power-tier.ts. `tier` is kept in sync for legacy paths.
+  powerTier   String   @default("MEDIUM")
+  // Auto-detected language of the idea/synopsis (ISO 639-1, e.g. "ru", "en").
+  language    String   @default("en")
+  idea        String?  @db.Text
   synopsis    String?  @db.Text
   synopsisApproved Boolean @default(false)
+  charactersApproved Boolean @default(false)
   charactersLocked Boolean @default(false)
   structureApproved Boolean @default(false)
   createdAt   DateTime @default(now())
@@ -91,6 +97,9 @@ model Character {
   role        String?
   personality String?  @db.Text
   appearance  String?  @db.Text
+  age         String?  // free-form ("34", "около 40")
+  firstAppearance String? @db.Text // where/how the character first appears in the season
+  status      String   @default("draft") // draft, approved, references_ready
   imageFront  String?  // cloud_storage_path or placeholder url
   imageProfile String? // cloud_storage_path or placeholder url
   imageFull   String?  // cloud_storage_path or placeholder url
@@ -103,6 +112,7 @@ model Character {
 
   project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   scenes      SceneCharacter[]
+  episodes    EpisodeCharacter[]
 
   @@index([projectId])
 }
@@ -112,6 +122,8 @@ model Season {
   projectId   String
   number      Int
   title       String?
+  logline     String?  @db.Text // stage 2: season arc summary
+  status      String   @default("draft") // draft, approved
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -128,6 +140,12 @@ model Episode {
   title         String
   description   String?  @db.Text
   cliffhanger   String?  @db.Text
+  // Stage 2 fields (additive): logline, location, full script text, status.
+  logline       String?  @db.Text
+  locationName  String?
+  locationDesc  String?  @db.Text
+  script        String?  @db.Text
+  status        String   @default("draft") // draft, script_ready, scenes_ready, approved
   videoUrl      String?  // assembled episode video URL
   videoIsPublic Boolean  @default(false)
   createdAt     DateTime @default(now())
@@ -135,8 +153,23 @@ model Episode {
 
   season        Season   @relation(fields: [seasonId], references: [id], onDelete: Cascade)
   scenes        Scene[]
+  characters    EpisodeCharacter[]
 
   @@index([seasonId])
+}
+
+/// Stage 2: which characters take part in an episode (additive join table).
+model EpisodeCharacter {
+  id          String   @id @default(cuid())
+  episodeId   String
+  characterId String
+  createdAt   DateTime @default(now())
+
+  episode     Episode   @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+
+  @@unique([episodeId, characterId])
+  @@index([characterId])
 }
 
 model Scene {
