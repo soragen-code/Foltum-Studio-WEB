@@ -7,7 +7,7 @@ import { prisma } from "@/lib/db";
 import { chatJSON } from "@/lib/ai";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { normalizeLanguage } from "@/lib/idea";
-import { sceneReviseSchema, sceneReviseSystemPrompt, renderScriptFromScenes, estimateDurationSec } from "@/lib/season";
+import { sceneReviseSchema, sceneReviseSystemPrompt, renderScriptFromScenes, estimateDurationSec, ensureEnglishDialogue } from "@/lib/season";
 
 /**
  * POST /api/ai/scenes/[id]/revise { instruction }
@@ -35,7 +35,10 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   const next = scene.episode.scenes.find((s) => s.number === scene.number + 1);
   const user = `EPISODE ${scene.episode.number} «${scene.episode.title}»: ${scene.episode.logline}\nLOCATION: ${scene.episode.locationName} — ${scene.episode.locationDesc}\nCHARACTERS IN SCENE: ${scene.characters.map((c) => `${c.character.name}: ${c.character.appearance ?? ""}`).join("; ")}\n\nPREVIOUS SHOT: ${prev ? `${prev.action}\n${prev.dialogue}` : "(none)"}\nNEXT SHOT: ${next ? `${next.action}\n${next.dialogue}` : "(none)"}\n\nCURRENT SCENE #${scene.number}\nshotType: ${scene.shotType}\ndurationSec: ${scene.durationSec ?? 15}\nlocationDesc: ${scene.locationDesc}\naction: ${scene.action}\ndialogue:\n${scene.dialogue}\nvideoPrompt:\n${scene.videoPrompt}\n\nINSTRUCTION: ${instruction}`;
   try {
-    const raw = sceneReviseSchema.parse(await chatJSON(sceneReviseSystemPrompt(language), user, { temperature: 0.6, maxTokens: 3000 }));
+    const raw0 = sceneReviseSchema.parse(await chatJSON(sceneReviseSystemPrompt(language), user, { temperature: 0.6, maxTokens: 3000 }));
+    // Seedance voices `dialogue` → guarantee English (swap swapped fields / translate).
+    const ensured = await ensureEnglishDialogue({ visualIdentity: "", scenes: [{ ...raw0, number: scene.number, characters: scene.characters.map((c) => c.character.name) }] }, chatJSON);
+    const raw = { ...raw0, dialogue: ensured.scenes[0].dialogue, dialogueLocal: ensured.scenes[0].dialogueLocal };
     const { dialogueLocal, ...rest } = raw;
     // Speech is always English (`dialogueEn`); `dialogue` keeps the story-language text for the UI / subtitles.
     const parsed = {

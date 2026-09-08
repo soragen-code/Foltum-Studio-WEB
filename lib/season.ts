@@ -187,6 +187,80 @@ export function normalizeEpisodeScript(script: EpisodeScript, characters?: Chara
   };
 }
 
+// ---------------------------------------------------------------------------------------------
+// Speech language guard. Seedance voices `dialogue`, which MUST be English; `dialogueLocal` is the
+// story-language text for UI / subtitles. gpt-4o regularly swaps the two for non-Latin stories
+// (Russian lines land in "dialogue"). Fix mechanically (swap) and, if there is still no English,
+// translate with a separate cheap LLM call (see `ensureEnglishDialogue`).
+// ---------------------------------------------------------------------------------------------
+const NON_LATIN_RE = /[\u0400-\u04FF\u0370-\u03FF\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/;
+
+/** Spoken text only (speaker names / tone cues like `МАРИНА (тихо):` are stripped from every line). */
+export function spokenText(dialogue: string): string {
+  return dialogue
+    .split(/\r?\n/)
+    .map((l) => l.replace(/^\s*[^:"«»]{1,80}(\([^)]*\))?\s*:\s*/, ""))
+    .join(" ")
+    .trim();
+}
+
+/** True when the spoken part of the dialogue is (Latin-script) English — or the scene is silent. */
+export function isEnglishDialogue(dialogue: string): boolean {
+  const t = spokenText(dialogue);
+  if (!t || /\[NO DIALOGUE\]/i.test(dialogue)) return true;
+  return !NON_LATIN_RE.test(t) && /[A-Za-z]{2}/.test(t);
+}
+
+/** Swap `dialogue` ↔ `dialogueLocal` where the model put the English lines into the local field. */
+export function fixDialogueLanguages(script: EpisodeScript): EpisodeScript {
+  return {
+    ...script,
+    scenes: script.scenes.map((s) => {
+      if (isEnglishDialogue(s.dialogue) || !s.dialogueLocal || !isEnglishDialogue(s.dialogueLocal)) return s;
+      return { ...s, dialogue: s.dialogueLocal, dialogueLocal: s.dialogue };
+    }),
+  };
+}
+
+/** Numbers of scenes whose spoken lines are still not English (after `fixDialogueLanguages`). */
+export function nonEnglishScenes(script: EpisodeScript): number[] {
+  return script.scenes.filter((s) => !isEnglishDialogue(s.dialogue)).map((s) => s.number);
+}
+
+export const translateDialogueSchema = z.object({ scenes: z.array(z.object({ number: z.number().int(), dialogue: z.string() })) });
+export const TRANSLATE_DIALOGUE_SYSTEM = `You translate screenplay dialogue into natural spoken ENGLISH for an AI video model that voices the lines. Keep the exact line structure: one line per row, NAME (tone cue): "line" — speaker names and tone cues stay as given, only the quoted lines are translated. Do not add, drop or merge lines. Return STRICT JSON: {"scenes": [{"number": int, "dialogue": string}]}.`;
+
+/**
+ * Guarantees English speech: swaps swapped fields, then translates the remaining non-English scenes via
+ * `chat` (a chatJSON-like function, injected so lib/season.ts stays free of the OpenAI client for tests).
+ * The original story-language lines are kept as `dialogueLocal` for UI / subtitles. Duration is re-estimated
+ * from the English words. Never throws: on a failed translation the script is returned as-is (logged).
+ */
+export async function ensureEnglishDialogue(
+  script: EpisodeScript,
+  chat: (system: string, user: string, opts?: { temperature?: number; maxTokens?: number }) => Promise<unknown>
+): Promise<EpisodeScript> {
+  const fixed = fixDialogueLanguages(script);
+  const missing = nonEnglishScenes(fixed);
+  if (!missing.length) return fixed;
+  try {
+    const payload = { scenes: fixed.scenes.filter((s) => missing.includes(s.number)).map((s) => ({ number: s.number, dialogue: s.dialogue })) };
+    const raw = translateDialogueSchema.parse(await chat(TRANSLATE_DIALOGUE_SYSTEM, JSON.stringify(payload), { temperature: 0.2, maxTokens: 6000 }));
+    const en = new Map(raw.scenes.map((s) => [s.number, s.dialogue.trim()]));
+    return {
+      ...fixed,
+      scenes: fixed.scenes.map((s) => {
+        const t = en.get(s.number);
+        if (!t || !isEnglishDialogue(t)) return s;
+        return { ...s, dialogue: t, dialogueLocal: s.dialogueLocal && isEnglishDialogue(s.dialogueLocal) ? s.dialogue : (s.dialogueLocal ?? s.dialogue), durationSec: estimateDurationSec(t, s.action) };
+      }),
+    };
+  } catch (err) {
+    console.error("[season] dialogue translation failed:", err);
+    return fixed;
+  }
+}
+
 function langName(language: IdeaLanguage) {
   return LANGUAGE_NAMES[language] ?? "English";
 }

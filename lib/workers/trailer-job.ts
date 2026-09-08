@@ -8,11 +8,34 @@ import { prisma } from "@/lib/db";
 import { chatJSON } from "@/lib/ai";
 import { updateJob, completeJob, failJob } from "@/lib/jobs";
 import { toCharacterCard, normalizeLanguage } from "@/lib/idea";
-import { normalizeEpisodeScript, validateEpisodeScript, isSoftProblem, matchLocation, type EpisodeOutline } from "@/lib/season";
+import { normalizeEpisodeScript, validateEpisodeScript, isSoftProblem, ensureEnglishDialogue, matchLocation, type EpisodeOutline } from "@/lib/season";
 import { trailerScriptSchema, trailerSystemPrompt, trailerUserPrompt, TRAILER_SEASON_NUMBER, TRAILER_MIN_SCENES, TRAILER_MAX_SCENES } from "@/lib/trailer";
 import { persistEpisodeScript } from "@/lib/workers/season-script-job";
 
 export const TRAILER_TITLE = "Мини-трейлер (тест)";
+
+/** Typical wall time of the trailer LLM call (gpt-4o, ~20–25 s); used only to pace the progress bar. */
+const TRAILER_LLM_EXPECTED_MS = 30_000;
+
+/**
+ * Awaits `work` while advancing the job progress from `from` toward `to` on a time basis
+ * (every 3 s), so the UI shows movement during a single long LLM call instead of freezing at one value.
+ */
+async function withLiveProgress<T>(jobId: string, work: Promise<T>, from: number, to: number, expectedMs: number, message: string): Promise<T> {
+  const started = Date.now();
+  let pending: Promise<void> = Promise.resolve();
+  const timer = setInterval(() => {
+    const frac = Math.min(1, (Date.now() - started) / expectedMs);
+    const progress = Math.round(from + (to - from) * (1 - Math.pow(1 - frac, 2))); // ease-out: fast start, slows near `to`
+    pending = updateJob(jobId, { progress, message });
+  }, 3000);
+  try {
+    return await work;
+  } finally {
+    clearInterval(timer);
+    await pending; // never let a late progress write overtake the next stage
+  }
+}
 
 export async function runTrailerJob(jobId: string, projectId: string): Promise<void> {
   try {
@@ -22,8 +45,14 @@ export async function runTrailerJob(jobId: string, projectId: string): Promise<v
     const cards = project.characters.map(toCharacterCard);
     await updateJob(jobId, { status: "processing", progress: 10, message: "Пишу сценарий мини-трейлера..." });
 
-    let script = trailerScriptSchema.parse(await chatJSON(trailerSystemPrompt(language), trailerUserPrompt(project.synopsis, cards, project.locations), { temperature: 0.7, maxTokens: 8000 }));
-    const normalized = normalizeEpisodeScript({ visualIdentity: script.visualIdentity, scenes: script.scenes }, cards);
+    const raw = await withLiveProgress(
+      jobId,
+      chatJSON(trailerSystemPrompt(language), trailerUserPrompt(project.synopsis, cards, project.locations), { temperature: 0.7, maxTokens: 6000 }),
+      10, 65, TRAILER_LLM_EXPECTED_MS, "Пишу сценарий мини-трейлера (3 сцены, диалоги на EN + перевод)...",
+    );
+    let script = trailerScriptSchema.parse(raw);
+    await updateJob(jobId, { progress: 68, message: "Проверяю сценарий и английскую озвучку..." });
+    const normalized = await ensureEnglishDialogue(normalizeEpisodeScript({ visualIdentity: script.visualIdentity, scenes: script.scenes }, cards), chatJSON);
     script = { ...script, scenes: normalized.scenes.slice(0, TRAILER_MAX_SCENES) };
     if (script.scenes.length < TRAILER_MIN_SCENES) throw new Error("trailer script too short");
     const hard = validateEpisodeScript({ visualIdentity: script.visualIdentity, scenes: script.scenes }).filter((p) => !isSoftProblem(p) && !/scene count/.test(p));

@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Loader2, FlaskConical, ArrowRight, Check } from 'lucide-react'
+import { Progress } from '@/components/ui/progress'
 import { JOB_POLL_INTERVAL_MS } from './use-job-polling'
 import { sceneClipPlan } from '@/lib/season'
 import type { PowerTier } from '@/lib/power-tier'
@@ -21,6 +22,8 @@ export function TrailerCard({ project }: { project: { id: string; powerTier?: st
   const [job, setJob] = useState<TrailerJob | null>(null)
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [elapsed, setElapsed] = useState(0)
+  const [shown, setShown] = useState(0) // displayed %, smoothed between 3-s polls
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const load = useCallback(async () => {
@@ -39,6 +42,17 @@ export function TrailerCard({ project }: { project: { id: string; powerTier?: st
     timer.current = setTimeout(() => void load(), JOB_POLL_INTERVAL_MS)
     return () => { if (timer.current) clearTimeout(timer.current) }
   }, [active, job?.progress, job?.message, load])
+
+  // Elapsed-time counter + smooth progress: creep +1 %/s toward (server progress + 12), never above 95 %.
+  useEffect(() => {
+    if (!active) { setElapsed(0); setShown(0); return }
+    const t0 = Date.now()
+    const id = setInterval(() => {
+      setElapsed(Math.round((Date.now() - t0) / 1000))
+      setShown((v) => Math.max(v, Math.min(95, Math.max(job?.progress ?? 0, Math.min(v + 1, (job?.progress ?? 0) + 12)))))
+    }, 1000)
+    return () => clearInterval(id)
+  }, [active, job?.progress])
 
   const start = async () => {
     if (episode && !confirm('Переписать мини-трейлер? Старый сценарий трейлера и его клипы будут заменены.')) return
@@ -74,8 +88,13 @@ export function TrailerCard({ project }: { project: { id: string; powerTier?: st
             </div>
           )}
           {(active || starting) && (
-            <div className="mt-3 flex items-center gap-2 text-sm" data-testid="trailer-progress">
-              <Loader2 className="h-4 w-4 animate-spin text-primary" /><span>{job?.message ?? 'Запуск...'}</span>
+            <div className="mt-3 space-y-2 text-sm" data-testid="trailer-progress">
+              <div className="flex items-center gap-2">
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" /><span className="min-w-0 flex-1">{job?.message ?? 'Запуск...'}</span>
+                <span className="tabular-nums font-medium" data-testid="trailer-progress-pct">{Math.max(shown, job?.progress ?? 0)}%</span>
+              </div>
+              <Progress value={Math.max(shown, job?.progress ?? 0)} className="h-2" aria-label="Прогресс сценария трейлера" />
+              <p className="text-xs text-muted-foreground">Прошло {elapsed} с · обычно сценарий готов за 20–40 с (одно обращение к нейросети)</p>
             </div>
           )}
           {job?.status === 'failed' && !active && <p className="mt-2 text-sm text-destructive">Ошибка: {job.error ?? 'генерация прервана'}</p>}

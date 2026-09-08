@@ -22,6 +22,7 @@ import {
   episodeScriptUserPrompt,
   validateEpisodeScript,
   hardProblems,
+  ensureEnglishDialogue,
   normalizeEpisodeScript,
   renderEpisodeScriptText,
   SEASON_DEFAULT_EPISODES,
@@ -80,7 +81,8 @@ export async function generateEpisodeScript(input: {
     const hard = hardProblems(problems); // density / sentence / camera-wording drift is soft (logged), see lib/season.ts
     if (hard.length) throw new Error(`episode ${input.episode.number} script invalid: ${hard.slice(0, 3).join("; ")}`);
     if (problems.length) console.warn(`[season] ep ${input.episode.number} soft issues:`, problems);
-    return script;
+    // Seedance voices `dialogue` → it must be English; swap swapped fields / translate leftovers.
+    return ensureEnglishDialogue(script, chatJSON);
   });
 }
 

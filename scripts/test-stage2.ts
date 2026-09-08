@@ -1,5 +1,5 @@
 /** Stage 2 unit checks: season/episode schemas, timing validation, cost plan. Run: npx tsx scripts/test-stage2.ts */
-import { episodeScriptSchema, validateEpisodeScript, normalizeEpisodeScript, spokenWordCount, dialogueSentenceCount, sceneClipPlan, seasonStructureSchema, matchCharacter, estimateDurationSec, hardProblems, PACE_DIRECTION, episodeScriptSystemPrompt, EPISODE_MIN_SCENES, SCENE_MIN_SECONDS, SCENE_MAX_SECONDS } from "../lib/season";
+import { episodeScriptSchema, validateEpisodeScript, normalizeEpisodeScript, spokenWordCount, dialogueSentenceCount, sceneClipPlan, seasonStructureSchema, matchCharacter, estimateDurationSec, hardProblems, isEnglishDialogue, fixDialogueLanguages, nonEnglishScenes, ensureEnglishDialogue, PACE_DIRECTION, episodeScriptSystemPrompt, EPISODE_MIN_SCENES, SCENE_MIN_SECONDS, SCENE_MAX_SECONDS } from "../lib/season";
 import { trailerSystemPrompt } from "../lib/trailer";
 const assert = (c: unknown, m: string) => { if (!c) { console.error("FAIL:", m); process.exit(1); } console.log("ok:", m); };
 const prompt = "[SHOT TYPE]: Medium close-up\n[VISUAL STYLE]: x\n[LIGHTING]: y\n[BLOCKING]: z\n[GAZE]: a\n[NON-VERBAL]: b\n[ACTION]: c\n[CHARACTER]: d\n[TRANSITION]: e";
@@ -45,6 +45,30 @@ const shortTalk = validateEpisodeScript({ ...ok, scenes: ok.scenes.map((s) => ({
 assert(shortTalk.some((p) => /dialogue sentences/.test(p)), "too-short dialogue flagged (soft)");
 console.log("ALL STAGE2 UNIT CHECKS PASSED");
 // --- revise schemas + queue concurrency ---
+// --- Speech language guard: Seedance voices `dialogue`, so it must be English even when gpt-4o swaps the fields ---
+const ru = 'МАРИНА (тихо): "Дедушка, ты всегда знал, что для меня значит этот дом."\nАНДРЕЙ (с вызовом): "Это бизнес, Марина."';
+const en = 'МАРИНА (тихо): "Grandpa, you always knew what this house means to me."\nАНДРЕЙ (с вызовом): "It is business, Marina."';
+assert(isEnglishDialogue(en) && !isEnglishDialogue(ru) && isEnglishDialogue("[NO DIALOGUE]"), "Cyrillic speaker names/cues do not hide the spoken language");
+const swapped = normalizeEpisodeScript(episodeScriptSchema.parse({ visualIdentity: "photoreal cinematic", scenes: mk(6).map((sc) => ({ ...sc, dialogue: ru, dialogueLocal: en })) }), []);
+const fixedSwap = fixDialogueLanguages(swapped);
+assert(fixedSwap.scenes.every((sc) => sc.dialogue === en && sc.dialogueLocal === ru), "swapped dialogue/dialogueLocal are swapped back");
+const noEn = normalizeEpisodeScript(episodeScriptSchema.parse({ visualIdentity: "photoreal cinematic", scenes: mk(6).map((sc) => ({ ...sc, dialogue: ru, dialogueLocal: ru })) }), []);
+assert(nonEnglishScenes(noEn).length === 6, "all-Russian scenes are detected as non-English");
+void (async () => {
+let translateCalls = 0;
+const translated = await ensureEnglishDialogue(noEn, async (_sys, user) => {
+  translateCalls++;
+  const req = JSON.parse(user) as { scenes: { number: number }[] };
+  return { scenes: req.scenes.map((sc) => ({ number: sc.number, dialogue: en })) };
+});
+assert(translateCalls === 1 && translated.scenes.every((sc) => sc.dialogue === en && sc.dialogueLocal === ru) && nonEnglishScenes(translated).length === 0, "non-English scenes are translated in one call; local text kept for subtitles");
+assert(translated.scenes.every((sc) => sc.durationSec >= SCENE_MIN_SECONDS && sc.durationSec <= SCENE_MAX_SECONDS), "translated scenes keep durationSec in range");
+const unchanged = await ensureEnglishDialogue(fixedSwap, async () => { throw new Error("must not be called"); });
+assert(unchanged.scenes[0].dialogue === en, "no translation call when English is already present");
+const failed = await ensureEnglishDialogue(noEn, async () => { throw new Error("llm down"); });
+assert(failed.scenes.length === 6 && failed.scenes[0].dialogue === ru, "translation failure never throws (script returned as-is)");
+})().catch((e) => { console.error(e); process.exit(1); });
+
 import { sceneReviseSchema, locationReviseSchema, renderScriptFromScenes } from "../lib/season";
 import { GENERATE_ALL_CONCURRENCY } from "../app/api/ai/episodes/[id]/generate-all/route";
 assert(sceneReviseSchema.safeParse({ shotType: "Close-up", durationSec: 30, locationDesc: "INT — Маяк — ночь", action: "Анна молчит.", dialogue: talk, videoPrompt: prompt }).success, "scene revise schema ok");
