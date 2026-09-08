@@ -290,8 +290,8 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
             <h3 className="font-display text-lg font-bold">Генерировать все сцены эпизода?</h3>
             <ul className="mt-3 space-y-1 text-sm">
               <li>Сцен к генерации: <b>{plan.pendingCount}</b> из {plan.sceneCount}</li>
-              <li>Длительность клипа: <b>{plan.duration}с</b> · {plan.resolution} ({plan.tier})</li>
-              <li>Стоимость: <b>{plan.costPerScene} кр. × {plan.pendingCount} = {plan.total} кр.</b></li>
+              <li>Длительность клипа: <b>до {plan.duration}с</b> · {plan.resolution} ({plan.tier})</li>
+              <li>Стоимость: <b>{plan.total} кр.</b> за {plan.pendingCount} сцен (до {plan.costPerScene} кр. за сцену)</li>
               <li>Остаток кредитов: <b>{plan.credits}</b>{plan.credits < plan.total && <span className="text-destructive"> — недостаточно</span>}</li>
             </ul>
             <div className="mt-4 flex justify-end gap-2">

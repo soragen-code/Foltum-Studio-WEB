@@ -75,7 +75,7 @@ export async function generateEpisodeScript(input: {
     const script = normalizeEpisodeScript(episodeScriptSchema.parse(raw), input.characters);
     const problems = validateEpisodeScript(script);
     // Word-count drift is tolerated (logged); hard problems (count, missing prompt lines, no dialogue) fail → retry.
-    const hard = problems.filter((p) => !/spoken words/.test(p));
+    const hard = problems.filter((p) => !/dialogue sentences|too many silent/.test(p)); // sentence/silent drift is soft (logged)
     if (hard.length) throw new Error(`episode ${input.episode.number} script invalid: ${hard.slice(0, 3).join("; ")}`);
     if (problems.length) console.warn(`[season] ep ${input.episode.number} soft issues:`, problems);
     return script;

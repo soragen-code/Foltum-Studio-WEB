@@ -18,6 +18,9 @@ export const POWER_TIERS: readonly PowerTier[] = ["LOW", "MEDIUM", "HIGH"];
 
 export type SeedanceResolution = "480p" | "720p";
 
+/** Real Seedance 2.5 schema on Replicate: duration integer 1–30 s (verified 2026-09). Same for every tier. */
+export const SEEDANCE_MAX_DURATION = 30;
+
 export interface PowerTierConfig {
   id: PowerTier;
   /** Legacy Project.tier value kept in sync for older code paths / dashboard. */
@@ -30,6 +33,8 @@ export interface PowerTierConfig {
   baseDuration: number;
   /** Credits per scene clip at baseDuration. */
   costPerScene: number;
+  /** Longest clip the tier may request from the model (seconds). */
+  maxDuration: number;
 }
 
 export const POWER_TIER_CONFIG: Record<PowerTier, PowerTierConfig> = {
@@ -41,6 +46,7 @@ export const POWER_TIER_CONFIG: Record<PowerTier, PowerTierConfig> = {
     resolution: "480p",
     baseDuration: 5,
     costPerScene: 1,
+    maxDuration: SEEDANCE_MAX_DURATION,
   },
   MEDIUM: {
     id: "MEDIUM",
@@ -50,6 +56,7 @@ export const POWER_TIER_CONFIG: Record<PowerTier, PowerTierConfig> = {
     resolution: "720p",
     baseDuration: 5,
     costPerScene: 3,
+    maxDuration: SEEDANCE_MAX_DURATION,
   },
   HIGH: {
     id: "HIGH",
@@ -59,6 +66,7 @@ export const POWER_TIER_CONFIG: Record<PowerTier, PowerTierConfig> = {
     resolution: "720p",
     baseDuration: 10,
     costPerScene: 8,
+    maxDuration: SEEDANCE_MAX_DURATION,
   },
 };
 

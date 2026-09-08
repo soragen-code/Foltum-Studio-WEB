@@ -8,6 +8,7 @@ import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, generateVideoSchema } from "@/lib/validations";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runVideoJob } from "@/lib/workers/video-job";
+import { sceneClipSeconds } from "@/lib/season";
 import { resolvePowerTier } from "@/lib/power-tier";
 
 /** Tier (power) determines credit cost AND video quality — single config in lib/power-tier.ts. */
@@ -64,10 +65,11 @@ export async function POST(request: Request) {
     // Episode must run at least EPISODE_MIN_SECONDS in total → each scene gets its share,
     // never shorter than the tier's base duration. Credits scale with the extra seconds.
     const sceneCount = Math.max(1, await prisma.scene.count({ where: { episodeId: sceneData.episodeId } }));
-    const duration = Math.min(
-      SCENE_MAX_SECONDS,
-      Math.max(SCENE_MIN_SECONDS, tier.duration, Math.ceil(EPISODE_MIN_SECONDS / sceneCount))
-    );
+    // New-flow scenes carry a scripted durationSec (dialogue-driven, up to the model max) — same
+    // rule as generate-all so a single-scene regen costs exactly what the batch would.
+    const duration = sceneData.durationSec
+      ? sceneClipSeconds(tier.power, sceneData.durationSec)
+      : Math.min(SCENE_MAX_SECONDS, Math.max(SCENE_MIN_SECONDS, tier.duration, Math.ceil(EPISODE_MIN_SECONDS / sceneCount)));
     // Kling's real schema supports ONLY 5 or 10 s (no 15s). Cap honestly so the
     // clip length AND the credit cost reflect what Kling actually produces.
     const effectiveDuration = provider === "kling" ? Math.min(10, duration) : duration;

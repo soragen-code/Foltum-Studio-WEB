@@ -1,10 +1,12 @@
 /** Stage 2 unit checks: season/episode schemas, timing validation, cost plan. Run: npx tsx scripts/test-stage2.ts */
-import { episodeScriptSchema, validateEpisodeScript, normalizeEpisodeScript, spokenWordCount, sceneClipPlan, seasonStructureSchema , matchCharacter } from "../lib/season";
+import { episodeScriptSchema, validateEpisodeScript, normalizeEpisodeScript, spokenWordCount, dialogueSentenceCount, sceneClipPlan, seasonStructureSchema , matchCharacter } from "../lib/season";
 const assert = (c: unknown, m: string) => { if (!c) { console.error("FAIL:", m); process.exit(1); } console.log("ok:", m); };
 const prompt = "[SHOT TYPE]: Medium close-up\n[VISUAL STYLE]: x\n[LIGHTING]: y\n[BLOCKING]: z\n[GAZE]: a\n[NON-VERBAL]: b\n[ACTION]: c\n[CHARACTER]: d\n[TRANSITION]: e";
-const talk = 'АННА (тихо): "Ты знал об этом с самого начала и молчал всё это время?"\nМАРК (резко): "Я молчал, потому что иначе ты бы ушла ещё тогда, той зимой."';
-const mk = (n: number) => Array.from({ length: n }, (_, i) => ({ number: i + 1, shotType: "Medium shot", durationSec: 15, locationDesc: "INT — Маяк — ночь", characters: ["Анна"], action: "Анна входит.", dialogue: i % 5 === 0 ? "[NO DIALOGUE]" : talk, videoPrompt: prompt }));
-assert(spokenWordCount(talk) >= 18 && spokenWordCount(talk) <= 40, `spoken words = ${spokenWordCount(talk)}`);
+const talk = 'АННА (тихо): "Ты знал об этом с самого начала и молчал всё это время? Каждый вечер ты смотрел мне в глаза и ничего не говорил."\nМАРК (резко): "Я молчал, потому что иначе ты бы ушла ещё тогда, той зимой. Ты бы собрала вещи и уехала в город, а маяк остался бы пустым."\nАННА: "Может, так было бы честнее. Но теперь мы оба заперты здесь с этой ложью."';
+const mk = (n: number) => Array.from({ length: n }, (_, i) => ({ number: i + 1, shotType: "Medium shot", durationSec: 30, locationDesc: "INT — Маяк — ночь", characters: ["Анна"], action: "Анна входит.", dialogue: i % 6 === 0 ? "[NO DIALOGUE]" : talk, videoPrompt: prompt }));
+assert(spokenWordCount(talk) > 40, `spoken words = ${spokenWordCount(talk)} (no upper limit anymore)`);
+assert(dialogueSentenceCount(talk) >= 5 && dialogueSentenceCount(talk) <= 7, `dialogue sentences = ${dialogueSentenceCount(talk)}`);
+assert(dialogueSentenceCount("[NO DIALOGUE]") === 0, "silent scene has 0 sentences");
 const ok = normalizeEpisodeScript(episodeScriptSchema.parse({ visualIdentity: "photoreal cinematic", scenes: mk(12) }));
 assert(validateEpisodeScript(ok).length === 0, "12-scene episode valid");
 assert(!episodeScriptSchema.safeParse({ visualIdentity: "photoreal cinematic", scenes: mk(9) }).success, "9 scenes rejected");
@@ -15,13 +17,17 @@ const ep = { number: 1, title: "t", logline: "Логлайн эпизода до
 assert(!seasonStructureSchema.safeParse({ title: "S", logline: "Сезонный логлайн.", episodes: Array(5).fill(ep) }).success, "5 episodes rejected");
 assert(seasonStructureSchema.safeParse({ title: "S", logline: "Сезонный логлайн.", episodes: Array(8).fill(ep) }).success, "8 episodes accepted");
 const plan = sceneClipPlan("HIGH", 12);
-assert(plan.duration === 15 && plan.costPerScene === 12 && plan.total === 144, `HIGH plan ${JSON.stringify(plan)}`);
-assert(sceneClipPlan("LOW", 12).costPerScene === 3 && sceneClipPlan("MEDIUM", 12).costPerScene === 9, "LOW/MEDIUM cost");
+assert(plan.duration === 30 && plan.costPerScene === 24 && plan.total === 288, `HIGH plan ${JSON.stringify({ ...plan, clips: undefined })}`);
+assert(sceneClipPlan("LOW", 12).costPerScene === 6 && sceneClipPlan("MEDIUM", 12).costPerScene === 18, "LOW/MEDIUM cost at 30s");
+const mixed = sceneClipPlan("LOW", [{ durationSec: 15 }, { durationSec: 30 }, { durationSec: null }]);
+assert(mixed.total === 3 + 6 + 6 && mixed.totalSeconds === 75 && mixed.duration === 30, `mixed plan ${JSON.stringify({ ...mixed, clips: undefined })}`);
+const shortTalk = validateEpisodeScript({ ...ok, scenes: ok.scenes.map((s) => ({ ...s, dialogue: 'АННА: "Да."' })) });
+assert(shortTalk.some((p) => /dialogue sentences/.test(p)), "too-short dialogue flagged (soft)");
 console.log("ALL STAGE2 UNIT CHECKS PASSED");
 // --- revise schemas + queue concurrency ---
 import { sceneReviseSchema, locationReviseSchema, renderScriptFromScenes } from "../lib/season";
 import { GENERATE_ALL_CONCURRENCY } from "../app/api/ai/episodes/[id]/generate-all/route";
-assert(sceneReviseSchema.safeParse({ shotType: "Close-up", durationSec: 15, locationDesc: "INT — Маяк — ночь", action: "Анна молчит.", dialogue: talk, videoPrompt: prompt }).success, "scene revise schema ok");
+assert(sceneReviseSchema.safeParse({ shotType: "Close-up", durationSec: 30, locationDesc: "INT — Маяк — ночь", action: "Анна молчит.", dialogue: talk, videoPrompt: prompt }).success, "scene revise schema ok");
 assert(!sceneReviseSchema.safeParse({ shotType: "Close-up", durationSec: 40, locationDesc: "x", action: "y", dialogue: talk, videoPrompt: prompt }).success, "scene revise rejects 40s");
 assert(locationReviseSchema.safeParse({ locationName: "Порт", locationDesc: "A foggy fishing port with rusted trawlers and sodium lamps.", scenes: [{ number: 1, locationDesc: "EXT — Порт — ночь", videoPrompt: prompt }] }).success, "location revise schema ok");
 assert(renderScriptFromScenes({ number: 1, title: "T", logline: "L", locationName: "Маяк", cliffhanger: "C" }, ["Анна"], ok.scenes).includes("СЦЕНА 12"), "script text renders 12 scenes");

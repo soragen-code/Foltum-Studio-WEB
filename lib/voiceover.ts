@@ -174,7 +174,8 @@ export function buildNativeAudioPrompt(
     `All spoken dialogue is in ${language}, pronounced by native ${language} speakers with correct, ` +
     `clear, natural articulation. Speak the quoted lines exactly and verbatim, word for word, without ` +
     `translating, paraphrasing, mispronouncing, adding, dropping or altering any words. ` +
-    `Do NOT read the character names or any text outside the quotation marks aloud.`;
+    `Do NOT read the character names or any text outside the quotation marks aloud. ` +
+    `Delivery is brisk and natural (real conversational tempo, no long pauses between lines) so that EVERY line is fully spoken before the clip ends.`;
 
   return `${base}\n\nThe characters speak the following lines out loud, on camera, in sync with their lip movements. ${LANGUAGE_DIRECTION}\n${spoken}\n\n${AUDIO_DIRECTION}`;
 }
