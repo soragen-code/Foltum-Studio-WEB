@@ -7,11 +7,15 @@ import { LANGUAGE_NAMES, type IdeaLanguage, type CharacterCard } from "@/lib/ide
 import { VISUAL_STYLE } from "@/lib/visual-style";
 import { POWER_TIER_CONFIG, SEEDANCE_MAX_DURATION, type PowerTier } from "@/lib/power-tier";
 
-export const SEASON_MIN_EPISODES = 6;
-export const SEASON_MAX_EPISODES = 10;
+/** Stage 4: nobody is asked for a running time — the story decides. These are only sanity bounds for the LLM output. */
+export const SEASON_MIN_EPISODES = 3;
+export const SEASON_MAX_EPISODES = 12;
 export const SEASON_DEFAULT_EPISODES = 8;
-export const EPISODE_MIN_SCENES = 10;
+export const EPISODE_MIN_SCENES = 6;
 export const EPISODE_MAX_SCENES = 15;
+/** Brisk English speech with overlapping replies ≈ 2.7 words/s; a clip must be filled with speech (≥ 2 words/s). */
+export const SPEECH_WORDS_PER_SEC = 2.7;
+export const MIN_WORDS_PER_SEC = 2;
 export const SCENE_MIN_SECONDS = 15;
 /** Seedance 2.5 real maximum (30 s) — every dialogue scene is planned at the maximum the model allows. */
 export const SCENE_MAX_SECONDS = SEEDANCE_MAX_DURATION;
@@ -44,11 +48,15 @@ export type EpisodeOutline = z.infer<typeof episodeOutlineSchema>;
 export const sceneScriptSchema = z.object({
   number: z.number().int().min(1),
   shotType: z.string().min(3),
-  durationSec: z.number().int().min(SCENE_MIN_SECONDS).max(SCENE_MAX_SECONDS),
+  /** Advisory only: the real clip length is computed from the dialogue (see estimateDurationSec). */
+  durationSec: z.coerce.number().int().min(1).max(120).optional().default(SCENE_MAX_SECONDS),
   locationDesc: z.string().min(3),
   characters: z.array(z.string()).default([]),
   action: z.string().min(5),
+  /** ENGLISH spoken lines — this is what Seedance voices (always English, whatever the story language). */
   dialogue: z.string().min(1),
+  /** Same lines in the story language for the UI / subtitles; equals `dialogue` for English projects. */
+  dialogueLocal: z.string().optional(),
   videoPrompt: z.string().min(40),
 });
 export const episodeScriptSchema = z.object({
@@ -83,6 +91,25 @@ export function dialogueSentenceCount(dialogue: string): number {
   return text.split(/(?<=[.!?…])\s+|\s*[.!?…]+\s*$/).map((x) => x.trim()).filter((x) => x.length > 1).length;
 }
 
+/**
+ * Clip length from the script itself: spoken words at a brisk pace + a little room for the action beat,
+ * rounded into the 15–30 s window Seedance 2.5 supports. No one is asked for a running time.
+ */
+export function estimateDurationSec(dialogue: string, action = ""): number {
+  const words = spokenWordCount(dialogue);
+  if (!words) return SCENE_MIN_SECONDS;
+  const actionBeat = Math.min(4, Math.ceil(action.trim().split(/\s+/).filter(Boolean).length / 12));
+  const sec = Math.ceil(words / SPEECH_WORDS_PER_SEC) + 1 + actionBeat;
+  return Math.min(SCENE_MAX_SECONDS, Math.max(SCENE_MIN_SECONDS, sec));
+}
+
+/** Pace / camera / performance directions shared by the script prompts and the final Seedance prompt. */
+export const PACE_DIRECTION =
+  "PACE: fast, tight rhythm — lines follow each other with NO pauses, the listener answers instantly, interrupts, overlaps with reactions; nobody waits for a turn. " +
+  "No long silent beats, no slow-motion, no empty establishing seconds at the start: the first line is spoken within the first second. " +
+  "CAMERA: 2–4 cuts inside the clip — close-up of the speaker → reverse shot of the listener → medium two-shot → tight reaction close-up; hard cuts, no slow pans, no lingering. " +
+  "PERFORMANCE: expressive, energetic acting — vivid facial expressions, sharp gestures, emotional accents in the voice (rising anger, cracking voice, bitter laugh), eye contact and reactions while the other speaks.";
+
 const PROMPT_LINES = ["[SHOT TYPE]", "[VISUAL STYLE]", "[LIGHTING]", "[BLOCKING]", "[GAZE]", "[NON-VERBAL]", "[ACTION]", "[CHARACTER]", "[TRANSITION]"];
 
 /** Non-throwing validation of an episode script: returns human-readable problems (empty = ok). */
@@ -97,6 +124,9 @@ export function validateEpisodeScript(script: EpisodeScript): string[] {
     if (s.number !== i + 1) problems.push(`scene ${i + 1} numbered ${s.number}`);
     const sentences = dialogueSentenceCount(s.dialogue);
     if (!isSilent(s.dialogue) && sentences < TALK_MIN_SENTENCES) problems.push(`scene ${s.number}: ${sentences} dialogue sentences (want ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES})`);
+    const words = spokenWordCount(s.dialogue);
+    if (!isSilent(s.dialogue) && words < MIN_WORDS_PER_SEC * s.durationSec) problems.push(`scene ${s.number}: ${words} words for ${s.durationSec}s (want ≥ ${MIN_WORDS_PER_SEC} words/s so speech fills the clip)`);
+    if (/\b(slow[- ]?motion|slowly|lingering|linger|long pause|beat of silence|holds? for a (few|long)|slow pan)\b/i.test(s.videoPrompt)) problems.push(`scene ${s.number}: videoPrompt contains slow/lingering direction`);
     const missing = PROMPT_LINES.filter((l) => !s.videoPrompt.includes(l));
     if (missing.length) problems.push(`scene ${s.number}: videoPrompt missing ${missing.join(",")}`);
   });
@@ -143,8 +173,9 @@ export function normalizeEpisodeScript(script: EpisodeScript, characters?: Chara
     scenes: script.scenes.map((s, i) => ({
       ...s,
       number: i + 1,
-      durationSec: Math.min(SCENE_MAX_SECONDS, Math.max(SCENE_MIN_SECONDS, Math.round(s.durationSec || SCENE_MAX_SECONDS))),
+      durationSec: estimateDurationSec(s.dialogue, s.action),
       dialogue: s.dialogue.trim() || "[NO DIALOGUE]",
+      dialogueLocal: (s.dialogueLocal ?? "").trim() || undefined,
       videoPrompt: repairPrompt(s),
     })),
   };
@@ -170,15 +201,15 @@ export function matchLocation<T extends { name: string }>(locations: T[], raw: s
 }
 
 export function seasonStructureSystemPrompt(language: IdeaLanguage, episodeCount = SEASON_DEFAULT_EPISODES): string {
-  return `You are a showrunner planning ONE season of a short-form vertical drama series (9:16 video, each episode ≈2–3 minutes = 10–15 shots of 10–15 seconds).
+  return `You are a showrunner planning ONE season of a short-form vertical drama series (9:16 video, each episode = ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES} fast-paced dialogue shots of 15–30 seconds).
 Return STRICT JSON: {"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string}]}.
 RULES:
-- EXACTLY ${episodeCount} episodes (allowed range ${SEASON_MIN_EPISODES}–${SEASON_MAX_EPISODES}). Episode 1 = завязка, last = финал, at least one поворот in the second half.
+- The NUMBER OF EPISODES is dictated by the story itself: as many as the synopsis genuinely needs to be told with tension and without padding (allowed range ${SEASON_MIN_EPISODES}–${SEASON_MAX_EPISODES}; most stories land at 6–10). Nobody sets a running time — you judge it from the material. Episode 1 = завязка, last = финал, at least one поворот in the second half.
 - Each episode has ONE key location. "locationName" MUST be one of the given LOCATIONS, copied verbatim (they already have reference images). Only if the story truly needs a place that is not in the list may you invent a new one (then give it a new name) — at most 2 new locations per season. "locationDesc" is a DETAILED English visual description (2–4 sentences: architecture, materials, textures, props, weather, light, color palette, time of day) usable verbatim by an image/video model — for a listed location, expand its given description. "locationName" is in ${langName(language)}.
 - Use ONLY the given character names (verbatim; a CROWD group name counts as a character). Every episode lists 2–6 characters actually present: the MAIN characters carrying it plus the SUPPORTING characters (family, colleagues, rivals) involved. Across the season EVERY SUPPORTING character appears in at least one episode, MINOR characters and CROWD groups are used where the story plausibly gathers people (family dinners, workplaces, hospitals, streets, court, celebrations).
 - Each logline is 2–3 sentences of concrete dramatic events (who wants what, what goes wrong). Cliffhanger = the final beat that forces the viewer into the next episode. No summaries like "tension rises".
 - Continuous story: consequences carry over episode to episode; no repetition.
-- All text except "locationDesc" is in ${langName(language)}. Original content: never reuse names, plots or lines of existing films/series.`;
+- All text except "locationDesc" is in ${langName(language)}. Character names stay exactly as given (Western names in Latin letters). Original content: never reuse names, plots or lines of existing films/series.`;
 }
 export function seasonStructureUserPrompt(synopsis: string, characters: CharacterCard[], locations: LocationRef[] = []): string {
   return `SYNOPSIS:\n${synopsis}\n\nCHARACTERS (with tiers):\n${charactersBlock(characters)}\n\nLOCATIONS (use these names verbatim):\n${locations.length ? locationsBlock(locations) : "(none defined — invent 4–8 and reuse them across episodes)"}`;
@@ -186,39 +217,41 @@ export function seasonStructureUserPrompt(synopsis: string, characters: Characte
 
 export function episodeScriptSystemPrompt(language: IdeaLanguage): string {
   const L = langName(language);
-  return `You are a film director + cinematographer writing the FULL shooting script of ONE episode of a short-form VERTICAL drama (9:16). The episode is ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES} consecutive shots ("scenes"), each up to ${SCENE_MAX_SECONDS} seconds, generated by an AI video model WITH native speech: characters really speak their lines out loud, so the DIALOGUE IS THE PRODUCT. A scene without dialogue is a wasted shot.
+  const local = language !== "en";
+  return `You are a film director + cinematographer writing the FULL shooting script of ONE episode of a short-form VERTICAL drama (9:16). The episode is ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES} consecutive shots ("scenes"), each 15–${SCENE_MAX_SECONDS} seconds, generated by an AI video model WITH native speech: characters really speak their lines out loud, so the DIALOGUE IS THE PRODUCT. A scene without dialogue is a wasted shot.
 
-Return STRICT JSON: {"visualIdentity": string, "scenes": [{"number": int, "shotType": string, "durationSec": int, "locationDesc": string, "characters": [names], "action": string, "dialogue": string, "videoPrompt": string}]}.
+Return STRICT JSON: {"visualIdentity": string, "scenes": [{"number": int, "shotType": string, "durationSec": int, "locationDesc": string, "characters": [names], "action": string, "dialogue": string${local ? ', "dialogueLocal": string' : ""}, "videoPrompt": string}]}.
 
 HARD RULES (the script is REJECTED automatically if any is broken):
-R1. 12 scenes by default (min ${EPISODE_MIN_SCENES}, max ${EPISODE_MAX_SCENES}). Scene 1 = wide establishing shot of the episode location. All scenes happen in/around the episode's key location.
-R2. AT MOST 2 scenes in the whole episode may be silent ("[NO DIALOGUE]") — typically only scene 1 and maybe one reaction beat. ALL OTHER SCENES (at least 10 of 12) contain a real spoken exchange.
-R3. A talking scene = a SUBSTANTIVE exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences in total, spread over 3–5 lines where characters answer each other (the story is told THROUGH the dialogue: decisions, accusations, confessions, information, subtext). A ${SCENE_MAX_SECONDS}-second clip at a natural brisk pace carries this. Monologue or voice-over does NOT replace dialogue — when two people are in the shot they talk to each other; a lone character may talk on the phone or to someone off-screen. Short one-liners like "Я должна узнать правду." are REJECTED. One line per row, format: NAME (tone cue): "line". Tone cues like (шёпотом), (резко), (сдерживая слёзы).
-    Example of a correct talking scene (6 sentences):
-    АННА (тихо): "Ты знал, что он не вернётся, и всё равно отправил лодку? Я ждала на причале до утра."
-    ВИКТОР (не глядя): "Я отправил лодку, потому что иначе мы бы потеряли обоих. Ты это понимаешь, даже если не хочешь признавать."
-    АННА (резко): "Не смей решать за меня, кого мне терять. Завтра я сама выйду в море, и ты меня не остановишь."
-    "durationSec" is ${SCENE_MAX_SECONDS} for every talking scene (the model's maximum); silent scenes may be ${SCENE_MIN_SECONDS}.
+R1. The NUMBER OF SCENES follows the drama of this episode's logline (min ${EPISODE_MIN_SCENES}, max ${EPISODE_MAX_SCENES}) — no padding, no filler. Nobody sets a running time: each scene lasts exactly as long as its dialogue needs (15–${SCENE_MAX_SECONDS} s at a brisk ~2.7 words/s; "durationSec" = round(words / 2.7) + 2, clamped to 15–${SCENE_MAX_SECONDS}). All scenes happen in/around the episode's key location; scene 1 may open on a wide shot but someone is ALREADY talking in it.
+R2. AT MOST ${MAX_SILENT_SCENES} scenes in the whole episode may be silent ("[NO DIALOGUE]"). ALL OTHER SCENES contain a real spoken exchange.
+R3. A talking scene = a SUBSTANTIVE exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences in total, spread over 3–6 lines where characters answer each other IMMEDIATELY (the story is told THROUGH the dialogue: decisions, accusations, confessions, information, subtext). Replies are quick, people interrupt and overlap; every second of the clip is filled with speech (≥ 2 words per second of durationSec). Monologue or voice-over does NOT replace dialogue — when two people are in the shot they talk to each other; a lone character may talk on the phone or to someone off-screen. Short one-liners like "I have to know the truth." alone are REJECTED. One line per row, format: NAME (tone cue): "line". Tone cues like (sharply), (whispering), (holding back tears).
+    "dialogue" is ALWAYS in ENGLISH — it is what the video model voices.${local ? ` "dialogueLocal" is the same lines translated into ${L}, same line structure and cues (shown to the author and burned in as subtitles).` : ""}
+    Example of a correct talking scene (6 sentences, 26 s):
+    ANNA (quietly): "You knew he wasn't coming back and you still sent the boat? I waited on the pier till morning."
+    VICTOR (not looking at her): "I sent the boat because otherwise we'd have lost both of them. You know that, even if you won't admit it."
+    ANNA (sharply): "Don't you dare decide who I get to lose. Tomorrow I'm going out to sea myself, and you won't stop me."
 R4. "videoPrompt" is ENGLISH and consists of EXACTLY these 9 lines, each on its own row, in this order, each starting with its bracket tag:
-    [SHOT TYPE]: framing + camera movement, vertical 9:16
+    [SHOT TYPE]: the CUT LIST inside the clip — 2–4 hard cuts, e.g. "0–8s close-up on Anna → 8–15s reverse over-the-shoulder on Victor → 15–22s medium two-shot → 22–26s tight reaction close-up on Anna"; vertical 9:16; NO slow pans, NO lingering, NO slow motion
     [VISUAL STYLE]: the short visualIdentity sentence — the SAME text in every scene
     [LIGHTING]: time of day, light sources, weather — IDENTICAL wording in every scene of the episode (the whole episode is one continuous time; the location references lock the light, only the camera angle changes)
     [BLOCKING]: where each character stands/moves
-    [GAZE]: where each character looks
-    [NON-VERBAL]: facial expression, gestures, breathing
-    [ACTION]: what physically happens in the shot
+    [GAZE]: where each character looks, eye contact and reaction while the other speaks
+    [NON-VERBAL]: EXPRESSIVE acting — concrete facial expressions, sharp gestures, breathing, emotional accents (rising anger, cracking voice, bitter laugh)
+    [ACTION]: what physically happens in the shot, brisk
     [CHARACTER]: for EVERY visible character: name, age, hair, skin, build, EXACT clothing for this episode — identical word for word in every scene of the episode
-    [TRANSITION]: how the shot hands off to the next one
-    The [CHARACTER] line is MANDATORY in every scene, including scene 1 if anyone is visible. Never put spoken text into the videoPrompt.
+    [TRANSITION]: a hard cut into the next shot (no fades, no pauses)
+    The [CHARACTER] line is MANDATORY in every scene. Never put spoken text into the videoPrompt. Never use the words "slowly", "slow motion", "lingering", "long pause".
 
 STYLE RULES:
-S1. LIP-SYNC BIAS: talking scenes use Medium shot / Medium close-up / Close-up / Over-the-shoulder with the speaker's face clearly visible; wide shots only for establishing or silent beats.
-S2. "locationDesc": "INT/EXT — place — time of day" in ${L}. "action" (1–2 sentences) and all dialogue in ${L}.
-S3. "visualIdentity": ONE SHORT English sentence (max 25 words) — photoreal live-action look, color palette, lens/grain feel of this episode. Keep it short: it is repeated in every scene.
-S4. Use ONLY the given character names. "characters" lists the names visible in the shot (a CROWD group name is listed when the group is in frame). SUPPORTING and MINOR characters present in the episode must actually speak in at least one scene each — not just stand in the background; crowds may have a short collective line or reactions.
-S5. Dramatize ONLY this episode's logline — a natural continuation of the previous episodes, ending on this episode's cliffhanger (the last scene IS the cliffhanger). Original content only: never reuse names, plots or lines of existing films/series.
+S1. ${PACE_DIRECTION}
+S2. LIP-SYNC BIAS: talking scenes cut between Medium shot / Medium close-up / Close-up / Over-the-shoulder with the speaker's face clearly visible; wide framing only as the first 2–3 seconds of an establishing cut.
+S3. "locationDesc": "INT/EXT — place — time of day" in ${L}. "action" (1–2 sentences) in ${L}.
+S4. "visualIdentity": ONE SHORT English sentence (max 25 words) — photoreal live-action look, color palette, lens/grain feel of this episode. Keep it short: it is repeated in every scene.
+S5. Use ONLY the given character names (Western names, Latin letters, exactly as given). "characters" lists the names visible in the shot (a CROWD group name is listed when the group is in frame). SUPPORTING and MINOR characters present in the episode must actually speak in at least one scene each; crowds may have a short collective line or reactions.
+S6. Dramatize ONLY this episode's logline — a natural continuation of the previous episodes, ending on this episode's cliffhanger (the last scene IS the cliffhanger). Original content only: never reuse names, plots or lines of existing films/series.
 
-Before answering, check: scenes count 10–15; silent scenes ≤ ${MAX_SILENT_SCENES}; each talking scene has ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} dialogue sentences; every videoPrompt has all 9 tags including [CHARACTER].`;
+Before answering, check: scenes count ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES}; silent scenes ≤ ${MAX_SILENT_SCENES}; each talking scene has ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} English dialogue sentences and ≥ 2 words per second; every videoPrompt has all 9 tags including [CHARACTER] and a cut list in [SHOT TYPE].`;
 }
 export function episodeScriptUserPrompt(input: {
   synopsis: string;
@@ -239,7 +272,7 @@ export function episodeScriptUserPrompt(input: {
 export function renderEpisodeScriptText(ep: EpisodeOutline, script: EpisodeScript): string {
   const head = `ЭПИЗОД ${ep.number}. ${ep.title}\n${ep.logline}\nЛокация: ${ep.locationName}\nПерсонажи: ${ep.characters.join(", ")}\n`;
   const body = script.scenes
-    .map((s) => `\nСЦЕНА ${s.number} · ${s.shotType} · ~${s.durationSec}с\n${s.locationDesc}\n${s.action}\n${s.dialogue}`)
+    .map((s) => `\nСЦЕНА ${s.number} · ${s.shotType} · ~${s.durationSec}с\n${s.locationDesc}\n${s.action}\n${s.dialogueLocal ?? s.dialogue}${s.dialogueLocal && s.dialogueLocal !== s.dialogue ? `\n[EN speech]\n${s.dialogue}` : ""}`)
     .join("\n");
   return `${head}${body}\n\nКЛИФФХЭНГЕР: ${ep.cliffhanger}\n`;
 }
@@ -300,12 +333,15 @@ export const sceneReviseSchema = z.object({
   locationDesc: z.string().min(3),
   action: z.string().min(3),
   dialogue: z.string().min(1),
+  dialogueLocal: z.string().optional(),
   videoPrompt: z.string().min(40),
 });
 export type SceneRevise = z.infer<typeof sceneReviseSchema>;
 
 export function sceneReviseSystemPrompt(language: IdeaLanguage): string {
+  const L = langName(language);
+  const local = language !== "en";
   return `You are a film director rewriting ONE shot ("scene", ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS}s, vertical 9:16, AI video model with native speech) of an episode by the author's instruction.
-Return STRICT JSON: {"shotType": string, "durationSec": int, "locationDesc": "INT/EXT — place — time" (${langName(language)}), "action": string (${langName(language)}), "dialogue": string, "videoPrompt": string}.
-RULES: dialogue in ${langName(language)}, one line per row NAME (tone cue): "line"; a talking scene has a substantive exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences (3–5 lines, characters answer each other; the story is told through the dialogue), or exactly "[NO DIALOGUE]" for a rare purely visual beat. durationSec ${SCENE_MAX_SECONDS} for talking scenes. Talking scenes use medium/close shots with the speaker's face visible. videoPrompt is ENGLISH, exactly 9 lines [SHOT TYPE]/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL]/[ACTION]/[CHARACTER]/[TRANSITION]; keep [VISUAL STYLE] and [CHARACTER] descriptions identical to the given scene unless the instruction requires otherwise; no spoken text in videoPrompt. Keep continuity with the previous and next shots. Original content only.`;
+Return STRICT JSON: {"shotType": string, "durationSec": int, "locationDesc": "INT/EXT — place — time" (${L}), "action": string (${L}), "dialogue": string${local ? ', "dialogueLocal": string' : ""}, "videoPrompt": string}.
+RULES: "dialogue" is ALWAYS in ENGLISH (it is what the model voices), one line per row NAME (tone cue): "line"; a talking scene has a substantive exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences (3–6 quick lines, characters answer each other instantly; the story is told through the dialogue), or exactly "[NO DIALOGUE]" for a rare purely visual beat.${local ? ` "dialogueLocal" = the same lines translated into ${L}, same structure and cues.` : ""} durationSec = round(words / 2.7) + 2 clamped to ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS} (≥ 2 words per second — no timing is set by anyone else). Talking scenes use medium/close shots with the speaker's face visible. ${PACE_DIRECTION} videoPrompt is ENGLISH, exactly 9 lines [SHOT TYPE] (cut list, 2–4 hard cuts with time ranges)/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL] (expressive acting)/[ACTION]/[CHARACTER]/[TRANSITION] (hard cut); keep [VISUAL STYLE] and [CHARACTER] descriptions identical to the given scene unless the instruction requires otherwise; no spoken text in videoPrompt; never "slowly", "slow motion", "lingering", "long pause". Keep continuity with the previous and next shots. Original content only; Western names, Latin letters, exactly as given.`;
 }

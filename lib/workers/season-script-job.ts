@@ -100,13 +100,16 @@ export async function persistEpisodeScript(
         data: {
           episodeId,
           number: s.number,
-          dialogue: s.dialogue,
+          // `dialogue` = story-language text (UI + burned-in subtitles); `dialogueEn` = the English lines the model voices.
+          dialogue: s.dialogueLocal ?? s.dialogue,
+          dialogueEn: s.dialogue,
           locationDesc: s.locationDesc,
           videoPrompt: s.videoPrompt,
           shotType: s.shotType,
           action: s.action,
           durationSec: s.durationSec,
-          language: language === "ru" ? "ru" : "en",
+          language: "en", // speech is always English (Stage 4)
+          subtitled: false,
           status: "pending",
         },
       });

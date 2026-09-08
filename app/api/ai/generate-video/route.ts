@@ -45,9 +45,9 @@ export async function POST(request: Request) {
 
     const parsed = await parseBody(request, generateVideoSchema);
     if (!parsed.ok) return parsed.response;
-    const { projectId, sceneId, language } = parsed.data;
-    // Only two spoken languages are offered in the UI; default English.
-    const spokenLang = language === "ru" ? "ru" : "en";
+    const { projectId, sceneId } = parsed.data;
+    // Stage 4: speech is always English (client-side language selector removed); subtitles carry the story language.
+    const spokenLang = "en";
     // Video provider: default Seedance (native audio, up to 15s). Kling is a
     // silent image-to-video alternative capped at 10s by its real schema.
     const provider = parsed.data.provider === "kling" ? "kling" : "seedance";

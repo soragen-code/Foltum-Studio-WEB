@@ -150,12 +150,7 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
     })
   /** episodeId -> true while the "Generate all scenes" batch request is being dispatched. */
   const [startingBatch, setStartingBatch] = useState<Record<string, boolean>>({})
-  // Per-scene spoken language for native audio ("en" default, or "ru"). Local override
-  // of whatever is stored on the scene; applied when the scene's video is generated.
-  const [sceneLang, setSceneLang] = useState<Record<string, string>>({})
-  const langOf = (scene: any): string => sceneLang[scene?.id] ?? scene?.language ?? 'en'
-  /** Spoken language for the "Generate all scenes" batch (EN default, RU optional). */
-  const [batchLang, setBatchLang] = useState<'en' | 'ru'>('en')
+  // Stage 4: speech is always English (subtitles in the project language are burned in) — no language selector.
   const pollTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const [error, setError] = useState('')
   const [expandedSeason, setExpandedSeason] = useState<string | null>(null)
@@ -303,7 +298,7 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.id])
 
-  const generateVideo = async (sceneId: string, language?: string) => {
+  const generateVideo = async (sceneId: string) => {
     if (!sceneId || isSceneBusy(sceneId)) return // already generating — don't reset the spinner or double-fire
     // Optimistically mark this scene as generating RIGHT NOW and keep it marked until a
     // terminal poll or an explicit start failure — this closes the gap between the start
@@ -311,7 +306,7 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
     markGenerating(sceneId)
     setError('')
     try {
-      const res = await postJobStart('/api/ai/generate-video', { projectId: project?.id, sceneId, language })
+      const res = await postJobStart('/api/ai/generate-video', { projectId: project?.id, sceneId })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data?.jobId) {
         setError(data?.error ?? 'Video generation failed')
@@ -332,13 +327,13 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
    * resumed (never double-charged). If you dislike a scene, tweak its prompt and hit
    * the per-scene Regenerate button — only that scene reruns.
    */
-  const generateEpisodeVideos = async (episodeId?: string, language?: string) => {
+  const generateEpisodeVideos = async (episodeId?: string) => {
     const epId = episodeId ?? selectedEpisodeId
     if (!epId || startingBatch[epId]) return
     setStartingBatch((prev) => ({ ...prev, [epId]: true }))
     setError('')
     try {
-      const res = await postJobStart('/api/ai/generate-episode-videos', { projectId: project?.id, episodeId: epId, language })
+      const res = await postJobStart('/api/ai/generate-episode-videos', { projectId: project?.id, episodeId: epId })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !Array.isArray(data?.jobs)) {
         setError(data?.error ?? 'Batch generation failed')
@@ -489,25 +484,8 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
                   Dislike one? Tweak its prompt and hit that scene's Regenerate button. */}
               {(scenes ?? []).length > 0 && (
                 <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3" style={{ boxShadow: 'var(--shadow-sm)' }}>
-                  <div className="flex items-center overflow-hidden rounded-lg border border-border text-xs">
-                    {(['en', 'ru'] as const).map((lng) => (
-                      <button
-                        key={lng}
-                        type="button"
-                        onClick={() => setBatchLang(lng)}
-                        disabled={!!startingBatch[selectedEpisodeId!]}
-                        className={`px-2.5 py-1.5 font-medium transition disabled:opacity-50 ${
-                          batchLang === lng
-                            ? 'bg-primary text-primary-foreground'
-                            : 'bg-card text-muted-foreground hover:bg-muted/40'
-                        }`}
-                      >
-                        {lng === 'en' ? 'EN' : 'RU'}
-                      </button>
-                    ))}
-                  </div>
                   <button
-                    onClick={() => generateEpisodeVideos(selectedEpisodeId!, batchLang)}
+                    onClick={() => generateEpisodeVideos(selectedEpisodeId!)}
                     disabled={!!startingBatch[selectedEpisodeId!]}
                     className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
                   >
@@ -626,26 +604,8 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
                   <div className="flex flex-wrap items-center gap-2">
                     {scene?.status !== 'accepted' && (
                       <>
-                        {/* Per-scene spoken language for the native voices (EN default, RU optional) */}
-                        <div className="flex items-center overflow-hidden rounded-lg border border-border text-xs">
-                          {(['en', 'ru'] as const).map((lng) => (
-                            <button
-                              key={lng}
-                              type="button"
-                              onClick={() => setSceneLang((prev) => ({ ...prev, [scene?.id]: lng }))}
-                              disabled={isSceneBusy(scene?.id)}
-                              className={`px-2.5 py-1.5 font-medium transition disabled:opacity-50 ${
-                                langOf(scene) === lng
-                                  ? 'bg-primary text-primary-foreground'
-                                  : 'bg-card text-muted-foreground hover:bg-muted/40'
-                              }`}
-                            >
-                              {lng === 'en' ? 'EN' : 'RU'}
-                            </button>
-                          ))}
-                        </div>
                         <button
-                          onClick={() => generateVideo(scene?.id ?? '', langOf(scene))}
+                          onClick={() => generateVideo(scene?.id ?? '')}
                           disabled={isSceneBusy(scene?.id)}
                           className="flex items-center gap-1 rounded-lg bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
                         >

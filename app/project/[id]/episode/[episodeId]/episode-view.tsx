@@ -31,7 +31,6 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
   const [activeGen, setActiveGen] = useState<Record<string, boolean>>({})
   const [videoJobs, setVideoJobs] = useState<Record<string, JobInfo>>({})
   const pollTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
-  const spokenLang: 'ru' | 'en' = project?.language === 'ru' ? 'ru' : 'en'
 
   const patchScene = (sceneId: string, patch: Partial<Scene>) => setScenes((prev) => prev.map((s) => (s.id === sceneId ? { ...s, ...patch } : s)))
   const stopPolling = (sceneId: string) => { const t = pollTimers.current[sceneId]; if (t) clearTimeout(t); delete pollTimers.current[sceneId] }
@@ -113,7 +112,7 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
   const generateAll = async () => {
     setStartingAll(true); setError(null)
     try {
-      const res = await postJobStart(`/api/ai/episodes/${episode.id}/generate-all`, { language: spokenLang })
+      const res = await postJobStart(`/api/ai/episodes/${episode.id}/generate-all`, {})
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error ?? 'Не удалось запустить генерацию')
       setModal(false)
@@ -134,7 +133,7 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
   const regenScene = async (sceneId: string) => {
     setRegenAsk(null); setActiveGen((p) => ({ ...p, [sceneId]: true })); setError(null)
     try {
-      const res = await postJobStart('/api/ai/generate-video', { projectId: project.id, sceneId, language: spokenLang })
+      const res = await postJobStart('/api/ai/generate-video', { projectId: project.id, sceneId })
       const data = await res.json(); if (!res.ok) throw new Error(data?.error ?? 'Не удалось запустить генерацию')
       patchScene(sceneId, { status: 'generating' }); pollVideoJob(sceneId, data.jobId); void refreshCredits()
     } catch (e: any) { clearGen(sceneId); setError(e?.message ?? 'Ошибка') }

@@ -55,7 +55,7 @@ export function CharacterAvatars({ chars, size = 'h-8 w-8' }: { chars: EpChar[];
 }
 
 /** Readable script with light structure (scene headers, action, dialogue, prompt technical lines). */
-export function ScriptView({ text, scenes }: { text?: string | null; scenes?: { number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; videoPrompt?: string | null }[] }) {
+export function ScriptView({ text, scenes }: { text?: string | null; scenes?: { number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; dialogueEn?: string | null; videoPrompt?: string | null }[] }) {
   if (scenes && scenes.length) {
     return (
       <div className="space-y-4 text-sm leading-relaxed">
@@ -67,6 +67,12 @@ export function ScriptView({ text, scenes }: { text?: string | null; scenes?: { 
               <div className="text-xs text-muted-foreground">{s.locationDesc}</div>
               {s.action && <p className="mt-2 italic">{s.action}</p>}
               <pre className="mt-2 whitespace-pre-wrap break-words font-sans">{s.dialogue}</pre>
+              {s.dialogueEn && s.dialogueEn.trim() !== (s.dialogue ?? '').trim() && (
+                <details className="mt-2 text-xs text-muted-foreground">
+                  <summary className="cursor-pointer">Озвучка (English) — субтитры на языке сценария</summary>
+                  <pre className="mt-1 whitespace-pre-wrap break-words font-sans">{s.dialogueEn}</pre>
+                </details>
+              )}
               {tech.length > 0 && (
                 <details className="mt-2 text-xs text-muted-foreground">
                   <summary className="cursor-pointer">Кадр: свет / мизансцена / взгляд / невербалика</summary>
