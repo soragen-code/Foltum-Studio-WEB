@@ -33,7 +33,17 @@ HARD RULES:
 T1. Exactly 3 scenes by default: (1) LOCATION A, two MAIN characters in a substantive exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences (3–6 quick lines, they answer each other instantly); (2) the SAME location from a different angle: an emotional turn (anger → tears, calm → threat) with ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} sentences; (3) LOCATION B (a different listed location), a third character or a crowd joins, ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} sentences ending on a hook. No silent scenes. Nobody sets a running time: "durationSec" = round(words / 2.7) + 2, clamped to 15–${SCENE_MAX_SECONDS} — the clip lasts exactly as long as its dialogue needs, ≥ 2 words per second.
 T2. "dialogue" is ALWAYS in ENGLISH (it is what the video model voices): one line per row, NAME (tone cue): "line". Only real spoken lines — the story is told through the dialogue.${language !== "en" ? ` "dialogueLocal" = the same lines translated into ${L}, same structure and cues (shown to the author and burned in as subtitles).` : ' "dialogueLocal" = same as "dialogue".'}
 T2b. ${PACE_DIRECTION}
-T3. "videoPrompt" is ENGLISH with EXACTLY these 9 tagged lines in this order: [SHOT TYPE] (the CUT LIST inside the clip — 2–4 hard cuts with time ranges, e.g. "0–7s close-up on Mara → 7–14s reverse on Ethan → 14–22s medium two-shot → 22–26s tight reaction close-up"; no slow pans, no lingering, no slow motion), [VISUAL STYLE] (the visualIdentity sentence, identical in all scenes), [LIGHTING] (identical wording within one location — the camera moves, the light does not), [BLOCKING], [GAZE] (eye contact and reactions while the other speaks), [NON-VERBAL] (EXPRESSIVE acting: concrete facial expressions, sharp gestures, emotional accents in the voice), [ACTION], [CHARACTER] (every visible character: name, age, hair, skin, build, exact clothing — identical in every scene), [TRANSITION]. No spoken text inside the videoPrompt. Never use the words "slowly", "slow motion", "lingering", "long pause".
+T3. "videoPrompt" is ENGLISH and consists of EXACTLY these 9 lines, each on its own row (separated by \n), in this order, each starting with its bracket tag exactly as written here:
+    [SHOT TYPE]: the CUT LIST inside the clip — 2–4 hard cuts with time ranges, e.g. "0–7s close-up on Mara → 7–14s reverse over-the-shoulder on Ethan → 14–22s medium two-shot → 22–26s tight reaction close-up"; vertical 9:16; no slow pans, no lingering, no slow motion
+    [VISUAL STYLE]: the visualIdentity sentence — identical in all scenes
+    [LIGHTING]: time of day, light sources, weather — identical wording within one location (the camera moves, the light does not)
+    [BLOCKING]: where each character stands/moves
+    [GAZE]: where each character looks; eye contact and reactions while the other speaks
+    [NON-VERBAL]: EXPRESSIVE acting — concrete facial expressions, sharp gestures, emotional accents in the voice
+    [ACTION]: what physically happens in the shot, brisk
+    [CHARACTER]: every visible character: name, age, hair, skin, build, exact clothing — identical in every scene
+    [TRANSITION]: a hard cut into the next shot (no fades, no pauses)
+    No spoken text inside the videoPrompt. Never use the words "slowly", "slow motion", "lingering", "long pause".
 T4. "locationNames" are copied VERBATIM from the given LOCATIONS list (they already have reference images); scene "locationDesc" is "INT/EXT — place — time of day" in ${L} and starts with the location name. Use ONLY the given character names (Western names, Latin letters, exactly as given).
 T5. Original content only — never reuse names, plots or lines of existing films/series. "title"/"logline" in ${L}, short.`;
 }
