@@ -91,7 +91,6 @@ export function SeasonStage({ project }: { project: any; onRefresh?: () => void 
   const [locText, setLocText] = useState<Record<string, string>>({})
   const [locOpen, setLocOpen] = useState<Record<string, boolean>>({})
   const [busy, setBusy] = useState<Record<string, string>>({}) // episodeId -> 'revise' | 'location'
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -115,9 +114,9 @@ export function SeasonStage({ project }: { project: any; onRefresh?: () => void 
   // Poll while a job runs (stable interval, no flicker: state only replaced on successful fetch).
   useEffect(() => {
     if (!jobActive) return
-    timer.current = setTimeout(load, JOB_POLL_INTERVAL_MS)
-    return () => { if (timer.current) clearTimeout(timer.current) }
-  }, [jobActive, job?.progress, job?.message, load])
+    const id = setInterval(load, JOB_POLL_INTERVAL_MS)
+    return () => clearInterval(id)
+  }, [jobActive, load])
 
   const start = async () => {
     setStarting(true); setError(null)
