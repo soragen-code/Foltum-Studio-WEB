@@ -231,7 +231,7 @@ R3. A talking scene = a SUBSTANTIVE exchange of ${TALK_MIN_SENTENCES}–${TALK_M
     ANNA (quietly): "You knew he wasn't coming back and you still sent the boat? I waited on the pier till morning."
     VICTOR (not looking at her): "I sent the boat because otherwise we'd have lost both of them. You know that, even if you won't admit it."
     ANNA (sharply): "Don't you dare decide who I get to lose. Tomorrow I'm going out to sea myself, and you won't stop me."
-R4. "videoPrompt" is ENGLISH and consists of EXACTLY these 9 lines, each on its own row, in this order, each starting with its bracket tag:
+R4. "videoPrompt" and "visualIdentity" are ENTIRELY in ENGLISH (every one of the 9 lines — never ${L}, even though locationDesc/action are in ${L}). "videoPrompt" consists of EXACTLY these 9 lines, each on its own row, in this order, each starting with its bracket tag:
     [SHOT TYPE]: the CUT LIST inside the clip — 2–4 hard cuts, e.g. "0–8s close-up on Anna → 8–15s reverse over-the-shoulder on Victor → 15–22s medium two-shot → 22–26s tight reaction close-up on Anna"; vertical 9:16; NO slow pans, NO lingering, NO slow motion
     [VISUAL STYLE]: the short visualIdentity sentence — the SAME text in every scene
     [LIGHTING]: time of day, light sources, weather — IDENTICAL wording in every scene of the episode (the whole episode is one continuous time; the location references lock the light, only the camera angle changes)
