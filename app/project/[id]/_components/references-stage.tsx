@@ -32,6 +32,9 @@ function hasAnyImage(c: RefCharacter) {
 export function ReferencesStage({ project, onRefresh }: { project: any; onRefresh: () => void }) {
   const [characters, setCharacters] = useState<RefCharacter[]>(project?.characters ?? [])
   const [jobs, setJobs] = useState<JobInfo[]>([])
+  // Until the first poll answers we don't know whether a job is running — show spinners
+  // for characters without references instead of an empty "no image" state.
+  const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
   const [continuing, setContinuing] = useState(false)
   const [starting, setStarting] = useState(false)
@@ -51,6 +54,7 @@ export function ReferencesStage({ project, onRefresh }: { project: any; onRefres
         const data = await jobsRes.json()
         const list: JobInfo[] = Array.isArray(data?.jobs) ? data.jobs : []
         setJobs(list)
+        setLoaded(true)
         // drop local markers once the server knows about the job (or it finished)
         setLocalGen((prev) => {
           const next: Record<string, string> = {}
@@ -85,9 +89,10 @@ export function ReferencesStage({ project, onRefresh }: { project: any; onRefres
   const activeGen: Record<string, JobInfo | 'local'> = {}
   for (const j of jobs) if (j.characterId) activeGen[j.characterId] = j
   for (const cid of Object.keys(localGen)) if (!activeGen[cid]) activeGen[cid] = 'local'
-  if (projectJob) for (const c of characters) if (!hasAllImages(c) && !activeGen[c.id]) activeGen[c.id] = projectJob
+  if (projectJob || !loaded)
+    for (const c of characters) if (!hasAllImages(c) && !activeGen[c.id]) activeGen[c.id] = projectJob ?? 'local'
 
-  const anyActive = jobs.length > 0 || Object.keys(localGen).length > 0
+  const anyActive = !loaded || jobs.length > 0 || Object.keys(localGen).length > 0
   const readyCount = characters.filter(hasAnyImage).length
   const missing = characters.filter((c) => !hasAllImages(c))
 
