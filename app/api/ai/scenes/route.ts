@@ -23,6 +23,11 @@ const MIN_SILENT_SCENES = 2;
  *  and characters actually talk to each other across the episode. */
 const MAX_SILENT_SCENES = Math.max(MIN_SILENT_SCENES, Math.floor(SCENES_PER_EPISODE / 4));
 
+/** A talking scene is NOT rendered as a ${SCENE_SECONDS}s clip — video generation
+ *  stretches each spoken clip to ~10–15 s (Seedance native audio 15 s, Kling 10 s),
+ *  which comfortably fits a real 2–3 line exchange. Size the dialogue to THIS. */
+const DIALOGUE_CLIP_SECONDS = 12;
+
 const SYSTEM = `You are a film director + cinematographer + editor working on a short-form VERTICAL drama series (9:16, TikTok/Reels format). Every episode must run AT LEAST ${EPISODE_MIN_SECONDS} seconds of screen time.
 
 VISUAL TREATMENT FOR ALL NEW SHOTS: ${VISUAL_STYLE}
@@ -69,12 +74,16 @@ Given the project synopsis, this episode's description, and the characters, retu
 
 6. TRANSITIONS — EVERY SHOT HANDS OFF TO THE NEXT. The [TRANSITION] line describes how this shot connects to the following one: what the camera lands on, what the character turns toward, what sound/motion carries over. Examples: "camera slowly pans right and settles on the closed door — the next shot opens on that door", "holds on her face as her eyes drop to the phone in her hand — next shot is the phone screen", "match cut: the glass she sets down becomes the glass on the lab table". The last shot's transition sets up the cliffhanger / next episode.
 
-7. DIALOGUE — CHARACTERS TALK TO EACH OTHER, WITHIN THE ${SCENE_SECONDS}-SECOND CLIP LIMIT. The audience bonds with the characters through what they say, so this is a DIALOGUE-DRIVEN series: only ${MIN_SILENT_SCENES}–${MAX_SILENT_SCENES} scenes are purely visual (establishing, reaction, atmosphere, insert) — write exactly "[NO DIALOGUE]" for those; EVERY other scene carries spoken dialogue.
-   • MORE DIALOGUE, as a real back-and-forth EXCHANGE. In talking scenes, prefer a short exchange between TWO characters — about 2–3 lines that answer each other (line, reply, and often a comeback) rather than a single isolated line.
-   • HONEST DURATION — do NOT overload a clip. A ${SCENE_SECONDS}-second clip can only speak a limited number of words: keep each talking scene to roughly 12–28 spoken words IN TOTAL (2–3 short lines). Never write a wall of text that could not physically be spoken in ${SCENE_SECONDS} seconds.
-   • LONGER CONVERSATIONS FLOW ACROSS CONSECUTIVE SHOTS. When a conversation needs more than fits one clip, CONTINUE it across the next shots (shot N ends mid-exchange, shot N+1 picks it up with the reply) — this is a continuous film, so a real multi-beat conversation is spread over several consecutive shots, each carrying its own short beat sized to the clip.
+7. DIALOGUE — CHARACTERS TALK TO EACH OTHER. The audience bonds with the characters through what they say, so this is a DIALOGUE-DRIVEN series: only ${MIN_SILENT_SCENES}–${MAX_SILENT_SCENES} scenes are purely visual (establishing, reaction, atmosphere, insert) — write exactly "[NO DIALOGUE]" for those; EVERY other scene carries spoken dialogue.
+   • REQUIRED: A REAL BACK-AND-FORTH EXCHANGE, NOT A SINGLE LINE. Each talking scene MUST contain a short exchange between TWO characters — at least 2, ideally 3, lines that ANSWER each other (a line, a reply, and often a comeback), written as SEPARATE "SPEAKER: line" lines. A talking scene with only ONE isolated line is WRONG — the whole point is that the characters converse. Alternate the speakers (A, then B, then A).
+   • HONEST DURATION — each talking scene is rendered as an ~${DIALOGUE_CLIP_SECONDS}-second clip (not ${SCENE_SECONDS}s), which comfortably carries a 2–3 line exchange of roughly 18–40 spoken words IN TOTAL. Keep it inside that budget — natural, punchy lines, no monologues, nothing that could not physically be spoken in ~${DIALOGUE_CLIP_SECONDS} seconds.
+   • A LONGER CONVERSATION SPANS SEVERAL SCENES, each still a full 2–3 line exchange. When a conversation runs long, keep it going across consecutive shots — but each of those shots still carries its OWN 2–3 line back-and-forth beat (never drop to a single line just because the talk continues next shot).
    • TONE OF VOICE ON EVERY LINE. Give each spoken line a brief delivery cue in parentheses right after the speaker name: HOW it is said — the tone, emotion and manner (e.g. "(low, guarded)", "(a shaky whisper, holding back tears)", "(mockingly, half-laughing)", "(a tired sigh, then flat)"). These cues are performance directions only; they are NEVER spoken aloud and NEVER shown as subtitles.
    Follow a film rhythm, e.g.: establishing (silent) → exchange → reaction (silent) → exchange continues → insert → exchange → ...
+   EXAMPLE of ONE talking scene's "dialogue" field (note: MULTIPLE lines that answer each other, each with a tone cue):
+     ANSEL (guarded, not turning around): "You shouldn't be here."
+     WREN (quiet, stepping closer): "Neither should you, after what happened."
+     ANSEL (a bitter breath): "Say his name, then. Say it."
 
 8. STORY. Dramatize ONLY the events of THIS episode's description — do NOT borrow, foreshadow in detail, or resolve events from the other episodes listed (they are told in their own episodes). Open by picking up naturally from the previous episode's cliffhanger (given below) and build steadily toward THIS episode's cliffhanger, landing on it in the final shot. Dialogue is natural, subtext-rich, screenplay format.
 
@@ -179,7 +188,7 @@ Episode ${episode.number}: "${episode.title}"
 Description: ${episode.description}
 This episode's ending cliffhanger (build toward it): ${episode.cliffhanger ?? "N/A"}
 
-Direct this episode as ONE continuous piece of film: first write "visualIdentity" and the "characterSheet", then exactly ${SCENES_PER_EPISODE} consecutive camera shots (scene 1 = wide establishing shot; only ${MIN_SILENT_SCENES}–${MAX_SILENT_SCENES} shots marked [NO DIALOGUE], EVERY other shot carrying a short back-and-forth exchange of 2–3 lines that fits the ${SCENE_SECONDS}-second clip, each spoken line prefixed with a (tone/delivery cue); real longer conversations continue across consecutive shots; every videoPrompt in the full 9-line format — [SHOT TYPE], [VISUAL STYLE] (identical every scene), [LIGHTING], [BLOCKING], [GAZE], [NON-VERBAL], [ACTION], [CHARACTER] (verbatim descriptions), [TRANSITION] handing off to the next shot) that dramatize ONLY this episode's description — from a natural continuation of the previous episode to this episode's cliffhanger.`;
+Direct this episode as ONE continuous piece of film: first write "visualIdentity" and the "characterSheet", then exactly ${SCENES_PER_EPISODE} consecutive camera shots (scene 1 = wide establishing shot; only ${MIN_SILENT_SCENES}–${MAX_SILENT_SCENES} shots marked [NO DIALOGUE], EVERY other shot carrying a REAL back-and-forth exchange of 2–3 lines where the characters ANSWER each other (never a single isolated line), each spoken line on its own "SPEAKER (tone): line" row; a longer conversation spans several consecutive shots, each still a full 2–3 line exchange; every videoPrompt in the full 9-line format — [SHOT TYPE], [VISUAL STYLE] (identical every scene), [LIGHTING], [BLOCKING], [GAZE], [NON-VERBAL], [ACTION], [CHARACTER] (verbatim descriptions), [TRANSITION] handing off to the next shot) that dramatize ONLY this episode's description — from a natural continuation of the previous episode to this episode's cliffhanger.`;
 
     const data = await chatJSON<{
       visualIdentity?: string;
