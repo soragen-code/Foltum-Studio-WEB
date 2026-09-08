@@ -112,21 +112,27 @@ export const PACE_DIRECTION =
 
 const PROMPT_LINES = ["[SHOT TYPE]", "[VISUAL STYLE]", "[LIGHTING]", "[BLOCKING]", "[GAZE]", "[NON-VERBAL]", "[ACTION]", "[CHARACTER]", "[TRANSITION]"];
 
-/** Non-throwing validation of an episode script: returns human-readable problems (empty = ok). */
+/** Problems prefixed "soft:" are logged but never fail a script (drift in density / sentence count / camera wording). */
+export const isSoftProblem = (p: string) => p.startsWith("soft:");
+export const hardProblems = (problems: string[]) => problems.filter((p) => !isSoftProblem(p));
+
+/** Non-throwing validation of an episode script: returns human-readable problems (empty = ok; "soft:" = warning only). */
 export function validateEpisodeScript(script: EpisodeScript): string[] {
   const problems: string[] = [];
   const n = script.scenes.length;
   if (n < EPISODE_MIN_SCENES || n > EPISODE_MAX_SCENES) problems.push(`scene count ${n} not in ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES}`);
   const silent = script.scenes.filter((s) => isSilent(s.dialogue)).length;
-  if (silent > MAX_SILENT_SCENES) problems.push(`too many silent scenes: ${silent} (max ${MAX_SILENT_SCENES})`);
+  if (silent > MAX_SILENT_SCENES) problems.push(`soft: too many silent scenes: ${silent} (max ${MAX_SILENT_SCENES})`);
   if (n - silent < 1) problems.push("no dialogue in episode");
   script.scenes.forEach((s, i) => {
     if (s.number !== i + 1) problems.push(`scene ${i + 1} numbered ${s.number}`);
     const sentences = dialogueSentenceCount(s.dialogue);
-    if (!isSilent(s.dialogue) && sentences < TALK_MIN_SENTENCES) problems.push(`scene ${s.number}: ${sentences} dialogue sentences (want ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES})`);
+    if (!isSilent(s.dialogue) && sentences < TALK_MIN_SENTENCES) problems.push(`soft: scene ${s.number}: ${sentences} dialogue sentences (want ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES})`);
+    // Speech density is ADVISORY: durationSec is derived from the word count by normalizeEpisodeScript,
+    // and at the 15 s floor a short exchange (24–28 words) cannot go any shorter — never a hard failure.
     const words = spokenWordCount(s.dialogue);
-    if (!isSilent(s.dialogue) && words < MIN_WORDS_PER_SEC * s.durationSec) problems.push(`scene ${s.number}: ${words} words for ${s.durationSec}s (want ≥ ${MIN_WORDS_PER_SEC} words/s so speech fills the clip)`);
-    if (/\b(slow[- ]?motion|slowly|lingering|linger|long pause|beat of silence|holds? for a (few|long)|slow pan)\b/i.test(s.videoPrompt)) problems.push(`scene ${s.number}: videoPrompt contains slow/lingering direction`);
+    if (!isSilent(s.dialogue) && s.durationSec > SCENE_MIN_SECONDS && words < MIN_WORDS_PER_SEC * s.durationSec) problems.push(`soft: scene ${s.number}: ${words} words for ${s.durationSec}s (want ≥ ${MIN_WORDS_PER_SEC} words/s so speech fills the clip)`);
+    if (/\b(slow[- ]?motion|slowly|lingering|linger|long pause|beat of silence|holds? for a (few|long)|slow pan)\b/i.test(s.videoPrompt)) problems.push(`soft: scene ${s.number}: videoPrompt contains slow/lingering direction`);
     const missing = PROMPT_LINES.filter((l) => !s.videoPrompt.includes(l));
     if (missing.length) problems.push(`scene ${s.number}: videoPrompt missing ${missing.join(",")}`);
   });
@@ -225,7 +231,7 @@ Return STRICT JSON: {"visualIdentity": string, "scenes": [{"number": int, "shotT
 HARD RULES (the script is REJECTED automatically if any is broken):
 R1. The NUMBER OF SCENES follows the drama of this episode's logline (min ${EPISODE_MIN_SCENES}, max ${EPISODE_MAX_SCENES}) — no padding, no filler. Nobody sets a running time: each scene lasts exactly as long as its dialogue needs (15–${SCENE_MAX_SECONDS} s at a brisk ~2.7 words/s; "durationSec" = round(words / 2.7) + 2, clamped to 15–${SCENE_MAX_SECONDS}). All scenes happen in/around the episode's key location; scene 1 may open on a wide shot but someone is ALREADY talking in it.
 R2. AT MOST ${MAX_SILENT_SCENES} scenes in the whole episode may be silent ("[NO DIALOGUE]"). ALL OTHER SCENES contain a real spoken exchange.
-R3. A talking scene = a SUBSTANTIVE exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences in total, spread over 3–6 lines where characters answer each other IMMEDIATELY (the story is told THROUGH the dialogue: decisions, accusations, confessions, information, subtext). Replies are quick, people interrupt and overlap; every second of the clip is filled with speech (≥ 2 words per second of durationSec). Monologue or voice-over does NOT replace dialogue — when two people are in the shot they talk to each other; a lone character may talk on the phone or to someone off-screen. Short one-liners like "I have to know the truth." alone are REJECTED. One line per row, format: NAME (tone cue): "line". Tone cues like (sharply), (whispering), (holding back tears).
+R3. A talking scene = a SUBSTANTIVE exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences in total, spread over 3–6 lines where characters answer each other IMMEDIATELY (the story is told THROUGH the dialogue: decisions, accusations, confessions, information, subtext). Replies are quick, people interrupt and overlap; every second of the clip is filled with speech — at least ~35 words per talking scene (≥ 2 words per second of durationSec). Monologue or voice-over does NOT replace dialogue — when two people are in the shot they talk to each other; a lone character may talk on the phone or to someone off-screen. Short one-liners like "I have to know the truth." alone are REJECTED. One line per row, format: NAME (tone cue): "line". Tone cues like (sharply), (whispering), (holding back tears).
     "dialogue" is ALWAYS in ENGLISH — it is what the video model voices.${local ? ` "dialogueLocal" is the same lines translated into ${L}, same line structure and cues (shown to the author and burned in as subtitles).` : ""}
     Example of a correct talking scene (6 sentences, 26 s):
     ANNA (quietly): "You knew he wasn't coming back and you still sent the boat? I waited on the pier till morning."

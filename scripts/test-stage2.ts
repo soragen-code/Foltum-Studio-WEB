@@ -1,5 +1,5 @@
 /** Stage 2 unit checks: season/episode schemas, timing validation, cost plan. Run: npx tsx scripts/test-stage2.ts */
-import { episodeScriptSchema, validateEpisodeScript, normalizeEpisodeScript, spokenWordCount, dialogueSentenceCount, sceneClipPlan, seasonStructureSchema, matchCharacter, estimateDurationSec, PACE_DIRECTION, episodeScriptSystemPrompt, EPISODE_MIN_SCENES, SCENE_MIN_SECONDS, SCENE_MAX_SECONDS } from "../lib/season";
+import { episodeScriptSchema, validateEpisodeScript, normalizeEpisodeScript, spokenWordCount, dialogueSentenceCount, sceneClipPlan, seasonStructureSchema, matchCharacter, estimateDurationSec, hardProblems, PACE_DIRECTION, episodeScriptSystemPrompt, EPISODE_MIN_SCENES, SCENE_MIN_SECONDS, SCENE_MAX_SECONDS } from "../lib/season";
 import { trailerSystemPrompt } from "../lib/trailer";
 const assert = (c: unknown, m: string) => { if (!c) { console.error("FAIL:", m); process.exit(1); } console.log("ok:", m); };
 const prompt = "[SHOT TYPE]: Medium close-up\n[VISUAL STYLE]: x\n[LIGHTING]: y\n[BLOCKING]: z\n[GAZE]: a\n[NON-VERBAL]: b\n[ACTION]: c\n[CHARACTER]: d\n[TRANSITION]: e";
@@ -18,7 +18,12 @@ assert(estimateDurationSec(talk) >= 20 && estimateDurationSec(talk) <= SCENE_MAX
 assert(estimateDurationSec('АННА: "Да."') === SCENE_MIN_SECONDS, "one word → clamped to 15s");
 assert(ok.scenes.every((s) => s.durationSec === estimateDurationSec(s.dialogue, s.action)), "normalize sets durationSec from dialogue, ignores the LLM's 30");
 const slow = validateEpisodeScript({ ...ok, scenes: ok.scenes.map((s, i) => (i === 1 ? { ...s, durationSec: 30, dialogue: 'АННА: "Ты знал. Ты знал и молчал. Всё это время. Каждый вечер. Смотрел и молчал."' } : i === 2 ? { ...s, videoPrompt: s.videoPrompt.replace("Medium close-up", "slow motion push-in, lingering") } : s)) });
-assert(slow.some((p) => /words for 30s/.test(p)) && slow.some((p) => /slow\/lingering/.test(p)), `pace validation: ${slow.join(" | ")}`);
+assert(slow.some((p) => /soft: .*words for 30s/.test(p)) && slow.some((p) => /soft: .*slow\/lingering/.test(p)) && hardProblems(slow).length === 0, `pace validation is soft only: ${slow.join(" | ")}`);
+// Regression (prod): a 24-word exchange → 15 s and NO error — the 15 s floor cannot go lower.
+const short24 = 'ANNA (sharply): "You knew he was not coming back and still sent the boat out there?"\nVICTOR (quietly): "I sent it because otherwise we would have lost both of them tonight."';
+const shortEp = normalizeEpisodeScript(episodeScriptSchema.parse({ visualIdentity: "photoreal cinematic", scenes: mk(6).map((s) => ({ ...s, dialogue: short24 })) }));
+assert(spokenWordCount(short24) >= 20 && spokenWordCount(short24) <= 30 && shortEp.scenes[0].durationSec === SCENE_MIN_SECONDS, `24-ish words → ${shortEp.scenes[0].durationSec}s`);
+assert(hardProblems(validateEpisodeScript(shortEp)).length === 0, `short scenes at 15s are not hard errors: ${validateEpisodeScript(shortEp).join(" | ") || "(none)"}`);
 const withLocal = normalizeEpisodeScript(episodeScriptSchema.parse({ visualIdentity: "photoreal cinematic", scenes: mk(6).map((s) => ({ ...s, dialogue: 'ANNA (softly): "You knew from the very start and stayed silent all this time? Every night you looked me in the eye and said nothing at all."\nMARK (sharply): "I stayed silent because otherwise you would have left back then, that winter. You would have packed and gone to the city, and the lighthouse would be empty."\nANNA: "Maybe that would have been more honest. But now we are both locked in here with this lie."', dialogueLocal: talk })) }));
 assert(withLocal.scenes[0].dialogueLocal === talk, "dialogueLocal preserved by normalize");
 assert(/ALWAYS in ENGLISH/.test(episodeScriptSystemPrompt("ru")) && /dialogueLocal/.test(episodeScriptSystemPrompt("ru")) && !/dialogueLocal/.test(episodeScriptSystemPrompt("en")), "episode prompt: EN speech + local subtitles only for non-EN");

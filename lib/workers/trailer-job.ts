@@ -8,7 +8,7 @@ import { prisma } from "@/lib/db";
 import { chatJSON } from "@/lib/ai";
 import { updateJob, completeJob, failJob } from "@/lib/jobs";
 import { toCharacterCard, normalizeLanguage } from "@/lib/idea";
-import { normalizeEpisodeScript, validateEpisodeScript, matchLocation, type EpisodeOutline } from "@/lib/season";
+import { normalizeEpisodeScript, validateEpisodeScript, isSoftProblem, matchLocation, type EpisodeOutline } from "@/lib/season";
 import { trailerScriptSchema, trailerSystemPrompt, trailerUserPrompt, TRAILER_SEASON_NUMBER, TRAILER_MIN_SCENES, TRAILER_MAX_SCENES } from "@/lib/trailer";
 import { persistEpisodeScript } from "@/lib/workers/season-script-job";
 
@@ -26,7 +26,7 @@ export async function runTrailerJob(jobId: string, projectId: string): Promise<v
     const normalized = normalizeEpisodeScript({ visualIdentity: script.visualIdentity, scenes: script.scenes }, cards);
     script = { ...script, scenes: normalized.scenes.slice(0, TRAILER_MAX_SCENES) };
     if (script.scenes.length < TRAILER_MIN_SCENES) throw new Error("trailer script too short");
-    const hard = validateEpisodeScript({ visualIdentity: script.visualIdentity, scenes: script.scenes }).filter((p) => !/dialogue sentences|too many silent|scene count/.test(p));
+    const hard = validateEpisodeScript({ visualIdentity: script.visualIdentity, scenes: script.scenes }).filter((p) => !isSoftProblem(p) && !/scene count/.test(p));
     if (hard.length) throw new Error(`trailer script invalid: ${hard.slice(0, 3).join("; ")}`);
 
     await updateJob(jobId, { progress: 70, message: "Сохраняю трейлер..." });
