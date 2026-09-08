@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { VISUAL_STYLE_ID } from "../lib/visual-style";
 const Module = require("node:module");
 const originalLoad = Module._load;
 let row: any, provider: any, refunds: number, publications: number, reads: number, cancels: number;
@@ -24,7 +25,7 @@ const db: any = {
       row = { ...row, ...data, updatedAt: new Date(clock) }; return { count: 1 };
     },
   },
-  sceneCharacter: { findMany: async () => [{ characterId: "theo", character: { name: "Theo", imageFront: "https:" + "//media.invalid/soft-original-v1/theo.webp" } }] },
+  sceneCharacter: { findMany: async () => [{ characterId: "theo", character: { name: "Theo", imageFront: "https:" + `//media.invalid/${VISUAL_STYLE_ID}/theo.webp` } }] },
   scene: { findFirst: async () => null, findUnique: async () => ({ id: "scene", episodeId: "episode", number: 7, language: "en", videoPrompt: "[ACTION]: Theo stands.", dialogue: 'Theo: "We have met."' }), update: async () => { publications++; return {}; } },
   user: { update: async () => { refunds++; } }, creditTransaction: { create: async () => ({}) },
   $transaction: async (fn: any) => fn(db),

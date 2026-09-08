@@ -114,7 +114,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       if (compatible.length && compatible.length === links.length) {
         referenceImages = compatible.map(l => l.character.imageFront!);
         reference = { mode: "character_references", characterIds: compatible.map(l => l.characterId) };
-        prompt += "\n" + compatible.map((l, i) => `[Image${i + 1}] defines ${l.character.name}'s appearance and soft illustration treatment; use the scene's staging and camera.`).join("\n");
+        prompt += "\n" + compatible.map((l, i) => `[Image${i + 1}] defines ${l.character.name}'s photorealistic appearance and identity; use the scene's staging and camera.`).join("\n");
       } else {
         // One new scene composition, never overwrite the user's old portraits or frames.
         // This is original text-to-image design, not a way to bypass a provider refusal.
@@ -146,7 +146,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
         const stored = await uploadRemoteToS3(referenceUrl, key, "image/webp");
         referenceImages = [stored];
         reference = { mode: "new_scene_reference", sceneId, referencePredictionId: attempt.predictionId };
-        prompt += "\n[Image1] defines the scene's original character designs, clothing, environment and soft illustration treatment. Preserve those designs while performing the scripted action.";
+        prompt += "\n[Image1] defines the scene's original photorealistic character designs, clothing and environment. Preserve those designs while performing the scripted action.";
       }
     }
     // One paid video attempt. Copyright, general moderation, E003 and timeout remain distinct;

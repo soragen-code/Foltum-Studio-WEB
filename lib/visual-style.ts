@@ -1,12 +1,15 @@
 import { sanitizeVideoPrompt } from "@/lib/sanitize-prompt";
 
-/** Versioned asset paths identify newly generated, compatible references; legacy assets stay intact. */
-export const VISUAL_STYLE_ID = "soft-original-v1";
+/** Versioned asset paths identify newly generated, compatible references; legacy assets stay intact.
+ * Bumping this id retires older-style frames from continuity chaining without deleting them. */
+export const VISUAL_STYLE_ID = "realistic-original-v1";
 export const VISUAL_STYLE =
-  "Original lightly stylized illustration in motion, softly rounded forms, subtle hand-painted matte textures, " +
-  "natural but gently simplified proportions, expressive distinctive faces, soft diffuse lighting. " +
-  "Recognizable individual characters with consistent hair, clothing and features. " +
-  "Not photorealistic or live action; no imitation of a named artist, studio or franchise.";
+  "Photorealistic live-action cinematography, natural realistic human skin with pores and fine detail, " +
+  "true-to-life materials and fabrics, physically accurate lighting and shadows, real depth of field, " +
+  "cinematic color grading and film grain, believable everyday environments. " +
+  "Distinct fictional individuals with consistent hair, clothing and features. " +
+  "Entirely original invented people — NOT any real actor, celebrity or public figure and not a lookalike of one; " +
+  "no branded logos or products in frame; not an imitation of any named artist, studio, film or franchise.";
 
 /** Change rendering treatment only. Action, camera, transitions and dialogue are not rewritten. */
 export function styledVisualPrompt(input: string, names: string[] = []): string {
