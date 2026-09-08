@@ -214,8 +214,10 @@ From the user's idea produce a season synopsis and the main characters. Return O
 {
   "language": "<ISO 639-1 code of the language the idea is written in, e.g. \\"ru\\" or \\"en\\">",
   "synopsis": "<plain text, 3-6 short paragraphs separated by blank lines>",
-  "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ]
+  "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
+  "locations": [ { "name": "...", "description": "...", "visualPrompt": "..." } ]
 }
+Both arrays are REQUIRED ("locations" must contain 4-8 items).
 
 LANGUAGE: detect the language of the idea and write synopsis, name, age, role, personality, firstAppearance in THAT language. Only "appearance" is in English.
 
@@ -275,6 +277,16 @@ export function reviseLocationUserPrompt(synopsis: string, card: LocationCard, i
 }
 
 /** Location card generated from a bare name typed by the producer (manual add). */
+/** Fallback when the idea call returned no locations: extract 4-8 key locations from the synopsis. */
+export function locationsFromSynopsisSystemPrompt(language: IdeaLanguage): string {
+  return `You are a production designer for a short-form vertical drama series. From the season synopsis and cast list the 4-8 key locations where most of the season happens (the leads' homes, workplaces, the central place of the story, the finale's place). Each visually distinct.
+Return ONLY valid JSON: { "locations": [ { "name": "...", "description": "...", "visualPrompt": "..." } ] }
+LANGUAGE of "name" and "description": ${LANGUAGE_NAMES[language]}.
+${LOCATION_FIELD_RULES}
+${ORIGINALITY_RULES}`;
+}
+export const locationsResultSchema = z.object({ locations: z.array(locationCardSchema).min(1).max(12) });
+
 export function locationFromNameSystemPrompt(language: IdeaLanguage): string {
   const lang = LANGUAGE_NAMES[language] ?? "the story language";
   return `You are a production designer. Given a season synopsis and the name (and optional note) of a location, write its card.

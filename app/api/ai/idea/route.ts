@@ -7,7 +7,7 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, ideaSchema } from "@/lib/validations";
 import { chatJSON } from "@/lib/ai";
-import { ideaSystemPrompt, ideaUserPrompt, normalizeIdeaResult, castExpansionSystemPrompt, castExpansionUserPrompt, normalizeCastExpansion, characterCardToData, type CharacterCard } from "@/lib/idea";
+import { ideaSystemPrompt, ideaUserPrompt, normalizeIdeaResult, castExpansionSystemPrompt, castExpansionUserPrompt, normalizeCastExpansion, characterCardToData, locationsFromSynopsisSystemPrompt, locationsResultSchema, dedupeCast, sanitizeLocationCard, type CharacterCard } from "@/lib/idea";
 
 /**
  * POST /api/ai/idea  { projectId, idea }
@@ -68,6 +68,20 @@ export async function POST(request: Request) {
       }
     }
     const cast = [...result.characters, ...extra];
+
+    // Fallback: the model sometimes drops "locations" — extract them from the synopsis (non-fatal).
+    if (result.locations.length === 0) {
+      try {
+        const raw = await chatJSON(
+          locationsFromSynopsisSystemPrompt(result.language),
+          `SYNOPSIS:\n${result.synopsis}\n\nCAST:\n${cast.map((c) => `- ${c.name} — ${c.role}`).join("\n")}`,
+          { temperature: 0.7, maxTokens: 3000 }
+        );
+        result.locations = dedupeCast(locationsResultSchema.parse(raw).locations).map(sanitizeLocationCard);
+      } catch (e: any) {
+        console.warn("[idea] locations fallback failed:", e?.message ?? e);
+      }
+    }
 
     await prisma.$transaction(async (tx) => {
       await tx.character.deleteMany({ where: { projectId } });
