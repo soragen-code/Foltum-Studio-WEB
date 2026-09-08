@@ -285,16 +285,19 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
     const epId = episodeId ?? selectedEpisodeId
     if (!epId) return
     setAssemblingEps((prev) => ({ ...prev, [epId]: true }))
+    setError('')
     try {
       const res = await fetch('/api/ai/assemble-episode', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ episodeId: epId }),
       })
-      const data = await res.json()
-      if (data?.videoUrl) {
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && data?.videoUrl) {
         setEpisodeVideo((prev) => ({ ...prev, [epId]: data.videoUrl }))
         onRefresh()
+      } else {
+        setError(data?.error || 'Assembly failed')
       }
     } catch { setError('Assembly failed') }
     finally { setAssemblingEps((prev) => ({ ...prev, [epId]: false })) }
@@ -412,9 +415,28 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
 
               {selectedEpisode?.videoUrl && (
                 <div className="overflow-hidden rounded-xl border border-border bg-card p-4" style={{ boxShadow: 'var(--shadow-sm)' }}>
-                  <p className="mb-2 text-xs font-medium text-muted-foreground">Assembled Episode</p>
-                  <div className="aspect-[9/16] max-h-[500px] overflow-hidden rounded-lg bg-muted">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <p className="text-xs font-medium text-muted-foreground">Assembled Episode</p>
+                    {allAccepted && (
+                      <button
+                        onClick={() => assembleEpisode()}
+                        disabled={assembling}
+                        title="Re-run assembly of all accepted scenes (replaces the current video)"
+                        className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium transition hover:bg-muted disabled:opacity-50"
+                      >
+                        {assembling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                        {assembling ? 'Reassembling…' : 'Reassemble Episode'}
+                      </button>
+                    )}
+                  </div>
+                  {assembling && (
+                    <div className="mb-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                      <div className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
+                    </div>
+                  )}
+                  <div className={`aspect-[9/16] max-h-[500px] overflow-hidden rounded-lg bg-muted ${assembling ? 'opacity-60' : ''}`}>
                     <video
+                      key={selectedEpisode.videoUrl}
                       src={selectedEpisode.videoUrl}
                       controls
                       playsInline
