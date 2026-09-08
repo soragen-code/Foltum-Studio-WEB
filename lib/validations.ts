@@ -45,6 +45,8 @@ export const generateVideoSchema = z.object({
   projectId: cuidSchema,
   sceneId: cuidSchema,
   language: z.enum(["en", "ru"]).optional().nullable(),
+  /** Video provider. "seedance" (default, native audio, 15s) or "kling" (silent, max 10s). */
+  provider: z.enum(["seedance", "kling"]).optional().nullable(),
 });
 
 export const charactersSchema = z.object({

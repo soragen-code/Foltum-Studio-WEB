@@ -114,6 +114,63 @@ export async function startVideoPrediction(input: SeedanceInput): Promise<string
   return prediction.id;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Kling v2.1 — alternative image-to-video provider                   */
+/*  Real schema (kwaivgi/kling-v2.1): required prompt + start_image;   */
+/*  duration enum [5,10] (NO 15s); mode 'standard'(720p)/'pro'(1080p); */
+/*  optional end_image, negative_prompt; NO native audio (silent).     */
+/* ------------------------------------------------------------------ */
+
+/** Pinned version id of kwaivgi/kling-v2.1 (image-to-video). */
+const KLING_MODEL_ID = "kwaivgi/kling-v2.1";
+const KLING_VERSION_ID =
+  process.env.REPLICATE_KLING_VERSION ??
+  "daad218feb714b03e2a1ac445986aebb9d05243cd00da2af17be2e4049f48f69";
+
+export interface KlingInput {
+  prompt: string;
+  /** REQUIRED first frame (image-to-video only). */
+  start_image: string;
+  /** Duration in seconds; Kling supports ONLY 5 or 10. Default 10. */
+  duration?: number;
+  /** 'standard' (720p) | 'pro' (1080p). Default 'standard'. */
+  mode?: "standard" | "pro";
+  /** Optional last frame for continuity (requires pro mode when set). */
+  end_image?: string;
+  negative_prompt?: string;
+}
+
+/** Model id string exported so callers/diagnostics can tag Kling attempts. */
+export const KLING_MODEL = KLING_MODEL_ID;
+
+/** Build the Kling input payload; clamps duration to the supported enum. */
+function klingInput(input: KlingInput) {
+  const dur = input.duration === 5 ? 5 : 10; // enum [5,10]
+  const mode = input.mode ?? "standard";
+  return {
+    prompt: input.prompt,
+    start_image: input.start_image,
+    duration: dur,
+    mode,
+    ...(input.end_image ? { end_image: input.end_image } : {}),
+    ...(input.negative_prompt ? { negative_prompt: input.negative_prompt } : {}),
+  };
+}
+
+/**
+ * Start a Kling v2.1 prediction WITHOUT waiting. Returns the prediction id so the
+ * caller reuses the SAME polling/finalize path as Seedance (standard Replicate
+ * prediction id + mp4 output). Kling REQUIRES start_image and has NO audio.
+ */
+export async function startKlingPrediction(input: KlingInput): Promise<string> {
+  if (!input.start_image) throw new Error("Kling requires a start_image (image-to-video only)");
+  const prediction = await getReplicate().predictions.create({
+    version: KLING_VERSION_ID,
+    input: klingInput(input),
+  });
+  return prediction.id;
+}
+
 /** Separate start lets scene-reference jobs persist prediction IDs before polling. */
 export async function startImagePrediction(input: FluxInput): Promise<string> {
   const prediction = await getReplicate().predictions.create({

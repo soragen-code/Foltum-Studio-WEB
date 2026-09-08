@@ -47,6 +47,9 @@ export async function POST(request: Request) {
     const { projectId, sceneId, language } = parsed.data;
     // Only two spoken languages are offered in the UI; default English.
     const spokenLang = language === "ru" ? "ru" : "en";
+    // Video provider: default Seedance (native audio, up to 15s). Kling is a
+    // silent image-to-video alternative capped at 10s by its real schema.
+    const provider = parsed.data.provider === "kling" ? "kling" : "seedance";
 
     const project = await prisma.project.findFirst({ where: { id: projectId } });
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
@@ -65,10 +68,13 @@ export async function POST(request: Request) {
       SCENE_MAX_SECONDS,
       Math.max(SCENE_MIN_SECONDS, tier.duration, Math.ceil(EPISODE_MIN_SECONDS / sceneCount))
     );
+    // Kling's real schema supports ONLY 5 or 10 s (no 15s). Cap honestly so the
+    // clip length AND the credit cost reflect what Kling actually produces.
+    const effectiveDuration = provider === "kling" ? Math.min(10, duration) : duration;
     const config = {
       resolution: tier.resolution,
-      duration,
-      cost: Math.max(tier.cost, Math.ceil((tier.cost * duration) / tier.duration)),
+      duration: effectiveDuration,
+      cost: Math.max(tier.cost, Math.ceil((tier.cost * effectiveDuration) / tier.duration)),
     };
 
     // Dead jobs (killed function) must not block new generations
@@ -128,6 +134,7 @@ export async function POST(request: Request) {
         cost: config.cost,
         duration: config.duration,
         resolution: config.resolution,
+        provider,
       })
     );
 

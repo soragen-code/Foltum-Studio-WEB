@@ -6,6 +6,7 @@ const originalLoad = Module._load;
 let row: any, provider: any, refunds: number, publications: number, reads: number, cancels: number;
 let pending: Promise<void>[], uploadFailure = false, lookupFailure = false;
 let submissions = 0, lastVideoInput: any = null;
+let klingSubmissions = 0, lastKlingInput: any = null;
 let clock = 1_000_000;
 const base = () => ({ predictionId: "existing", sceneId: "scene", projectId: "project", userId: "test", cost: 1, startedAt: clock - 600_000, diagnostics: [{ phase: "video", predictionId: "existing", status: "processing", input: { generate_audio: true } }] });
 const matches = (where: any) => {
@@ -36,6 +37,8 @@ const mocks: any = {
     getPredictionState: async () => { reads++; if (lookupFailure) throw Error("status GET unavailable"); return provider; },
     cancelVideoPrediction: async () => { cancels++; provider = { status: "canceled" }; },
     startVideoPrediction: async (input: any) => { submissions++; lastVideoInput = input; assert.equal(input.generate_audio, true); return "existing"; },
+    startKlingPrediction: async (input: any) => { klingSubmissions++; lastKlingInput = input; assert.ok(input.start_image, "Kling needs a start_image"); assert.equal(input.generate_audio, undefined); return "existing"; },
+    KLING_MODEL: "kwaivgi/kling-v2.1",
   },
   "@/lib/jobs": { runInBackground: (fn: any) => pending.push(fn()), updateJob: async () => {}, heartbeatJob: async () => {} },
   "@/lib/s3-upload": {
@@ -50,7 +53,7 @@ const { runVideoJob, resumeVideoJob, VIDEO_DEADLINE_MS } = require("../lib/worke
 Module._load = originalLoad;
 const reset = () => {
   clock = 1_000_000; row = { id: "job", type: "video", status: "processing", resultData: JSON.stringify(base()), updatedAt: new Date(0) };
-  refunds = publications = reads = cancels = submissions = 0; pending = []; uploadFailure = lookupFailure = false;
+  refunds = publications = reads = cancels = submissions = klingSubmissions = 0; lastKlingInput = null; pending = []; uploadFailure = lookupFailure = false;
 };
 const check = async () => { clock += 10_000; await resumeVideoJob({ ...row }); await Promise.all(pending.splice(0)); };
 const originalNow = Date.now;
@@ -123,5 +126,33 @@ test("submission: заданная длительность (15 с) переда
   await runVideoJob({ jobId: "job", sceneId: "scene", projectId: "project", userId: "test", cost: 3, duration: 15 });
   assert.equal(submissions, 1);
   assert.equal(lastVideoInput.duration, 15);
+  assert.equal(lastVideoInput.generate_audio, true);
+});
+
+test("submission (kling): маршрутизируется в Kling со start_image, без generate_audio, длительность ≤ 10", async () => {
+  reset();
+  await runVideoJob({ jobId: "job", sceneId: "scene", projectId: "project", userId: "test", cost: 8, duration: 15, provider: "kling" });
+  // Kling path used, Seedance NOT used
+  assert.equal(klingSubmissions, 1);
+  assert.equal(submissions, 0);
+  assert.ok(lastKlingInput.start_image, "start_image must be supplied to Kling");
+  assert.equal(lastKlingInput.duration, 10); // capped from 15 to Kling's max
+  assert.equal(lastKlingInput.generate_audio, undefined); // Kling has no native audio
+  assert.equal(row.status, "processing");
+  assert.equal(JSON.parse(row.resultData).predictionId, "existing");
+});
+
+test("submission (kling): 5 с сохраняется как есть (в пределах enum)", async () => {
+  reset();
+  await runVideoJob({ jobId: "job", sceneId: "scene", projectId: "project", userId: "test", cost: 1, duration: 5, provider: "kling" });
+  assert.equal(klingSubmissions, 1);
+  assert.equal(lastKlingInput.duration, 5);
+});
+
+test("submission (default): без provider используется Seedance с аудио", async () => {
+  reset();
+  await runVideoJob({ jobId: "job", sceneId: "scene", projectId: "project", userId: "test", cost: 3, duration: 15 });
+  assert.equal(klingSubmissions, 0);
+  assert.equal(submissions, 1);
   assert.equal(lastVideoInput.generate_audio, true);
 });

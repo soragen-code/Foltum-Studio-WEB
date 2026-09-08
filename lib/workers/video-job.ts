@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db";
-import { startVideoPrediction, startImagePrediction, getPredictionState, cancelVideoPrediction } from "@/lib/replicate";
+import { startVideoPrediction, startKlingPrediction, startImagePrediction, getPredictionState, cancelVideoPrediction, KLING_MODEL } from "@/lib/replicate";
 import { buildNativeAudioPrompt, translateDialogue, detectSpokenLanguage, languageName } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
 import { extractLastFrameBuffer } from "@/lib/ffmpeg";
@@ -17,6 +17,8 @@ export interface VideoJobParams {
   cost?: number;
   duration?: number;
   resolution?: string;
+  /** "seedance" (default, native audio) or "kling" (silent image-to-video, max 10s). */
+  provider?: "seedance" | "kling";
 }
 
 /** Persisted in GenerationJob.resultData while the job is running, so it can be resumed. */
@@ -151,21 +153,51 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     }
     // One paid video attempt. Copyright, general moderation, E003 and timeout remain distinct;
     // none silently trigger another generation or switch the audio off.
-    const input = {
-      prompt, duration: Number(params.duration ?? 5), resolution: String(params.resolution ?? "480p"),
-      aspect_ratio: image ? "adaptive" : "9:16", generate_audio: true, watermark: false,
-    };
-    const attempt: GenerationAttempt = {
-      jobId, sceneId, attempt: 1, model: "bytedance/seedance-2.5", phase: "video", status: "submitting",
-      style: VISUAL_STYLE_ID, language: scene.language || "en", input: safeDiagnosticInput({ ...input, reference }),
-    };
-    diagnostics.push(attempt); await persist(); logAttempt(attempt);
-    const predictionId = await startVideoPrediction({ ...input, ...(image ? { image } : { reference_images: referenceImages }) });
+    const provider = params.provider === "kling" ? "kling" : "seedance";
+    let predictionId: string;
+    let attempt: GenerationAttempt;
+    let submitMessage: string;
+
+    if (provider === "kling") {
+      // Kling v2.1 is image-to-video ONLY and needs a single start frame. Reuse the
+      // frame we already have: an adjacent last frame, or the first reference still.
+      const startImage = image ?? referenceImages[0];
+      if (!startImage) throw new Error("Kling requires a start image but none was produced");
+      // Kling has NO audio track — feed the clean VISUAL prompt (no spoken-dialogue
+      // instructions). Real schema caps duration at 5 or 10 s; there is no 15s.
+      const klingDuration = Math.min(10, Number(params.duration ?? 10));
+      const klingInputForLog = {
+        prompt: visualPrompt, duration: klingDuration, mode: "standard", start_image: startImage,
+        audio: "none (Kling has no native audio)",
+      };
+      attempt = {
+        jobId, sceneId, attempt: 1, model: KLING_MODEL, phase: "video", status: "submitting",
+        style: VISUAL_STYLE_ID, language: scene.language || "en",
+        input: safeDiagnosticInput({ ...klingInputForLog, reference }),
+      };
+      diagnostics.push(attempt); await persist(); logAttempt(attempt);
+      predictionId = await startKlingPrediction({
+        prompt: visualPrompt, start_image: startImage, duration: klingDuration, mode: "standard",
+      });
+      submitMessage = "Submitted to Kling (silent, image-to-video); checking the same prediction...";
+    } else {
+      const input = {
+        prompt, duration: Number(params.duration ?? 5), resolution: String(params.resolution ?? "480p"),
+        aspect_ratio: image ? "adaptive" : "9:16", generate_audio: true, watermark: false,
+      };
+      attempt = {
+        jobId, sceneId, attempt: 1, model: "bytedance/seedance-2.5", phase: "video", status: "submitting",
+        style: VISUAL_STYLE_ID, language: scene.language || "en", input: safeDiagnosticInput({ ...input, reference }),
+      };
+      diagnostics.push(attempt); await persist(); logAttempt(attempt);
+      predictionId = await startVideoPrediction({ ...input, ...(image ? { image } : { reference_images: referenceImages }) });
+      submitMessage = "Submitted to Seedance; checking the same prediction...";
+    }
     attempt.predictionId = predictionId; attempt.status = "processing";
     state = { predictionId, sceneId, projectId, userId, cost, startedAt: Date.now(), diagnostics };
     // This checkpoint MUST succeed: never swallow the prediction ID write.
     await prisma.generationJob.update({ where: { id: jobId }, data: {
-      resultData: JSON.stringify(state), message: "Submitted to Seedance; checking the same prediction...",
+      resultData: JSON.stringify(state), message: submitMessage,
     } });
     logAttempt(attempt);
     // Release the serverless invocation immediately. Polling inspects the persisted prediction,
