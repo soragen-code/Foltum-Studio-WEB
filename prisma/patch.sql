@@ -38,3 +38,8 @@ END $$;
 -- Backfill: legacy projects carry only `tier`; keep powerTier consistent with it (tier is always written alongside powerTier).
 UPDATE "Project" SET "powerTier" = CASE "tier" WHEN 'minimum' THEN 'LOW' WHEN 'maximum' THEN 'HIGH' ELSE 'MEDIUM' END
   WHERE "powerTier" <> CASE "tier" WHEN 'minimum' THEN 'LOW' WHEN 'maximum' THEN 'HIGH' ELSE 'MEDIUM' END;
+
+-- Stage 2 (season script): additive columns only.
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "arcRole" TEXT;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "shotType" TEXT;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "durationSec" INTEGER;

@@ -1,0 +1,20 @@
+/** Stage 2 unit checks: season/episode schemas, timing validation, cost plan. Run: npx tsx scripts/test-stage2.ts */
+import { episodeScriptSchema, validateEpisodeScript, normalizeEpisodeScript, spokenWordCount, sceneClipPlan, seasonStructureSchema } from "../lib/season";
+const assert = (c: unknown, m: string) => { if (!c) { console.error("FAIL:", m); process.exit(1); } console.log("ok:", m); };
+const prompt = "[SHOT TYPE]: Medium close-up\n[VISUAL STYLE]: x\n[LIGHTING]: y\n[BLOCKING]: z\n[GAZE]: a\n[NON-VERBAL]: b\n[ACTION]: c\n[CHARACTER]: d\n[TRANSITION]: e";
+const talk = 'АННА (тихо): "Ты знал об этом с самого начала и молчал всё это время?"\nМАРК (резко): "Я молчал, потому что иначе ты бы ушла ещё тогда, той зимой."';
+const mk = (n: number) => Array.from({ length: n }, (_, i) => ({ number: i + 1, shotType: "Medium shot", durationSec: 15, locationDesc: "INT — Маяк — ночь", characters: ["Анна"], action: "Анна входит.", dialogue: i % 5 === 0 ? "[NO DIALOGUE]" : talk, videoPrompt: prompt }));
+assert(spokenWordCount(talk) >= 18 && spokenWordCount(talk) <= 40, `spoken words = ${spokenWordCount(talk)}`);
+const ok = normalizeEpisodeScript(episodeScriptSchema.parse({ visualIdentity: "photoreal cinematic", scenes: mk(12) }));
+assert(validateEpisodeScript(ok).length === 0, "12-scene episode valid");
+assert(!episodeScriptSchema.safeParse({ visualIdentity: "photoreal cinematic", scenes: mk(9) }).success, "9 scenes rejected");
+assert(!episodeScriptSchema.safeParse({ visualIdentity: "photoreal cinematic", scenes: mk(16) }).success, "16 scenes rejected");
+const bad = { ...ok, scenes: ok.scenes.map((s) => ({ ...s, dialogue: "[NO DIALOGUE]" })) };
+assert(validateEpisodeScript(bad).some((p) => /silent|no dialogue/.test(p)), "all-silent episode flagged");
+const ep = { number: 1, title: "t", logline: "Логлайн эпизода достаточно длинный.", locationName: "Маяк", locationDesc: "A weathered white lighthouse on a granite cliff, rusted railings, fog.", characters: ["Анна"], arcRole: "завязка", cliffhanger: "Свет гаснет." };
+assert(!seasonStructureSchema.safeParse({ title: "S", logline: "Сезонный логлайн.", episodes: Array(5).fill(ep) }).success, "5 episodes rejected");
+assert(seasonStructureSchema.safeParse({ title: "S", logline: "Сезонный логлайн.", episodes: Array(8).fill(ep) }).success, "8 episodes accepted");
+const plan = sceneClipPlan("HIGH", 12);
+assert(plan.duration === 15 && plan.costPerScene === 12 && plan.total === 144, `HIGH plan ${JSON.stringify(plan)}`);
+assert(sceneClipPlan("LOW", 12).costPerScene === 3 && sceneClipPlan("MEDIUM", 12).costPerScene === 9, "LOW/MEDIUM cost");
+console.log("ALL STAGE2 UNIT CHECKS PASSED");

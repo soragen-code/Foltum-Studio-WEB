@@ -145,7 +145,8 @@ model Episode {
   locationName  String?
   locationDesc  String?  @db.Text
   script        String?  @db.Text
-  status        String   @default("draft") // draft, script_ready, scenes_ready, approved
+  arcRole       String?  // stage 2: завязка / развитие / поворот / финал
+  status        String   @default("draft") // draft, script_ready, scenes_ready, approved, assembled
   videoUrl      String?  // assembled episode video URL
   videoIsPublic Boolean  @default(false)
   createdAt     DateTime @default(now())
@@ -184,6 +185,8 @@ model Scene {
   lastFrameUrl  String?  // last frame of this scene's video (S3) — fed as first-frame of the next scene for one-take continuity
   videoIsPublic Boolean  @default(false)
   language      String   @default("en") // spoken language for native audio: "en" or "ru"
+  shotType      String?  // stage 2: shot type label from the season script
+  durationSec   Int?     // stage 2: planned duration (10–15s)
   status        String   @default("pending") // pending, generating, generated, accepted
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
