@@ -102,6 +102,7 @@ export async function persistEpisodeScript(
           locationDesc: s.locationDesc,
           videoPrompt: s.videoPrompt,
           shotType: s.shotType,
+          action: s.action,
           durationSec: s.durationSec,
           language: language === "ru" ? "ru" : "en",
           status: "pending",

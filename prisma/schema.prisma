@@ -186,6 +186,7 @@ model Scene {
   videoIsPublic Boolean  @default(false)
   language      String   @default("en") // spoken language for native audio: "en" or "ru"
   shotType      String?  // stage 2: shot type label from the season script
+  action        String?  @db.Text // stage 2: readable action description of the shot
   durationSec   Int?     // stage 2: planned duration (10–15s)
   status        String   @default("pending") // pending, generating, generated, accepted
   createdAt     DateTime @default(now())

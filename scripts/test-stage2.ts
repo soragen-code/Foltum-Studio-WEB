@@ -18,3 +18,12 @@ const plan = sceneClipPlan("HIGH", 12);
 assert(plan.duration === 15 && plan.costPerScene === 12 && plan.total === 144, `HIGH plan ${JSON.stringify(plan)}`);
 assert(sceneClipPlan("LOW", 12).costPerScene === 3 && sceneClipPlan("MEDIUM", 12).costPerScene === 9, "LOW/MEDIUM cost");
 console.log("ALL STAGE2 UNIT CHECKS PASSED");
+// --- revise schemas + queue concurrency ---
+import { sceneReviseSchema, locationReviseSchema, renderScriptFromScenes } from "../lib/season";
+import { GENERATE_ALL_CONCURRENCY } from "../app/api/ai/episodes/[id]/generate-all/route";
+assert(sceneReviseSchema.safeParse({ shotType: "Close-up", durationSec: 15, locationDesc: "INT — Маяк — ночь", action: "Анна молчит.", dialogue: talk, videoPrompt: prompt }).success, "scene revise schema ok");
+assert(!sceneReviseSchema.safeParse({ shotType: "Close-up", durationSec: 40, locationDesc: "x", action: "y", dialogue: talk, videoPrompt: prompt }).success, "scene revise rejects 40s");
+assert(locationReviseSchema.safeParse({ locationName: "Порт", locationDesc: "A foggy fishing port with rusted trawlers and sodium lamps.", scenes: [{ number: 1, locationDesc: "EXT — Порт — ночь", videoPrompt: prompt }] }).success, "location revise schema ok");
+assert(renderScriptFromScenes({ number: 1, title: "T", logline: "L", locationName: "Маяк", cliffhanger: "C" }, ["Анна"], ok.scenes).includes("СЦЕНА 12"), "script text renders 12 scenes");
+assert(GENERATE_ALL_CONCURRENCY >= 2 && GENERATE_ALL_CONCURRENCY <= 3, `queue concurrency ${GENERATE_ALL_CONCURRENCY}`);
+console.log("ALL STAGE2 EXTENDED CHECKS PASSED");

@@ -169,3 +169,45 @@ export function sceneClipPlan(tier: PowerTier, sceneCount: number) {
   const costPerScene = Math.max(cfg.costPerScene, Math.ceil((cfg.costPerScene * duration) / cfg.baseDuration));
   return { duration, costPerScene, total: costPerScene * sceneCount, totalSeconds: duration * sceneCount };
 }
+
+/** Readable script text from persisted Scene rows (used after partial edits). */
+export function renderScriptFromScenes(
+  ep: { number: number; title: string; logline?: string | null; locationName?: string | null; cliffhanger?: string | null },
+  characterNames: string[],
+  scenes: { number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null }[]
+): string {
+  const head = `ЭПИЗОД ${ep.number}. ${ep.title}\n${ep.logline ?? ""}\nЛокация: ${ep.locationName ?? ""}\nПерсонажи: ${characterNames.join(", ")}\n`;
+  const body = scenes
+    .map((s) => `\nСЦЕНА ${s.number} · ${s.shotType ?? ""} · ~${s.durationSec ?? SCENE_MAX_SECONDS}с\n${s.locationDesc ?? ""}\n${s.action ?? ""}\n${s.dialogue ?? "[NO DIALOGUE]"}`)
+    .join("\n");
+  return `${head}${body}\n\nКЛИФФХЭНГЕР: ${ep.cliffhanger ?? ""}\n`;
+}
+
+export const locationReviseSchema = z.object({
+  locationName: z.string().min(1),
+  locationDesc: z.string().min(20),
+  scenes: z.array(z.object({ number: z.number().int().min(1), locationDesc: z.string().min(3), videoPrompt: z.string().min(40) })),
+});
+export type LocationRevise = z.infer<typeof locationReviseSchema>;
+
+export function locationReviseSystemPrompt(language: IdeaLanguage): string {
+  return `You are a production designer + cinematographer. The author wants to change the KEY LOCATION of one episode of a vertical (9:16) drama. Apply the instruction to the location and reflect it in EVERY scene of the episode.
+Return STRICT JSON: {"locationName": string (${langName(language)}), "locationDesc": string (detailed ENGLISH visual description, 2–4 sentences: architecture, materials, textures, props, weather, light, palette, time of day), "scenes": [{"number": int, "locationDesc": "INT/EXT — place — time" in ${langName(language)}, "videoPrompt": string}]}.
+RULES: keep every scene's number, shot type, action, characters, [CHARACTER] descriptions and story beats; only change what the new location implies ([LIGHTING], set details in [BLOCKING]/[ACTION]/[SHOT TYPE], [VISUAL STYLE] stays identical). videoPrompt stays ENGLISH with exactly the 9 lines [SHOT TYPE]/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL]/[ACTION]/[CHARACTER]/[TRANSITION]. Return ALL scenes. Never add spoken text to videoPrompt. Original content only.`;
+}
+
+export const sceneReviseSchema = z.object({
+  shotType: z.string().min(3),
+  durationSec: z.number().int().min(SCENE_MIN_SECONDS).max(SCENE_MAX_SECONDS),
+  locationDesc: z.string().min(3),
+  action: z.string().min(3),
+  dialogue: z.string().min(1),
+  videoPrompt: z.string().min(40),
+});
+export type SceneRevise = z.infer<typeof sceneReviseSchema>;
+
+export function sceneReviseSystemPrompt(language: IdeaLanguage): string {
+  return `You are a film director rewriting ONE shot ("scene", ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS}s, vertical 9:16, AI video model with native speech) of an episode by the author's instruction.
+Return STRICT JSON: {"shotType": string, "durationSec": int, "locationDesc": "INT/EXT — place — time" (${langName(language)}), "action": string (${langName(language)}), "dialogue": string, "videoPrompt": string}.
+RULES: dialogue in ${langName(language)}, one line per row NAME (tone cue): "line"; a talking scene has ${TALK_MIN_WORDS}–${TALK_MAX_WORDS} spoken words in total, or exactly "[NO DIALOGUE]". Talking scenes use medium/close shots with the speaker's face visible. videoPrompt is ENGLISH, exactly 9 lines [SHOT TYPE]/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL]/[ACTION]/[CHARACTER]/[TRANSITION]; keep [VISUAL STYLE] and [CHARACTER] descriptions identical to the given scene unless the instruction requires otherwise; no spoken text in videoPrompt. Keep continuity with the previous and next shots. Original content only.`;
+}

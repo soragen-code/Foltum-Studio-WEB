@@ -8,6 +8,7 @@ import { StructureStage } from './structure-stage'
 import { ScenesStage } from './scenes-stage'
 import { IdeaStage } from './idea-stage'
 import { ReferencesStage } from './references-stage'
+import { SeasonStage } from './season-stage'
 import { resolvePowerTier } from '@/lib/power-tier'
 import { FileText, Users, GitBranch, Video, Check, Lightbulb, Gauge } from 'lucide-react'
 import { motion } from 'framer-motion'
@@ -127,7 +128,10 @@ export function ProjectWizard({ project: initialProject }: { project: any }) {
           {currentStage === 'characters' && (
             <CharactersStage project={project} onRefresh={refreshProject} />
           )}
-          {currentStage === 'structure' && (
+          {currentStage === 'structure' && isNewFlow(project) && (
+            <SeasonStage project={project} onRefresh={refreshProject} />
+          )}
+          {currentStage === 'structure' && !isNewFlow(project) && (
             <StructureStage project={project} onRefresh={refreshProject} />
           )}
           {currentStage === 'scenes' && (

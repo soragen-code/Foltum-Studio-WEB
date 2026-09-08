@@ -18,7 +18,7 @@ const VIDEO_EXPECTED_SEC = 600 // ~10 min: Seedance renders a 15 s clip with nat
  * failure we simply retry — the retry picks up the job that the dropped call
  * started, turning a false error into a correct "generating" state.
  */
-async function postJobStart(url: string, body: unknown, retries = 2): Promise<Response> {
+export async function postJobStart(url: string, body: unknown, retries = 2): Promise<Response> {
   let lastErr: unknown
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -39,7 +39,7 @@ async function postJobStart(url: string, body: unknown, retries = 2): Promise<Re
  * Scene player: Seedance video with native audio (speech + ambience baked into the clip).
  * The audioUrl prop is kept for backward-compatibility with older scenes but is no longer generated.
  */
-function SceneVideoPlayer({
+export function SceneVideoPlayer({
   videoUrl,
   audioUrl,
   poster,

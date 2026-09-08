@@ -59,7 +59,7 @@ export async function POST(request: Request) {
     if (scenes.length === 0)
       return NextResponse.json({ error: "Episode has no scenes" }, { status: 400 });
 
-    const allAccepted = scenes.every((s) => s.status === "accepted");
+    const allAccepted = scenes.every((s) => s.status === "accepted" || (s.status === "generated" && s.videoUrl));
     if (!allAccepted)
       return NextResponse.json({ error: "All scenes must be accepted first" }, { status: 400 });
 
@@ -88,7 +88,7 @@ export async function POST(request: Request) {
 
     await prisma.episode.update({
       where: { id: episodeId },
-      data: { videoUrl },
+      data: { videoUrl, status: "assembled" },
     });
 
     return NextResponse.json({ videoUrl, sceneCount: scenes.length });
