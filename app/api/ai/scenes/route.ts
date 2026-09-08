@@ -17,6 +17,8 @@ const SCENES_PER_EPISODE = Number(
 
 /** Minimum number of purely visual beats (no spoken lines) per episode. */
 const MIN_SILENT_SCENES = 3;
+/** Maximum silent shots — the rest must carry dialogue so the viewer bonds with the characters. */
+const MAX_SILENT_SCENES = Math.max(MIN_SILENT_SCENES, Math.floor(SCENES_PER_EPISODE / 2));
 
 const SYSTEM = `You are a film director + cinematographer + editor working on a short-form VERTICAL drama series (9:16, TikTok/Reels format). Every episode must run AT LEAST ${EPISODE_MIN_SECONDS} seconds of screen time.
 
@@ -61,7 +63,7 @@ Given the project synopsis, this episode's description, and the characters, retu
 
 6. TRANSITIONS — EVERY SHOT HANDS OFF TO THE NEXT. The [TRANSITION] line describes how this shot connects to the following one: what the camera lands on, what the character turns toward, what sound/motion carries over. Examples: "camera slowly pans right and settles on the closed door — the next shot opens on that door", "holds on her face as her eyes drop to the phone in her hand — next shot is the phone screen", "match cut: the glass she sets down becomes the glass on the lab table". The last shot's transition sets up the cliffhanger / next episode.
 
-7. DIALOGUE DENSITY FOR ${SCENE_SECONDS}-SECOND CLIPS WITH NATIVE AUDIO. A clip this short can carry AT MOST 1–2 short spoken lines, 8–15 words in TOTAL per scene. Never more. At least ${MIN_SILENT_SCENES} scenes MUST be purely visual (action, reaction, atmosphere, insert) — write exactly "[NO DIALOGUE]" for them. Follow a film rhythm, e.g.: establishing (silent) → dialogue → visual beat → dialogue → reaction (silent) → visual → dialogue → ... Reaction shots without words are what make viewers feel the characters.
+7. DIALOGUE DENSITY FOR ${SCENE_SECONDS}-SECOND CLIPS WITH NATIVE AUDIO. A clip this short can carry AT MOST 1–2 short spoken lines, 8–15 words in TOTAL per scene. Never more. At least ${MIN_SILENT_SCENES} and at most ${MAX_SILENT_SCENES} scenes are purely visual (action, reaction, atmosphere, insert) — write exactly "[NO DIALOGUE]" for them; ALL other scenes carry a spoken line, because the viewer bonds with characters through what they say to each other. Follow a film rhythm, e.g.: establishing (silent) → dialogue → visual beat → dialogue → reaction (silent) → visual → dialogue → ... Reaction shots without words are what make viewers feel the characters.
 
 8. STORY. Dramatize ONLY the events of THIS episode's description — do NOT borrow, foreshadow in detail, or resolve events from the other episodes listed (they are told in their own episodes). Open by picking up naturally from the previous episode's cliffhanger (given below) and build steadily toward THIS episode's cliffhanger, landing on it in the final shot. Dialogue is natural, subtext-rich, screenplay format.
 
@@ -152,7 +154,7 @@ Episode ${episode.number}: "${episode.title}"
 Description: ${episode.description}
 This episode's ending cliffhanger (build toward it): ${episode.cliffhanger ?? "N/A"}
 
-Direct this episode as ONE continuous piece of film: first write "visualIdentity" and the "characterSheet", then exactly ${SCENES_PER_EPISODE} consecutive camera shots (scene 1 = wide establishing shot; at least ${MIN_SILENT_SCENES} shots marked [NO DIALOGUE]; every videoPrompt in the 5-line format with the identical [VISUAL STYLE] line and verbatim character descriptions; every [TRANSITION] handing off to the next shot) that dramatize ONLY this episode's description — from a natural continuation of the previous episode to this episode's cliffhanger.`;
+Direct this episode as ONE continuous piece of film: first write "visualIdentity" and the "characterSheet", then exactly ${SCENES_PER_EPISODE} consecutive camera shots (scene 1 = wide establishing shot; ${MIN_SILENT_SCENES}–${MAX_SILENT_SCENES} shots marked [NO DIALOGUE], every other shot with 1–2 short spoken lines; every videoPrompt in the 5-line format with the identical [VISUAL STYLE] line and verbatim character descriptions; every [TRANSITION] handing off to the next shot) that dramatize ONLY this episode's description — from a natural continuation of the previous episode to this episode's cliffhanger.`;
 
     const data = await chatJSON<{
       visualIdentity?: string;
@@ -191,7 +193,7 @@ Direct this episode as ONE continuous piece of film: first write "visualIdentity
     const silentCount = scenesOut.filter((s) => /\[NO DIALOGUE\]|\[VISUAL MONTAGE\]/i.test(s.dialogue)).length;
     const establishing = /establishing|wide|aerial|drone/i.test(scenesOut[0]?.videoPrompt ?? "");
     console.log(
-      `[scenes] ${episodeId}: ${scenesOut.length}/${SCENES_PER_EPISODE} shots, silent=${silentCount} (min ${MIN_SILENT_SCENES}), ` +
+      `[scenes] ${episodeId}: ${scenesOut.length}/${SCENES_PER_EPISODE} shots, silent=${silentCount} (target ${MIN_SILENT_SCENES}–${MAX_SILENT_SCENES}), ` +
         `establishing=${establishing}, identity="${visualIdentity.slice(0, 60)}", characters=${Object.keys(characterSheet).join("/")}`
     );
 
