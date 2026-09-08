@@ -132,15 +132,18 @@ export interface PredictionState {
   /** Output URL when succeeded */
   url?: string;
   error?: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
 }
 
 /** Fetch the current state of a prediction. */
 export async function getPredictionState(id: string): Promise<PredictionState> {
-  const p = await getReplicate().predictions.get(id);
+  const p = await getReplicate().predictions.get(id, { signal: AbortSignal.timeout(20_000) });
   const status = p.status as PredictionState["status"];
-  if (status === "succeeded") return { status, url: extractUrl(p.output) };
-  if (status === "failed" || status === "canceled") return { status, error: String(p.error ?? status) };
-  return { status };
+  const times = { startedAt: p.started_at, completedAt: p.completed_at };
+  if (status === "succeeded") return { status, ...times, url: extractUrl(p.output) };
+  if (status === "failed" || status === "canceled") return { status, ...times, error: p.error ? String(p.error) : undefined };
+  return { status, ...times };
 }
 
 /* ------------------------------------------------------------------ */
@@ -275,4 +278,8 @@ export async function concatVideos(videoUrls: string[]): Promise<string> {
   if (output && typeof (output as any).url === "function") return (output as any).url();
   if (output && typeof output === "object" && "url" in (output as any)) return String((output as any).url);
   throw new Error("Unexpected ffmpeg output format");
+}
+
+export async function cancelVideoPrediction(id: string): Promise<void> {
+  await getReplicate().predictions.cancel(id, { signal: AbortSignal.timeout(20_000) });
 }

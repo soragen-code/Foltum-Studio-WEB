@@ -1,12 +1,13 @@
+import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db";
-import { startVideoPrediction, startImagePrediction, getPredictionState } from "@/lib/replicate";
+import { startVideoPrediction, startImagePrediction, getPredictionState, cancelVideoPrediction } from "@/lib/replicate";
 import { buildNativeAudioPrompt, translateDialogue, detectSpokenLanguage, languageName } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
 import { extractLastFrameBuffer } from "@/lib/ffmpeg";
 import { getBucketConfig } from "@/lib/aws-config";
 import { VISUAL_STYLE_ID, styledVisualPrompt, isStyledAsset, canChainFrame } from "@/lib/visual-style";
 import { GenerationAttempt, safeProviderError, classifyProviderError, logAttempt, safeDiagnosticInput } from "@/lib/generation-diagnostics";
-import { updateJob, completeJob, failJob, heartbeatJob, runInBackground } from "@/lib/jobs";
+import { updateJob, heartbeatJob, runInBackground } from "@/lib/jobs";
 
 export interface VideoJobParams {
   jobId: string;
@@ -19,7 +20,7 @@ export interface VideoJobParams {
 }
 
 /** Persisted in GenerationJob.resultData while the job is running, so it can be resumed. */
-interface VideoJobState {
+export interface VideoJobState {
   predictionId: string;
   sceneId: string;
   projectId: string;
@@ -29,13 +30,22 @@ interface VideoJobState {
   diagnostics?: GenerationAttempt[];
   /** set once finalization (upload) has begun, to avoid running it twice */
   finalizing?: boolean;
+  leaseToken?: string;
+  leaseUntil?: number;
+  finalizeAttempts?: number;
+  providerStatus?: string;
+  providerStartedAt?: string | null;
+  providerCompletedAt?: string | null;
 }
 
 const POLL_INTERVAL_MS = 8_000;
 /** Typical Seedance time — only used to animate the progress bar while waiting. */
 const EXPECTED_VIDEO_MS = Number(process.env.SEEDANCE_EXPECTED_MS ?? 5 * 60 * 1000);
 /** Hard cap for waiting on Replicate. */
-const MAX_WAIT_MS = Math.min(Number(process.env.SEEDANCE_MAX_WAIT_MS ?? 9 * 60 * 1000), 9 * 60 * 1000);
+// End-to-end budget, not an invocation timer. Check provider terminal state BEFORE enforcing it.
+export const VIDEO_DEADLINE_MS = 30 * 60 * 1000;
+const CHECK_LEASE_MS = 60_000;
+const FINALIZE_LEASE_MS = 12 * 60 * 1000;
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -61,7 +71,7 @@ function waitingProgress(startedAt: number): number {
  * Background video job (runs inside the same serverless invocation via `after()`).
  *
  * 1. Start Seedance prediction (generate_audio: true — speech + ambience baked in), persist predictionId
- * 2. Poll Replicate, heart-beating the job (progress 5→55) so it is never marked stale
+ * 2. Return; authenticated GET polling checks this same prediction with a database lease
  * 3. finalize(): S3 upload (80%) → Scene update (95%) → completed
  * On failure: scene status reset, credits refunded, job marked failed.
  *
@@ -153,10 +163,14 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     const predictionId = await startVideoPrediction({ ...input, ...(image ? { image } : { reference_images: referenceImages }) });
     attempt.predictionId = predictionId; attempt.status = "processing";
     state = { predictionId, sceneId, projectId, userId, cost, startedAt: Date.now(), diagnostics };
-    await persist(); logAttempt(attempt);
-    await updateJob(jobId, { message: "Generating softly stylized video with dialogue and ambience..." });
-    const videoUrl = await waitForPrediction(jobId, state);
-    await finalizeVideoJob(jobId, state, videoUrl);
+    // This checkpoint MUST succeed: never swallow the prediction ID write.
+    await prisma.generationJob.update({ where: { id: jobId }, data: {
+      resultData: JSON.stringify(state), message: "Submitted to Seedance; checking the same prediction...",
+    } });
+    logAttempt(attempt);
+    // Release the serverless invocation immediately. Polling inspects the persisted prediction,
+    // including after browser reload; it never starts a replacement prediction.
+
   } catch (err: unknown) {
     const attempt = diagnostics[diagnostics.length - 1];
     if (attempt && attempt.status !== "succeeded") {
@@ -165,155 +179,132 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       logAttempt(attempt);
     }
     await persist();
+    // If submission succeeded, never convert a checkpoint/network failure into a refund
+    // and a second generation. Keep the known prediction for recovery.
+    if (state?.predictionId) {
+      console.error("[video-job] prediction checkpoint needs recovery:", { jobId, predictionId: state.predictionId, error: safeProviderError(err) });
+      return;
+    }
     await handleFailure(jobId, { sceneId, userId, cost }, err);
   }
 }
 
-/** Keep diagnostics across provider completion, worker resumption and upload. */
-async function recordPredictionStatus(jobId: string, state: VideoJobState, status: string, error?: string) {
-  const attempt = state.diagnostics?.find(a => a.predictionId === state.predictionId);
-  if (attempt) {
-    attempt.status = status;
-    if (error) { attempt.error = safeProviderError(error); attempt.errorKind = classifyProviderError(error); }
-    await updateJob(jobId, { resultData: JSON.stringify(state) });
-    logAttempt(attempt);
-  }
+/** Guard all recovery writes with an expiring compare-and-swap lease. */
+function owned(jobId: string, state: VideoJobState) {
+  return { id: jobId, status: "processing", resultData: { contains: `"leaseToken":"${state.leaseToken}"` } };
+}
+async function saveOwned(jobId: string, state: VideoJobState, data: Record<string, unknown> = {}) {
+  const result = await prisma.generationJob.updateMany({ where: owned(jobId, state), data: {
+    ...data, resultData: JSON.stringify(state),
+  } });
+  return result.count === 1;
 }
 
-/** Poll Replicate until the prediction settles; heartbeats the job on every tick. */
-async function waitForPrediction(jobId: string, state: VideoJobState): Promise<string> {
-  while (true) {
-    const p = await getPredictionState(state.predictionId);
-    if (p.status === "succeeded" && p.url) {
-      await recordPredictionStatus(jobId, state, p.status);
-      return p.url;
-    }
-    if (p.status === "failed" || p.status === "canceled") {
-      await recordPredictionStatus(jobId, state, p.status, p.error);
-      throw new Error(p.error || "Video model failed");
-    }
-    if (Date.now() - state.startedAt > MAX_WAIT_MS) throw new Error("Video model timed out");
-
-    await updateJob(jobId, { progress: waitingProgress(state.startedAt) });
-    await heartbeatJob(jobId);
-    await sleep(POLL_INTERVAL_MS);
-  }
-}
-
-/** Upload + scene update. Idempotent guard via state.finalizing. */
-async function finalizeVideoJob(jobId: string, state: VideoJobState, replicateVideoUrl: string): Promise<void> {
-  const { sceneId, projectId } = state;
-  await updateJob(jobId, {
-    progress: 60,
-    message: "Video ready. Uploading to storage...",
-    resultData: JSON.stringify({ ...state, finalizing: true }),
-  });
-
-  const scene = await prisma.scene.findUnique({ where: { id: sceneId } });
+async function finalizeVideoJob(jobId: string, state: VideoJobState, source: string) {
+  const scene = await prisma.scene.findUnique({ where: { id: state.sceneId } });
   if (!scene) throw new Error("Scene not found");
-
-  // Speech and ambient sound are baked into the Seedance clip — no external audio overlay.
-  await updateJob(jobId, { progress: 80, message: "Uploading to storage..." });
-
   const { folderPrefix } = getBucketConfig();
-  const baseKey = `${folderPrefix}public/videos/${projectId}/${scene.episodeId}/${VISUAL_STYLE_ID}/scene-${scene.number}-${Date.now()}`;
-  const videoUrl = await uploadRemoteToS3(replicateVideoUrl, `${baseKey}.mp4`, "video/mp4");
-
-  await updateJob(jobId, { progress: 95, message: "Saving scene..." });
-
-  const updated = await prisma.scene.update({
-    where: { id: sceneId },
-    data: { videoUrl, audioUrl: null, status: "generated", lastFrameUrl: null },
-  });
-
-  // One-take frame-chaining: capture this scene's LAST FRAME so the NEXT scene can start
-  // from it. Best-effort — never fail the job over a thumbnail.
+  // Deterministic object names: recovery never creates duplicate published outputs.
+  const key = `${folderPrefix}public/videos/${state.projectId}/${scene.episodeId}/${VISUAL_STYLE_ID}/${jobId}`;
+  const videoUrl = await uploadRemoteToS3(source, `${key}.mp4`, "video/mp4");
+  let lastFrameUrl: string | null = null;
   try {
     const frame = await extractLastFrameBuffer(videoUrl);
-    const lastFrameUrl = await uploadBufferToS3(frame, `${baseKey}-lastframe.jpg`, "image/jpeg");
-    await prisma.scene.update({ where: { id: sceneId }, data: { lastFrameUrl } });
-    console.log(`[video-job] scene ${scene.number}: stored last frame for chaining`);
-  } catch (frameErr: any) {
-    console.warn("[video-job] last-frame extraction failed (non-fatal):", safeProviderError(frameErr));
-  }
-
-  await completeJob(jobId, { ...state, finalizing: false, videoUrl, scene: updated }, "Video ready");
+    lastFrameUrl = await uploadBufferToS3(frame, `${key}-lastframe.jpg`, "image/jpeg");
+  } catch (error) { console.warn("[video-job] frame:", safeProviderError(error)); }
+  // Publish scene and completed job together. A stale lease holder cannot publish or refund.
+  await prisma.$transaction(async tx => {
+    const result = await tx.generationJob.updateMany({ where: owned(jobId, state), data: {
+      status: "completed", progress: 100, message: "Video ready", error: null,
+      resultData: JSON.stringify({ ...state, leaseUntil: 0, finalizing: false, videoUrl }),
+    } });
+    if (!result.count) return;
+    await tx.scene.update({ where: { id: state.sceneId }, data: {
+      videoUrl, audioUrl: null, status: "generated", lastFrameUrl,
+    } });
+  });
 }
 
-async function handleFailure(
-  jobId: string,
-  ctx: { sceneId: string; userId?: string; cost?: number },
-  err: any
-): Promise<void> {
-  console.error("[video-job] failed:", { jobId, sceneId: ctx.sceneId, kind: classifyProviderError(err), error: safeProviderError(err) });
-  const cost = Number(ctx.cost ?? 0);
-  try {
-    await prisma.scene.update({ where: { id: ctx.sceneId }, data: { status: "pending" } });
-  } catch {}
-  try {
-    if (ctx.userId && cost > 0) {
-      await prisma.user.update({ where: { id: ctx.userId }, data: { credits: { increment: cost } } });
-      await prisma.creditTransaction.create({
-        data: { userId: ctx.userId, amount: cost, description: "Refund: video generation failed" },
-      });
+/** Status transition and refund are atomic and happen only once. */
+async function handleFailure(jobId: string, ctx: { sceneId: string; userId?: string; cost?: number }, error: unknown, state?: VideoJobState) {
+  const message = `[${classifyProviderError(error)}] ${safeProviderError(error)}`;
+  console.error("[video-job] failed:", { jobId, sceneId: ctx.sceneId, error: message });
+  await prisma.$transaction(async tx => {
+    const result = await tx.generationJob.updateMany({
+      where: state ? owned(jobId, state) : { id: jobId, status: { in: ["pending", "processing"] } },
+      data: { status: "failed", error: message, message: "Failed", ...(state ? { resultData: JSON.stringify({ ...state, leaseUntil: 0 }) } : {}) },
+    });
+    if (!result.count) return;
+    await tx.scene.update({ where: { id: ctx.sceneId }, data: { status: "pending" } });
+    if (ctx.userId && Number(ctx.cost) > 0) {
+      await tx.user.update({ where: { id: ctx.userId }, data: { credits: { increment: Number(ctx.cost) } } });
+      await tx.creditTransaction.create({ data: { userId: ctx.userId, amount: Number(ctx.cost), description: `Refund: video generation failed (${jobId})` } });
     }
-  } catch {}
-  await failJob(jobId, `[${classifyProviderError(err)}] ${safeProviderError(err)}`);
+  });
 }
 
-/**
- * Called from the polling endpoint for a "processing" video job whose function may have died.
- * Returns true if the job was touched (resumed / heart-beaten / failed) — i.e. the caller
- * should re-read it — or false if there is nothing to resume.
- */
-export async function resumeVideoJob(job: {
-  id: string;
-  type: string;
-  status: string;
-  resultData: string | null;
-  updatedAt: Date;
-}): Promise<boolean> {
+/** One short provider check per poll, no sleeping invocation and no new prediction. */
+export async function resumeVideoJob(job: { id: string; type: string; status: string; resultData: string | null; updatedAt: Date }): Promise<boolean> {
   if (job.type !== "video" || job.status !== "processing") return false;
-  const state = parseState(job.resultData);
-  if (!state) return false;
-
-  // Only step in when the worker has gone quiet (no heartbeat for > 1 poll interval x3)
-  if (Date.now() - job.updatedAt.getTime() < POLL_INTERVAL_MS * 3) return false;
-
+  // Fresh read matters: callers may have read the job before a concurrent finalization/refund.
+  const fresh = await prisma.generationJob.findUnique({ where: { id: job.id } });
+  if (!fresh || fresh.status !== "processing") return false;
+  const state = parseState(fresh.resultData);
+  if (!state || (state.leaseUntil ?? 0) > Date.now()) return false;
+  if (state.providerStatus && Date.now() - fresh.updatedAt.getTime() < POLL_INTERVAL_MS) return false;
+  state.leaseToken = randomUUID(); state.leaseUntil = Date.now() + CHECK_LEASE_MS;
+  const claim = await prisma.generationJob.updateMany({
+    where: { id: job.id, status: "processing", resultData: fresh.resultData },
+    data: { resultData: JSON.stringify(state) },
+  });
+  if (!claim.count) return false;
   try {
-    if (state.finalizing) {
-      // Finalization died (upload). It's cheap to redo — restart it.
-      const p = await getPredictionState(state.predictionId);
-      if (["succeeded", "failed", "canceled"].includes(p.status)) await recordPredictionStatus(job.id, state, p.status, p.error);
-      if (p.status === "succeeded" && p.url) {
-        await heartbeatJob(job.id);
-        runInBackground(() => finalizeVideoJob(job.id, state, p.url!).catch((e) => handleFailure(job.id, state, e)));
+    let prediction = await getPredictionState(state.predictionId);
+    // Deadline only applies to NON-terminal predictions. Late success still gets saved.
+    if (["starting", "processing"].includes(prediction.status) && Date.now() - state.startedAt >= VIDEO_DEADLINE_MS) {
+      await cancelVideoPrediction(state.predictionId);
+      prediction = await getPredictionState(state.predictionId);
+    }
+    state.providerStatus = prediction.status;
+    state.providerStartedAt = prediction.startedAt;
+    state.providerCompletedAt = prediction.completedAt;
+    const attempt = state.diagnostics?.find(a => a.predictionId === state.predictionId);
+    if (attempt) {
+      attempt.status = prediction.status;
+      if (prediction.error) { attempt.error = safeProviderError(prediction.error); attempt.errorKind = classifyProviderError(prediction.error); }
+      logAttempt(attempt);
+    }
+    if (prediction.status === "failed" || prediction.status === "canceled") {
+      const reason = prediction.error || (Date.now() - state.startedAt >= VIDEO_DEADLINE_MS ? "Prediction timed out at the 30-minute application deadline (cancellation confirmed)" : "Prediction canceled by provider");
+      await handleFailure(job.id, state, new Error(reason), state);
+      return true;
+    }
+    if (prediction.status === "succeeded" && prediction.url) {
+      state.finalizing = true;
+      state.finalizeAttempts = (state.finalizeAttempts ?? 0) + 1;
+      if (state.finalizeAttempts > 3) {
+        await handleFailure(job.id, state, new Error("Storage finalization failed after three recovery attempts"), state);
         return true;
       }
-    }
-
-    const p = await getPredictionState(state.predictionId);
-    if (["succeeded", "failed", "canceled"].includes(p.status)) await recordPredictionStatus(job.id, state, p.status, p.error);
-    if (p.status === "succeeded" && p.url) {
-      await heartbeatJob(job.id);
-      runInBackground(() => finalizeVideoJob(job.id, state, p.url!).catch((e) => handleFailure(job.id, state, e)));
+      state.leaseUntil = Date.now() + FINALIZE_LEASE_MS;
+      if (!await saveOwned(job.id, state, { progress: 60, message: "Video ready. Uploading to storage..." })) return false;
+      runInBackground(async () => {
+        try { await finalizeVideoJob(job.id, state, prediction.url!); }
+        catch (error) {
+          // Network/storage failures are recoverable; keep the same successful prediction.
+          state.leaseUntil = 0;
+          await saveOwned(job.id, state, { message: "Upload interrupted; retrying storage on the next check", error: safeProviderError(error) });
+        }
+      });
       return true;
     }
-    if (p.status === "failed" || p.status === "canceled") {
-      await handleFailure(job.id, state, new Error(p.error || "Video model failed"));
-      return true;
-    }
-    if (Date.now() - state.startedAt > MAX_WAIT_MS) {
-      await recordPredictionStatus(job.id, state, "timeout", "Video model timed out");
-      await handleFailure(job.id, state, new Error("Video model timed out"));
-      return true;
-    }
-    // Still rendering — keep the job alive from the poller side
-    await updateJob(job.id, { progress: waitingProgress(state.startedAt) });
-    await heartbeatJob(job.id);
+    state.leaseUntil = 0;
+    await saveOwned(job.id, state, { progress: waitingProgress(state.startedAt), message: prediction.status === "starting" ? "Queued at Seedance; checking the same prediction..." : "Seedance is processing; waiting for native audio and video..." });
     return true;
-  } catch (e) {
-    console.error("[video-job] resume error:", safeProviderError(e));
-    return false;
+  } catch (error) {
+    // A failed status GET is NOT a failed generation. Leave it recoverable, without a refund.
+    state.leaseUntil = 0;
+    await saveOwned(job.id, state, { message: "Provider status temporarily unavailable; checking again", error: safeProviderError(error) });
+    return true;
   }
 }
