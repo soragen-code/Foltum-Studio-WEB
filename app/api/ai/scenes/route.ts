@@ -1,5 +1,5 @@
 export const dynamic = "force-dynamic";
-export const maxDuration = 300; // a 12-shot breakdown with 5-line video prompts is a long LLM completion
+export const maxDuration = 300; // a 12-shot breakdown with detailed 9-line video prompts is a long LLM completion
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -18,9 +18,10 @@ const SCENES_PER_EPISODE = Number(
 );
 
 /** Minimum number of purely visual beats (no spoken lines) per episode. */
-const MIN_SILENT_SCENES = 3;
-/** Maximum silent shots — the rest must carry dialogue so the viewer bonds with the characters. */
-const MAX_SILENT_SCENES = Math.max(MIN_SILENT_SCENES, Math.floor(SCENES_PER_EPISODE / 2));
+const MIN_SILENT_SCENES = 2;
+/** Maximum silent shots — kept low so the MAJORITY of shots carry spoken dialogue
+ *  and characters actually talk to each other across the episode. */
+const MAX_SILENT_SCENES = Math.max(MIN_SILENT_SCENES, Math.floor(SCENES_PER_EPISODE / 4));
 
 const SYSTEM = `You are a film director + cinematographer + editor working on a short-form VERTICAL drama series (9:16, TikTok/Reels format). Every episode must run AT LEAST ${EPISODE_MIN_SECONDS} seconds of screen time.
 
@@ -41,9 +42,9 @@ Given the project synopsis, this episode's description, and the characters, retu
     {
       "number": 1,
       "shotType": "Wide establishing shot | Wide shot | Medium shot | Close-up | Extreme close-up | Over-the-shoulder | POV | Tracking shot | Reaction shot | Insert",
-      "dialogue": "[NO DIALOGUE]  — or —  CHARACTER_NAME: \\"One short line.\\"\\nCHARACTER2: \\"Short reply.\\"",
-      "locationDesc": "INT/EXT — Location — Time. Vivid, filmable description of the setting, lighting, atmosphere.",
-      "videoPrompt": "[SHOT TYPE]: ...\\n[VISUAL STYLE]: ...\\n[ACTION]: ...\\n[CHARACTER]: ...\\n[TRANSITION]: ..."
+      "dialogue": "[NO DIALOGUE]  — or —  a short back-and-forth EXCHANGE with a delivery cue in parentheses on each line:\\nCHARACTER_NAME (low, guarded): \\"Short line.\\"\\nCHARACTER2 (a tired sigh, barely a whisper): \\"Short reply.\\"\\nCHARACTER_NAME (leaning in): \\"One more beat.\\"",
+      "locationDesc": "INT/EXT — Location — Time. Vivid, filmable description of the setting, HOW the light falls (source, direction, quality, shadows, colour temperature) and the atmosphere/ambience.",
+      "videoPrompt": "[SHOT TYPE]: ...\\n[VISUAL STYLE]: ...\\n[LIGHTING]: ...\\n[BLOCKING]: ...\\n[GAZE]: ...\\n[NON-VERBAL]: ...\\n[ACTION]: ...\\n[CHARACTER]: ...\\n[TRANSITION]: ..."
     }
   ]
 }
@@ -68,13 +69,22 @@ Given the project synopsis, this episode's description, and the characters, retu
 
 6. TRANSITIONS — EVERY SHOT HANDS OFF TO THE NEXT. The [TRANSITION] line describes how this shot connects to the following one: what the camera lands on, what the character turns toward, what sound/motion carries over. Examples: "camera slowly pans right and settles on the closed door — the next shot opens on that door", "holds on her face as her eyes drop to the phone in her hand — next shot is the phone screen", "match cut: the glass she sets down becomes the glass on the lab table". The last shot's transition sets up the cliffhanger / next episode.
 
-7. DIALOGUE DENSITY FOR ${SCENE_SECONDS}-SECOND CLIPS WITH NATIVE AUDIO. A clip this short can carry AT MOST 1–2 short spoken lines, 8–15 words in TOTAL per scene. Never more. At least ${MIN_SILENT_SCENES} and at most ${MAX_SILENT_SCENES} scenes are purely visual (action, reaction, atmosphere, insert) — write exactly "[NO DIALOGUE]" for them; ALL other scenes carry a spoken line, because the viewer bonds with characters through what they say to each other. Follow a film rhythm, e.g.: establishing (silent) → dialogue → visual beat → dialogue → reaction (silent) → visual → dialogue → ... Reaction shots without words are what make viewers feel the characters.
+7. DIALOGUE — CHARACTERS TALK TO EACH OTHER, WITHIN THE ${SCENE_SECONDS}-SECOND CLIP LIMIT. The audience bonds with the characters through what they say, so this is a DIALOGUE-DRIVEN series: only ${MIN_SILENT_SCENES}–${MAX_SILENT_SCENES} scenes are purely visual (establishing, reaction, atmosphere, insert) — write exactly "[NO DIALOGUE]" for those; EVERY other scene carries spoken dialogue.
+   • MORE DIALOGUE, as a real back-and-forth EXCHANGE. In talking scenes, prefer a short exchange between TWO characters — about 2–3 lines that answer each other (line, reply, and often a comeback) rather than a single isolated line.
+   • HONEST DURATION — do NOT overload a clip. A ${SCENE_SECONDS}-second clip can only speak a limited number of words: keep each talking scene to roughly 12–28 spoken words IN TOTAL (2–3 short lines). Never write a wall of text that could not physically be spoken in ${SCENE_SECONDS} seconds.
+   • LONGER CONVERSATIONS FLOW ACROSS CONSECUTIVE SHOTS. When a conversation needs more than fits one clip, CONTINUE it across the next shots (shot N ends mid-exchange, shot N+1 picks it up with the reply) — this is a continuous film, so a real multi-beat conversation is spread over several consecutive shots, each carrying its own short beat sized to the clip.
+   • TONE OF VOICE ON EVERY LINE. Give each spoken line a brief delivery cue in parentheses right after the speaker name: HOW it is said — the tone, emotion and manner (e.g. "(low, guarded)", "(a shaky whisper, holding back tears)", "(mockingly, half-laughing)", "(a tired sigh, then flat)"). These cues are performance directions only; they are NEVER spoken aloud and NEVER shown as subtitles.
+   Follow a film rhythm, e.g.: establishing (silent) → exchange → reaction (silent) → exchange continues → insert → exchange → ...
 
 8. STORY. Dramatize ONLY the events of THIS episode's description — do NOT borrow, foreshadow in detail, or resolve events from the other episodes listed (they are told in their own episodes). Open by picking up naturally from the previous episode's cliffhanger (given below) and build steadily toward THIS episode's cliffhanger, landing on it in the final shot. Dialogue is natural, subtext-rich, screenplay format.
 
-============ videoPrompt FORMAT (English, always, exactly these 5 lines) ============
+============ videoPrompt FORMAT (English, always, exactly these 9 lines, in this order) ============
 [SHOT TYPE]: <Wide establishing shot / Medium shot / Close-up / Over-the-shoulder / POV / Tracking shot / Reaction shot / Insert> + camera movement (static / slow dolly in / handheld / slow zoom / pan right ...), vertical 9:16 framing
 [VISUAL STYLE]: <the visualIdentity sentence — identical in every scene>
+[LIGHTING]: <HOW the light falls in THIS shot — light source(s) and direction (e.g. hard window light from camera-left, a single overhead bulb, warm street lamp, cold monitor glow), quality (hard/soft, diffused), where the shadows fall, highlights and rim light, and the colour temperature/palette; keep it consistent with [VISUAL STYLE]>
+[BLOCKING]: <WHERE each character is placed and how they move — who stands / sits / leans and where in the frame (foreground/background, camera-left/right), the distance and spatial relationship between them, and any movement or gesture during the beat (steps closer, turns away, folds arms, sets something down)>
+[GAZE]: <the EYELINES — who looks at whom or at what (e.g. "she stares straight into his eyes", "he looks down at the phone", "his eyes flick to the door", "she avoids his gaze, looking at the floor"); state each visible character's gaze direction>
+[NON-VERBAL]: <the wordless performance — facial micro-expressions, sighs, breathing, swallowing, trembling, a tightening jaw, a flicker of a smile, tears welling, body language and posture that reveal the inner emotion of the beat>
 [ACTION]: <exactly what happens in these ~${SCENE_SECONDS} seconds, one clear beat, present tense, concrete and filmable; include the emotion on faces>
 [CHARACTER]: <verbatim characterSheet description of every visible character; write "none visible" for empty frames>
 [TRANSITION]: <how this shot connects to the next shot>
@@ -169,7 +179,7 @@ Episode ${episode.number}: "${episode.title}"
 Description: ${episode.description}
 This episode's ending cliffhanger (build toward it): ${episode.cliffhanger ?? "N/A"}
 
-Direct this episode as ONE continuous piece of film: first write "visualIdentity" and the "characterSheet", then exactly ${SCENES_PER_EPISODE} consecutive camera shots (scene 1 = wide establishing shot; ${MIN_SILENT_SCENES}–${MAX_SILENT_SCENES} shots marked [NO DIALOGUE], every other shot with 1–2 short spoken lines; every videoPrompt in the 5-line format with the identical [VISUAL STYLE] line and verbatim character descriptions; every [TRANSITION] handing off to the next shot) that dramatize ONLY this episode's description — from a natural continuation of the previous episode to this episode's cliffhanger.`;
+Direct this episode as ONE continuous piece of film: first write "visualIdentity" and the "characterSheet", then exactly ${SCENES_PER_EPISODE} consecutive camera shots (scene 1 = wide establishing shot; only ${MIN_SILENT_SCENES}–${MAX_SILENT_SCENES} shots marked [NO DIALOGUE], EVERY other shot carrying a short back-and-forth exchange of 2–3 lines that fits the ${SCENE_SECONDS}-second clip, each spoken line prefixed with a (tone/delivery cue); real longer conversations continue across consecutive shots; every videoPrompt in the full 9-line format — [SHOT TYPE], [VISUAL STYLE] (identical every scene), [LIGHTING], [BLOCKING], [GAZE], [NON-VERBAL], [ACTION], [CHARACTER] (verbatim descriptions), [TRANSITION] handing off to the next shot) that dramatize ONLY this episode's description — from a natural continuation of the previous episode to this episode's cliffhanger.`;
 
     const data = await chatJSON<{
       visualIdentity?: string;
@@ -177,9 +187,10 @@ Direct this episode as ONE continuous piece of film: first write "visualIdentity
       scenes: any[];
     }>(SYSTEM, userMsg, {
       temperature: 0.8,
-      // ${SCENES_PER_EPISODE} scenes (≈12) each with a 5-line videoPrompt plus the
-      // identity/character blocks need more room than the 4k default, or the JSON gets truncated.
-      maxTokens: 12000,
+      // ${SCENES_PER_EPISODE} scenes (≈12) each with a detailed 9-line videoPrompt
+      // (lighting, blocking, gaze, non-verbal ...) plus multi-line dialogue and the
+      // identity/character blocks need generous room, or the JSON gets truncated.
+      maxTokens: 16000,
     });
 
     const rawScenes = Array.isArray(data?.scenes) ? data.scenes : [];

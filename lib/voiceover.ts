@@ -2,6 +2,10 @@
 export interface DialogueLine {
   speaker: string | null;
   text: string;
+  /** Delivery cue captured from the speaker parenthetical, e.g. "low, guarded".
+   *  Drives HOW the line is spoken in the native-audio prompt. Never spoken aloud
+   *  and never shown in subtitles. */
+  tone?: string;
 }
 
 export interface VoiceCharacter {
@@ -30,19 +34,29 @@ export function parseDialogue(raw: string | null | undefined): DialogueLine[] {
     let line = rawLine.trim();
     if (!line || NO_DIALOGUE_RE.test(line)) continue;
 
+    let tone: string | undefined;
     const m = line.match(SPEAKER_RE);
     if (m) {
       currentSpeaker = m[1].trim();
+      // The optional parenthetical after the speaker name is the delivery cue
+      // (tone / manner), e.g. "THEO (low, guarded):". Capture it — it drives HOW
+      // the line is spoken, but is stripped from the spoken text and subtitles.
+      if (m[2]) tone = m[2].replace(/^\(|\)$/g, "").trim() || undefined;
       line = line.slice(m[0].length);
     }
 
     const text = line.replace(DIRECTION_RE, " ").replace(/\s+/g, " ").trim().replace(QUOTES_RE, "").trim();
     if (!text) continue;
 
-    // Merge consecutive lines of the same speaker into one utterance
+    // Merge consecutive lines of the same speaker into one utterance (keep the
+    // first tone cue we saw for that speaker turn).
     const last = lines[lines.length - 1];
-    if (last && last.speaker === currentSpeaker) last.text += " " + text;
-    else lines.push({ speaker: currentSpeaker, text });
+    if (last && last.speaker === currentSpeaker) {
+      last.text += " " + text;
+      if (!last.tone && tone) last.tone = tone;
+    } else {
+      lines.push({ speaker: currentSpeaker, text, ...(tone ? { tone } : {}) });
+    }
   }
   return lines;
 }
@@ -104,8 +118,10 @@ export async function translateDialogue(
     const { chat } = await import("@/lib/ai");
     const out = await chat(
       `You are a professional screenplay translator. Translate ALL spoken dialogue into ${targetLanguage}. ` +
-        `Keep the exact same line structure: preserve "Speaker:" name prefixes (do NOT translate character names) ` +
-        `and keep any [stage directions] in brackets. Translate ONLY the spoken words, naturally and idiomatically ` +
+        `Keep the exact same line structure: preserve "Speaker:" name prefixes (do NOT translate character names), ` +
+        `keep any [stage directions] in brackets, and keep every (delivery/tone cue) in parentheses right after the ` +
+        `speaker name — you MAY translate the words inside those cues but must keep the parentheses and their position. ` +
+        `Translate ONLY the spoken words and the tone cues, naturally and idiomatically ` +
         `for ${targetLanguage}. Return ONLY the translated dialogue block, nothing else.`,
       block,
       { temperature: 0.3, maxTokens: 2048 }
@@ -146,8 +162,11 @@ export function buildNativeAudioPrompt(
     .map((l) => {
       const character = findCharacter(l.speaker, characters);
       const who = character?.name ?? l.speaker ?? "Character";
+      // The tone cue (from the "(low, guarded)" parenthetical) tells the model HOW
+      // to deliver the line; it is a performance direction, never spoken aloud.
+      const manner = l.tone ? `, ${l.tone},` : "";
       // Plain quoted dialogue; no undocumented bracket semantics.
-      return `${who} says in ${language}, lips moving on camera: "${l.text}"`;
+      return `${who} says in ${language}${manner} lips moving on camera: "${l.text}"`;
     })
     .join("\n");
 
