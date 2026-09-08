@@ -224,7 +224,7 @@ function buildSrt(subtitles: (string | null | undefined)[], infos: MediaInfo[], 
     const pad = infos.length > 1 ? Math.min(0.25, t) : 0;
     const from = starts[i] + pad;
     const to = Math.max(from + 0.4, starts[i] + dur - pad);
-    cues.push(`${idx}\n${srtTime(from)} --> ${srtTime(to)}\n${wrapSubtitle(raw)}\n`);
+    cues.push(`${idx}\n${srtTime(from)} --> ${srtTime(to)}\n${wrapSubtitle(raw, 32)}\n`);
     idx++;
   }
   return cues.join("\n");
@@ -238,8 +238,8 @@ function buildSrt(subtitles: (string | null | undefined)[], infos: MediaInfo[], 
 async function burnSubtitles(inputPath: string, srtName: string, outPath: string, workDir: string, styleOverride?: string): Promise<void> {
   const style =
     styleOverride ??
-    "FontName=DejaVu Sans,Fontsize=15,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000," +
-    "BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=64";
+    "FontName=DejaVu Sans,Fontsize=9,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000," +
+    "BorderStyle=1,Outline=1,Shadow=1,Alignment=2,MarginV=34"; // compact 9:16 style (same as per-scene burn)
   // Serverless images ship no system fonts: without a font libass renders NOTHING (and ffmpeg
   // still exits 0). Bundle DejaVu Sans with the app and point libass at it via a relative fontsdir.
   const fontsDir = await stageFonts(workDir);
