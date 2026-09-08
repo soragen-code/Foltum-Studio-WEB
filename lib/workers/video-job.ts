@@ -88,7 +88,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
   try {
     const scene = await prisma.scene.findUnique({ where: { id: sceneId } });
     if (!scene?.videoPrompt) throw new Error("Scene has no video prompt");
-    await updateJob(jobId, { status: "processing", progress: 5, message: "Preparing softly stylized visual references..." });
+    await updateJob(jobId, { status: "processing", progress: 5, message: "Preparing photorealistic visual references..." });
     const links = await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true } });
     const visualPrompt = styledVisualPrompt(scene.videoPrompt, links.map(l => l.character.name));
     const targetLanguage = languageName(scene.language) || "English";
