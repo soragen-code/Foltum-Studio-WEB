@@ -72,8 +72,8 @@ Generate a fresh, different take on this character's appearance and personality.
           prompt,
           aspect_ratio: aspectRatios[shot],
         }, { characterId: existing.id });
-        const s3Key = `media/public/characters/${pid}/${existing.id}/${VISUAL_STYLE_ID}/${shot}_${Date.now()}.webp`;
-        const s3Url = await uploadRemoteToS3(replicateUrl, s3Key, "image/webp");
+        const s3Key = `media/public/characters/${pid}/${existing.id}/${VISUAL_STYLE_ID}/${shot}_${Date.now()}.png`;
+        const s3Url = await uploadRemoteToS3(replicateUrl, s3Key, "image/png");
         return { shot, url: s3Url };
       })
     );

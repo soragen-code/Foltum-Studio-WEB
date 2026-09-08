@@ -217,14 +217,32 @@ export async function startLipsyncPrediction(input: LipsyncInput): Promise<strin
   return prediction.id;
 }
 
-/** Separate start lets scene-reference jobs persist prediction IDs before polling. */
+/* ------------------------------------------------------------------ */
+/*  Seedream 5.0 Lite — photorealistic reference image generation     */
+/* ------------------------------------------------------------------ */
+
+/** Real Replicate slug + pinned version for Seedream 5.0 Lite (verified via API). */
+export const SEEDREAM_MODEL = "bytedance/seedream-5-lite";
+const SEEDREAM_VERSION_ID =
+  (process.env.REPLICATE_SEEDREAM_VERSION as string | undefined) ??
+  "eeb2857d94c49a5bcbc9d6c6057416e1d3b1a2735a16e08e4def9bf7ee22ec71";
+
+/**
+ * Start a Seedream 5.0 Lite image prediction (photorealistic references).
+ * Seedream has NO watermark-disable parameter — its PNG output carries a C2PA
+ * content-credentials watermark in metadata (no visible pixel logo). We KEEP that
+ * watermark: marking the reference as AI-generated content can help the downstream
+ * video model's moderation accept it. Output is uploaded as-is (image/png).
+ * Note: Seedream's only image output format is png/jpeg (no webp) and it has no seed input.
+ */
 export async function startImagePrediction(input: FluxInput): Promise<string> {
   const prediction = await getReplicate().predictions.create({
-    model: "black-forest-labs/flux-1.1-pro",
+    version: SEEDREAM_VERSION_ID,
     input: {
-      prompt: input.prompt, aspect_ratio: input.aspect_ratio ?? "9:16",
-      output_format: "webp", output_quality: 90, safety_tolerance: 2,
-      prompt_upsampling: true, ...(input.seed !== undefined ? { seed: input.seed } : {}),
+      prompt: input.prompt,
+      aspect_ratio: input.aspect_ratio ?? "9:16",
+      size: "2K",
+      output_format: "png",
     },
   });
   return prediction.id;
@@ -250,29 +268,30 @@ export async function getPredictionState(id: string): Promise<PredictionState> {
 }
 
 /* ------------------------------------------------------------------ */
-/*  FLUX 1.1 Pro — image generation (character portraits)            */
+/*  Image generation (character portraits + scene references)         */
+/*  Backed by Seedream 5.0 Lite (photorealistic) via startImagePrediction. */
 /* ------------------------------------------------------------------ */
 
 export interface FluxInput {
   prompt: string;
-  /** "1:1" | "3:4" | "4:3" | "16:9" | "9:16" etc. Default "3:4" for portraits. */
+  /** "1:1" | "3:4" | "4:3" | "16:9" | "9:16" etc. Default "9:16" for vertical. */
   aspect_ratio?: string;
-  /** 1-4, lower = more creative. Default 3.5. */
+  /** 1-4, lower = more creative. Default 3.5. (unused by Seedream) */
   prompt_strength?: number;
-  /** Number of inference steps. Default 28. */
+  /** Number of inference steps. Default 28. (unused by Seedream) */
   num_inference_steps?: number;
   seed?: number;
 }
 
 /**
- * Generate an image using FLUX 1.1 Pro via Replicate.
+ * Generate a photorealistic reference image (Seedream 5.0 Lite) via Replicate.
  * Returns the URL of the generated image. Logs each prediction; no paid automatic retries.
  */
 export async function generateImage(input: FluxInput, context: { jobId?: string; characterId?: string } = {}): Promise<string> {
   const attempt: GenerationAttempt = {
-    ...context, attempt: 1, phase: "reference", model: "black-forest-labs/flux-1.1-pro",
+    ...context, attempt: 1, phase: "reference", model: SEEDREAM_MODEL,
     status: "submitting", style: VISUAL_STYLE_ID,
-    input: safeDiagnosticInput({ prompt: input.prompt, aspect_ratio: input.aspect_ratio ?? "9:16", safety_tolerance: 2 }),
+    input: safeDiagnosticInput({ prompt: input.prompt, aspect_ratio: input.aspect_ratio ?? "9:16", size: "2K" }),
   };
   logAttempt(attempt);
   try {

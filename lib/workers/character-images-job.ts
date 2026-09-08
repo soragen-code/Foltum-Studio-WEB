@@ -54,8 +54,10 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds }: 
             prompt: characterImagePrompt(char.appearance ?? "", shot, char.name),
             aspect_ratio: ASPECT_RATIOS[shot],
           }, { jobId, characterId: char.id });
-          const s3Key = `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/${shot}-${Date.now()}.webp`;
-          const url = await uploadRemoteToS3(replicateUrl, s3Key, "image/webp");
+          // Seedream outputs PNG (with its C2PA content-credentials watermark). We upload the
+          // raw bytes as-is — the watermark is intentionally kept (it can aid video moderation).
+          const s3Key = `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/${shot}-${Date.now()}.png`;
+          const url = await uploadRemoteToS3(replicateUrl, s3Key, "image/png");
           await prisma.character.update({ where: { id: char.id }, data: { [SHOT_FIELDS[shot]]: url } });
         } catch (imgErr: any) {
           failed += 1;

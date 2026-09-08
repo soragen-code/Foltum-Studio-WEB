@@ -39,7 +39,7 @@ An episode is ONE continuous piece of cinema. The ${SCENES_PER_EPISODE} "scenes"
 Given the project synopsis, this episode's description, and the characters, return ONLY valid JSON in this exact shape:
 
 {
-  "visualIdentity": "One sentence, English. The cinematic look of the whole episode: cinematography, lighting, color grade, aspect. Use the VISUAL TREATMENT above, with a consistent lighting and color palette.",
+  "visualIdentity": "One sentence, English. The photorealistic look of the whole episode: cinematography, lighting, color grade, aspect. Use the VISUAL TREATMENT above, with a consistent lighting and color palette.",
   "characterSheet": {
     "CHARACTER_NAME": "Exact physical description used VERBATIM in every videoPrompt where this character appears. Example: 'YARA (early 20s, short black hair, olive skin, dark grey hoodie, silver stud earrings)'"
   },
@@ -60,7 +60,7 @@ Given the project synopsis, this episode's description, and the characters, retu
 
 2. SHOT PROGRESSION, NOT SCENE JUMPS. Think like a cinematographer covering one continuous action: wide → medium → close-up → reaction shot → back to medium → insert → ... Action, location and time flow CONTINUOUSLY from shot to shot: shot N+1 starts exactly where shot N ended (same room, same light, same positions, same props). A change of location/time is allowed ONLY when explicitly motivated and written into locationDesc as a transition ("CUT TO: 2 hours later —", "SMASH CUT TO: EXT —"). At most 1–2 such transitions per episode.
 
-3. ONE CONSISTENT VISUAL IDENTITY. Define it in "visualIdentity" and repeat that SAME sentence (verbatim or near-verbatim) in the [VISUAL STYLE] line of EVERY videoPrompt. Same visual treatment, lighting scheme and color palette in all ${SCENES_PER_EPISODE} shots — the cut must never feel like a different camera.
+3. ONE CONSISTENT VISUAL IDENTITY. Define it in "visualIdentity" and repeat that SAME sentence (verbatim or near-verbatim) in the [VISUAL STYLE] line of EVERY videoPrompt. Same photorealistic treatment, lighting scheme and color palette in all ${SCENES_PER_EPISODE} shots — the cut must never feel like a different camera.
 
 4. IDENTICAL CHARACTER DESCRIPTIONS. Build "characterSheet" first (age range, hair, skin, build, distinctive features, EXACT clothing for this episode). Then, in every videoPrompt where a character is visible, paste their characterSheet description WORD FOR WORD into [CHARACTER]. Never vary hair, clothes or features between shots. Use the character names given below.
 

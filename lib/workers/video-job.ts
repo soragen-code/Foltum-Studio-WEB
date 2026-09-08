@@ -156,8 +156,9 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
           await heartbeatJob(jobId); await sleep(POLL_INTERVAL_MS);
         }
         const { folderPrefix } = getBucketConfig();
-        const key = `${folderPrefix}public/references/${projectId}/${VISUAL_STYLE_ID}/${sceneId}-${jobId}.webp`;
-        const stored = await uploadRemoteToS3(referenceUrl, key, "image/webp");
+        // Seedream reference is PNG (keeps its C2PA content-credentials watermark on purpose).
+        const key = `${folderPrefix}public/references/${projectId}/${VISUAL_STYLE_ID}/${sceneId}-${jobId}.png`;
+        const stored = await uploadRemoteToS3(referenceUrl, key, "image/png");
         referenceImages = [stored];
         reference = { mode: "new_scene_reference", sceneId, referencePredictionId: attempt.predictionId };
         prompt += "\n[Image1] defines the scene's original photorealistic character designs, clothing and environment. Preserve those designs while performing the scripted action.";
