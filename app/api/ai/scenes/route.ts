@@ -1,4 +1,5 @@
 export const dynamic = "force-dynamic";
+export const maxDuration = 300; // a 12-shot breakdown with 5-line video prompts is a long LLM completion
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -14,40 +15,69 @@ const SCENES_PER_EPISODE = Number(
   process.env.SCENES_PER_EPISODE ?? Math.ceil(EPISODE_MIN_SECONDS / SCENE_SECONDS)
 );
 
-const SYSTEM = `You are a professional screenwriter creating scene breakdowns for a short-form vertical drama series (TikTok/Reels format). Every episode must run AT LEAST ${EPISODE_MIN_SECONDS} seconds of screen time.
+/** Minimum number of purely visual beats (no spoken lines) per episode. */
+const MIN_SILENT_SCENES = 3;
 
-Given the project synopsis, episode description, and characters, break the episode into exactly ${SCENES_PER_EPISODE} scenes of about ${SCENE_SECONDS} seconds each (total ≥ ${EPISODE_MIN_SECONDS} s). Return ONLY valid JSON:
+const SYSTEM = `You are a film director + cinematographer + editor working on a short-form VERTICAL drama series (9:16, TikTok/Reels format). Every episode must run AT LEAST ${EPISODE_MIN_SECONDS} seconds of screen time.
+
+THE CORE IDEA — SCENES ARE SHOTS, NOT MINI-STORIES:
+An episode is ONE continuous piece of cinema. The ${SCENES_PER_EPISODE} "scenes" you write are ${SCENES_PER_EPISODE} CAMERA SHOTS (cuts) of ~${SCENE_SECONDS} seconds each inside that single continuous sequence — exactly the way a film editor cuts between angles of the same unfolding action. Each shot is rendered as a separate ~${SCENE_SECONDS} s AI video clip and the clips are concatenated in order, so the viewer must experience them as ONE flowing film, never as unrelated clips glued together.
+
+Given the project synopsis, this episode's description, and the characters, return ONLY valid JSON in this exact shape:
 
 {
+  "visualIdentity": "One sentence, English. The look of the whole episode: film stock / lens, lighting, color palette, grain, aspect. Example: 'Cinematic 35mm film, warm amber tungsten lighting with cold blue window spill, shallow depth of field, anamorphic lens flare, fine grain, muted teal-and-amber palette.'",
+  "characterSheet": {
+    "CHARACTER_NAME": "Exact physical description used VERBATIM in every videoPrompt where this character appears. Example: 'YARA (early 20s, short black hair, olive skin, dark grey hoodie, silver stud earrings)'"
+  },
   "scenes": [
     {
       "number": 1,
-      "dialogue": "CHARACTER_NAME: \\"Line of dialogue.\\"\\nCHARACTER2: \\"Response.\\"",
-      "locationDesc": "INT/EXT — Location — Time. Vivid description of the setting, lighting, atmosphere.",
-      "videoPrompt": "Detailed prompt for AI video generation: camera angle, movement, lighting, mood, visual style. Be cinematic and specific."
+      "shotType": "Wide establishing shot | Wide shot | Medium shot | Close-up | Extreme close-up | Over-the-shoulder | POV | Tracking shot | Reaction shot | Insert",
+      "dialogue": "[NO DIALOGUE]  — or —  CHARACTER_NAME: \\"One short line.\\"\\nCHARACTER2: \\"Short reply.\\"",
+      "locationDesc": "INT/EXT — Location — Time. Vivid, filmable description of the setting, lighting, atmosphere.",
+      "videoPrompt": "[SHOT TYPE]: ...\\n[VISUAL STYLE]: ...\\n[ACTION]: ...\\n[CHARACTER]: ...\\n[TRANSITION]: ..."
     }
   ]
 }
 
-Rules:
-- Exactly ${SCENES_PER_EPISODE} scenes per episode, each written for ~${SCENE_SECONDS} seconds of screen time (a Seedance clip is short — typically 1-2 spoken lines, or a single beat of action, fit into ~${SCENE_SECONDS} s)
-- Dialogue should be natural and dramatic, in screenplay format
-- Location descriptions should be vivid and filmable
-- Video prompts should be detailed enough for AI video generation (Seedance/Minimax style)
-- Include camera directions in video prompts (close-up, wide shot, tracking, etc.)
-- Build tension within each episode toward the cliffhanger
-- Some scenes can have no dialogue (use [NO DIALOGUE] or [VISUAL MONTAGE])
+============ SHOT DESIGN RULES ============
 
-CONTINUITY & SCOPE (critical — the scenes must feel like ONE coherent episode, not random clips):
-- Dramatize ONLY the events described in THIS episode's description below. Do NOT include, foreshadow in detail, or resolve events that belong to other episodes in the provided episode list — those are told in their own episodes.
-- The ${SCENES_PER_EPISODE} scenes are a SINGLE CONTINUOUS SEQUENCE. Each scene must follow causally and chronologically from the previous one (same story thread, consistent time and place unless a transition is clearly motivated). Scene N+1 continues what scene N set up — no unexplained jumps in time, location, or character state.
-- Open by picking up naturally from where the previous episode left off (its cliffhanger, given below), and end on the beat that sets up THIS episode's cliffhanger.
-- Keep characters, locations, and props consistent from scene to scene. Reuse the same character names and appearances throughout.
-- Think of the whole episode as one ~${EPISODE_MIN_SECONDS}-second continuous scene split into ${SCENES_PER_EPISODE} consecutive shots, not ${SCENES_PER_EPISODE} independent mini-stories.
+1. ESTABLISHING SHOT FIRST. Scene 1 of EVERY episode is a wide or aerial ESTABLISHING SHOT (EXT — Location — Time, or a wide interior) that grounds the viewer in place, time and mood, and defines the episode's visual identity. Brief or NO dialogue in scene 1 (prefer [NO DIALOGUE]).
 
-IMPORTANT LANGUAGE RULES:
-- Write dialogue and locationDesc in the SAME LANGUAGE as the synopsis/episode description. If they are in Russian — write in Russian.
-- EXCEPTION: The "videoPrompt" field must ALWAYS be in English — it is used as a prompt for AI video generation (Seedance) and works best in English.`;
+2. SHOT PROGRESSION, NOT SCENE JUMPS. Think like a cinematographer covering one continuous action: wide → medium → close-up → reaction shot → back to medium → insert → ... Action, location and time flow CONTINUOUSLY from shot to shot: shot N+1 starts exactly where shot N ended (same room, same light, same positions, same props). A change of location/time is allowed ONLY when explicitly motivated and written into locationDesc as a transition ("CUT TO: 2 hours later —", "SMASH CUT TO: EXT —"). At most 1–2 such transitions per episode.
+
+3. ONE CONSISTENT VISUAL IDENTITY. Define it in "visualIdentity" and repeat that SAME sentence (verbatim or near-verbatim) in the [VISUAL STYLE] line of EVERY videoPrompt. Same film stock, lens character, lighting scheme and color palette in all ${SCENES_PER_EPISODE} shots — the cut must never feel like a different camera.
+
+4. IDENTICAL CHARACTER DESCRIPTIONS. Build "characterSheet" first (age range, hair, skin, build, distinctive features, EXACT clothing for this episode). Then, in every videoPrompt where a character is visible, paste their characterSheet description WORD FOR WORD into [CHARACTER]. Never vary hair, clothes or features between shots. Use the character names given below.
+
+5. EMOTIONAL CAMERA LANGUAGE — the camera must express the emotion of the beat:
+   • Tension / fear: handheld, tight close-ups, rack focus, shallow depth of field, unsteady framing
+   • Calm / intimacy: steady tripod or slow dolly, wide or medium shots, soft motion
+   • Revelation / realization: slow zoom in, dramatic push-in on the face, held stare
+   • Action / urgency: tracking shot, whip pan, dynamic following movement
+   • Isolation / dread: wide shot with the character small in frame, negative space, static camera
+   State the camera movement explicitly in [SHOT TYPE] / [ACTION].
+
+6. TRANSITIONS — EVERY SHOT HANDS OFF TO THE NEXT. The [TRANSITION] line describes how this shot connects to the following one: what the camera lands on, what the character turns toward, what sound/motion carries over. Examples: "camera slowly pans right and settles on the closed door — the next shot opens on that door", "holds on her face as her eyes drop to the phone in her hand — next shot is the phone screen", "match cut: the glass she sets down becomes the glass on the lab table". The last shot's transition sets up the cliffhanger / next episode.
+
+7. DIALOGUE DENSITY FOR ${SCENE_SECONDS}-SECOND CLIPS WITH NATIVE AUDIO. A clip this short can carry AT MOST 1–2 short spoken lines, 8–15 words in TOTAL per scene. Never more. At least ${MIN_SILENT_SCENES} scenes MUST be purely visual (action, reaction, atmosphere, insert) — write exactly "[NO DIALOGUE]" for them. Follow a film rhythm, e.g.: establishing (silent) → dialogue → visual beat → dialogue → reaction (silent) → visual → dialogue → ... Reaction shots without words are what make viewers feel the characters.
+
+8. STORY. Dramatize ONLY the events of THIS episode's description — do NOT borrow, foreshadow in detail, or resolve events from the other episodes listed (they are told in their own episodes). Open by picking up naturally from the previous episode's cliffhanger (given below) and build steadily toward THIS episode's cliffhanger, landing on it in the final shot. Dialogue is natural, subtext-rich, screenplay format.
+
+============ videoPrompt FORMAT (English, always, exactly these 5 lines) ============
+[SHOT TYPE]: <Wide establishing shot / Medium shot / Close-up / Over-the-shoulder / POV / Tracking shot / Reaction shot / Insert> + camera movement (static / slow dolly in / handheld / slow zoom / pan right ...), vertical 9:16 framing
+[VISUAL STYLE]: <the visualIdentity sentence — identical in every scene>
+[ACTION]: <exactly what happens in these ~${SCENE_SECONDS} seconds, one clear beat, present tense, concrete and filmable; include the emotion on faces>
+[CHARACTER]: <verbatim characterSheet description of every visible character; write "none visible" for empty frames>
+[TRANSITION]: <how this shot connects to the next shot>
+
+Never mention real people, brands, logos or existing films/characters. No on-screen text, no subtitles, no music references.
+
+============ LANGUAGE RULES ============
+- "dialogue" and "locationDesc" are written in the SAME LANGUAGE as the synopsis / episode description (Russian synopsis → Russian dialogue and locations).
+- "visualIdentity", "characterSheet" and "videoPrompt" are ALWAYS in English — they drive the AI video model.
+- Exactly ${SCENES_PER_EPISODE} scenes, numbered 1..${SCENES_PER_EPISODE}, in shooting/screening order.`;
 
 export async function POST(request: Request) {
   try {
@@ -122,20 +152,54 @@ Episode ${episode.number}: "${episode.title}"
 Description: ${episode.description}
 This episode's ending cliffhanger (build toward it): ${episode.cliffhanger ?? "N/A"}
 
-Produce exactly ${SCENES_PER_EPISODE} consecutive, causally-linked scenes that dramatize ONLY this episode's description as one continuous sequence — from a natural continuation of the previous episode to this episode's cliffhanger.`;
+Direct this episode as ONE continuous piece of film: first write "visualIdentity" and the "characterSheet", then exactly ${SCENES_PER_EPISODE} consecutive camera shots (scene 1 = wide establishing shot; at least ${MIN_SILENT_SCENES} shots marked [NO DIALOGUE]; every videoPrompt in the 5-line format with the identical [VISUAL STYLE] line and verbatim character descriptions; every [TRANSITION] handing off to the next shot) that dramatize ONLY this episode's description — from a natural continuation of the previous episode to this episode's cliffhanger.`;
 
-    const data = await chatJSON<{ scenes: any[] }>(SYSTEM, userMsg, {
-      temperature: 0.85,
-      // ${SCENES_PER_EPISODE} scenes (≈12) each with dialogue/location/videoPrompt
-      // need more room than the 4k default, or the JSON gets truncated.
-      maxTokens: 8192,
+    const data = await chatJSON<{
+      visualIdentity?: string;
+      characterSheet?: Record<string, string>;
+      scenes: any[];
+    }>(SYSTEM, userMsg, {
+      temperature: 0.8,
+      // ${SCENES_PER_EPISODE} scenes (≈12) each with a 5-line videoPrompt plus the
+      // identity/character blocks need more room than the 4k default, or the JSON gets truncated.
+      maxTokens: 12000,
     });
+
+    const rawScenes = Array.isArray(data?.scenes) ? data.scenes : [];
+    if (rawScenes.length === 0) throw new Error("Model returned no scenes");
+
+    const visualIdentity = (data.visualIdentity ?? "").trim();
+    const characterSheet = data.characterSheet ?? {};
+
+    // Normalize: sequential numbering, trimmed to the target count, guaranteed
+    // visual-style line in every prompt so all clips share one look.
+    const scenesOut = rawScenes.slice(0, SCENES_PER_EPISODE).map((s, i) => {
+      let videoPrompt = String(s?.videoPrompt ?? "").trim();
+      if (visualIdentity && !/\[VISUAL STYLE\]/i.test(videoPrompt)) {
+        videoPrompt = `[VISUAL STYLE]: ${visualIdentity}\n${videoPrompt}`;
+      }
+      const dialogue = String(s?.dialogue ?? "").trim() || "[NO DIALOGUE]";
+      return {
+        number: i + 1,
+        dialogue,
+        locationDesc: String(s?.locationDesc ?? "").trim(),
+        videoPrompt,
+      };
+    });
+
+    // Diagnostics for cohesion rules (never fatal — the model output is still usable).
+    const silentCount = scenesOut.filter((s) => /\[NO DIALOGUE\]|\[VISUAL MONTAGE\]/i.test(s.dialogue)).length;
+    const establishing = /establishing|wide|aerial|drone/i.test(scenesOut[0]?.videoPrompt ?? "");
+    console.log(
+      `[scenes] ${episodeId}: ${scenesOut.length}/${SCENES_PER_EPISODE} shots, silent=${silentCount} (min ${MIN_SILENT_SCENES}), ` +
+        `establishing=${establishing}, identity="${visualIdentity.slice(0, 60)}", characters=${Object.keys(characterSheet).join("/")}`
+    );
 
     // Clear existing scenes
     await prisma.scene.deleteMany({ where: { episodeId } });
 
     const created = [];
-    for (const s of data.scenes) {
+    for (const s of scenesOut) {
       const scene = await prisma.scene.create({
         data: {
           episodeId,
@@ -149,7 +213,7 @@ Produce exactly ${SCENES_PER_EPISODE} consecutive, causally-linked scenes that d
       created.push(scene);
     }
 
-    return NextResponse.json({ scenes: created });
+    return NextResponse.json({ scenes: created, visualIdentity, characterSheet });
   } catch (err: any) {
     console.error("Scene generation error:", err);
     return NextResponse.json({ error: "Generation failed" }, { status: 500 });
