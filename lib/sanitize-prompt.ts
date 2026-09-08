@@ -1,11 +1,7 @@
 /**
- * Copyright-safety sanitizer for video-model prompts (Seedance).
- *
- * Seedance runs an output-moderation / copyright filter that rejects clips when the
- * prompt references real people, brands, well-known films/characters or an artist's
- * signature style. Every prompt goes through `sanitizeVideoPrompt()` right before it is
- * sent to Replicate: known names are replaced with generic descriptions, "in the style
- * of X" / "like X" phrases are removed, and the original text stays untouched in the DB.
+ * Remove explicit named imitations from visual descriptions while keeping project names.
+ * This heuristic neither predicts provider moderation nor guarantees approval.
+ * Dialogue must be added after this step so spoken words remain intact.
  */
 
 export interface SanitizeOptions {
@@ -234,7 +230,7 @@ function nameToGeneric(name: string, list: "female" | "male" | "person"): string
 }
 
 /**
- * Sanitize a video-model prompt so it cannot trip the copyright filter.
+ * Remove explicit named imitations from visual descriptions; this is not a moderation guarantee.
  * Pure function — never touches the DB; callers keep the original prompt for reference.
  */
 export function sanitizeVideoPrompt(input: string, options: SanitizeOptions = {}): SanitizeResult {
@@ -280,40 +276,6 @@ export function sanitizeVideoPrompt(input: string, options: SanitizeOptions = {}
   }
   // Logos / trademarks in general.
   text = apply(text, /\b(?:visible|prominent|recognizable|famous|brand(?:ed)?)\s+(?:logos?|trademarks?|brand(?:ing| names?)?|insignia)\b/gi, "no logos", keep, changes, "logo");
-
-  // 4.5 Cinematic style vocabulary that steers the model toward known copyrighted visual styles
-  // and/or causes the output-filter to flag the clip. Seedance 2.5 bracket semantics:
-  //   {text} = speech, (text) = music cue, <text> = sound effect.
-  // We never emit round brackets so the model never generates a score.
-  const CINEMATIC_STYLE: Array<[RegExp, string]> = [
-    [/\b(?:cinematic(?:ally)?|film[- ]?like|movie[- ]?like|hollywood(?:\s+(?:production|quality|style))?)\b/gi, ""],
-    [/\b(?:blockbuster|oscar[- ]?(?:worthy|winning|caliber)|award[- ]?winning)\b/gi, ""],
-    [/\bfilm\s+noir\b/gi, "high-contrast shadows"],
-    [/\bnoir(?:\s+(?:style|aesthetic|look|vibe|mood|atmosphere|tone))?\b/gi, "shadowy"],
-    [/\b(?:dramatic|haunting|tense|moody|soaring|swelling|building|rising|melancholic)\s+(?:score|music|soundtrack|melody|theme)\b/gi, "ambient sound"],
-    [/\b(?:film|movie|cinematic|orchestral|symphonic|sweeping|lush|epic)\s+(?:score|soundtrack)\b/gi, "ambient sound"],
-    [/\bscore\s+(?:builds?|swells?|rises?|soars?|crescendos?)\b/gi, "tension builds"],
-    [/\bchiaroscuro\b/gi, "strong directional lighting"],
-    [/\b(?:v[eé]rit[eé]|cinema\s+v[eé]rit[eé])\b/gi, "observational"],
-  ];
-  for (const [pattern, rep] of CINEMATIC_STYLE) {
-    text = apply(text, pattern, rep, keep, changes, "cinematic style");
-  }
-
-  // 5. Production meta-language. Words like "episode", "cliffhanger", "next shot", "series"
-  // describe the SHOW, not the picture — they hint at TV/film content and were the only
-  // thing shared by consecutive filter rejections of an otherwise plain close-up.
-  const META: Rule[] = [
-    { pattern: /,?\s*(?:setting|which sets|that sets|to set)\s+up\s+(?:the\s+)?(?:cliffhanger|hook|reveal|twist)(?:\s+(?:for|of)\s+(?:the\s+)?(?:next|following|upcoming)\s+(?:episode|scene|shot|chapter|part|season))?/gi, replacement: "" },
-    { pattern: /\b(?:for|in|into|to|of|from|with)\s+(?:the\s+)?(?:next|previous|following|upcoming|final|last|first)\s+(?:episode|scene|shot|clip|chapter|season|series|sequence)s?\b/gi, replacement: "" },
-    { pattern: /\b(?:the\s+)?(?:next|previous|following|upcoming)\s+(?:episode|scene|shot|clip|chapter|season|series)s?\b/gi, replacement: "what follows" },
-    { pattern: /\bcliff-?hangers?\b/gi, replacement: "unresolved tension" },
-    { pattern: /\b(?:tv|television|web|drama|streaming)\s+(?:series|show|serial)s?\b/gi, replacement: "story" },
-    { pattern: /\bepisodes?\b/gi, replacement: "sequence" },
-    { pattern: /\bseason\s+\d+\b/gi, replacement: "" },
-    { pattern: /\b(?:match|smash|hard|jump)\s+cut(?:\s+to)?\b:?/gi, replacement: "then" },
-  ];
-  for (const r of META) text = apply(text, r.pattern, r.replacement, keep, changes, "meta");
 
   // 6. Tidy: doubled generic phrases, whitespace, dangling punctuation.
   text = text

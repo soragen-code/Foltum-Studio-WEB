@@ -146,8 +146,8 @@ model Scene {
   dialogue      String?  @db.Text
   locationDesc  String?  @db.Text
   videoPrompt   String?  @db.Text
-  videoUrl      String?  // generated scene video URL (silent, Seedance)
-  audioUrl      String?  // ElevenLabs voiceover for the scene dialogue
+  videoUrl      String?  // generated scene video URL (Seedance native audio)
+  audioUrl      String?  // legacy separate audio for the scene dialogue
   lastFrameUrl  String?  // last frame of this scene's video (S3) — fed as first-frame of the next scene for one-take continuity
   videoIsPublic Boolean  @default(false)
   language      String   @default("en") // spoken language for native audio: "en" or "ru"

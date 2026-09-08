@@ -1,4 +1,6 @@
 import Replicate from "replicate";
+import { GenerationAttempt, safeDiagnosticInput, safeProviderError, classifyProviderError, logAttempt } from "@/lib/generation-diagnostics";
+import { VISUAL_STYLE_ID } from "@/lib/visual-style";
 
 let _client: Replicate | null = null;
 
@@ -39,6 +41,8 @@ export interface SeedanceInput {
   generate_audio?: boolean;
   /** First-frame image URL (image-to-video). */
   image?: string;
+  /** Character/style references; mutually exclusive with first-frame image. */
+  reference_images?: string[];
   /** Add watermark. Default false. */
   watermark?: boolean;
   seed?: number;
@@ -60,10 +64,10 @@ export async function generateVideo(input: SeedanceInput): Promise<string> {
           duration: input.duration ?? 5,
           resolution: input.resolution ?? "720p",
           aspect_ratio: input.aspect_ratio ?? "9:16",
-          generate_audio: input.generate_audio ?? true,
+          generate_audio: true,
           watermark: input.watermark ?? false,
           output_format: "mp4",
-          ...(input.image ? { image: input.image } : {}),
+          ...(input.image ? { image: input.image } : { reference_images: input.reference_images ?? [] }),
           ...(input.seed !== undefined ? { seed: input.seed } : {}),
         },
       });
@@ -89,10 +93,10 @@ function seedanceInput(input: SeedanceInput) {
     duration: input.duration ?? 5,
     resolution: input.resolution ?? "720p",
     aspect_ratio: input.aspect_ratio ?? "9:16",
-    generate_audio: input.generate_audio ?? true,
+    generate_audio: true,
     watermark: input.watermark ?? false,
     output_format: "mp4",
-    ...(input.image ? { image: input.image } : {}),
+    ...(input.image ? { image: input.image } : { reference_images: input.reference_images ?? [] }),
     ...(input.seed !== undefined ? { seed: input.seed } : {}),
   };
 }
@@ -102,25 +106,25 @@ function seedanceInput(input: SeedanceInput) {
  * so the caller can poll (and survive a serverless function restart).
  */
 export async function startVideoPrediction(input: SeedanceInput): Promise<string> {
-  const replicate = getReplicate();
-  const maxRetries = 2;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const prediction = await replicate.predictions.create({
-        model: "bytedance/seedance-2.5",
-        input: seedanceInput(input),
-      });
-      return prediction.id;
-    } catch (err: any) {
-      const is429 = err?.message?.includes("429") || err?.response?.status === 429;
-      if (is429 && attempt < maxRetries) {
-        await sleep((attempt + 1) * 15_000);
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw new Error("startVideoPrediction: exhausted retries");
+  // One submission per job. Provider/moderation refusals require review, not paid blind retries.
+  const prediction = await getReplicate().predictions.create({
+    model: "bytedance/seedance-2.5",
+    input: seedanceInput(input),
+  });
+  return prediction.id;
+}
+
+/** Separate start lets scene-reference jobs persist prediction IDs before polling. */
+export async function startImagePrediction(input: FluxInput): Promise<string> {
+  const prediction = await getReplicate().predictions.create({
+    model: "black-forest-labs/flux-1.1-pro",
+    input: {
+      prompt: input.prompt, aspect_ratio: input.aspect_ratio ?? "9:16",
+      output_format: "webp", output_quality: 90, safety_tolerance: 2,
+      prompt_upsampling: true, ...(input.seed !== undefined ? { seed: input.seed } : {}),
+    },
+  });
+  return prediction.id;
 }
 
 export interface PredictionState {
@@ -156,38 +160,33 @@ export interface FluxInput {
 
 /**
  * Generate an image using FLUX 1.1 Pro via Replicate.
- * Returns the URL of the generated image. Includes retry logic for rate limits.
+ * Returns the URL of the generated image. Logs each prediction; no paid automatic retries.
  */
-export async function generateImage(input: FluxInput): Promise<string> {
-  const replicate = getReplicate();
-  const maxRetries = 3;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const output = await replicate.run("black-forest-labs/flux-1.1-pro", {
-        input: {
-          prompt: input.prompt,
-          aspect_ratio: input.aspect_ratio ?? "3:4",
-          output_format: "webp",
-          output_quality: 90,
-          safety_tolerance: 2,
-          prompt_upsampling: true,
-          ...(input.seed !== undefined ? { seed: input.seed } : {}),
-        },
-      });
-      return extractUrl(output);
-    } catch (err: any) {
-      const is429 = err?.message?.includes("429") || err?.response?.status === 429;
-      if (is429 && attempt < maxRetries) {
-        const delay = (attempt + 1) * 12_000; // 12s, 24s, 36s
-        console.log(`FLUX rate-limited, retry ${attempt + 1}/${maxRetries} in ${delay / 1000}s`);
-        await sleep(delay);
-        continue;
+export async function generateImage(input: FluxInput, context: { jobId?: string; characterId?: string } = {}): Promise<string> {
+  const attempt: GenerationAttempt = {
+    ...context, attempt: 1, phase: "reference", model: "black-forest-labs/flux-1.1-pro",
+    status: "submitting", style: VISUAL_STYLE_ID,
+    input: safeDiagnosticInput({ prompt: input.prompt, aspect_ratio: input.aspect_ratio ?? "9:16", safety_tolerance: 2 }),
+  };
+  logAttempt(attempt);
+  try {
+    attempt.predictionId = await startImagePrediction(input);
+    attempt.status = "processing"; logAttempt(attempt);
+    const started = Date.now();
+    while (true) {
+      const p = await getPredictionState(attempt.predictionId);
+      if (p.status === "succeeded" && p.url) {
+        attempt.status = "succeeded"; logAttempt(attempt); return p.url;
       }
-      throw err;
+      if (p.status === "failed" || p.status === "canceled") throw new Error(p.error || "Image model failed");
+      if (Date.now() - started > 180_000) throw new Error("Image model timed out; no automatic resubmission");
+      await sleep(2_000);
     }
+  } catch (error) {
+    attempt.error = safeProviderError(error); attempt.errorKind = classifyProviderError(error);
+    attempt.status = attempt.errorKind === "timeout" ? "timeout" : "failed";
+    logAttempt(attempt); throw new Error(attempt.error);
   }
-  throw new Error("generateImage: exhausted retries");
 }
 
 

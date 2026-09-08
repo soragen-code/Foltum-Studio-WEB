@@ -9,6 +9,8 @@ import { chatJSON } from "@/lib/ai";
 import { generateImage } from "@/lib/replicate";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 
+import { characterImagePrompt, VISUAL_STYLE_ID } from "@/lib/visual-style";
+
 const SYSTEM = `You are a character designer. Given a character's current data and the project synopsis, regenerate a fresh take on their appearance and personality while keeping their name and role.
 
 Return ONLY valid JSON:
@@ -20,18 +22,6 @@ Return ONLY valid JSON:
 IMPORTANT LANGUAGE RULES:
 - Write "personality" in the SAME LANGUAGE as the existing character data. If it's in Russian — write in Russian.
 - The "appearance" field must ALWAYS be in English — it is used as a prompt for AI image generation.`;
-
-function imagePrompt(appearance: string, name: string, shotType: "front" | "profile" | "full"): string {
-  const base = `Cinematic character portrait, dramatic lighting, dark moody atmosphere, film still quality. Character: ${appearance}.`;
-  switch (shotType) {
-    case "front":
-      return `${base} Close-up front view, facing camera directly, eye contact, shallow depth of field, studio portrait.`;
-    case "profile":
-      return `${base} Side profile view, dramatic rim lighting, silhouette edge, cinematic composition.`;
-    case "full":
-      return `${base} Full body shot, standing pose, environmental portrait, wide angle, atmospheric background.`;
-  }
-}
 
 export async function POST(request: Request) {
   try {
@@ -77,12 +67,12 @@ Generate a fresh, different take on this character's appearance and personality.
 
     const imgResults = await Promise.all(
       shots.map(async (shot) => {
-        const prompt = imagePrompt(data.appearance, existing.name, shot);
+        const prompt = characterImagePrompt(data.appearance, shot, existing.name);
         const replicateUrl = await generateImage({
           prompt,
           aspect_ratio: aspectRatios[shot],
-        });
-        const s3Key = `media/public/characters/${pid}/${existing.id}/${shot}_${Date.now()}.webp`;
+        }, { characterId: existing.id });
+        const s3Key = `media/public/characters/${pid}/${existing.id}/${VISUAL_STYLE_ID}/${shot}_${Date.now()}.webp`;
         const s3Url = await uploadRemoteToS3(replicateUrl, s3Key, "image/webp");
         return { shot, url: s3Url };
       })

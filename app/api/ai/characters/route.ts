@@ -88,7 +88,7 @@ export async function POST(request: Request) {
     if (rawChars.length === 0)
       return NextResponse.json({ error: "AI returned no characters" }, { status: 500 });
 
-    const characters = [];
+    const characters: Awaited<ReturnType<typeof prisma.character.create>>[] = [];
     for (const c of rawChars) {
       characters.push(
         await prisma.character.create({

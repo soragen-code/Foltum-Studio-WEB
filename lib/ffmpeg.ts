@@ -2,7 +2,7 @@
  * Local ffmpeg helpers (server-side, via the `ffmpeg-static` binary).
  *
  * Used by episode assembly: every scene clip gets a UNIFORM audio track
- * (ElevenLabs voiceover if present, otherwise the clip's own audio, otherwise
+ * (legacy separate audio if present, otherwise the clip's own audio, otherwise
  * silence), then all clips are concatenated. Doing this locally — instead of
  * through a remote ffmpeg model — guarantees the final file keeps its audio
  * stream; the previous remote concatenation silently dropped it.
@@ -126,7 +126,7 @@ export async function probeMedia(file: string): Promise<MediaInfo> {
 
 export interface SceneClipInput {
   videoUrl: string;
-  /** Separate voiceover (e.g. ElevenLabs mp3). Takes priority over the clip's own audio. */
+  /** Separate voiceover (e.g. uploaded audio). Takes priority over the clip's own audio. */
   audioUrl?: string | null;
   /** Cleaned spoken text for this scene — burned in as a subtitle over the clip's segment. */
   subtitle?: string | null;

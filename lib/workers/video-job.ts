@@ -1,19 +1,12 @@
 import { prisma } from "@/lib/db";
-import { startVideoPrediction, getPredictionState } from "@/lib/replicate";
+import { startVideoPrediction, startImagePrediction, getPredictionState } from "@/lib/replicate";
 import { buildNativeAudioPrompt, translateDialogue, detectSpokenLanguage, languageName } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
 import { extractLastFrameBuffer } from "@/lib/ffmpeg";
 import { getBucketConfig } from "@/lib/aws-config";
-import { sanitizeVideoPrompt } from "@/lib/sanitize-prompt";
+import { VISUAL_STYLE_ID, styledVisualPrompt, isStyledAsset, canChainFrame } from "@/lib/visual-style";
+import { GenerationAttempt, safeProviderError, classifyProviderError, logAttempt, safeDiagnosticInput } from "@/lib/generation-diagnostics";
 import { updateJob, completeJob, failJob, heartbeatJob, runInBackground } from "@/lib/jobs";
-
-/**
- * Always use Seedance native audio: characters speak and ambient sound is baked into the clip.
- * Attempts 1–2: generate_audio=true (voices in-clip).
- * Attempt 3 (last retry): generate_audio=false as a silent fallback in case audio triggers the
- * copyright filter — a silent-but-valid clip is better than a hard failure.
- */
-const NATIVE_AUDIO = true;
 
 export interface VideoJobParams {
   jobId: string;
@@ -33,7 +26,8 @@ interface VideoJobState {
   userId?: string;
   cost?: number;
   startedAt: number;
-  /** set once finalization (TTS + upload) has begun, to avoid running it twice */
+  diagnostics?: GenerationAttempt[];
+  /** set once finalization (upload) has begun, to avoid running it twice */
   finalizing?: boolean;
 }
 
@@ -41,7 +35,7 @@ const POLL_INTERVAL_MS = 8_000;
 /** Typical Seedance time — only used to animate the progress bar while waiting. */
 const EXPECTED_VIDEO_MS = Number(process.env.SEEDANCE_EXPECTED_MS ?? 5 * 60 * 1000);
 /** Hard cap for waiting on Replicate. */
-const MAX_WAIT_MS = Number(process.env.SEEDANCE_MAX_WAIT_MS ?? 12 * 60 * 1000);
+const MAX_WAIT_MS = Math.min(Number(process.env.SEEDANCE_MAX_WAIT_MS ?? 9 * 60 * 1000), 9 * 60 * 1000);
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
@@ -78,176 +72,126 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
   const { jobId, sceneId, projectId, userId } = params;
   const cost = Number(params.cost ?? 0);
 
+  const diagnostics: GenerationAttempt[] = [];
+  let state: VideoJobState | null = null;
+  const persist = () => updateJob(jobId, { resultData: JSON.stringify({ ...state, diagnostics }) });
   try {
     const scene = await prisma.scene.findUnique({ where: { id: sceneId } });
     if (!scene?.videoPrompt) throw new Error("Scene has no video prompt");
-
-    await updateJob(jobId, {
-      status: "processing",
-      progress: 5,
-      message: "Generating video with Seedance native audio (this takes ~3-5 min)...",
-    });
-
-    // In native-audio mode, embed the spoken dialogue into the prompt so the
-    // characters actually speak on camera (lip-synced) with diegetic ambient sound.
-    let prompt = scene.videoPrompt;
+    await updateJob(jobId, { status: "processing", progress: 5, message: "Preparing softly stylized visual references..." });
     const links = await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true } });
-    if (NATIVE_AUDIO) {
-      // Per-scene spoken language chosen in the UI ("en" default / "ru").
-      const targetLangName = languageName((scene as any).language) || "English";
-      // Speak the dialogue in the selected language — translate it if it isn't already.
-      let dialogue = scene.dialogue;
-      if (dialogue && detectSpokenLanguage(dialogue) !== targetLangName) {
-        dialogue = await translateDialogue(dialogue, targetLangName);
-      }
-      prompt = buildNativeAudioPrompt(scene.videoPrompt, dialogue, links.map((l) => l.character), targetLangName);
+    const visualPrompt = styledVisualPrompt(scene.videoPrompt, links.map(l => l.character.name));
+    const targetLanguage = languageName(scene.language) || "English";
+    let dialogue = scene.dialogue;
+    if (dialogue && detectSpokenLanguage(dialogue) !== targetLanguage) {
+      dialogue = await translateDialogue(dialogue, targetLanguage);
     }
+    // Sanitize visual descriptions BEFORE adding speech: never rewrite scripted dialogue.
+    let prompt = buildNativeAudioPrompt(visualPrompt, dialogue, links.map(l => l.character), targetLanguage);
 
-    // Strip anything that trips the model's copyright filter (real people, brands, films,
-    // "in the style of …"). The ORIGINAL videoPrompt stays untouched in the DB; only the
-    // text sent to the model is rewritten. Project character names are never rewritten.
-    const sanitized = sanitizeVideoPrompt(prompt, { keep: links.map((l) => l.character.name) });
-    if (sanitized.changed) {
-      console.warn(`[video-job] scene ${sceneId}: sanitized prompt —`, sanitized.changes.join(" | "));
-    }
-    prompt = sanitized.prompt;
-
-    // Steer the model away from anything its output-moderation flags as copyrighted.
-    const basePrompt = withCopyrightSafety(prompt);
-
-    // ── One-take frame-chaining ────────────────────────────────────────────────
-    // Feed the LAST FRAME of the previous scene as the FIRST FRAME of this one, so the
-    // clip literally starts where the last one ended and the episode reads as a single
-    // continuous take instead of separate shots glued together.
-    let chainImage: string | undefined;
-    if (scene.number > 1) {
-      const prev = await prisma.scene.findFirst({
-        where: { episodeId: scene.episodeId, number: { lt: scene.number }, lastFrameUrl: { not: null } },
-        orderBy: { number: "desc" },
-        select: { lastFrameUrl: true, number: true },
-      });
-      if (prev?.lastFrameUrl) {
-        chainImage = prev.lastFrameUrl;
-        console.log(`[video-job] scene ${scene.number}: chaining from scene ${prev.number}'s last frame`);
-      }
-    }
-
-    // 1-2. Start + wait, retrying automatically if the OUTPUT is rejected by the
-    // model's copyright/moderation filter (that check is partly non-deterministic —
-    // a fresh generation with stronger "original content" framing usually passes).
-    const MAX_ATTEMPTS = 3;
-    let videoUrl = "";
-    let state: VideoJobState | null = null;
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-      // Escalate the anti-copyright framing on each retry.
-      const attemptPrompt = attempt === 1 ? basePrompt : withCopyrightSafety(prompt, attempt);
-      // The filter judges the OUTPUT (video + generated soundtrack), not the prompt. A clip
-      // with fully generic visuals can still be rejected because the model's improvised
-      // score/ambience resembles existing music. On the last attempt drop generated audio
-      // so a silent-but-valid clip beats a hard failure (audio can be re-added later).
-      const silentFallback = attempt === MAX_ATTEMPTS;
-      if (silentFallback) {
-        await updateJob(jobId, { message: "Final attempt: generating without model audio (copyright-safe)..." });
-      }
-      const predictionId = await startVideoPrediction({
-        prompt: attemptPrompt,
-        duration: Number(params.duration ?? 5),
-        resolution: String(params.resolution ?? "480p"),
-        aspect_ratio: "9:16",
-        generate_audio: !silentFallback, // Seedance native speech+ambience; last retry drops audio to avoid copyright filter
-        watermark: false,
-        ...(chainImage ? { image: chainImage } : {}), // one-take continuity: start from previous scene's last frame
-      });
-      state = { predictionId, sceneId, projectId, userId, cost, startedAt: Date.now() };
-      await updateJob(jobId, { resultData: JSON.stringify(state) });
-
-      try {
-        videoUrl = await waitForPrediction(jobId, state);
-        break; // success
-      } catch (err: any) {
-        const last = attempt >= MAX_ATTEMPTS;
-        if (isCopyrightError(err) && !last) {
-          await updateJob(jobId, {
-            progress: 5,
-            message: `Output flagged by copyright filter — retrying with adjusted prompt (attempt ${attempt + 1}/${MAX_ATTEMPTS})...`,
-          });
-          continue;
+    const previous = scene.number > 1 ? await prisma.scene.findFirst({
+      where: { episodeId: scene.episodeId, number: scene.number - 1 },
+      select: { id: true, number: true, locationDesc: true, lastFrameUrl: true },
+    }) : null;
+    let image: string | undefined;
+    let referenceImages: string[] = [];
+    let reference: Record<string, unknown>;
+    if (canChainFrame(scene, previous)) {
+      image = previous!.lastFrameUrl!;
+      reference = { mode: "adjacent_frame", sceneId: previous!.id };
+    } else {
+      const compatible = links.filter(l => isStyledAsset(l.character.imageFront));
+      if (compatible.length && compatible.length === links.length) {
+        referenceImages = compatible.map(l => l.character.imageFront!);
+        reference = { mode: "character_references", characterIds: compatible.map(l => l.characterId) };
+        prompt += "\n" + compatible.map((l, i) => `[Image${i + 1}] defines ${l.character.name}'s appearance and soft illustration treatment; use the scene's staging and camera.`).join("\n");
+      } else {
+        // One new scene composition, never overwrite the user's old portraits or frames.
+        // This is original text-to-image design, not a way to bypass a provider refusal.
+        const referencePrompt = `${visualPrompt}\nSingle still establishing the described scene with the same characters, clothing and setting. No text or subtitles.`;
+        const attempt: GenerationAttempt = {
+          jobId, sceneId, attempt: 1, model: "black-forest-labs/flux-1.1-pro", phase: "reference",
+          status: "submitting", style: VISUAL_STYLE_ID,
+          input: safeDiagnosticInput({ prompt: referencePrompt, aspect_ratio: "9:16", safety_tolerance: 2, source: "original_scene_description" }),
+        };
+        diagnostics.push(attempt); await persist(); logAttempt(attempt);
+        attempt.predictionId = await startImagePrediction({ prompt: referencePrompt, aspect_ratio: "9:16" });
+        attempt.status = "processing"; await persist(); logAttempt(attempt);
+        const started = Date.now();
+        let referenceUrl = "";
+        while (!referenceUrl) {
+          const prediction = await getPredictionState(attempt.predictionId);
+          if (prediction.status === "succeeded" && prediction.url) {
+            referenceUrl = prediction.url; attempt.status = "succeeded"; await persist(); logAttempt(attempt); break;
+          }
+          if (prediction.status === "failed" || prediction.status === "canceled") {
+            attempt.status = prediction.status;
+            throw new Error(prediction.error || "Reference model failed");
+          }
+          if (Date.now() - started > 180_000) throw new Error("Reference model timed out; no automatic resubmission");
+          await heartbeatJob(jobId); await sleep(POLL_INTERVAL_MS);
         }
-        // Not a copyright issue, or we're out of retries → surface a clear message.
-        throw isCopyrightError(err)
-          ? new Error(
-              "The video model's copyright filter blocked the result after several attempts. " +
-                "Try rephrasing the scene prompt to avoid references to real people, brands, logos or well-known films/characters."
-            )
-          : err;
+        const { folderPrefix } = getBucketConfig();
+        const key = `${folderPrefix}public/references/${projectId}/${VISUAL_STYLE_ID}/${sceneId}-${jobId}.webp`;
+        const stored = await uploadRemoteToS3(referenceUrl, key, "image/webp");
+        referenceImages = [stored];
+        reference = { mode: "new_scene_reference", sceneId, referencePredictionId: attempt.predictionId };
+        prompt += "\n[Image1] defines the scene's original character designs, clothing, environment and soft illustration treatment. Preserve those designs while performing the scripted action.";
       }
     }
-
-    // 3. Finalize
-    await finalizeVideoJob(jobId, state!, videoUrl);
-  } catch (err: any) {
+    // One paid video attempt. Copyright, general moderation, E003 and timeout remain distinct;
+    // none silently trigger another generation or switch the audio off.
+    const input = {
+      prompt, duration: Number(params.duration ?? 5), resolution: String(params.resolution ?? "480p"),
+      aspect_ratio: image ? "adaptive" : "9:16", generate_audio: true, watermark: false,
+    };
+    const attempt: GenerationAttempt = {
+      jobId, sceneId, attempt: 1, model: "bytedance/seedance-2.5", phase: "video", status: "submitting",
+      style: VISUAL_STYLE_ID, language: scene.language || "en", input: safeDiagnosticInput({ ...input, reference }),
+    };
+    diagnostics.push(attempt); await persist(); logAttempt(attempt);
+    const predictionId = await startVideoPrediction({ ...input, ...(image ? { image } : { reference_images: referenceImages }) });
+    attempt.predictionId = predictionId; attempt.status = "processing";
+    state = { predictionId, sceneId, projectId, userId, cost, startedAt: Date.now(), diagnostics };
+    await persist(); logAttempt(attempt);
+    await updateJob(jobId, { message: "Generating softly stylized video with dialogue and ambience..." });
+    const videoUrl = await waitForPrediction(jobId, state);
+    await finalizeVideoJob(jobId, state, videoUrl);
+  } catch (err: unknown) {
+    const attempt = diagnostics[diagnostics.length - 1];
+    if (attempt && attempt.status !== "succeeded") {
+      attempt.error = safeProviderError(err); attempt.errorKind = classifyProviderError(err);
+      if (attempt.status !== "failed" && attempt.status !== "canceled") attempt.status = attempt.errorKind === "timeout" ? "timeout" : "failed";
+      logAttempt(attempt);
+    }
+    await persist();
     await handleFailure(jobId, { sceneId, userId, cost }, err);
   }
 }
 
-/** Does this error come from the model's copyright / content-moderation filter? */
-function isCopyrightError(err: any): boolean {
-  const m = String(err?.message ?? err ?? "").toLowerCase();
-  return (
-    m.includes("copyright") ||
-    m.includes("content policy") ||
-    m.includes("moderation") ||
-    m.includes("flagged") ||
-    m.includes("sensitive")
-  );
-}
-
-/**
- * Prefix the prompt with an "original content" declaration so the model's output-filter
- * sees it before any scene description. On retries: escalate the declaration AND strip
- * cinematic style vocabulary that pushes the model toward copyrighted visual styles.
- *
- * Bracket semantics (Seedance 2.5): {text} = speech, (text) = music cue.
- * Round brackets are intentionally absent from all prompt text so no music is generated.
- */
-function withCopyrightSafety(prompt: string, attempt = 1): string {
-  const ORIGINAL =
-    "Entirely original, non-copyrighted fictional content. " +
-    "No real people, no celebrity likenesses, no brand names or logos, " +
-    "no copyrighted or recognizable franchise characters, no trademarks, no watermarks, " +
-    "no on-screen text. Generic everyday appearance and neutral setting. " +
-    "NO background music. NO score. NO soundtrack. Dialogue and ambient sound only.";
-  const extra =
-    attempt > 1
-      ? " Nothing resembling any existing film, show, game, music video or public figure."
-      : "";
-  const safePrompt = attempt > 1 ? stripStyleReferences(prompt) : prompt;
-  return `[ORIGINAL CONTENT: ${ORIGINAL}${extra}]\n${safePrompt}`;
-}
-
-/** Remove cinematic style vocabulary that steers the model toward copyrighted visual/audio styles. */
-function stripStyleReferences(prompt: string): string {
-  return prompt
-    .replace(/\b(?:cinematic(?:ally)?|film[- ]?like|movie[- ]?like)\b/gi, "")
-    .replace(/\bfilm\s+noir\b/gi, "high-contrast shadows")
-    .replace(/\bnoir(?:\s+(?:style|aesthetic|look|vibe|mood|atmosphere|tone))?\b/gi, "shadowy")
-    .replace(/\b(?:blockbuster|oscar[- ]?(?:worthy|winning|caliber)|award[- ]?winning|iconic)\b/gi, "")
-    .replace(/\b(?:dramatic|haunting|tense|moody|soaring|swelling|building|rising|melancholic)\s+(?:score|music|soundtrack|melody|theme)\b/gi, "ambient sound")
-    .replace(/\b(?:film|movie|cinematic|orchestral|symphonic|sweeping|lush|epic)\s+(?:score|soundtrack)\b/gi, "ambient sound")
-    .replace(/\bscore\s+(?:builds?|swells?|rises?|soars?|crescendos?)\b/gi, "tension builds")
-    .replace(/\bchiaroscuro\b/gi, "strong directional lighting")
-    .replace(/\b(?:v[eé]rit[eé]|cinema\s+v[eé]rit[eé])\b/gi, "observational")
-    .replace(/\s{2,}/g, " ")
-    .replace(/,\s*,/g, ",")
-    .trim();
+/** Keep diagnostics across provider completion, worker resumption and upload. */
+async function recordPredictionStatus(jobId: string, state: VideoJobState, status: string, error?: string) {
+  const attempt = state.diagnostics?.find(a => a.predictionId === state.predictionId);
+  if (attempt) {
+    attempt.status = status;
+    if (error) { attempt.error = safeProviderError(error); attempt.errorKind = classifyProviderError(error); }
+    await updateJob(jobId, { resultData: JSON.stringify(state) });
+    logAttempt(attempt);
+  }
 }
 
 /** Poll Replicate until the prediction settles; heartbeats the job on every tick. */
 async function waitForPrediction(jobId: string, state: VideoJobState): Promise<string> {
   while (true) {
     const p = await getPredictionState(state.predictionId);
-    if (p.status === "succeeded" && p.url) return p.url;
-    if (p.status === "failed" || p.status === "canceled") throw new Error(p.error || "Video model failed");
+    if (p.status === "succeeded" && p.url) {
+      await recordPredictionStatus(jobId, state, p.status);
+      return p.url;
+    }
+    if (p.status === "failed" || p.status === "canceled") {
+      await recordPredictionStatus(jobId, state, p.status, p.error);
+      throw new Error(p.error || "Video model failed");
+    }
     if (Date.now() - state.startedAt > MAX_WAIT_MS) throw new Error("Video model timed out");
 
     await updateJob(jobId, { progress: waitingProgress(state.startedAt) });
@@ -272,14 +216,14 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, replicateVi
   await updateJob(jobId, { progress: 80, message: "Uploading to storage..." });
 
   const { folderPrefix } = getBucketConfig();
-  const baseKey = `${folderPrefix}public/videos/${projectId}/${scene.episodeId}/scene-${scene.number}-${Date.now()}`;
+  const baseKey = `${folderPrefix}public/videos/${projectId}/${scene.episodeId}/${VISUAL_STYLE_ID}/scene-${scene.number}-${Date.now()}`;
   const videoUrl = await uploadRemoteToS3(replicateVideoUrl, `${baseKey}.mp4`, "video/mp4");
 
   await updateJob(jobId, { progress: 95, message: "Saving scene..." });
 
   const updated = await prisma.scene.update({
     where: { id: sceneId },
-    data: { videoUrl, audioUrl: null, status: "generated" },
+    data: { videoUrl, audioUrl: null, status: "generated", lastFrameUrl: null },
   });
 
   // One-take frame-chaining: capture this scene's LAST FRAME so the NEXT scene can start
@@ -290,10 +234,10 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, replicateVi
     await prisma.scene.update({ where: { id: sceneId }, data: { lastFrameUrl } });
     console.log(`[video-job] scene ${scene.number}: stored last frame for chaining`);
   } catch (frameErr: any) {
-    console.warn("[video-job] last-frame extraction failed (non-fatal):", frameErr?.message ?? frameErr);
+    console.warn("[video-job] last-frame extraction failed (non-fatal):", safeProviderError(frameErr));
   }
 
-  await completeJob(jobId, { videoUrl, scene: updated }, "Video ready");
+  await completeJob(jobId, { ...state, finalizing: false, videoUrl, scene: updated }, "Video ready");
 }
 
 async function handleFailure(
@@ -301,7 +245,7 @@ async function handleFailure(
   ctx: { sceneId: string; userId?: string; cost?: number },
   err: any
 ): Promise<void> {
-  console.error("[video-job] failed:", err);
+  console.error("[video-job] failed:", { jobId, sceneId: ctx.sceneId, kind: classifyProviderError(err), error: safeProviderError(err) });
   const cost = Number(ctx.cost ?? 0);
   try {
     await prisma.scene.update({ where: { id: ctx.sceneId }, data: { status: "pending" } });
@@ -314,7 +258,7 @@ async function handleFailure(
       });
     }
   } catch {}
-  await failJob(jobId, err?.message ?? "Video generation failed");
+  await failJob(jobId, `[${classifyProviderError(err)}] ${safeProviderError(err)}`);
 }
 
 /**
@@ -338,8 +282,9 @@ export async function resumeVideoJob(job: {
 
   try {
     if (state.finalizing) {
-      // Finalization died (TTS/upload). It's cheap to redo — restart it.
+      // Finalization died (upload). It's cheap to redo — restart it.
       const p = await getPredictionState(state.predictionId);
+      if (["succeeded", "failed", "canceled"].includes(p.status)) await recordPredictionStatus(job.id, state, p.status, p.error);
       if (p.status === "succeeded" && p.url) {
         await heartbeatJob(job.id);
         runInBackground(() => finalizeVideoJob(job.id, state, p.url!).catch((e) => handleFailure(job.id, state, e)));
@@ -348,6 +293,7 @@ export async function resumeVideoJob(job: {
     }
 
     const p = await getPredictionState(state.predictionId);
+    if (["succeeded", "failed", "canceled"].includes(p.status)) await recordPredictionStatus(job.id, state, p.status, p.error);
     if (p.status === "succeeded" && p.url) {
       await heartbeatJob(job.id);
       runInBackground(() => finalizeVideoJob(job.id, state, p.url!).catch((e) => handleFailure(job.id, state, e)));
@@ -358,6 +304,7 @@ export async function resumeVideoJob(job: {
       return true;
     }
     if (Date.now() - state.startedAt > MAX_WAIT_MS) {
+      await recordPredictionStatus(job.id, state, "timeout", "Video model timed out");
       await handleFailure(job.id, state, new Error("Video model timed out"));
       return true;
     }
@@ -366,7 +313,7 @@ export async function resumeVideoJob(job: {
     await heartbeatJob(job.id);
     return true;
   } catch (e) {
-    console.error("[video-job] resume error:", e);
+    console.error("[video-job] resume error:", safeProviderError(e));
     return false;
   }
 }

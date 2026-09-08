@@ -20,8 +20,8 @@ function subtitleFor(dialogue: string | null | undefined): string {
 /**
  * Assemble a full episode from all accepted scene videos (in scene order).
  *
- * Scene clips are generated WITHOUT audio (Seedance `generate_audio: false`); the
- * dialogue is a separate ElevenLabs voiceover in `scene.audioUrl`. Assembly therefore:
+ * New scenes carry Seedance native speech and ambience. Older scenes may retain
+ * a separate audio asset in `scene.audioUrl`; assembly preserves that compatibility:
  *   1. muxes each scene's voiceover into its clip (clips without a voiceover keep their
  *      own audio if they have one, otherwise get a silent track) so every clip has a
  *      uniform video + AAC audio layout,

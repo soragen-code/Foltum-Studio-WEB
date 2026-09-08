@@ -7,6 +7,8 @@ import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, scenesSchema } from "@/lib/validations";
 import { chatJSON } from "@/lib/ai";
 
+import { VISUAL_STYLE } from "@/lib/visual-style";
+
 const EPISODE_MIN_SECONDS = Number(process.env.EPISODE_MIN_SECONDS ?? 60);
 // Seedance 2.5 renders one scene = one ~5 s clip. To reach ~1 minute per episode
 // (and NEVER less), we need enough scenes to cover EPISODE_MIN_SECONDS at 5 s each.
@@ -22,13 +24,16 @@ const MAX_SILENT_SCENES = Math.max(MIN_SILENT_SCENES, Math.floor(SCENES_PER_EPIS
 
 const SYSTEM = `You are a film director + cinematographer + editor working on a short-form VERTICAL drama series (9:16, TikTok/Reels format). Every episode must run AT LEAST ${EPISODE_MIN_SECONDS} seconds of screen time.
 
+VISUAL TREATMENT FOR ALL NEW SHOTS: ${VISUAL_STYLE}
+Preserve each character's own identity and story; never imitate a studio or franchise. Use only dialogue and natural ambience, never music.
+
 THE CORE IDEA — SCENES ARE SHOTS, NOT MINI-STORIES:
 An episode is ONE continuous piece of cinema. The ${SCENES_PER_EPISODE} "scenes" you write are ${SCENES_PER_EPISODE} CAMERA SHOTS (cuts) of ~${SCENE_SECONDS} seconds each inside that single continuous sequence — exactly the way a film editor cuts between angles of the same unfolding action. Each shot is rendered as a separate ~${SCENE_SECONDS} s AI video clip and the clips are concatenated in order, so the viewer must experience them as ONE flowing film, never as unrelated clips glued together.
 
 Given the project synopsis, this episode's description, and the characters, return ONLY valid JSON in this exact shape:
 
 {
-  "visualIdentity": "One sentence, English. The look of the whole episode: film stock / lens, lighting, color palette, grain, aspect. Example: 'Cinematic 35mm film, warm amber tungsten lighting with cold blue window spill, shallow depth of field, anamorphic lens flare, fine grain, muted teal-and-amber palette.'",
+  "visualIdentity": "One sentence, English. The look of the whole episode: soft forms / textures, lighting, color palette, aspect. Use the VISUAL TREATMENT above, with a consistent lighting and color palette.",
   "characterSheet": {
     "CHARACTER_NAME": "Exact physical description used VERBATIM in every videoPrompt where this character appears. Example: 'YARA (early 20s, short black hair, olive skin, dark grey hoodie, silver stud earrings)'"
   },
@@ -49,7 +54,7 @@ Given the project synopsis, this episode's description, and the characters, retu
 
 2. SHOT PROGRESSION, NOT SCENE JUMPS. Think like a cinematographer covering one continuous action: wide → medium → close-up → reaction shot → back to medium → insert → ... Action, location and time flow CONTINUOUSLY from shot to shot: shot N+1 starts exactly where shot N ended (same room, same light, same positions, same props). A change of location/time is allowed ONLY when explicitly motivated and written into locationDesc as a transition ("CUT TO: 2 hours later —", "SMASH CUT TO: EXT —"). At most 1–2 such transitions per episode.
 
-3. ONE CONSISTENT VISUAL IDENTITY. Define it in "visualIdentity" and repeat that SAME sentence (verbatim or near-verbatim) in the [VISUAL STYLE] line of EVERY videoPrompt. Same film stock, lens character, lighting scheme and color palette in all ${SCENES_PER_EPISODE} shots — the cut must never feel like a different camera.
+3. ONE CONSISTENT VISUAL IDENTITY. Define it in "visualIdentity" and repeat that SAME sentence (verbatim or near-verbatim) in the [VISUAL STYLE] line of EVERY videoPrompt. Same soft forms, matte textures, lighting scheme and color palette in all ${SCENES_PER_EPISODE} shots — the cut must never feel like a different camera.
 
 4. IDENTICAL CHARACTER DESCRIPTIONS. Build "characterSheet" first (age range, hair, skin, build, distinctive features, EXACT clothing for this episode). Then, in every videoPrompt where a character is visible, paste their characterSheet description WORD FOR WORD into [CHARACTER]. Never vary hair, clothes or features between shots. Use the character names given below.
 
@@ -76,8 +81,8 @@ Given the project synopsis, this episode's description, and the characters, retu
 
 Never mention real people, brands, logos or existing films/characters. No on-screen text, no subtitles, no music references.
 
-============ HARD RULE — COPYRIGHT-SAFE PROMPTS (the video model REJECTS violations) ============
-The AI video model runs a strict copyright filter and will BLOCK the whole clip if a videoPrompt contains any of the following. Every videoPrompt, visualIdentity and characterSheet entry MUST be 100% original:
+============ ORIGINAL VISUAL DESIGN RULES ============
+Describe original designs directly. These rules do not guarantee provider moderation approval:
 - NEVER name real actors, celebrities, musicians, politicians, athletes, influencers or ANY real person — not as a lookalike either ("looks like Angelina Jolie", "a young Brad Pitt" are FORBIDDEN). Describe people generically and concretely instead: "a woman in her 30s with dark shoulder-length hair and sharp cheekbones".
 - NEVER name directors, cinematographers, photographers or their signature styles ("Wes Anderson symmetry", "Fincher-esque", "Deakins lighting", "in the style of Kubrick"). Describe the technique itself: "perfectly centered symmetrical framing", "low-key cool-toned lighting with deep shadows", "slow push-in with shallow depth of field".
 - NEVER reference specific films, TV series, games, anime, comics or their characters, worlds, props or scenes ("Blade Runner neon", "like the Matrix lobby scene", "a Joker-style grin", "Hogwarts-like castle"). Describe the imagery directly: "rain-soaked street lit by pink and cyan neon signs".

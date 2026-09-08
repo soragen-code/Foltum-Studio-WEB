@@ -3,6 +3,8 @@ import { generateImage } from "@/lib/replicate";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob } from "@/lib/jobs";
 
+import { characterImagePrompt, VISUAL_STYLE_ID } from "@/lib/visual-style";
+
 const SHOTS = ["front", "profile", "full"] as const;
 type Shot = (typeof SHOTS)[number];
 const ASPECT_RATIOS: Record<Shot, string> = { front: "3:4", profile: "3:4", full: "9:16" };
@@ -14,19 +16,6 @@ const SHOT_FIELDS: Record<Shot, "imageFront" | "imageProfile" | "imageFull"> = {
 };
 
 function sleep(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
-
-/** Build a FLUX prompt for a specific shot type */
-function imagePrompt(appearance: string, shotType: Shot): string {
-  const base = `Cinematic character portrait, dramatic lighting, dark moody atmosphere, film still quality. Character: ${appearance}.`;
-  switch (shotType) {
-    case "front":
-      return `${base} Close-up front view, facing camera directly, eye contact, shallow depth of field, studio portrait.`;
-    case "profile":
-      return `${base} Side profile view, dramatic rim lighting, silhouette edge, cinematic composition.`;
-    case "full":
-      return `${base} Full body shot, standing pose, environmental portrait, wide angle, atmospheric background.`;
-  }
-}
 
 export interface CharacterImagesJobParams {
   jobId: string;
@@ -62,10 +51,10 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds }: 
         });
         try {
           const replicateUrl = await generateImage({
-            prompt: imagePrompt(char.appearance ?? "", shot),
+            prompt: characterImagePrompt(char.appearance ?? "", shot, char.name),
             aspect_ratio: ASPECT_RATIOS[shot],
-          });
-          const s3Key = `media/public/characters/${projectId}/${char.id}/${shot}.webp`;
+          }, { jobId, characterId: char.id });
+          const s3Key = `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/${shot}-${Date.now()}.webp`;
           const url = await uploadRemoteToS3(replicateUrl, s3Key, "image/webp");
           await prisma.character.update({ where: { id: char.id }, data: { [SHOT_FIELDS[shot]]: url } });
         } catch (imgErr: any) {
