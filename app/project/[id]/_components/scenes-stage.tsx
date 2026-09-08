@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Loader2, Play, Check, RefreshCw, Edit2, Film, ChevronDown, ChevronRight } from 'lucide-react'
+import { Loader2, Play, Check, RefreshCw, Edit2, Film, ChevronDown, ChevronRight, Zap } from 'lucide-react'
 import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from './use-job-polling'
 
 const VIDEO_EXPECTED_SEC = 200 // ~3 min Seedance + TTS + upload
@@ -99,10 +99,14 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
   /** sceneId -> job being polled (or just finished, kept briefly for the 100% state) */
   const [videoJobs, setVideoJobs] = useState<Record<string, JobInfo>>({})
   const [startingVideo, setStartingVideo] = useState<string | null>(null)
+  /** episodeId -> true while the "Generate all scenes" batch request is being dispatched. */
+  const [startingBatch, setStartingBatch] = useState<Record<string, boolean>>({})
   // Per-scene spoken language for native audio ("en" default, or "ru"). Local override
   // of whatever is stored on the scene; applied when the scene's video is generated.
   const [sceneLang, setSceneLang] = useState<Record<string, string>>({})
   const langOf = (scene: any): string => sceneLang[scene?.id] ?? scene?.language ?? 'en'
+  /** Spoken language for the "Generate all scenes" batch (EN default, RU optional). */
+  const [batchLang, setBatchLang] = useState<'en' | 'ru'>('en')
   const pollTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const [error, setError] = useState('')
   const [expandedSeason, setExpandedSeason] = useState<string | null>(null)
@@ -267,6 +271,39 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
     finally { setStartingVideo(null) }
   }
 
+  /**
+   * Generate video for EVERY scene of the episode at once — they render in PARALLEL.
+   * Each returned job is polled independently. Scenes with an already-running job are
+   * resumed (never double-charged). If you dislike a scene, tweak its prompt and hit
+   * the per-scene Regenerate button — only that scene reruns.
+   */
+  const generateEpisodeVideos = async (episodeId?: string, language?: string) => {
+    const epId = episodeId ?? selectedEpisodeId
+    if (!epId || startingBatch[epId]) return
+    setStartingBatch((prev) => ({ ...prev, [epId]: true }))
+    setError('')
+    try {
+      const res = await fetch('/api/ai/generate-episode-videos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: project?.id, episodeId: epId, language }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !Array.isArray(data?.jobs)) {
+        setError(data?.error ?? 'Batch generation failed')
+        return
+      }
+      for (const j of data.jobs as Array<{ sceneId: string; jobId: string }>) {
+        patchScene(j.sceneId, { status: 'generating' })
+        pollVideoJob(j.sceneId, j.jobId)
+      }
+      if (data.jobs.length === 0) {
+        setError(data?.skipped ? 'All scenes already running or out of credits' : 'No scenes to generate')
+      }
+    } catch { setError('Network error') }
+    finally { setStartingBatch((prev) => ({ ...prev, [epId]: false })) }
+  }
+
   const acceptScene = async (sceneId: string) => {
     try {
       const res = await fetch('/api/ai/accept-scene', {
@@ -394,6 +431,42 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
                   </span>
                 )}
               </div>
+
+              {/* Generate ALL scenes of the episode at once — they render in parallel.
+                  Dislike one? Tweak its prompt and hit that scene's Regenerate button. */}
+              {(scenes ?? []).length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3" style={{ boxShadow: 'var(--shadow-sm)' }}>
+                  <div className="flex items-center overflow-hidden rounded-lg border border-border text-xs">
+                    {(['en', 'ru'] as const).map((lng) => (
+                      <button
+                        key={lng}
+                        type="button"
+                        onClick={() => setBatchLang(lng)}
+                        disabled={!!startingBatch[selectedEpisodeId!]}
+                        className={`px-2.5 py-1.5 font-medium transition disabled:opacity-50 ${
+                          batchLang === lng
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-card text-muted-foreground hover:bg-muted/40'
+                        }`}
+                      >
+                        {lng === 'en' ? 'EN' : 'RU'}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    onClick={() => generateEpisodeVideos(selectedEpisodeId!, batchLang)}
+                    disabled={!!startingBatch[selectedEpisodeId!]}
+                    className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
+                  >
+                    {startingBatch[selectedEpisodeId!] ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Zap className="h-4 w-4" />
+                    )}
+                    Generate all scenes
+                  </button>
+                </div>
+              )}
 
               {/* Non-destructive loading banner: the panel stays mounted so nothing
                   flashes away and back while scenes are (re)generated. */}
