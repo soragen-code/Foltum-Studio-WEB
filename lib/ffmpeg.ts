@@ -240,10 +240,13 @@ async function burnSubtitles(inputPath: string, srtName: string, outPath: string
     styleOverride ??
     "FontName=DejaVu Sans,Fontsize=15,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000," +
     "BorderStyle=1,Outline=2,Shadow=1,Alignment=2,MarginV=64";
+  // Serverless images ship no system fonts: without a font libass renders NOTHING (and ffmpeg
+  // still exits 0). Bundle DejaVu Sans with the app and point libass at it via a relative fontsdir.
+  const fontsDir = await stageFonts(workDir);
   await runFfmpeg(
     [
       "-i", inputPath,
-      "-vf", `subtitles=${srtName}:force_style='${style}'`,
+      "-vf", `subtitles=${srtName}${fontsDir ? `:fontsdir=${fontsDir}` : ""}:force_style='${style}'`,
       "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
       "-c:a", "copy",
       "-movflags", "+faststart",
@@ -293,6 +296,29 @@ export async function burnSceneSubtitles(videoUrl: string, lines: string[]): Pro
   } finally {
     await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+/** Copy the bundled subtitle fonts next to the SRT (relative path → no ':' escaping issues). */
+async function stageFonts(workDir: string): Promise<string | null> {
+  const candidates = [
+    path.join(process.cwd(), "assets", "fonts"),
+    path.join(__dirname, "..", "assets", "fonts"),
+    path.join(__dirname, "..", "..", "assets", "fonts"),
+  ];
+  for (const dir of candidates) {
+    try {
+      const files = (await fs.readdir(dir)).filter((f) => /\.(ttf|otf)$/i.test(f));
+      if (!files.length) continue;
+      const dest = path.join(workDir, "fonts");
+      await fs.mkdir(dest, { recursive: true });
+      for (const f of files) await fs.copyFile(path.join(dir, f), path.join(dest, f));
+      return "fonts";
+    } catch {
+      /* try next */
+    }
+  }
+  console.warn("[ffmpeg] bundled fonts not found — subtitles may render blank");
+  return null;
 }
 
 export interface AssembleResult {
