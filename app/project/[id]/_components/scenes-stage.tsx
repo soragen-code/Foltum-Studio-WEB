@@ -7,8 +7,8 @@ import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_M
 const VIDEO_EXPECTED_SEC = 200 // ~3 min Seedance + TTS + upload
 
 /**
- * Scene player: silent Seedance video + ElevenLabs voiceover kept in sync.
- * The <audio> element is hidden and mirrors the video's play/pause/seek/rate.
+ * Scene player: Seedance video with native audio (speech + ambience baked into the clip).
+ * The audioUrl prop is kept for backward-compatibility with older scenes but is no longer generated.
  */
 function SceneVideoPlayer({
   videoUrl,
@@ -548,9 +548,6 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
                     {scene?.dialogue && <p><span className="font-medium text-foreground">Dialogue:</span> {scene.dialogue}</p>}
                     {scene?.locationDesc && <p><span className="font-medium text-foreground">Location:</span> {scene.locationDesc}</p>}
                     {scene?.videoPrompt && <p><span className="font-medium text-foreground">Prompt:</span> {scene.videoPrompt}</p>}
-                    {scene?.videoUrl && scene?.audioUrl && (
-                      <p className="text-[11px] text-primary/80">🎙 Voiceover (ElevenLabs) — plays in sync with the video</p>
-                    )}
                   </div>
 
                   {scene?.videoUrl && (

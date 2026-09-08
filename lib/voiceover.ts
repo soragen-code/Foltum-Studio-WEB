@@ -185,14 +185,17 @@ export function buildNativeAudioPrompt(
   const base = (basePrompt ?? "").trim();
   const lines = parseDialogue(dialogue);
 
+  // Seedance 2.5 bracket semantics: {text} = spoken line, (text) = music cue.
+  // Round brackets are intentionally ABSENT so the model never generates a musical score.
   const AUDIO_DIRECTION =
-    "Audio: fully diegetic and cinematic — spoken dialogue comes from the characters' mouths, " +
-    "lip-synced and synchronized on screen, mixed naturally with the location's ambient sound and room tone. " +
-    "No background music, no narration voiceover, no on-screen text or subtitles.";
+    "AUDIO TRACK: dialogue and ambient sound only. " +
+    "NO background music. NO score. NO instrumental track. NO soundtrack. NO musical theme. " +
+    "Only the characters' voices (lip-synced on camera) and the natural ambient sound of the location. " +
+    "No narration voiceover. No on-screen text or subtitles.";
 
   if (!lines.length) {
-    // No dialogue — still ask for lifelike ambient sound, no music.
-    return `${base}\n\nAudio: cinematic diegetic ambient sound and room tone only. No background music, no voiceover, no subtitles.`;
+    // No dialogue — ambient sound only. NO round brackets (= music cue in Seedance 2.5).
+    return `${base}\n\nAUDIO TRACK: ambient sound and room tone of the location only. NO background music. NO score. NO soundtrack. No voiceover. No subtitles.`;
   }
 
   // Explicit selection (from the per-scene EN/RU picker) wins; else auto-detect.
@@ -204,9 +207,9 @@ export function buildNativeAudioPrompt(
     .map((l) => {
       const character = findCharacter(l.speaker, characters);
       const who = character?.name ?? l.speaker ?? "Character";
-      // Language tagged per line + line kept verbatim in quotes so the model reads
-      // exactly these words with correct native pronunciation.
-      return `${who} (speaking on camera, lips moving) says in ${language}: "${l.text}"`;
+      // Seedance 2.5 markup: {text} = spoken dialogue (curly braces signal speech, not music).
+      // Round brackets are music cues — never use them for dialogue lines.
+      return `${who} says in ${language}, lips moving on camera: {${l.text}}`;
     })
     .join("\n");
 

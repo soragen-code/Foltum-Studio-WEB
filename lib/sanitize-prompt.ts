@@ -281,6 +281,25 @@ export function sanitizeVideoPrompt(input: string, options: SanitizeOptions = {}
   // Logos / trademarks in general.
   text = apply(text, /\b(?:visible|prominent|recognizable|famous|brand(?:ed)?)\s+(?:logos?|trademarks?|brand(?:ing| names?)?|insignia)\b/gi, "no logos", keep, changes, "logo");
 
+  // 4.5 Cinematic style vocabulary that steers the model toward known copyrighted visual styles
+  // and/or causes the output-filter to flag the clip. Seedance 2.5 bracket semantics:
+  //   {text} = speech, (text) = music cue, <text> = sound effect.
+  // We never emit round brackets so the model never generates a score.
+  const CINEMATIC_STYLE: Array<[RegExp, string]> = [
+    [/\b(?:cinematic(?:ally)?|film[- ]?like|movie[- ]?like|hollywood(?:\s+(?:production|quality|style))?)\b/gi, ""],
+    [/\b(?:blockbuster|oscar[- ]?(?:worthy|winning|caliber)|award[- ]?winning)\b/gi, ""],
+    [/\bfilm\s+noir\b/gi, "high-contrast shadows"],
+    [/\bnoir(?:\s+(?:style|aesthetic|look|vibe|mood|atmosphere|tone))?\b/gi, "shadowy"],
+    [/\b(?:dramatic|haunting|tense|moody|soaring|swelling|building|rising|melancholic)\s+(?:score|music|soundtrack|melody|theme)\b/gi, "ambient sound"],
+    [/\b(?:film|movie|cinematic|orchestral|symphonic|sweeping|lush|epic)\s+(?:score|soundtrack)\b/gi, "ambient sound"],
+    [/\bscore\s+(?:builds?|swells?|rises?|soars?|crescendos?)\b/gi, "tension builds"],
+    [/\bchiaroscuro\b/gi, "strong directional lighting"],
+    [/\b(?:v[eé]rit[eé]|cinema\s+v[eé]rit[eé])\b/gi, "observational"],
+  ];
+  for (const [pattern, rep] of CINEMATIC_STYLE) {
+    text = apply(text, pattern, rep, keep, changes, "cinematic style");
+  }
+
   // 5. Production meta-language. Words like "episode", "cliffhanger", "next shot", "series"
   // describe the SHOW, not the picture — they hint at TV/film content and were the only
   // thing shared by consecutive filter rejections of an otherwise plain close-up.

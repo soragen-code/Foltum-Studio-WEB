@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { startVideoPrediction, getPredictionState } from "@/lib/replicate";
-import { renderSceneVoiceover, buildNativeAudioPrompt, translateDialogue, detectSpokenLanguage, languageName } from "@/lib/voiceover";
+import { buildNativeAudioPrompt, translateDialogue, detectSpokenLanguage, languageName } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
 import { extractLastFrameBuffer } from "@/lib/ffmpeg";
 import { getBucketConfig } from "@/lib/aws-config";
@@ -8,14 +8,12 @@ import { sanitizeVideoPrompt } from "@/lib/sanitize-prompt";
 import { updateJob, completeJob, failJob, heartbeatJob, runInBackground } from "@/lib/jobs";
 
 /**
- * DEFAULT is FALSE: the video model generates SILENT clips (generate_audio:false) and the
- * dialogue is a separate ElevenLabs voiceover laid on top. This is deliberate — Seedance's
- * copyright/moderation filter is most often tripped by the model's IMPROVISED SOUNDTRACK, not
- * the visuals, so dropping generated audio removes almost all copyright blocks and the wasted
- * retries → generation succeeds first time and is much faster.
- * Set NATIVE_SCENE_AUDIO=true to re-enable in-clip native voices (legacy, block-prone).
+ * Always use Seedance native audio: characters speak and ambient sound is baked into the clip.
+ * Attempts 1–2: generate_audio=true (voices in-clip).
+ * Attempt 3 (last retry): generate_audio=false as a silent fallback in case audio triggers the
+ * copyright filter — a silent-but-valid clip is better than a hard failure.
  */
-const NATIVE_AUDIO = (process.env.NATIVE_SCENE_AUDIO ?? "false").toLowerCase() === "true";
+const NATIVE_AUDIO = true;
 
 export interface VideoJobParams {
   jobId: string;
@@ -68,9 +66,9 @@ function waitingProgress(startedAt: number): number {
 /**
  * Background video job (runs inside the same serverless invocation via `after()`).
  *
- * 1. Start Seedance prediction (silent — generate_audio: false), persist predictionId
+ * 1. Start Seedance prediction (generate_audio: true — speech + ambience baked in), persist predictionId
  * 2. Poll Replicate, heart-beating the job (progress 5→55) so it is never marked stale
- * 3. finalize(): human voiceover via ElevenLabs (60%) → S3 upload (80%) → Scene update (95%) → completed
+ * 3. finalize(): S3 upload (80%) → Scene update (95%) → completed
  * On failure: scene status reset, credits refunded, job marked failed.
  *
  * If the function dies mid-way, GET /api/jobs/[id] calls `resumeVideoJob()` which
@@ -87,9 +85,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     await updateJob(jobId, {
       status: "processing",
       progress: 5,
-      message: NATIVE_AUDIO
-        ? "Generating cinematic video with in-scene voices (this takes ~3-5 min)..."
-        : "Generating video with Seedance (this takes ~3-5 min)...",
+      message: "Generating video with Seedance native audio (this takes ~3-5 min)...",
     });
 
     // In native-audio mode, embed the spoken dialogue into the prompt so the
@@ -149,7 +145,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       // with fully generic visuals can still be rejected because the model's improvised
       // score/ambience resembles existing music. On the last attempt drop generated audio
       // so a silent-but-valid clip beats a hard failure (audio can be re-added later).
-      const silentFallback = NATIVE_AUDIO && attempt === MAX_ATTEMPTS;
+      const silentFallback = attempt === MAX_ATTEMPTS;
       if (silentFallback) {
         await updateJob(jobId, { message: "Final attempt: generating without model audio (copyright-safe)..." });
       }
@@ -158,7 +154,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
         duration: Number(params.duration ?? 5),
         resolution: String(params.resolution ?? "480p"),
         aspect_ratio: "9:16",
-        generate_audio: NATIVE_AUDIO && !silentFallback, // characters speak in-clip; legacy path adds ElevenLabs later
+        generate_audio: !silentFallback, // Seedance native speech+ambience; last retry drops audio to avoid copyright filter
         watermark: false,
         ...(chainImage ? { image: chainImage } : {}), // one-take continuity: start from previous scene's last frame
       });
@@ -206,19 +202,44 @@ function isCopyrightError(err: any): boolean {
   );
 }
 
-/** Append an "original, non-infringing content" instruction that steers the model
- *  away from outputs its filter would flag. Stronger wording on retries. */
+/**
+ * Prefix the prompt with an "original content" declaration so the model's output-filter
+ * sees it before any scene description. On retries: escalate the declaration AND strip
+ * cinematic style vocabulary that pushes the model toward copyrighted visual styles.
+ *
+ * Bracket semantics (Seedance 2.5): {text} = speech, (text) = music cue.
+ * Round brackets are intentionally absent from all prompt text so no music is generated.
+ */
 function withCopyrightSafety(prompt: string, attempt = 1): string {
-  const base =
-    "All characters, settings and elements are entirely original and fictional. " +
-    "No real people, no celebrity likenesses, no brand names, no logos, no trademarks, " +
-    "no copyrighted or well-known franchise characters, and no on-screen text or watermarks.";
-  const strong =
+  const ORIGINAL =
+    "Entirely original, non-copyrighted fictional content. " +
+    "No real people, no celebrity likenesses, no brand names or logos, " +
+    "no copyrighted or recognizable franchise characters, no trademarks, no watermarks, " +
+    "no on-screen text. Generic everyday appearance and neutral setting. " +
+    "NO background music. NO score. NO soundtrack. Dialogue and ambient sound only.";
+  const extra =
     attempt > 1
-      ? " Generic, everyday appearance and wardrobe; a neutral, non-branded environment; " +
-        "nothing resembling any existing film, show, game or public figure."
+      ? " Nothing resembling any existing film, show, game, music video or public figure."
       : "";
-  return `${prompt}\n\n[Content: ${base}${strong}]`;
+  const safePrompt = attempt > 1 ? stripStyleReferences(prompt) : prompt;
+  return `[ORIGINAL CONTENT: ${ORIGINAL}${extra}]\n${safePrompt}`;
+}
+
+/** Remove cinematic style vocabulary that steers the model toward copyrighted visual/audio styles. */
+function stripStyleReferences(prompt: string): string {
+  return prompt
+    .replace(/\b(?:cinematic(?:ally)?|film[- ]?like|movie[- ]?like)\b/gi, "")
+    .replace(/\bfilm\s+noir\b/gi, "high-contrast shadows")
+    .replace(/\bnoir(?:\s+(?:style|aesthetic|look|vibe|mood|atmosphere|tone))?\b/gi, "shadowy")
+    .replace(/\b(?:blockbuster|oscar[- ]?(?:worthy|winning|caliber)|award[- ]?winning|iconic)\b/gi, "")
+    .replace(/\b(?:dramatic|haunting|tense|moody|soaring|swelling|building|rising|melancholic)\s+(?:score|music|soundtrack|melody|theme)\b/gi, "ambient sound")
+    .replace(/\b(?:film|movie|cinematic|orchestral|symphonic|sweeping|lush|epic)\s+(?:score|soundtrack)\b/gi, "ambient sound")
+    .replace(/\bscore\s+(?:builds?|swells?|rises?|soars?|crescendos?)\b/gi, "tension builds")
+    .replace(/\bchiaroscuro\b/gi, "strong directional lighting")
+    .replace(/\b(?:v[eé]rit[eé]|cinema\s+v[eé]rit[eé])\b/gi, "observational")
+    .replace(/\s{2,}/g, " ")
+    .replace(/,\s*,/g, ",")
+    .trim();
 }
 
 /** Poll Replicate until the prediction settles; heartbeats the job on every tick. */
@@ -235,47 +256,30 @@ async function waitForPrediction(jobId: string, state: VideoJobState): Promise<s
   }
 }
 
-/** TTS + upload + scene update. Idempotent guard via state.finalizing. */
+/** Upload + scene update. Idempotent guard via state.finalizing. */
 async function finalizeVideoJob(jobId: string, state: VideoJobState, replicateVideoUrl: string): Promise<void> {
   const { sceneId, projectId } = state;
   await updateJob(jobId, {
     progress: 60,
-    message: NATIVE_AUDIO ? "Video ready. Finalizing..." : "Video ready. Recording voiceover...",
+    message: "Video ready. Uploading to storage...",
     resultData: JSON.stringify({ ...state, finalizing: true }),
   });
 
   const scene = await prisma.scene.findUnique({ where: { id: sceneId } });
   if (!scene) throw new Error("Scene not found");
 
-  // Native-audio mode: speech + ambience are already baked into the clip — no overlay.
-  // Legacy mode: render per-character ElevenLabs voiceover (labels/directions never read aloud).
-  let audioBuffer: Buffer | null = null;
-  if (!NATIVE_AUDIO && (scene.dialogue ?? "").trim()) {
-    try {
-      const links = await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true } });
-      audioBuffer = await renderSceneVoiceover(scene.dialogue, links.map((l) => l.character));
-    } catch (ttsErr: any) {
-      console.error("[video-job] ElevenLabs failed (video kept without audio):", ttsErr?.message ?? ttsErr);
-    }
-  }
+  // Speech and ambient sound are baked into the Seedance clip — no external audio overlay.
   await updateJob(jobId, { progress: 80, message: "Uploading to storage..." });
 
   const { folderPrefix } = getBucketConfig();
   const baseKey = `${folderPrefix}public/videos/${projectId}/${scene.episodeId}/scene-${scene.number}-${Date.now()}`;
   const videoUrl = await uploadRemoteToS3(replicateVideoUrl, `${baseKey}.mp4`, "video/mp4");
-  let audioUrl: string | null = null;
-  if (audioBuffer) {
-    try {
-      audioUrl = await uploadBufferToS3(audioBuffer, `${baseKey}.mp3`, "audio/mpeg");
-    } catch (upErr: any) {
-      console.error("[video-job] audio upload failed:", upErr?.message ?? upErr);
-    }
-  }
+
   await updateJob(jobId, { progress: 95, message: "Saving scene..." });
 
   const updated = await prisma.scene.update({
     where: { id: sceneId },
-    data: { videoUrl, audioUrl, status: "generated" },
+    data: { videoUrl, audioUrl: null, status: "generated" },
   });
 
   // One-take frame-chaining: capture this scene's LAST FRAME so the NEXT scene can start
@@ -289,7 +293,7 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, replicateVi
     console.warn("[video-job] last-frame extraction failed (non-fatal):", frameErr?.message ?? frameErr);
   }
 
-  await completeJob(jobId, { videoUrl, audioUrl, scene: updated }, "Video ready");
+  await completeJob(jobId, { videoUrl, scene: updated }, "Video ready");
 }
 
 async function handleFailure(
