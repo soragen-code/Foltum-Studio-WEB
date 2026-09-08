@@ -7,6 +7,35 @@ import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_M
 const VIDEO_EXPECTED_SEC = 600 // ~10 min: Seedance renders a 15 s clip with native audio + upload
 
 /**
+ * POST that survives a dropped connection.
+ *
+ * Starting a video job does several seconds of DB work before it can return the
+ * jobId, so on a cold start or a flaky mobile connection the request can be cut
+ * off before the response arrives — `fetch` then throws and the UI used to show a
+ * bogus "Network error" even though the server already created (and started) the
+ * job. The video-start endpoints are idempotent per scene: a repeat call returns
+ * the already-active job (`resumed`) without charging again. So on a network-layer
+ * failure we simply retry — the retry picks up the job that the dropped call
+ * started, turning a false error into a correct "generating" state.
+ */
+async function postJobStart(url: string, body: unknown, retries = 2): Promise<Response> {
+  let lastErr: unknown
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+    } catch (err) {
+      lastErr = err
+      if (attempt < retries) await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)))
+    }
+  }
+  throw lastErr
+}
+
+/**
  * Scene player: Seedance video with native audio (speech + ambience baked into the clip).
  * The audioUrl prop is kept for backward-compatibility with older scenes but is no longer generated.
  */
@@ -255,11 +284,7 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
     setStartingVideo(sceneId)
     setError('')
     try {
-      const res = await fetch('/api/ai/generate-video', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: project?.id, sceneId, language }),
-      })
+      const res = await postJobStart('/api/ai/generate-video', { projectId: project?.id, sceneId, language })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data?.jobId) {
         setError(data?.error ?? 'Video generation failed')
@@ -267,7 +292,7 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
       }
       patchScene(sceneId, { status: 'generating' })
       pollVideoJob(sceneId, data.jobId)
-    } catch { setError('Network error') }
+    } catch { setError('Network error — please check your connection and try again') }
     finally { setStartingVideo(null) }
   }
 
@@ -283,11 +308,7 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
     setStartingBatch((prev) => ({ ...prev, [epId]: true }))
     setError('')
     try {
-      const res = await fetch('/api/ai/generate-episode-videos', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: project?.id, episodeId: epId, language }),
-      })
+      const res = await postJobStart('/api/ai/generate-episode-videos', { projectId: project?.id, episodeId: epId, language })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !Array.isArray(data?.jobs)) {
         setError(data?.error ?? 'Batch generation failed')
