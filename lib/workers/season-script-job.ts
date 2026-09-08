@@ -68,10 +68,10 @@ export async function generateEpisodeScript(input: {
 }): Promise<EpisodeScript> {
   return generateWithRetry(input.jobId, 2, async () => {
     const raw = await chatJSON(episodeScriptSystemPrompt(input.language), episodeScriptUserPrompt(input), {
-      temperature: 0.75,
+      temperature: 0.6,
       maxTokens: 16000,
     });
-    const script = normalizeEpisodeScript(episodeScriptSchema.parse(raw));
+    const script = normalizeEpisodeScript(episodeScriptSchema.parse(raw), input.characters);
     const problems = validateEpisodeScript(script);
     // Word-count drift is tolerated (logged); hard problems (count, missing prompt lines, no dialogue) fail → retry.
     const hard = problems.filter((p) => !/spoken words/.test(p));
