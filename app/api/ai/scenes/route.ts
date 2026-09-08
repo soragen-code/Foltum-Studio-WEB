@@ -76,6 +76,16 @@ Given the project synopsis, this episode's description, and the characters, retu
 
 Never mention real people, brands, logos or existing films/characters. No on-screen text, no subtitles, no music references.
 
+============ HARD RULE — COPYRIGHT-SAFE PROMPTS (the video model REJECTS violations) ============
+The AI video model runs a strict copyright filter and will BLOCK the whole clip if a videoPrompt contains any of the following. Every videoPrompt, visualIdentity and characterSheet entry MUST be 100% original:
+- NEVER name real actors, celebrities, musicians, politicians, athletes, influencers or ANY real person — not as a lookalike either ("looks like Angelina Jolie", "a young Brad Pitt" are FORBIDDEN). Describe people generically and concretely instead: "a woman in her 30s with dark shoulder-length hair and sharp cheekbones".
+- NEVER name directors, cinematographers, photographers or their signature styles ("Wes Anderson symmetry", "Fincher-esque", "Deakins lighting", "in the style of Kubrick"). Describe the technique itself: "perfectly centered symmetrical framing", "low-key cool-toned lighting with deep shadows", "slow push-in with shallow depth of field".
+- NEVER reference specific films, TV series, games, anime, comics or their characters, worlds, props or scenes ("Blade Runner neon", "like the Matrix lobby scene", "a Joker-style grin", "Hogwarts-like castle"). Describe the imagery directly: "rain-soaked street lit by pink and cyan neon signs".
+- NEVER name brands, products, logos, trademarks or branded gear — including phones, cars, sneakers, fashion labels, drinks, apps, camera bodies and film stocks ("iPhone", "BMW", "Nike", "Gucci", "Coca-Cola", "Netflix", "Arri Alexa", "Kodak Portra"). Use generic nouns: "smartphone", "black sedan", "plain white sneakers", "35mm film stock". No visible logos or text anywhere in frame.
+- NEVER reference art styles by artist or studio name ("Van Gogh brushstrokes", "Rembrandt lighting", "Ghibli style", "Pixar look"). Describe the visual qualities: "thick expressive brushstrokes", "classic three-quarter portrait lighting", "soft hand-drawn animation look".
+- Character names are the fictional names from the character list below — never a real person's full name.
+If in doubt, DESCRIBE what the camera sees in plain, generic cinematic language. Prompts that break this rule are unusable.
+
 ============ LANGUAGE RULES ============
 - "dialogue" and "locationDesc" are written in the SAME LANGUAGE as the synopsis / episode description (Russian synopsis → Russian dialogue and locations).
 - "visualIdentity", "characterSheet" and "videoPrompt" are ALWAYS in English — they drive the AI video model.

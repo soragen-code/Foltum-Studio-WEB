@@ -3,6 +3,7 @@ import { startVideoPrediction, getPredictionState } from "@/lib/replicate";
 import { renderSceneVoiceover, buildNativeAudioPrompt, translateDialogue, detectSpokenLanguage, languageName } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
 import { getBucketConfig } from "@/lib/aws-config";
+import { sanitizeVideoPrompt } from "@/lib/sanitize-prompt";
 import { updateJob, completeJob, failJob, heartbeatJob, runInBackground } from "@/lib/jobs";
 
 /**
@@ -90,8 +91,8 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     // In native-audio mode, embed the spoken dialogue into the prompt so the
     // characters actually speak on camera (lip-synced) with diegetic ambient sound.
     let prompt = scene.videoPrompt;
+    const links = await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true } });
     if (NATIVE_AUDIO) {
-      const links = await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true } });
       // Per-scene spoken language chosen in the UI ("en" default / "ru").
       const targetLangName = languageName((scene as any).language) || "English";
       // Speak the dialogue in the selected language — translate it if it isn't already.
@@ -101,6 +102,15 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       }
       prompt = buildNativeAudioPrompt(scene.videoPrompt, dialogue, links.map((l) => l.character), targetLangName);
     }
+
+    // Strip anything that trips the model's copyright filter (real people, brands, films,
+    // "in the style of …"). The ORIGINAL videoPrompt stays untouched in the DB; only the
+    // text sent to the model is rewritten. Project character names are never rewritten.
+    const sanitized = sanitizeVideoPrompt(prompt, { keep: links.map((l) => l.character.name) });
+    if (sanitized.changed) {
+      console.warn(`[video-job] scene ${sceneId}: sanitized prompt —`, sanitized.changes.join(" | "));
+    }
+    prompt = sanitized.prompt;
 
     // Steer the model away from anything its output-moderation flags as copyrighted.
     const basePrompt = withCopyrightSafety(prompt);
