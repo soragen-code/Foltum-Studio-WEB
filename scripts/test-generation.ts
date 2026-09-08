@@ -10,11 +10,11 @@ test("стилизация сохраняет действие и художес
   const action = "[ACTION]: Theo opens the door.\n[TRANSITION]: Camera turns to Mara.";
   const result = styledVisualPrompt(`[VISUAL STYLE]: Photorealistic 35mm film\n${action}`);
   assert.ok(result.includes(action)); assert.ok(!result.includes("Photorealistic 35mm"));
-  assert.match(characterImagePrompt("Theo, navy blazer", "front", "Theo"), /Photorealistic/);
+  assert.match(characterImagePrompt("Theo, navy blazer", "front", "Theo"), /human-like/);
   assert.match(characterImagePrompt("Theo, navy blazer", "front", "Theo"), /NOT any real actor/);
   assert.match(sanitizeVideoPrompt("cinematic noir chiaroscuro, next shot").prompt, /cinematic noir chiaroscuro, next shot/);
   assert.equal(sanitizeVideoPrompt("Mara waits", { keep: ["Mara"] }).prompt, "Mara waits");
-  assert.ok(styledVisualPrompt("").includes("Photorealistic"));
+  assert.ok(styledVisualPrompt("").includes("human-like"));
 });
 test("continuity: только соседний совместимый кадр в том же месте", () => {
   const scene = { number: 7, locationDesc: "INT Living room" };

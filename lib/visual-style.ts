@@ -2,11 +2,12 @@ import { sanitizeVideoPrompt } from "@/lib/sanitize-prompt";
 
 /** Versioned asset paths identify newly generated, compatible references; legacy assets stay intact.
  * Bumping this id retires older-style frames from continuity chaining without deleting them. */
-export const VISUAL_STYLE_ID = "realistic-original-v1";
+export const VISUAL_STYLE_ID = "human-alike-v1";
 export const VISUAL_STYLE =
-  "Photorealistic live-action cinematography, natural realistic human skin with pores and fine detail, " +
-  "true-to-life materials and fabrics, physically accurate lighting and shadows, real depth of field, " +
-  "cinematic color grading and film grain, believable everyday environments. " +
+  "Stylized cinematic look with human-like characters — believable and expressive but clearly NOT photorealistic, " +
+  "a polished digital-cinematic / 3D-animated feature-film aesthetic, natural human proportions and readable facial " +
+  "expressions with clear mouth movement, soft naturalistic lighting and shadows, gentle filmic color grading, " +
+  "detailed yet slightly stylized skin and fabrics (not real-photo skin pores), believable everyday environments. " +
   "Distinct fictional individuals with consistent hair, clothing and features. " +
   "Entirely original invented people — NOT any real actor, celebrity or public figure and not a lookalike of one; " +
   "no branded logos or products in frame; not an imitation of any named artist, studio, film or franchise.";
