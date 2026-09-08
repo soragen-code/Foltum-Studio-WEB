@@ -68,7 +68,7 @@ export async function POST(request: Request) {
       scenes.map((s) => ({
         videoUrl: s.videoUrl as string,
         audioUrl: s.audioUrl,
-        subtitle: subtitleFor(s.dialogue),
+        subtitle: s.subtitled ? null : subtitleFor(s.dialogue), // stage 4: already burned per scene
       }))
     );
     workDir = result.workDir;

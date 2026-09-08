@@ -3,7 +3,8 @@ import { prisma } from "@/lib/db";
 import { startVideoPrediction, startKlingPrediction, startLipsyncPrediction, startImagePrediction, getPredictionState, cancelVideoPrediction, KLING_MODEL, LIPSYNC_MODEL } from "@/lib/replicate";
 import { buildNativeAudioPrompt, translateDialogue, detectSpokenLanguage, languageName, parseDialogue } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
-import { extractLastFrameBuffer, extractAudioBuffer } from "@/lib/ffmpeg";
+import { extractLastFrameBuffer, extractAudioBuffer, burnSceneSubtitles } from "@/lib/ffmpeg";
+import { PACE_DIRECTION } from "@/lib/season";
 import { getBucketConfig } from "@/lib/aws-config";
 import { VISUAL_STYLE_ID, styledVisualPrompt, isStyledAsset, canChainFrame, locationAngleImages } from "@/lib/visual-style";
 import { GenerationAttempt, safeProviderError, classifyProviderError, logAttempt, safeDiagnosticInput } from "@/lib/generation-diagnostics";
@@ -107,13 +108,16 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     await updateJob(jobId, { status: "processing", progress: 5, message: "Preparing photorealistic visual references..." });
     const links = await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true } });
     const visualPrompt = styledVisualPrompt(scene.videoPrompt, links.map(l => l.character.name));
-    const targetLanguage = languageName(scene.language) || "English";
-    let dialogue = scene.dialogue;
+    // Stage 4: speech is ALWAYS English. `dialogueEn` holds the voiced lines; legacy scenes written in
+    // another language are translated once and the translation is saved.
+    const targetLanguage = "English";
+    let dialogue = (scene.dialogueEn ?? "").trim() || scene.dialogue;
     if (dialogue && detectSpokenLanguage(dialogue) !== targetLanguage) {
       dialogue = await translateDialogue(dialogue, targetLanguage);
+      await prisma.scene.update({ where: { id: sceneId }, data: { dialogueEn: dialogue, language: "en" } }).catch(() => {});
     }
     // Sanitize visual descriptions BEFORE adding speech: never rewrite scripted dialogue.
-    let prompt = buildNativeAudioPrompt(visualPrompt, dialogue, links.map(l => l.character), targetLanguage);
+    let prompt = `${buildNativeAudioPrompt(stripSlowDirections(visualPrompt), dialogue, links.map(l => l.character), targetLanguage)}\n\n${PACE_DIRECTION}`;
 
     const previous = scene.number > 1 ? await prisma.scene.findFirst({
       where: { episodeId: scene.episodeId, number: scene.number - 1 },
@@ -271,6 +275,18 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
   }
 }
 
+/** Stage 4 pace: drop slow/lingering camera words that would stretch the rhythm of the clip. */
+function stripSlowDirections(prompt: string): string {
+  return prompt
+    .replace(/\b(in )?slow[- ]?motion\b/gi, "")
+    .replace(/\bslowly\b/gi, "briskly")
+    .replace(/\blingering\b/gi, "brief")
+    .replace(/\blingers?\b/gi, "cuts")
+    .replace(/\blong (pause|silence)\b/gi, "no pause")
+    .replace(/\bslow (pan|push|zoom|dolly)\b/gi, "quick $1")
+    .replace(/ {2,}/g, " ");
+}
+
 /** Guard all recovery writes with an expiring compare-and-swap lease. */
 function owned(jobId: string, state: VideoJobState) {
   return { id: jobId, status: "processing", resultData: { contains: `"leaseToken":"${state.leaseToken}"` } };
@@ -288,7 +304,23 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, source: str
   const { folderPrefix } = getBucketConfig();
   // Deterministic object names: recovery never creates duplicate published outputs.
   const key = `${folderPrefix}public/videos/${state.projectId}/${scene.episodeId}/${VISUAL_STYLE_ID}/${jobId}`;
-  const videoUrl = await uploadRemoteToS3(source, `${key}.mp4`, "video/mp4");
+  // Stage 4: burn the scene's subtitles (story-language text) into the clip before publishing.
+  // If burning fails the raw clip is published unsubtitled (subtitled=false → assembly adds them).
+  let videoUrl: string;
+  let subtitled = false;
+  const subtitleLines = parseDialogue(scene.dialogue).map((l) => l.text).filter(Boolean);
+  if (subtitleLines.length) {
+    try {
+      const buf = await burnSceneSubtitles(source, subtitleLines);
+      videoUrl = await uploadBufferToS3(buf, `${key}.mp4`, "video/mp4");
+      subtitled = true;
+    } catch (error) {
+      console.warn("[video-job] subtitles:", safeProviderError(error));
+      videoUrl = await uploadRemoteToS3(source, `${key}.mp4`, "video/mp4");
+    }
+  } else {
+    videoUrl = await uploadRemoteToS3(source, `${key}.mp4`, "video/mp4");
+  }
   let lastFrameUrl: string | null = null;
   try {
     const frame = await extractLastFrameBuffer(videoUrl);
@@ -302,7 +334,7 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, source: str
     } });
     if (!result.count) return;
     await tx.scene.update({ where: { id: state.sceneId }, data: {
-      videoUrl, audioUrl: null, status: "generated", lastFrameUrl,
+      videoUrl, audioUrl: null, status: "generated", lastFrameUrl, subtitled,
     } });
   });
 }
