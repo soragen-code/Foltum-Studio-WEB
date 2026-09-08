@@ -84,6 +84,7 @@ model Project {
 
   user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   characters  Character[]
+  locations   Location[]
   seasons     Season[]
 
   @@index([userId])
@@ -107,6 +108,9 @@ model Character {
   imageProfileIsPublic Boolean @default(true)
   imageFullIsPublic   Boolean @default(true)
   isLocked    Boolean  @default(false)
+  // Stage 3 (extended cast): MAIN / SUPPORTING / MINOR / CROWD; groupSize only for CROWD groups.
+  tier        String   @default("MAIN")
+  groupSize   Int?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -144,6 +148,7 @@ model Episode {
   logline       String?  @db.Text
   locationName  String?
   locationDesc  String?  @db.Text
+  locationId    String?  // stage 3: bound project Location (reference image)
   script        String?  @db.Text
   arcRole       String?  // stage 2: завязка / развитие / поворот / финал
   status        String   @default("draft") // draft, script_ready, scenes_ready, approved, assembled
@@ -153,10 +158,28 @@ model Episode {
   updatedAt     DateTime @updatedAt
 
   season        Season   @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  location      Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
   scenes        Scene[]
   characters    EpisodeCharacter[]
 
   @@index([seasonId])
+}
+
+/// Stage 3: key locations of a project — photoreal reference images used by Seedance alongside characters.
+model Location {
+  id           String   @id @default(cuid())
+  projectId    String
+  name         String
+  description  String?  @db.Text // project-language description shown in UI
+  visualPrompt String?  @db.Text // English visual prompt for the reference image (no people)
+  imageUrl     String?  // cloud_storage_path of the PNG reference
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  episodes     Episode[]
+
+  @@index([projectId])
 }
 
 /// Stage 2: which characters take part in an episode (additive join table).

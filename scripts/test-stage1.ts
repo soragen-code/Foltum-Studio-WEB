@@ -103,7 +103,7 @@ test("normalizeIdeaResult: язык по идее, markdown снят, внешн
   assert.ok(!/Angelina|Jolie|Nike/i.test(res.characters[0].appearance), res.characters[0].appearance);
   assert.equal(res.characters[1].name, "Олег Ветров");
   // имя персонажа сохраняется при санитизации
-  assert.equal(sanitizeCharacterCard(card, ["Марина Соколова"]).name, card.name);
+  assert.equal(sanitizeCharacterCard(characterCardSchema.parse(card), ["Марина Соколова"]).name, card.name);
 });
 
 test("схема ревизии синопсиса: с персонажами и без", () => {

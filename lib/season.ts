@@ -153,10 +153,20 @@ export function normalizeEpisodeScript(script: EpisodeScript, characters?: Chara
 function langName(language: IdeaLanguage) {
   return LANGUAGE_NAMES[language] ?? "English";
 }
+const TIER_ORDER: Record<string, number> = { MAIN: 0, SUPPORTING: 1, MINOR: 2, CROWD: 3 };
 function charactersBlock(characters: CharacterCard[]) {
-  return characters
-    .map((c) => `- ${c.name} (${c.role}, ${c.age}); first appears: ${c.firstAppearance}\n  Personality: ${c.personality}\n  Appearance: ${c.appearance}`)
+  return [...characters]
+    .sort((a, b) => (TIER_ORDER[a.tier ?? "MAIN"] ?? 0) - (TIER_ORDER[b.tier ?? "MAIN"] ?? 0))
+    .map((c) => `- ${c.name} [${c.tier ?? "MAIN"}${c.tier === "CROWD" && c.groupSize ? `, group of ${c.groupSize}` : ""}] (${c.role}, ${c.age}); first appears: ${c.firstAppearance}\n  Personality: ${c.personality}\n  Appearance: ${c.appearance}`)
     .join("\n");
+}
+export type LocationRef = { name: string; description?: string | null; visualPrompt?: string | null };
+function locationsBlock(locations: LocationRef[]) {
+  return locations.map((l) => `- ${l.name}: ${l.description ?? ""}${l.visualPrompt ? ` / ${l.visualPrompt}` : ""}`).join("\n");
+}
+/** Resolve an LLM location name to a project Location (same fuzzy rule as matchCharacter). */
+export function matchLocation<T extends { name: string }>(locations: T[], raw: string): T | undefined {
+  return matchCharacter(locations, raw);
 }
 
 export function seasonStructureSystemPrompt(language: IdeaLanguage, episodeCount = SEASON_DEFAULT_EPISODES): string {
@@ -164,14 +174,14 @@ export function seasonStructureSystemPrompt(language: IdeaLanguage, episodeCount
 Return STRICT JSON: {"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string}]}.
 RULES:
 - EXACTLY ${episodeCount} episodes (allowed range ${SEASON_MIN_EPISODES}–${SEASON_MAX_EPISODES}). Episode 1 = завязка, last = финал, at least one поворот in the second half.
-- Each episode has ONE key location. "locationDesc" is a DETAILED English visual description (2–4 sentences: architecture, materials, textures, props, weather, light, color palette, time of day) usable verbatim by an image/video model. "locationName" is in ${langName(language)}.
-- Use ONLY the given character names (verbatim). Every episode lists 2–4 characters actually present.
+- Each episode has ONE key location. "locationName" MUST be one of the given LOCATIONS, copied verbatim (they already have reference images). Only if the story truly needs a place that is not in the list may you invent a new one (then give it a new name) — at most 2 new locations per season. "locationDesc" is a DETAILED English visual description (2–4 sentences: architecture, materials, textures, props, weather, light, color palette, time of day) usable verbatim by an image/video model — for a listed location, expand its given description. "locationName" is in ${langName(language)}.
+- Use ONLY the given character names (verbatim; a CROWD group name counts as a character). Every episode lists 2–6 characters actually present: the MAIN characters carrying it plus the SUPPORTING characters (family, colleagues, rivals) involved. Across the season EVERY SUPPORTING character appears in at least one episode, MINOR characters and CROWD groups are used where the story plausibly gathers people (family dinners, workplaces, hospitals, streets, court, celebrations).
 - Each logline is 2–3 sentences of concrete dramatic events (who wants what, what goes wrong). Cliffhanger = the final beat that forces the viewer into the next episode. No summaries like "tension rises".
 - Continuous story: consequences carry over episode to episode; no repetition.
 - All text except "locationDesc" is in ${langName(language)}. Original content: never reuse names, plots or lines of existing films/series.`;
 }
-export function seasonStructureUserPrompt(synopsis: string, characters: CharacterCard[]): string {
-  return `SYNOPSIS:\n${synopsis}\n\nCHARACTERS:\n${charactersBlock(characters)}`;
+export function seasonStructureUserPrompt(synopsis: string, characters: CharacterCard[], locations: LocationRef[] = []): string {
+  return `SYNOPSIS:\n${synopsis}\n\nCHARACTERS (with tiers):\n${charactersBlock(characters)}\n\nLOCATIONS (use these names verbatim):\n${locations.length ? locationsBlock(locations) : "(none defined — invent 4–8 and reuse them across episodes)"}`;
 }
 
 export function episodeScriptSystemPrompt(language: IdeaLanguage): string {
@@ -205,7 +215,7 @@ STYLE RULES:
 S1. LIP-SYNC BIAS: talking scenes use Medium shot / Medium close-up / Close-up / Over-the-shoulder with the speaker's face clearly visible; wide shots only for establishing or silent beats.
 S2. "locationDesc": "INT/EXT — place — time of day" in ${L}. "action" (1–2 sentences) and all dialogue in ${L}.
 S3. "visualIdentity": ONE SHORT English sentence (max 25 words) — photoreal live-action look, color palette, lens/grain feel of this episode. Keep it short: it is repeated in every scene.
-S4. Use ONLY the given character names. "characters" lists the names visible in the shot.
+S4. Use ONLY the given character names. "characters" lists the names visible in the shot (a CROWD group name is listed when the group is in frame). SUPPORTING and MINOR characters present in the episode must actually speak in at least one scene each — not just stand in the background; crowds may have a short collective line or reactions.
 S5. Dramatize ONLY this episode's logline — a natural continuation of the previous episodes, ending on this episode's cliffhanger (the last scene IS the cliffhanger). Original content only: never reuse names, plots or lines of existing films/series.
 
 Before answering, check: scenes count 10–15; silent scenes ≤ ${MAX_SILENT_SCENES}; each talking scene has ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} dialogue sentences; every videoPrompt has all 9 tags including [CHARACTER].`;

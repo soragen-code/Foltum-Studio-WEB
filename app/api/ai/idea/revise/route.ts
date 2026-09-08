@@ -13,6 +13,7 @@ import {
   synopsisReviseResultSchema,
   stripMarkup,
   sanitizeCharacterCard,
+  characterCardToData,
   toCharacterCard,
   normalizeLanguage,
 } from "@/lib/idea";
@@ -79,20 +80,7 @@ export async function POST(request: Request) {
         for (const raw of result!.characters!) {
           const c = sanitizeCharacterCard(raw, names);
           await tx.character.create({
-            data: {
-              projectId,
-              name: c.name,
-              age: c.age,
-              role: c.role,
-              appearance: c.appearance,
-              personality: c.personality,
-              firstAppearance: c.firstAppearance,
-              description: c.firstAppearance,
-              status: "draft",
-              imageFront: "",
-              imageProfile: "",
-              imageFull: "",
-            },
+            data: { projectId, ...characterCardToData(c), status: "draft", imageFront: "", imageProfile: "", imageFull: "" },
           });
         }
       }

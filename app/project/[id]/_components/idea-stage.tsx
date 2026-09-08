@@ -1,7 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { Loader2, Wand2, Check, Pencil, User, X, Lightbulb, MessageSquareText } from 'lucide-react'
+import { Loader2, Wand2, Check, Pencil, User, X, Lightbulb, MessageSquareText, UserPlus } from 'lucide-react'
+import { LocationCard, AddLocationForm, TierBadge, TIER_LABELS, groupByTier, type LocationCardData } from './cast-and-locations'
 
 export interface CharacterCardData {
   id: string
@@ -11,6 +12,8 @@ export interface CharacterCardData {
   appearance?: string | null
   personality?: string | null
   firstAppearance?: string | null
+  tier?: string | null
+  groupSize?: number | null
 }
 
 const LANGUAGE_LABELS: Record<string, string> = {
@@ -74,6 +77,7 @@ export function CharacterCard({
         )}
       </div>
 
+      <TierBadge char={char} />
       {extra}
 
       <dl className="space-y-1.5 text-xs text-muted-foreground [overflow-wrap:anywhere]">
@@ -121,6 +125,9 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   const [synopsis, setSynopsis] = useState<string>(project?.synopsis ?? '')
   const [language, setLanguage] = useState<string>(project?.language ?? '')
   const [characters, setCharacters] = useState<CharacterCardData[]>(project?.characters ?? [])
+  const [locations, setLocations] = useState<LocationCardData[]>(project?.locations ?? [])
+  const [addingCast, setAddingCast] = useState(false)
+  const [castHint, setCastHint] = useState('')
   const [generating, setGenerating] = useState(false)
   const [revising, setRevising] = useState(false)
   const [approving, setApproving] = useState(false)
@@ -129,7 +136,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   const [error, setError] = useState('')
 
   const hasResult = synopsis.trim().length > 0 && characters.length > 0
-  const busy = generating || revising || approving
+  const busy = generating || revising || approving || addingCast
 
   const generate = async () => {
     if (idea.trim().length < 10) { setError('Опишите идею хотя бы одним-двумя предложениями'); return }
@@ -145,8 +152,39 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
       setSynopsis(data.synopsis ?? '')
       setLanguage(data.language ?? '')
       setCharacters(data.characters ?? [])
+      setLocations(data.locations ?? [])
+      if (data.castWarning) setNotice('Расширенный каст не удалось сгенерировать автоматически — нажмите «Добавить ещё персонажей».')
     } catch { setError('Ошибка сети') }
     finally { setGenerating(false) }
+  }
+
+  const addCast = async () => {
+    setError(''); setNotice(''); setAddingCast(true)
+    try {
+      const res = await fetch('/api/ai/characters/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: project.id, hint: castHint.trim() }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data?.error ?? 'Не удалось добавить персонажей'); return }
+      setCharacters(data.characters ?? characters)
+      setNotice(`Добавлено персонажей: ${data.added}`)
+      setCastHint('')
+    } catch { setError('Ошибка сети') }
+    finally { setAddingCast(false) }
+  }
+
+  const reviseLocation = async (locationId: string, text: string) => {
+    setError(''); setNotice('')
+    const res = await fetch(`/api/ai/locations/${locationId}/revise`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instruction: text, regenerate: false }),
+    })
+    const data = await res.json()
+    if (!res.ok) { setError(data?.error ?? 'Не удалось изменить локацию'); return }
+    setLocations((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...data.location } : l)))
   }
 
   const reviseSynopsis = async () => {
@@ -221,10 +259,10 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
           data-testid="idea-generate"
         >
           {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-          {hasResult ? 'Сгенерировать заново' : 'Сгенерировать синопсис и персонажей'}
+          {hasResult ? 'Сгенерировать заново' : 'Сгенерировать синопсис, персонажей и локации'}
         </button>
         {generating && (
-          <p className="mt-2 text-xs text-muted-foreground">Обычно это занимает 20–40 секунд...</p>
+          <p className="mt-2 text-xs text-muted-foreground">Обычно это занимает 40–90 секунд: синопсис, локации и полный каст (главные, семья и окружение, эпизодические, массовка)...</p>
         )}
       </div>
 
@@ -276,12 +314,54 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
             </div>
           </div>
 
-          <div>
-            <h3 className="mb-3 font-display text-lg font-semibold">Персонажи ({characters.length})</h3>
+          <div data-testid="idea-locations">
+            <h3 className="mb-1 font-display text-lg font-semibold">Локации ({locations.length})</h3>
+            <p className="mb-3 text-xs text-muted-foreground">Ключевые места сезона. На следующем шаге для них генерируются фотореалистичные референсы, которые видеомодель использует вместе с персонажами.</p>
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {characters.map((c) => (
-                <CharacterCard key={c.id} char={c} busy={busy} onRevise={reviseCharacter} />
+              {locations.map((l) => (
+                <LocationCard key={l.id} loc={l} busy={busy} onRevise={reviseLocation} />
               ))}
+            </div>
+            <div className="mt-3">
+              <AddLocationForm projectId={project.id} busy={busy} onAdded={(loc) => setLocations((p) => [...p, loc])} onError={setError} />
+            </div>
+          </div>
+
+          <div data-testid="idea-cast">
+            <h3 className="mb-3 font-display text-lg font-semibold">Персонажи ({characters.length})</h3>
+            {groupByTier(characters).map((g) => (
+              <div key={g.tier} className="mb-5" data-testid={`cast-group-${g.tier}`}>
+                <h4 className="mb-2 text-sm font-semibold text-muted-foreground">{TIER_LABELS[g.tier]} · {g.items.length}</h4>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  {g.items.map((c) => (
+                    <CharacterCard key={c.id} char={c} busy={busy} onRevise={reviseCharacter} />
+                  ))}
+                </div>
+              </div>
+            ))}
+            <div className="rounded-lg border border-border bg-background p-3">
+              <label className="mb-2 flex items-center gap-2 text-sm font-medium">
+                <UserPlus className="h-4 w-4 text-primary" /> Добавить ещё персонажей
+              </label>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <input
+                  value={castHint}
+                  onChange={(e) => setCastHint(e.target.value)}
+                  placeholder="Необязательно: кого добавить (например, «братья героя и соседи по дому»)"
+                  disabled={busy}
+                  className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
+                  data-testid="cast-add-hint"
+                />
+                <button
+                  onClick={addCast}
+                  disabled={busy}
+                  className="flex items-center justify-center gap-2 rounded-lg bg-muted px-4 py-2 text-xs font-semibold transition hover:bg-muted/80 disabled:opacity-50"
+                  data-testid="cast-add-submit"
+                >
+                  {addingCast ? <Loader2 className="h-3 w-3 animate-spin" /> : <UserPlus className="h-3 w-3" />}
+                  Добавить ещё персонажей
+                </button>
+              </div>
             </div>
           </div>
 

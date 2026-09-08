@@ -60,28 +60,58 @@ export const LANGUAGE_NAMES: Record<IdeaLanguage, string> = {
 
 const str = (max: number) => z.string().trim().min(1).max(max);
 
+/** Cast tiers (stage 3). CROWD = a named group (family at the table, port workers, protesters…). */
+export const CHARACTER_TIERS = ["MAIN", "SUPPORTING", "MINOR", "CROWD"] as const;
+export type CharacterTier = (typeof CHARACTER_TIERS)[number];
+export const TIER_LABELS: Record<CharacterTier, string> = { MAIN: "Главные", SUPPORTING: "Второстепенные", MINOR: "Эпизодические", CROWD: "Массовка / группы" };
+export function normalizeTier(v: unknown): CharacterTier {
+  const t = typeof v === "string" ? v.trim().toUpperCase() : "";
+  return (CHARACTER_TIERS as readonly string[]).includes(t) ? (t as CharacterTier) : "MAIN";
+}
+
 export const characterCardSchema = z.object({
   name: str(120),
   age: z.union([z.string(), z.number()]).transform((v) => String(v).trim()).pipe(z.string().min(1).max(40)),
-  role: str(120),
-  appearance: str(2000),
+  role: str(200),
+  appearance: str(2500),
   personality: str(2000),
   firstAppearance: str(1500),
+  tier: z.preprocess(normalizeTier, z.enum(CHARACTER_TIERS)).optional().default("MAIN"),
+  groupSize: z.union([z.number(), z.string(), z.null()]).optional().transform((v) => {
+    const n = typeof v === "string" ? parseInt(v, 10) : v;
+    return typeof n === "number" && Number.isFinite(n) && n >= 2 ? Math.min(500, Math.round(n)) : null;
+  }),
 });
 export type CharacterCard = z.infer<typeof characterCardSchema>;
+
+/** A key location of the season: name/description in the story language, visualPrompt in English (no people). */
+export const locationCardSchema = z.object({
+  name: str(120),
+  description: str(2000),
+  visualPrompt: str(2500),
+});
+export type LocationCard = z.infer<typeof locationCardSchema>;
+
+export const MAX_CAST = 60;
 
 export const ideaResultSchema = z.object({
   language: z.string().optional(),
   synopsis: z.string().trim().min(80).max(12_000),
-  characters: z.array(characterCardSchema).min(2).max(8),
+  characters: z.array(characterCardSchema).min(2).max(MAX_CAST),
+  locations: z.array(locationCardSchema).max(12).optional().default([]),
 });
 export type IdeaResult = z.infer<typeof ideaResultSchema>;
+
+/** Second idea call / «Добавить ещё персонажей»: extra cast members only. */
+export const castExpansionSchema = z.object({
+  characters: z.array(characterCardSchema).min(1).max(MAX_CAST),
+});
 
 export const synopsisReviseResultSchema = z.object({
   synopsis: z.string().trim().min(80).max(12_000),
   charactersChanged: z.boolean().optional().default(false),
   changeSummary: z.string().max(1000).optional().default(""),
-  characters: z.array(characterCardSchema).min(2).max(8).optional(),
+  characters: z.array(characterCardSchema).min(2).max(MAX_CAST).optional(),
 });
 export type SynopsisReviseResult = z.infer<typeof synopsisReviseResultSchema>;
 
@@ -116,13 +146,38 @@ export function sanitizeCharacterCard(card: CharacterCard, keepNames: string[] =
   };
 }
 
-export function normalizeIdeaResult(raw: unknown, ideaText: string): { language: IdeaLanguage; synopsis: string; characters: CharacterCard[] } {
+/** Sanitize a location card: the English visual prompt must stay original (no brands / real landmarks by name). */
+export function sanitizeLocationCard(card: LocationCard): LocationCard {
+  return { ...card, visualPrompt: sanitizeVideoPrompt(card.visualPrompt, { keep: [card.name] }).prompt.trim() || card.visualPrompt };
+}
+
+/** Drop cast entries whose name duplicates an existing one (case-insensitive). */
+export function dedupeCast<T extends { name: string }>(cards: T[], existing: string[] = []): T[] {
+  const seen = new Set(existing.map((n) => n.trim().toLowerCase()));
+  const out: T[] = [];
+  for (const c of cards) {
+    const k = c.name.trim().toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(c);
+  }
+  return out;
+}
+
+export function normalizeIdeaResult(raw: unknown, ideaText: string): { language: IdeaLanguage; synopsis: string; characters: CharacterCard[]; locations: LocationCard[] } {
   const parsed = ideaResultSchema.parse(raw);
   const synopsis = stripMarkup(parsed.synopsis);
   const language = normalizeLanguage(parsed.language, ideaText || synopsis);
   const names = parsed.characters.map((c) => c.name);
-  const characters = parsed.characters.map((c) => sanitizeCharacterCard(c, names));
-  return { language, synopsis, characters };
+  const characters = dedupeCast(parsed.characters).map((c) => sanitizeCharacterCard(c, names));
+  const locations = dedupeCast(parsed.locations).map(sanitizeLocationCard);
+  return { language, synopsis, characters, locations };
+}
+
+export function normalizeCastExpansion(raw: unknown, existingNames: string[]): CharacterCard[] {
+  const parsed = castExpansionSchema.parse(raw);
+  const names = [...existingNames, ...parsed.characters.map((c) => c.name)];
+  return dedupeCast(parsed.characters, existingNames).map((c) => sanitizeCharacterCard(c, names));
 }
 
 /* ------------------------------------------------------------------ */
@@ -139,7 +194,18 @@ const CHARACTER_FIELD_RULES = `Character card fields (all REQUIRED, non-empty):
 - "role": role in the story (protagonist, antagonist, ally, mentor, etc.), in the story language
 - "appearance": ALWAYS in ENGLISH, 2-3 sentences, concrete and photoreal: age, ethnicity/skin tone, build, face, hair, eyes, clothing style, distinguishing features. Used verbatim as a prompt for AI image generation.
 - "personality": 2-3 sentences in the story language — traits, motivation, inner conflict
-- "firstAppearance": 1-2 sentences in the story language — where and how the character first appears in the season`;
+- "firstAppearance": 1-2 sentences in the story language — where and how the character first appears in the season
+- "tier": one of "MAIN" | "SUPPORTING" | "MINOR" | "CROWD"
+- "groupSize": integer number of people, ONLY for CROWD groups (otherwise null)
+Tier meaning: MAIN = leads carrying the season arc; SUPPORTING = recurring characters close to the leads — FAMILY MEMBERS (state the kinship in "role", e.g. "мать героини", "younger brother"), partners, colleagues, rivals; MINOR = episodic characters with a line or two (a nurse, a taxi driver, a neighbour); CROWD = a named GROUP that appears as a crowd (e.g. "Гости на свадьбе", "Рабочие порта", "Толпа у суда"). For CROWD: "name" is the group name, "age" is the age range, "appearance" describes the group as ONE photoreal wide shot in English (how many people, who they are, how they are dressed, typical postures), "personality" describes how the crowd behaves.`;
+
+const LOCATION_FIELD_RULES = `Location card fields (all REQUIRED):
+- "name": short name of the place in the story language (e.g. "Маяк на мысе", "Кухня семьи Орловых")
+- "description": 1-2 sentences in the story language — what the place is and what happens there in the season
+- "visualPrompt": ALWAYS in ENGLISH, 3-4 sentences, concrete and photoreal: type of place, architecture/interior, materials, colours, time of day and lighting, weather, props and signs of life — but NO PEOPLE and no text/logos. Used verbatim as a prompt for an AI reference image (vertical 9:16 photograph).
+- Locations must be ORIGINAL: no real landmarks, brands, or existing franchises by name.`;
+
+export const CAST_TARGETS = { MAIN: "3-5", SUPPORTING: "5-10", MINOR: "5-10", CROWD: "2-5" } as const;
 
 export function ideaSystemPrompt(): string {
   return `You are a head writer for a short-form vertical drama series.
@@ -155,10 +221,65 @@ LANGUAGE: detect the language of the idea and write synopsis, name, age, role, p
 
 SYNOPSIS: readable and compact (250-450 words). No headings, no markdown, no bullet lists, no labels like "Setup:". It must still convey the whole season arc: the setup (world, hero, hook), the development (rising stakes, relationships), the key turning points, and the finale of the season. Write it as prose a producer can read in one minute.
 
-CHARACTERS: 3-6 characters, each visually distinct.
+CHARACTERS: ${CAST_TARGETS.MAIN} MAIN characters only (tier "MAIN"), each visually distinct. The supporting cast, minor characters and crowds are produced in a separate step — do NOT include them here.
+${CHARACTER_FIELD_RULES}
+
+LOCATIONS: 4-8 key locations where most of the season happens (the leads' homes, workplaces, the central place of the story, the finale's place). Each visually distinct.
+${LOCATION_FIELD_RULES}
+
+${ORIGINALITY_RULES}`;
+}
+
+/**
+ * Cast expansion: the second idea call (full supporting/minor/crowd cast) and the
+ * «Добавить ещё персонажей» button (with the producer's hint).
+ */
+export function castExpansionSystemPrompt(language: IdeaLanguage, opts?: { hint?: string; countHint?: string }): string {
+  const lang = LANGUAGE_NAMES[language] ?? "the story language";
+  const what = opts?.hint?.trim()
+    ? `Add NEW characters according to the producer's request below (${opts.countHint ?? "as many as the request implies, 1-12"}). Assign each the correct tier.`
+    : `Produce the FULL extended cast around the existing main characters: ${CAST_TARGETS.SUPPORTING} SUPPORTING (must include the leads' family members with kinship in "role"), ${CAST_TARGETS.MINOR} MINOR and ${CAST_TARGETS.CROWD} CROWD groups.`;
+  return `You are a head writer / casting director for a short-form vertical drama series.
+
+${what}
+Return ONLY valid JSON: { "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "...", "tier": "SUPPORTING" | "MINOR" | "CROWD" | "MAIN", "groupSize": <int or null> } ] }
+
+RULES:
+- Do NOT repeat or rename existing characters; every new character must have a unique name and be visually distinct.
+- name, age, role, personality, firstAppearance in ${lang}; "appearance" ALWAYS in English.
+- Ground every character in the synopsis: they must have a plausible reason to appear in the season.
 ${CHARACTER_FIELD_RULES}
 
 ${ORIGINALITY_RULES}`;
+}
+
+export function castExpansionUserPrompt(synopsis: string, existing: CharacterCard[], hint?: string): string {
+  const list = existing.map((c) => `- ${c.name} (${c.tier}${c.groupSize ? `, ${c.groupSize} people` : ""}): ${c.role}, ${c.age}`).join("\n");
+  return `SYNOPSIS:\n${synopsis}\n\nEXISTING CHARACTERS:\n${list || "(none)"}${hint?.trim() ? `\n\nPRODUCER'S REQUEST:\n${hint.trim()}` : ""}`;
+}
+
+export function reviseLocationSystemPrompt(language: IdeaLanguage): string {
+  const lang = LANGUAGE_NAMES[language] ?? "the same language as the current card";
+  return `You are a production designer for a short-form vertical drama series. Rewrite ONE location card according to the producer's instruction.
+
+Return ONLY valid JSON with ALL fields: { "name": "...", "description": "...", "visualPrompt": "..." }
+
+RULES:
+- name and description in ${lang}; "visualPrompt" ALWAYS in English, no people, no text/logos.
+- Apply the instruction; keep everything it does not touch as close to the original as possible (including the name unless asked).
+${LOCATION_FIELD_RULES}`;
+}
+
+export function reviseLocationUserPrompt(synopsis: string, card: LocationCard, instruction: string): string {
+  return `SYNOPSIS (context):\n${synopsis}\n\nCURRENT LOCATION (JSON):\n${JSON.stringify(card)}\n\nINSTRUCTION FROM PRODUCER:\n${instruction.trim()}`;
+}
+
+/** Location card generated from a bare name typed by the producer (manual add). */
+export function locationFromNameSystemPrompt(language: IdeaLanguage): string {
+  const lang = LANGUAGE_NAMES[language] ?? "the story language";
+  return `You are a production designer. Given a season synopsis and the name (and optional note) of a location, write its card.
+Return ONLY valid JSON: { "name": "...", "description": "...", "visualPrompt": "..." } — name and description in ${lang}, visualPrompt in English.
+${LOCATION_FIELD_RULES}`;
 }
 
 export function ideaUserPrompt(idea: string): string {
@@ -195,10 +316,10 @@ export function reviseCharacterSystemPrompt(language: IdeaLanguage): string {
   return `You are a character designer for a short-form vertical drama series. Rewrite ONE character card according to the producer's instruction.
 
 Return ONLY valid JSON with ALL fields:
-{ "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." }
+{ "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "...", "tier": "...", "groupSize": <int or null> }
 
 RULES:
-- name, age, role, personality, firstAppearance in ${lang}; "appearance" ALWAYS in English.
+- name, age, role, personality, firstAppearance in ${lang}; "appearance" ALWAYS in English. Keep "tier" unless the instruction changes the character's importance.
 - Apply the instruction; keep everything the instruction does not touch as close to the original as possible (including the name unless asked to change it).
 - Keep the card consistent with the synopsis.
 ${CHARACTER_FIELD_RULES}
@@ -234,6 +355,8 @@ export function toCharacterCard(c: {
   personality?: string | null;
   firstAppearance?: string | null;
   description?: string | null;
+  tier?: string | null;
+  groupSize?: number | null;
 }): CharacterCard {
   return {
     name: c.name,
@@ -242,5 +365,22 @@ export function toCharacterCard(c: {
     appearance: c.appearance?.trim() || "—",
     personality: c.personality?.trim() || c.description?.trim() || "—",
     firstAppearance: c.firstAppearance?.trim() || "—",
+    tier: normalizeTier(c.tier),
+    groupSize: c.groupSize ?? null,
+  };
+}
+
+/** Prisma `data` fragment for a character card (shared by idea / revise / add routes). */
+export function characterCardToData(c: CharacterCard) {
+  return {
+    name: c.name,
+    age: c.age,
+    role: c.role,
+    appearance: c.appearance,
+    personality: c.personality,
+    firstAppearance: c.firstAppearance,
+    description: c.firstAppearance,
+    tier: c.tier ?? "MAIN",
+    groupSize: c.tier === "CROWD" ? c.groupSize ?? 12 : null,
   };
 }

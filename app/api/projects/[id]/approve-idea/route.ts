@@ -47,7 +47,9 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
     });
     if (active) return NextResponse.json({ success: true, jobId: active.id, resumed: true });
 
-    const pending = project.characters.filter((c) => !c.imageFront || !c.imageProfile || !c.imageFull);
+    // Free auto-generation covers the MAIN cast only; supporting/minor/crowd references are
+    // started from the References stage buttons (charged per character).
+    const pending = project.characters.filter((c) => c.tier === "MAIN" && (!c.imageFront || !c.imageProfile || !c.imageFull));
     if (pending.length === 0) return NextResponse.json({ success: true, jobId: null });
 
     const job = await prisma.generationJob.create({
@@ -57,6 +59,7 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
         progress: 5,
         message: `Starting reference generation for ${pending.length} character(s)...`,
         projectId: id,
+        resultData: JSON.stringify({ characterIds: pending.map((c) => c.id) }),
       },
     });
     runInBackground(() =>

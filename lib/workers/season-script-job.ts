@@ -28,6 +28,7 @@ import {
   type EpisodeScript,
   type SeasonStructure,
   matchCharacter,
+  matchLocation,
 } from "@/lib/season";
 
 export const SEASON_JOB_TYPE = "season_script";
@@ -139,7 +140,7 @@ export function outlineFromEpisode(e: { number: number; title: string; logline: 
 export async function runSeasonScriptJob(jobId: string, projectId: string, episodeCount = SEASON_DEFAULT_EPISODES): Promise<void> {
   const started = Date.now();
   try {
-    const project = await prisma.project.findUnique({ where: { id: projectId }, include: { characters: true } });
+    const project = await prisma.project.findUnique({ where: { id: projectId }, include: { characters: true, locations: { orderBy: { createdAt: "asc" } } } });
     if (!project?.synopsis) throw new Error("Project synopsis missing");
     const language = normalizeLanguage(project.language, project.synopsis);
     const cards = project.characters.map(toCharacterCard);
@@ -149,7 +150,7 @@ export async function runSeasonScriptJob(jobId: string, projectId: string, episo
     if (!season || season.episodes.length === 0) {
       await updateJob(jobId, { status: "processing", progress: 3, message: "Строю структуру сезона…" });
       const structure = await generateWithRetry(jobId, 2, async () => {
-        const raw = await chatJSON(seasonStructureSystemPrompt(language, episodeCount), seasonStructureUserPrompt(project.synopsis!, cards), { temperature: 0.7, maxTokens: 6000 });
+        const raw = await chatJSON(seasonStructureSystemPrompt(language, episodeCount), seasonStructureUserPrompt(project.synopsis!, cards, project.locations), { temperature: 0.7, maxTokens: 6000 });
         const parsed = seasonStructureSchema.parse(raw);
         return { ...parsed, episodes: parsed.episodes.map((e, i) => ({ ...e, number: i + 1 })) };
       });
@@ -158,13 +159,21 @@ export async function runSeasonScriptJob(jobId: string, projectId: string, episo
         const s = season
           ? await tx.season.update({ where: { id: season.id }, data: { title: structure.title, logline: structure.logline } })
           : await tx.season.create({ data: { projectId, number: 1, title: structure.title, logline: structure.logline } });
+        const locs: { id: string; name: string }[] = project.locations.map((l) => ({ id: l.id, name: l.name }));
         for (const e of structure.episodes) {
-          const ep = await tx.episode.create({ data: { seasonId: s.id, number: e.number, title: e.title, description: e.logline, logline: e.logline, cliffhanger: e.cliffhanger, locationName: e.locationName, locationDesc: e.locationDesc, arcRole: e.arcRole, status: "draft" } });
+          // Bind the episode to an existing project Location (reference image); unknown names become new Locations without an image.
+          let loc = matchLocation(locs, e.locationName);
+          if (!loc) {
+            const created = await tx.location.create({ data: { projectId, name: e.locationName, description: e.locationName, visualPrompt: e.locationDesc } });
+            loc = { id: created.id, name: created.name };
+            locs.push(loc);
+          }
+          const ep = await tx.episode.create({ data: { seasonId: s.id, number: e.number, title: e.title, description: e.logline, logline: e.logline, cliffhanger: e.cliffhanger, locationName: loc.name, locationDesc: e.locationDesc, locationId: loc.id, arcRole: e.arcRole, status: "draft" } });
           const ids = Array.from(new Set(e.characters.map((n) => byName.get(n.toLowerCase())).filter((x): x is string => !!x)));
           if (ids.length) await tx.episodeCharacter.createMany({ data: ids.map((characterId) => ({ episodeId: ep.id, characterId })) });
         }
         return tx.season.findUniqueOrThrow({ where: { id: s.id }, include: { episodes: { orderBy: { number: "asc" }, include: { characters: { include: { character: true } } } } } });
-      });
+      }, { timeout: 30_000 });
       await prisma.project.update({ where: { id: projectId }, data: { stage: "structure" } });
     }
 

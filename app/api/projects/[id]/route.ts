@@ -18,6 +18,7 @@ export async function GET(
       where: { id, userId: user.id },
       include: {
         characters: { orderBy: { createdAt: 'asc' } },
+        locations: { orderBy: { createdAt: 'asc' } },
         seasons: {
           include: {
             episodes: {

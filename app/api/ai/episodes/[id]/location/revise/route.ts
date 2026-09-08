@@ -53,6 +53,10 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
           script: renderScriptFromScenes({ ...episode, locationName: parsed.locationName }, episode.characters.map((c) => c.character.name), scenes),
         },
       });
+      // Stage 3: keep the bound project Location in sync (its reference image is regenerated from the References stage).
+      if (episode.locationId) {
+        await tx.location.update({ where: { id: episode.locationId }, data: { name: parsed.locationName, visualPrompt: parsed.locationDesc } });
+      }
     });
     return NextResponse.json({ ok: true, locationName: parsed.locationName, locationDesc: parsed.locationDesc, updatedScenes: parsed.scenes.length });
   } catch (err) {

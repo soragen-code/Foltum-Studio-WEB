@@ -51,7 +51,7 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds }: 
         });
         try {
           const replicateUrl = await generateImage({
-            prompt: characterImagePrompt(char.appearance ?? "", shot, char.name),
+            prompt: characterImagePrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize),
             aspect_ratio: ASPECT_RATIOS[shot],
           }, { jobId, characterId: char.id });
           // Seedream outputs PNG (with its C2PA content-credentials watermark). We upload the

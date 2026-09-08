@@ -7,7 +7,7 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, ideaSchema } from "@/lib/validations";
 import { chatJSON } from "@/lib/ai";
-import { ideaSystemPrompt, ideaUserPrompt, normalizeIdeaResult } from "@/lib/idea";
+import { ideaSystemPrompt, ideaUserPrompt, normalizeIdeaResult, castExpansionSystemPrompt, castExpansionUserPrompt, normalizeCastExpansion, characterCardToData, type CharacterCard } from "@/lib/idea";
 
 /**
  * POST /api/ai/idea  { projectId, idea }
@@ -50,34 +50,43 @@ export async function POST(request: Request) {
     }
     if (!result) return NextResponse.json({ error: "AI returned an invalid result: " + lastError }, { status: 502 });
 
+    // Second call: the extended cast (supporting incl. family, minor, crowd groups). Non-fatal —
+    // the producer can always press «Добавить ещё персонажей».
+    let extra: CharacterCard[] = [];
+    let castWarning = "";
+    for (let attempt = 0; attempt < 2 && extra.length === 0; attempt++) {
+      try {
+        const raw = await chatJSON(
+          castExpansionSystemPrompt(result.language),
+          castExpansionUserPrompt(result.synopsis, result.characters),
+          { temperature: 0.8, maxTokens: 6000 }
+        );
+        extra = normalizeCastExpansion(raw, result.characters.map((c) => c.name));
+      } catch (e: any) {
+        castWarning = e?.message ?? String(e);
+        console.warn(`[idea] cast expansion attempt ${attempt + 1} failed:`, castWarning);
+      }
+    }
+    const cast = [...result.characters, ...extra];
+
     await prisma.$transaction(async (tx) => {
       await tx.character.deleteMany({ where: { projectId } });
-      for (const c of result!.characters) {
-        await tx.character.create({
-          data: {
-            projectId,
-            name: c.name,
-            age: c.age,
-            role: c.role,
-            appearance: c.appearance,
-            personality: c.personality,
-            firstAppearance: c.firstAppearance,
-            description: c.firstAppearance,
-            status: "draft",
-            imageFront: "",
-            imageProfile: "",
-            imageFull: "",
-          },
-        });
+      for (const c of cast) {
+        await tx.character.create({ data: { projectId, ...characterCardToData(c), status: "draft", imageFront: "", imageProfile: "", imageFull: "" } });
+      }
+      await tx.location.deleteMany({ where: { projectId } });
+      for (const l of result!.locations) {
+        await tx.location.create({ data: { projectId, name: l.name, description: l.description, visualPrompt: l.visualPrompt } });
       }
       await tx.project.update({
         where: { id: projectId },
         data: { idea, synopsis: result!.synopsis, language: result!.language, synopsisApproved: false },
       });
-    });
+    }, { timeout: 30_000 });
 
     const characters = await prisma.character.findMany({ where: { projectId }, orderBy: { createdAt: "asc" } });
-    return NextResponse.json({ synopsis: result.synopsis, language: result.language, characters });
+    const locations = await prisma.location.findMany({ where: { projectId }, orderBy: { createdAt: "asc" } });
+    return NextResponse.json({ synopsis: result.synopsis, language: result.language, characters, locations, castWarning: extra.length ? "" : castWarning });
   } catch (err: any) {
     console.error("Idea generation error:", err);
     return NextResponse.json({ error: "Generation failed: " + (err?.message ?? "Unknown error") }, { status: 500 });

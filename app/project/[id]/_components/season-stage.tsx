@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, Wand2, ChevronDown, ChevronRight, MapPin, Pencil, ArrowRight, Film, Check } from 'lucide-react'
+import { Loader2, Wand2, ChevronDown, ChevronRight, MapPin, Pencil, ArrowRight, Film, Check, Camera } from 'lucide-react'
 import { JOB_POLL_INTERVAL_MS } from './use-job-polling'
 
 type EpChar = { character: { id: string; name: string; imageFront?: string | null } }
@@ -14,6 +14,7 @@ export type SeasonEpisode = {
   arcRole?: string | null
   locationName?: string | null
   locationDesc?: string | null
+  locationId?: string | null
   cliffhanger?: string | null
   script?: string | null
   status: string
@@ -91,7 +92,22 @@ export function SeasonStage({ project }: { project: any; onRefresh?: () => void 
   const [locText, setLocText] = useState<Record<string, string>>({})
   const [locOpen, setLocOpen] = useState<Record<string, boolean>>({})
   const [busy, setBusy] = useState<Record<string, string>>({}) // episodeId -> 'revise' | 'location'
+  // Location references (id → imageUrl); refreshed while a location image job runs.
+  const [locImages, setLocImages] = useState<Record<string, string | null>>(() =>
+    Object.fromEntries(((project?.locations ?? []) as { id: string; imageUrl?: string | null }[]).map((l) => [l.id, l.imageUrl ?? null]))
+  )
+  const [locGen, setLocGen] = useState<Record<string, boolean>>({}) // locationId → generating
 
+  const loadLocations = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/ai/locations?projectId=${project.id}`, { cache: 'no-store' })
+      if (!res.ok) return
+      const data = await res.json()
+      const list: { id: string; imageUrl?: string | null }[] = Array.isArray(data?.locations) ? data.locations : []
+      setLocImages(Object.fromEntries(list.map((l) => [l.id, l.imageUrl ?? null])))
+      setLocGen((g) => { const n = { ...g }; for (const l of list) if (validUrl(l.imageUrl)) delete n[l.id]; return n })
+    } catch {}
+  }, [project.id])
   const load = useCallback(async () => {
     try {
       const res = await fetch(`/api/ai/season?projectId=${project.id}`, { cache: 'no-store' })
@@ -99,9 +115,30 @@ export function SeasonStage({ project }: { project: any; onRefresh?: () => void 
       const data = await res.json()
       setSeason(data.season ?? null)
       setJob(data.job ?? null)
+      // the worker may bind episodes to newly created locations — keep the id → image map in sync
+      void loadLocations()
     } catch {}
     finally { setLoading(false) }
-  }, [project.id])
+  }, [project.id, loadLocations])
+
+  const anyLocGen = Object.values(locGen).some(Boolean)
+  useEffect(() => {
+    if (!anyLocGen) return
+    const id = setInterval(loadLocations, JOB_POLL_INTERVAL_MS * 2)
+    return () => clearInterval(id)
+  }, [anyLocGen, loadLocations])
+
+  const generateLocationRef = async (locationId: string) => {
+    setError(null); setLocGen((g) => ({ ...g, [locationId]: true }))
+    try {
+      const res = await fetch(`/api/ai/locations/${locationId}/image`, { method: 'POST' })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error ?? 'Не удалось запустить генерацию референса локации')
+    } catch (e: any) {
+      setError(e?.message ?? 'Ошибка')
+      setLocGen((g) => { const n = { ...g }; delete n[locationId]; return n })
+    }
+  }
 
   const jobActive = !!job && (job.status === 'pending' || job.status === 'processing')
   const result = (() => { try { return job?.resultData ? JSON.parse(job.resultData) : null } catch { return null } })()
@@ -170,7 +207,7 @@ export function SeasonStage({ project }: { project: any; onRefresh?: () => void 
       <div className="rounded-xl border border-border bg-card p-4 sm:p-6">
         <h2 className="font-display text-xl font-bold">Сценарий сезона</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Полный сценарий первого сезона: 6–10 эпизодов, в каждом 10–15 сцен по 10–15 секунд с диалогами и раскадровкой для ИИ-экранизации.
+          Полный сценарий первого сезона: 6–10 эпизодов, в каждом 10–15 сцен с полноценными диалогами (5–7 реплик-предложений) и раскадровкой для ИИ-экранизации. Каждый эпизод привязан к локации из списка референсов.
         </p>
         {season?.title && (
           <div className="mt-3">
@@ -235,6 +272,21 @@ export function SeasonStage({ project }: { project: any; onRefresh?: () => void 
                     <span className="inline-flex items-center gap-1"><MapPin className="h-3.5 w-3.5" />{ep.locationName || '—'}
                       <button onClick={() => setLocOpen((o) => ({ ...o, [ep.id]: !o[ep.id] }))} className="ml-1 rounded p-0.5 hover:bg-muted" aria-label="Изменить локацию" data-testid="location-edit"><Pencil className="h-3 w-3" /></button>
                     </span>
+                    {ep.locationId && ep.locationId in locImages && !validUrl(locImages[ep.locationId]) && (
+                      <button
+                        onClick={() => generateLocationRef(ep.locationId as string)}
+                        disabled={!!locGen[ep.locationId]}
+                        className="inline-flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[11px] hover:bg-muted disabled:opacity-50"
+                        title="Локация появилась в сценарии и пока без референса — сгенерировать фотореалистичный кадр (1 кредит)"
+                        data-testid="location-ref-generate"
+                      >
+                        {locGen[ep.locationId] ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
+                        {locGen[ep.locationId] ? 'референс локации…' : 'Сгенерировать референс локации'}
+                      </button>
+                    )}
+                    {ep.locationId && validUrl(locImages[ep.locationId]) && (
+                      <img src={locImages[ep.locationId] as string} alt={ep.locationName ?? ''} className="h-6 w-6 rounded object-cover ring-1 ring-border" title="Референс локации" data-testid="location-ref-thumb" />
+                    )}
                     <CharacterAvatars chars={ep.characters} size="h-6 w-6" />
                     {ep.script && <span>{ep.scenes.length} сцен</span>}
                   </div>

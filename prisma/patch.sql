@@ -44,3 +44,29 @@ ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "arcRole" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "shotType" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "durationSec" INTEGER;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "action" TEXT;
+
+-- Stage 3 (locations + extended cast): additive only.
+ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "tier" TEXT NOT NULL DEFAULT 'MAIN';
+ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "groupSize" INTEGER;
+CREATE TABLE IF NOT EXISTS "Location" (
+  "id" TEXT PRIMARY KEY,
+  "projectId" TEXT NOT NULL,
+  "name" TEXT NOT NULL,
+  "description" TEXT,
+  "visualPrompt" TEXT,
+  "imageUrl" TEXT,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS "Location_projectId_idx" ON "Location"("projectId");
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'Location_projectId_fkey') THEN
+    ALTER TABLE "Location" ADD CONSTRAINT "Location_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "locationId" TEXT;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'Episode_locationId_fkey') THEN
+    ALTER TABLE "Episode" ADD CONSTRAINT "Episode_locationId_fkey" FOREIGN KEY ("locationId") REFERENCES "Location"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+  END IF;
+END $$;

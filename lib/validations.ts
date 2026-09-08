@@ -88,6 +88,28 @@ export const characterReviseSchema = z.object({
   instruction: z.string().trim().min(2, "Instruction is required").max(4_000),
 });
 
+export const charactersAddSchema = z.object({
+  projectId: cuidSchema,
+  hint: z.string().trim().max(2_000).optional().default(""),
+});
+
+export const charactersReferencesSchema = z.object({
+  projectId: cuidSchema,
+  tiers: z.array(z.enum(["MAIN", "SUPPORTING", "MINOR", "CROWD"])).optional(),
+  characterIds: z.array(cuidSchema).max(100).optional(),
+});
+
+export const locationCreateSchema = z.object({
+  projectId: cuidSchema,
+  name: z.string().trim().min(2).max(120),
+  note: z.string().trim().max(2_000).optional().default(""),
+});
+
+export const locationReviseBodySchema = z.object({
+  instruction: z.string().trim().min(2, "Instruction is required").max(4_000),
+  regenerate: z.boolean().optional().default(true),
+});
+
 export const acceptSceneSchema = z.object({
   sceneId: cuidSchema,
 });

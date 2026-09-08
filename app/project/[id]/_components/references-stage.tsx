@@ -1,9 +1,11 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Loader2, Wand2, ArrowRight, User, ImageOff, Users, RefreshCw } from 'lucide-react'
+import { Loader2, Wand2, ArrowRight, ImageOff, Users, RefreshCw, MapPin, Camera } from 'lucide-react'
 import { CharacterCard, type CharacterCardData } from './idea-stage'
 import type { JobInfo } from './use-job-polling'
+import { CHARACTER_REFERENCE_COST } from '@/lib/power-tier'
+import { TIER_LABELS, groupByTier, tierOf, type Tier, type LocationCardData, LocationCard, AddLocationForm } from './cast-and-locations'
 
 interface RefCharacter extends CharacterCardData {
   imageFront?: string | null
@@ -13,6 +15,22 @@ interface RefCharacter extends CharacterCardData {
 
 const POLL_MS = 3000
 const SHOT_LABELS = ['Портрет', 'Профиль', 'В полный рост']
+const LOCATION_JOB_TYPE = 'location_image'
+
+function jobCharacterIds(j: JobInfo & { resultData?: string | null }): string[] | null {
+  try {
+    const rd = j.resultData ? JSON.parse(j.resultData) : j.result
+    return Array.isArray(rd?.characterIds) ? rd.characterIds : null
+  } catch { return null }
+}
+
+/** Location ids covered by an active location_image job (resultData = JSON {locationIds}). */
+function jobLocationIds(j: JobInfo & { resultData?: string | null }): string[] {
+  try {
+    const rd = j.resultData ? JSON.parse(j.resultData) : j.result
+    return Array.isArray(rd?.locationIds) ? rd.locationIds : []
+  } catch { return [] }
+}
 
 function validUrl(u?: string | null) {
   return typeof u === 'string' && u.startsWith('http') && u.length > 10
@@ -31,7 +49,12 @@ function hasAnyImage(c: RefCharacter) {
  */
 export function ReferencesStage({ project, onRefresh }: { project: any; onRefresh: () => void }) {
   const [characters, setCharacters] = useState<RefCharacter[]>(project?.characters ?? [])
+  const [locations, setLocations] = useState<LocationCardData[]>(project?.locations ?? [])
   const [jobs, setJobs] = useState<JobInfo[]>([])
+  const [locJobs, setLocJobs] = useState<JobInfo[]>([])
+  const [bulk, setBulk] = useState<string>('') // which bulk button is sending
+  // locationId → jobId started locally (until the server lists the job)
+  const [localLoc, setLocalLoc] = useState<Record<string, string>>({})
   // Until the first poll answers we don't know whether a job is running — show spinners
   // for characters without references instead of an empty "no image" state.
   const [loaded, setLoaded] = useState(false)
@@ -45,11 +68,22 @@ export function ReferencesStage({ project, onRefresh }: { project: any; onRefres
   /** One tick: active character jobs + fresh character rows. */
   const tick = useCallback(async () => {
     try {
-      const [jobsRes, projRes] = await Promise.all([
+      const [jobsRes, projRes, locJobsRes] = await Promise.all([
         fetch(`/api/jobs?projectId=${project.id}&type=characters&active=1`, { cache: 'no-store' }),
         fetch(`/api/projects/${project.id}`, { cache: 'no-store' }),
+        fetch(`/api/jobs?projectId=${project.id}&type=${LOCATION_JOB_TYPE}&active=1`, { cache: 'no-store' }),
       ])
       if (!mounted.current) return
+      if (locJobsRes.ok) {
+        const data = await locJobsRes.json()
+        const list: JobInfo[] = Array.isArray(data?.jobs) ? data.jobs : []
+        setLocJobs(list)
+        setLocalLoc((prev) => {
+          const next: Record<string, string> = {}
+          for (const [lid, jid] of Object.entries(prev)) if (list.some((j) => j.id === jid)) next[lid] = jid
+          return Object.keys(next).length === Object.keys(prev).length ? prev : next
+        })
+      }
       if (jobsRes.ok) {
         const data = await jobsRes.json()
         const list: JobInfo[] = Array.isArray(data?.jobs) ? data.jobs : []
@@ -65,6 +99,7 @@ export function ReferencesStage({ project, onRefresh }: { project: any; onRefres
       if (projRes.ok) {
         const data = await projRes.json()
         if (Array.isArray(data?.project?.characters)) setCharacters(data.project.characters)
+        if (Array.isArray(data?.project?.locations)) setLocations(data.project.locations)
       }
     } catch {
       /* transient — keep polling */
@@ -89,12 +124,66 @@ export function ReferencesStage({ project, onRefresh }: { project: any; onRefres
   const activeGen: Record<string, JobInfo | 'local'> = {}
   for (const j of jobs) if (j.characterId) activeGen[j.characterId] = j
   for (const cid of Object.keys(localGen)) if (!activeGen[cid]) activeGen[cid] = 'local'
+  // A project-wide job spins only its own characters when it lists them (resultData.characterIds);
+  // older jobs without the list — every character still missing images.
+  const projectJobIds = projectJob ? jobCharacterIds(projectJob as any) : null
   if (projectJob || !loaded)
-    for (const c of characters) if (!hasAllImages(c) && !activeGen[c.id]) activeGen[c.id] = projectJob ?? 'local'
+    for (const c of characters)
+      if (!hasAllImages(c) && !activeGen[c.id] && (projectJobIds ? projectJobIds.includes(c.id) : projectJob ? true : tierOf(c) === 'MAIN'))
+        activeGen[c.id] = projectJob ?? 'local'
 
   const anyActive = !loaded || jobs.length > 0 || Object.keys(localGen).length > 0
   const readyCount = characters.filter(hasAnyImage).length
   const missing = characters.filter((c) => !hasAllImages(c))
+  const missingByTier = (tiers: Tier[]) => missing.filter((c) => tiers.includes(tierOf(c)))
+  const groups = groupByTier(characters)
+
+  // Location reference generation state
+  const activeLoc: Record<string, JobInfo | 'local'> = {}
+  for (const j of locJobs) for (const lid of jobLocationIds(j as any)) activeLoc[lid] = j
+  for (const lid of Object.keys(localLoc)) if (!activeLoc[lid]) activeLoc[lid] = 'local'
+  const locReady = locations.filter((l) => validUrl(l.imageUrl)).length
+
+  /** Bulk: generate references for the characters (without images) of the given tiers. */
+  const startBulk = async (key: string, tiers?: Tier[]) => {
+    setError(''); setBulk(key)
+    try {
+      const res = await fetch('/api/ai/characters/references', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: project.id, ...(tiers ? { tiers } : {}) }),
+      })
+      const data = await res.json()
+      if (!res.ok) { setError(data?.error ?? 'Не удалось запустить генерацию'); return }
+      if (data?.jobId) {
+        const targets = tiers ? missingByTier(tiers) : missing
+        setLocalGen((prev) => { const n = { ...prev }; for (const c of targets) n[c.id] = data.jobId; return n })
+      }
+      await tick()
+    } catch { setError('Ошибка сети') }
+    finally { setBulk('') }
+  }
+
+  const generateLocation = async (locationId: string) => {
+    setError('')
+    const res = await fetch(`/api/ai/locations/${locationId}/image`, { method: 'POST' })
+    const data = await res.json()
+    if (!res.ok) { setError(data?.error ?? 'Не удалось запустить генерацию локации'); return }
+    if (data?.jobId) setLocalLoc((prev) => ({ ...prev, [locationId]: data.jobId }))
+    await tick()
+  }
+
+  const reviseLocation = async (locationId: string, instruction: string) => {
+    setError('')
+    const res = await fetch(`/api/ai/locations/${locationId}/revise`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ instruction, regenerate: true }),
+    })
+    const data = await res.json()
+    if (!res.ok) { setError(data?.error ?? 'Не удалось изменить локацию'); return }
+    if (data?.location) setLocations((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...data.location } : l)))
+    if (data?.jobId) setLocalLoc((prev) => ({ ...prev, [locationId]: data.jobId }))
+    await tick()
+  }
 
   /** (Re)start the project-wide reference job — idempotent on the server. */
   const startReferences = async () => {
@@ -141,6 +230,8 @@ export function ReferencesStage({ project, onRefresh }: { project: any; onRefres
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
           Фотореалистичные референсы генерируются по описанию внешности каждого персонажа. Готово: {readyCount} из {characters.length}.
+          Для главных героев референсы создаются автоматически; второстепенных, эпизодических и массовку можно сгенерировать
+          кнопками ниже ({CHARACTER_REFERENCE_COST} кр. за персонажа или группу).
         </p>
         {error && <div className="mt-4 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
         {projectJob && (
@@ -151,34 +242,136 @@ export function ReferencesStage({ project, onRefresh }: { project: any; onRefres
           </div>
         )}
         {!anyActive && missing.length > 0 && (
-          <button
-            onClick={startReferences}
-            disabled={starting}
-            className="mt-4 flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
-            data-testid="references-start"
-          >
-            {starting ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-            Догенерировать недостающие референсы
-          </button>
+          <div className="mt-4 flex flex-wrap gap-2" data-testid="references-bulk">
+            {missingByTier(['MAIN']).length > 0 && (
+              <button
+                onClick={startReferences}
+                disabled={starting || !!bulk}
+                className="flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
+                data-testid="references-start"
+              >
+                {starting ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                Сгенерировать главных ({missingByTier(['MAIN']).length} × {CHARACTER_REFERENCE_COST} кр.)
+              </button>
+            )}
+            {missingByTier(['SUPPORTING']).length > 0 && (
+              <button
+                onClick={() => startBulk('supporting', ['SUPPORTING'])}
+                disabled={starting || !!bulk}
+                className="flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
+                data-testid="references-start-supporting"
+              >
+                {bulk === 'supporting' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Users className="h-3 w-3" />}
+                Сгенерировать второстепенных ({missingByTier(['SUPPORTING']).length} × {CHARACTER_REFERENCE_COST} кр.)
+              </button>
+            )}
+            {missingByTier(['MINOR', 'CROWD']).length > 0 && (
+              <button
+                onClick={() => startBulk('minor', ['MINOR', 'CROWD'])}
+                disabled={starting || !!bulk}
+                className="flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
+                data-testid="references-start-minor"
+              >
+                {bulk === 'minor' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Users className="h-3 w-3" />}
+                Эпизодических и массовку ({missingByTier(['MINOR', 'CROWD']).length} × {CHARACTER_REFERENCE_COST} кр.)
+              </button>
+            )}
+            {missing.length > 1 && (
+              <button
+                onClick={() => startBulk('all')}
+                disabled={starting || !!bulk}
+                className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
+                data-testid="references-start-all"
+              >
+                {bulk === 'all' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />}
+                Сгенерировать всех ({missing.length} × {CHARACTER_REFERENCE_COST} = {missing.length * CHARACTER_REFERENCE_COST} кр.)
+              </button>
+            )}
+          </div>
         )}
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {characters.map((c) => {
-          const gen = activeGen[c.id]
-          return (
-            <CharacterCard
-              key={c.id}
-              char={c}
-              busy={!!gen}
-              extra={<ReferenceImages char={c} generating={!!gen} message={gen && gen !== 'local' ? gen.message : null} />}
-              footer={
-                <AppearanceEditor characterId={c.id} disabled={!!gen} onSubmit={changeAppearance} />
-              }
-            />
-          )
-        })}
-      </div>
+      {groups.map((g) => (
+        <section key={g.tier} className="space-y-3" data-testid={`ref-group-${g.tier}`}>
+          <h3 className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+            {TIER_LABELS[g.tier]} <span className="text-xs font-normal text-muted-foreground">· {g.items.filter(hasAnyImage).length} из {g.items.length} с референсами</span>
+          </h3>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {g.items.map((c) => {
+              const gen = activeGen[c.id]
+              return (
+                <CharacterCard
+                  key={c.id}
+                  char={c}
+                  busy={!!gen}
+                  extra={<ReferenceImages char={c} generating={!!gen} message={gen && gen !== 'local' ? gen.message : null} />}
+                  footer={<AppearanceEditor characterId={c.id} disabled={!!gen} onSubmit={changeAppearance} />}
+                />
+              )
+            })}
+          </div>
+        </section>
+      ))}
+
+      <section className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }} data-testid="location-references">
+        <h2 className="flex items-center gap-2 font-display text-xl font-bold">
+          <MapPin className="h-5 w-5 text-primary" /> Референсы локаций
+        </h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Фотореалистичный кадр каждой локации без людей (9:16). Он передаётся в видеомодель вместе с персонажами, чтобы место действия
+          выглядело одинаково во всех сценах. Готово: {locReady} из {locations.length}. Стоимость — {CHARACTER_REFERENCE_COST} кр. за локацию.
+        </p>
+        <div className="mt-4">
+          <AddLocationForm projectId={project.id} onAdded={(loc) => setLocations((prev) => [...prev, loc])} onError={setError} />
+        </div>
+        {locations.length > 0 && (
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {locations.map((loc) => {
+              const gen = activeLoc[loc.id]
+              const has = validUrl(loc.imageUrl)
+              return (
+                <LocationCard
+                  key={loc.id}
+                  loc={loc}
+                  busy={!!gen}
+                  onRevise={reviseLocation}
+                  media={
+                    <div className="relative mb-3 aspect-[9/16] max-h-64 w-full overflow-hidden rounded-lg bg-muted">
+                      {has ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={loc.imageUrl as string} alt={loc.name} className="h-full w-full object-cover" data-testid="location-image" />
+                      ) : gen ? (
+                        <div className="flex h-full w-full items-center justify-center" data-testid="location-spinner">
+                          <Loader2 className="h-5 w-5 animate-spin text-primary" />
+                        </div>
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center bg-muted/50"><ImageOff className="h-5 w-5 text-muted-foreground/40" /></div>
+                      )}
+                      {gen && has && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-background/60"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div>
+                      )}
+                    </div>
+                  }
+                  footer={
+                    <div className="mt-3 border-t border-border pt-3">
+                      <button
+                        type="button"
+                        onClick={() => generateLocation(loc.id)}
+                        disabled={!!gen}
+                        className="flex items-center gap-1 rounded-lg bg-muted px-3 py-1.5 text-xs transition hover:bg-muted/80 disabled:opacity-50"
+                        data-testid="location-generate"
+                      >
+                        {gen ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
+                        {gen ? 'Генерация…' : has ? `Перегенерировать (${CHARACTER_REFERENCE_COST} кр.)` : `Сгенерировать референс (${CHARACTER_REFERENCE_COST} кр.)`}
+                      </button>
+                    </div>
+                  }
+                />
+              )
+            })}
+          </div>
+        )}
+      </section>
 
       <button
         onClick={continueToScript}

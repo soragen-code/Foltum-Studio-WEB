@@ -18,13 +18,29 @@ export function styledVisualPrompt(input: string, names: string[] = []): string 
   return /\[VISUAL STYLE\]:/i.test(clean) ? clean : `[VISUAL STYLE]: ${VISUAL_STYLE}\n${clean}`;
 }
 
-export function characterImagePrompt(appearance: string, shot: "front" | "profile" | "full", name = ""): string {
+export function characterImagePrompt(appearance: string, shot: "front" | "profile" | "full", name = "", tier?: string | null, groupSize?: number | null): string {
+  if (tier === "CROWD") {
+    // A crowd group is one reference: the whole group in frame, so Seedance can reuse the same extras.
+    const framing = {
+      front: "Wide group shot, the whole group facing the camera, everyone fully visible, natural candid expressions.",
+      profile: "Candid medium-wide shot of the group from the side, people interacting with each other, nobody looking at camera.",
+      full: "Full wide establishing shot of the entire group in their environment, all bodies visible head to toe.",
+    }[shot];
+    const size = groupSize ? ` (${groupSize} people)` : "";
+    return `${VISUAL_STYLE}\nGroup of people${size}: ${sanitizeVideoPrompt(appearance, { keep: [name] }).prompt}. ${framing} Realistic environment matching the group. No text or logos.`;
+  }
   const framing = {
     front: "Close-up front portrait, facing camera, eye contact.",
     profile: "Side profile portrait, soft rim lighting.",
     full: "Full-body standing portrait, all clothing and silhouette visible.",
   }[shot];
   return `${VISUAL_STYLE}\nCharacter: ${sanitizeVideoPrompt(appearance, { keep: [name] }).prompt}. ${framing} Neutral unobtrusive background. No text or logos.`;
+}
+
+/** Photoreal 9:16 location reference (no people) — used by Seedance as an environment reference. */
+export function locationImagePrompt(visualPrompt: string, name = ""): string {
+  return `${VISUAL_STYLE}\nLocation establishing shot: ${sanitizeVideoPrompt(visualPrompt, { keep: [name] }).prompt}. Wide vertical composition, eye-level camera, ` +
+    `no people, no animals, no text, no signs with readable words, no logos. Real physical environment with authentic wear and detail.`;
 }
 
 export function isStyledAsset(url?: string | null): boolean {

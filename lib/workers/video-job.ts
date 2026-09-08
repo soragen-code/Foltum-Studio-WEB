@@ -59,6 +59,8 @@ const EXPECTED_VIDEO_MS = Number(process.env.SEEDANCE_EXPECTED_MS ?? 10 * 60 * 1
 // End-to-end budget, not an invocation timer. Check provider terminal state BEFORE enforcing it.
 export const VIDEO_DEADLINE_MS = 30 * 60 * 1000;
 const CHECK_LEASE_MS = 60_000;
+/** Seedance 2.5 accepts up to 30 reference images ([Image1]..[ImageN] in the prompt). */
+export const MAX_REFERENCE_IMAGES = 30;
 const FINALIZE_LEASE_MS = 12 * 60 * 1000;
 
 function sleep(ms: number) {
@@ -124,11 +126,22 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       image = previous!.lastFrameUrl!;
       reference = { mode: "adjacent_frame", sceneId: previous!.id };
     } else {
-      const compatible = links.filter(l => isStyledAsset(l.character.imageFront));
-      if (compatible.length && compatible.length === links.length) {
-        referenceImages = compatible.map(l => l.character.imageFront!);
-        reference = { mode: "character_references", characterIds: compatible.map(l => l.characterId) };
-        prompt += "\n" + compatible.map((l, i) => `[Image${i + 1}] defines ${l.character.name}'s photorealistic appearance and identity; use the scene's staging and camera.`).join("\n");
+      // Stage 3 reference set, in priority order: speaking/visible individual characters → the
+      // episode's location reference → crowd groups. Seedance accepts up to MAX_REFERENCE_IMAGES.
+      const styled = links.filter(l => isStyledAsset(l.character.imageFront));
+      const individuals = styled.filter(l => l.character.tier !== "CROWD");
+      const crowds = styled.filter(l => l.character.tier === "CROWD");
+      const episodeLoc = await prisma.episode.findUnique({ where: { id: scene.episodeId }, select: { location: { select: { id: true, name: true, imageUrl: true } } } });
+      const location = episodeLoc?.location?.imageUrl && isStyledAsset(episodeLoc.location.imageUrl) ? episodeLoc.location : null;
+      if (individuals.length || location || crowds.length) {
+        const refs: { url: string; note: string; kind: string; id: string }[] = [
+          ...individuals.map(l => ({ url: l.character.imageFront!, kind: "character", id: l.characterId, note: `defines ${l.character.name}'s photorealistic appearance and identity; use the scene's staging and camera.` })),
+          ...(location ? [{ url: location.imageUrl!, kind: "location", id: location.id, note: `defines the location's environment (${location.name}): architecture, materials, light and palette. Stage the scene inside it.` }] : []),
+          ...crowds.map(l => ({ url: l.character.imageFront!, kind: "crowd", id: l.characterId, note: `defines the look of the group "${l.character.name}" (extras): who they are and how they are dressed.` })),
+        ].slice(0, MAX_REFERENCE_IMAGES);
+        referenceImages = refs.map(r => r.url);
+        reference = { mode: "character_references", characterIds: refs.filter(r => r.kind !== "location").map(r => r.id), locationId: location?.id ?? null, kinds: refs.map(r => r.kind) };
+        prompt += "\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
       } else {
         // One new scene composition, never overwrite the user's old portraits or frames.
         // This is original text-to-image design, not a way to bypass a provider refusal.

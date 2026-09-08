@@ -78,6 +78,8 @@ export async function POST(request: Request) {
         appearance: clean.appearance,
         personality: clean.personality,
         firstAppearance: clean.firstAppearance,
+        tier: clean.tier ?? character.tier,
+        groupSize: clean.tier === "CROWD" ? clean.groupSize ?? character.groupSize ?? 12 : null,
         description: clean.firstAppearance,
       },
     });
