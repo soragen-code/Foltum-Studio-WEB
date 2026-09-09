@@ -3,19 +3,28 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Header } from '@/components/header'
-import { Loader2, Wand2, ArrowLeft, MapPin, Film, Download, Play, RefreshCw, Clapperboard, Images, Ban } from 'lucide-react'
+import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, Play, RefreshCw, Clapperboard, Images, Ban, X, Maximize2, Users, ImageOff } from 'lucide-react'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { ScriptView } from '../../_components/season-stage'
 import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
 import { CancelButton } from '../../_components/cancel-button'
+import { desiredExtraFrames, locationScale, locationScaleLabel, episodeLocations } from '@/lib/location-scale'
 
 const VIDEO_EXPECTED_SEC = 600
+const REF_POLL_MS = 3500
+const SHOT_LABELS = ['Портрет', 'Профиль', 'В полный рост']
 const validUrl = (u?: string | null) => typeof u === 'string' && u.startsWith('http') && u.length > 10
+const hasAllImages = (c: any) => validUrl(c?.imageFront) && validUrl(c?.imageProfile) && validUrl(c?.imageFull)
+function parseExtra(imageExtra?: string | null): string[] {
+  if (!imageExtra) return []
+  try { const a = JSON.parse(imageExtra); return Array.isArray(a) ? a.filter((u): u is string => typeof u === 'string' && u.startsWith('http')) : [] } catch { return [] }
+}
 
 type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; videoPrompt?: string | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; status: string; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Plan = { sceneCount: number; pendingCount: number; duration: number; costPerScene: number; total: number; credits: number; tier: string; resolution: string }
+type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null }
 
-export function EpisodeView({ episode: initial, project, credits: initialCredits }: { episode: any; project: any; credits: number }) {
+export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits }: { episode: any; project: any; siblings?: Sibling[]; credits: number }) {
   const [episode, setEpisode] = useState<any>(initial)
   const [scenes, setScenes] = useState<Scene[]>(initial.scenes ?? [])
   const [credits, setCredits] = useState(initialCredits)
@@ -40,6 +49,23 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
   const continueBusy = useRef(false)
   const continueRef = useRef<() => void>(() => {})
 
+  // Stage 12: per-episode references (characters + locations) with a single "generate all" button.
+  const initialChars: any[] = (initial.characters?.length ? initial.characters.map((ec: any) => ec.character) : (project.characters ?? []))
+  const [refChars, setRefChars] = useState<any[]>(initialChars)
+  const [refLocs, setRefLocs] = useState<any[]>(episodeLocations(initial, project.locations ?? []))
+  const [refSession, setRefSession] = useState(false) // polling active while refs are generating
+  const [refStarting, setRefStarting] = useState(false)
+  const refJobs = useRef<{ char?: string; loc: Record<string, string>; extra: Record<string, string> }>({ loc: {}, extra: {} })
+  const refCanceled = useRef(false)
+  const [charBusy, setCharBusy] = useState<Record<string, boolean>>({}) // per-character prompt-revise spinner
+  const [locBusy, setLocBusy] = useState<Record<string, boolean>>({})   // per-location prompt-revise spinner
+  const [charEdit, setCharEdit] = useState<Record<string, string>>({})
+  const [locEdit, setLocEdit] = useState<Record<string, string>>({})
+  // Fullscreen lightbox for any reference image (mobile-safe: object-contain, tap/Esc to close).
+  const [lightbox, setLightbox] = useState<{ url: string; alt: string } | null>(null)
+  // Sequential draft playlist.
+  const [draftOpen, setDraftOpen] = useState(false)
+
   const patchScene = (sceneId: string, patch: Partial<Scene>) => setScenes((prev) => prev.map((s) => (s.id === sceneId ? { ...s, ...patch } : s)))
   const stopPolling = (sceneId: string) => { const t = pollTimers.current[sceneId]; if (t) clearTimeout(t); delete pollTimers.current[sceneId] }
   const clearGen = (sceneId: string) => setActiveGen((p) => { const n = { ...p }; delete n[sceneId]; return n })
@@ -47,6 +73,21 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
   const refreshCredits = useCallback(async () => {
     try { const r = await fetch('/api/user/credits', { cache: 'no-store' }); if (r.ok) { const d = await r.json(); if (typeof d?.credits === 'number') setCredits(d.credits) } } catch {}
   }, [])
+
+  // ---- Reference readiness ----
+  const locBaseReady = (l: any) => validUrl(l?.imageUrl)
+  const locExtraReady = (l: any) => parseExtra(l?.imageExtra).length >= desiredExtraFrames(l)
+  const refsReady = refChars.every(hasAllImages) && refLocs.every((l) => locBaseReady(l) && locExtraReady(l))
+  const refsCharsDone = refChars.filter(hasAllImages).length
+  const refsLocsDone = refLocs.filter(locBaseReady).length
+
+  // Escape closes the lightbox.
+  useEffect(() => {
+    if (!lightbox) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setLightbox(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [lightbox])
 
   /** Same stable-spinner logic as ScenesStage: poll one scene's job until terminal. */
   const pollVideoJob = (sceneId: string, jobId: string) => {
@@ -82,9 +123,117 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
     }).catch(() => {})
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ---- References: refresh characters + locations from the project, drive extra-angle follow-ups ----
+  const refreshRefs = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/projects/${project.id}`, { cache: 'no-store' })
+      if (!r.ok) return
+      const d = await r.json()
+      const pchars: any[] = d?.project?.characters ?? []
+      const plocs: any[] = d?.project?.locations ?? []
+      setRefChars((prev) => prev.map((c) => pchars.find((x) => x.id === c.id) ?? c))
+      // recompute episode locations from fresh project locations, preserving order/membership
+      setRefLocs((prev) => prev.map((l) => plocs.find((x) => x.id === l.id) ?? l))
+      return { pchars, plocs }
+    } catch { return }
+  }, [project.id])
+
+  // Poll while a reference session is active: refresh data, kick extra angles for big locations, stop when ready.
+  useEffect(() => {
+    if (!refSession) return
+    let stopped = false
+    const loop = async () => {
+      const fresh = await refreshRefs()
+      if (stopped || refCanceled.current) return
+      // Kick extra angles for big locations whose base is ready but still lack enough extra frames.
+      if (fresh) {
+        for (const l of refLocs) {
+          const loc = fresh.plocs.find((x: any) => x.id === l.id)
+          if (!loc) continue
+          const want = desiredExtraFrames(loc)
+          const have = parseExtra(loc.imageExtra).length
+          if (want > 0 && validUrl(loc.imageUrl) && have < want && !refJobs.current.extra[loc.id]) {
+            try {
+              const res = await fetch(`/api/ai/locations/${loc.id}/extra-images`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ count: want - have }) })
+              const dd = await res.json().catch(() => ({}))
+              if (res.ok && dd?.jobId) refJobs.current.extra[loc.id] = dd.jobId
+              else if (!res.ok && dd?.error) setError(dd.error)
+            } catch {}
+          }
+        }
+      }
+      void refreshCredits()
+    }
+    void loop()
+    const id = setInterval(loop, REF_POLL_MS)
+    return () => { stopped = true; clearInterval(id) }
+  }, [refSession, refreshRefs, refreshCredits, refLocs])
+
+  // Stop the reference session once everything is ready.
+  useEffect(() => { if (refSession && refsReady) { setRefSession(false); refJobs.current = { loc: {}, extra: {} } } }, [refSession, refsReady])
+
+  /** Single button: generate every missing reference for this episode's characters and locations. */
+  const generateAllRefs = async () => {
+    setError(''); setRefStarting(true); refCanceled.current = false
+    try {
+      const missingChars = refChars.filter((c) => !hasAllImages(c))
+      if (missingChars.length > 0) {
+        const res = await fetch('/api/ai/characters/references', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, characterIds: missingChars.map((c) => c.id) }) })
+        const d = await res.json()
+        if (!res.ok) { setError(d?.error ?? 'Не удалось запустить генерацию персонажей'); setRefStarting(false); return }
+        if (d?.jobId) refJobs.current.char = d.jobId
+        if (typeof d?.creditsRemaining === 'number') setCredits(d.creditsRemaining)
+      }
+      for (const l of refLocs) {
+        if (!locBaseReady(l) && !refJobs.current.loc[l.id]) {
+          const res = await fetch(`/api/ai/locations/${l.id}/image`, { method: 'POST' })
+          const d = await res.json().catch(() => ({}))
+          if (res.ok && d?.jobId) refJobs.current.loc[l.id] = d.jobId
+          else if (!res.ok && d?.error) setError(d.error)
+        }
+      }
+      setRefSession(true)
+    } catch { setError('Ошибка сети') } finally { setRefStarting(false) }
+  }
+
+  const cancelRefs = async () => {
+    refCanceled.current = true
+    const ids = [refJobs.current.char, ...Object.values(refJobs.current.loc), ...Object.values(refJobs.current.extra)].filter(Boolean) as string[]
+    for (const id of ids) { try { await fetch(`/api/ai/jobs/${id}/cancel`, { method: 'POST' }) } catch {} }
+    setRefSession(false); refJobs.current = { loc: {}, extra: {} }
+    void refreshRefs(); void refreshCredits()
+  }
+
+  /** Prompt-edit a character's appearance (regenerates its references; C2PA preserved in the worker). */
+  const reviseCharacter = async (characterId: string) => {
+    const instruction = charEdit[characterId]?.trim(); if (!instruction) return
+    setCharBusy((b) => ({ ...b, [characterId]: true })); setError('')
+    try {
+      const res = await fetch('/api/ai/characters/appearance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ characterId, instruction }) })
+      const d = await res.json()
+      if (!res.ok) { setError(d?.error ?? 'Не удалось изменить персонажа'); return }
+      if (d?.character) setRefChars((prev) => prev.map((c) => (c.id === characterId ? { ...c, ...d.character } : c)))
+      setCharEdit((t) => ({ ...t, [characterId]: '' }))
+      setRefSession(true) // poll until the new references land
+    } catch { setError('Ошибка сети') } finally { setCharBusy((b) => { const n = { ...b }; delete n[characterId]; return n }) }
+  }
+
+  /** Prompt-edit a location (regenerates its reference; C2PA preserved in the worker). */
+  const reviseLocation = async (locationId: string) => {
+    const instruction = locEdit[locationId]?.trim(); if (!instruction) return
+    setLocBusy((b) => ({ ...b, [locationId]: true })); setError('')
+    try {
+      const res = await fetch(`/api/ai/locations/${locationId}/revise`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instruction, regenerate: true }) })
+      const d = await res.json()
+      if (!res.ok) { setError(d?.error ?? 'Не удалось изменить локацию'); return }
+      if (d?.location) setRefLocs((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...d.location } : l)))
+      setLocEdit((t) => ({ ...t, [locationId]: '' }))
+      setRefSession(true)
+    } catch { setError('Ошибка сети') } finally { setLocBusy((b) => { const n = { ...b }; delete n[locationId]; return n }) }
+  }
+
   // Stage 8: one continue "kick". Idempotent server-side; safe to call every few seconds.
   const continueBatch = async (retryFailed = false) => {
-    // After a cancel, suppress the auto-continue loop; only an explicit manual retry may relaunch.
     if (!retryFailed && canceledRef.current) return
     if (retryFailed) { canceledRef.current = false; setBatchCanceled(false) }
     if (continueBusy.current) return
@@ -96,7 +245,6 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
       setBatch({ active: d.remaining > 0, total: d.total, done: d.done, generating: d.generating, failed: d.failed, pending: d.pending, remaining: d.remaining })
       if (typeof d.creditsRemaining === 'number') setCredits(d.creditsRemaining)
       if (d.creditsShort) setError('Недостаточно кредитов для повтора части сцен — пополните баланс и нажмите «Продолжить».')
-      // Ensure each in-flight scene is being polled (advances its Replicate prediction + updates the card).
       for (const s of d.scenes ?? []) {
         if (s.status === 'generating') {
           setActiveGen((p) => (p[s.sceneId] ? p : { ...p, [s.sceneId]: true }))
@@ -106,14 +254,12 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
     } catch {} finally { continueBusy.current = false }
   }
   continueRef.current = () => { void continueBatch(false) }
-  // Poll-and-kick loop while the batch has unfinished scenes (stable interval, no flicker).
   const batchActive = batch?.active ?? false
   useEffect(() => {
     if (!batchActive) return
     const id = setInterval(() => continueRef.current(), JOB_POLL_INTERVAL_MS * 3)
     return () => clearInterval(id)
   }, [batchActive])
-  // On mount / reload: if any scene still lacks a video, sync batch state and auto-continue.
   useEffect(() => {
     if (scenes.some((s) => !validUrl(s.videoUrl))) void continueBatch(false)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -147,7 +293,6 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
     const d = await r.json(); if (!r.ok) throw new Error(d?.error ?? 'Ошибка')
     setPlan(d); return d
   }, [episode.id])
-  // Preload the cost plan so "Изменить сцену" → regen confirmation can show the price at once.
   useEffect(() => { loadPlan().catch(() => {}) }, [loadPlan])
   const openModal = async () => {
     setError(null)
@@ -162,22 +307,16 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
       setModal(false)
       for (const j of data.jobs ?? []) { setActiveGen((p) => ({ ...p, [j.sceneId]: true })); patchScene(j.sceneId, { status: 'generating' }); pollVideoJob(j.sceneId, j.jobId) }
       if (typeof data.creditsRemaining === 'number') setCredits(data.creditsRemaining)
-      // Kick off client-driven auto-continuation so the rest of the scenes generate without another click.
       setBatch({ active: true, total: scenes.length, done: scenes.filter((s) => validUrl(s.videoUrl)).length, generating: (data.jobs ?? []).length, failed: 0, pending: 0, remaining: scenes.length })
       void continueBatch(false)
     } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setStartingAll(false) }
   }
 
-  // Stage 11: stop the batch — mark active video jobs canceled server-side and halt client auto-continue.
   const cancelBatch = async () => {
-    canceledRef.current = true // stop the auto-continue loop immediately (no new scenes)
-    try {
-      const res = await fetch(`/api/ai/episodes/${episode.id}/generate-all/cancel`, { method: 'POST' })
-      await res.json().catch(() => ({}))
-    } catch {}
+    canceledRef.current = true
+    try { const res = await fetch(`/api/ai/episodes/${episode.id}/generate-all/cancel`, { method: 'POST' }); await res.json().catch(() => ({})) } catch {}
     setBatch((b) => (b ? { ...b, active: false } : b))
     setBatchCanceled(true)
-    // Reflect canceled scenes locally: any scene still waiting (no video, not a live prediction) becomes pending.
     setScenes((prev) => prev.map((s) => (activeGen[s.id] && !validUrl(s.videoUrl) ? { ...s, status: 'pending' } : s)))
     void refreshCredits()
   }
@@ -201,6 +340,7 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
   }
 
   const allReady = scenes.length > 0 && scenes.every((s) => validUrl(s.videoUrl) && !activeGen[s.id])
+  const anyClip = scenes.some((s) => validUrl(s.videoUrl))
   const assemble = async () => {
     setAssembling(true); setError(null)
     try {
@@ -211,19 +351,15 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
   }
 
   const perScene = plan?.costPerScene
-  const chars = episode.characters?.length ? episode.characters : (project.characters ?? []).map((c: any) => ({ character: c }))
-  // Stage 5: references are optional — warn (not block) when scene characters have no reference image yet.
-  const missingRefs: string[] = Array.from(new Set<string>(
-    scenes.flatMap((sc) => (sc.characters ?? []).filter(({ character: c }: any) => !validUrl(c.imageFront)).map(({ character: c }: any) => c.name as string))
-  ))
+  const isAssembled = episode.status === 'assembled' || validUrl(episode.videoUrl)
+  const nextEpisode = siblings.filter((s) => s.number > episode.number).sort((a, b) => a.number - b.number)[0] ?? null
 
   return (
     <div className="min-h-screen bg-background">
       <Header />
       <main className="mx-auto max-w-[1200px] px-4 py-6" data-testid="episode-page">
         <div className="flex flex-wrap items-center gap-4">
-          <Link href={`/project/${project.id}`} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> К сценарию сезона</Link>
-          <Link href={`/project/${project.id}?tab=references`} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground" data-testid="open-references"><Images className="h-4 w-4" /> Референсы</Link>
+          <Link href={`/project/${project.id}`} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> К сюжету сезона</Link>
         </div>
         <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
@@ -234,37 +370,130 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
           <div className="text-sm text-muted-foreground">Кредиты: <span className="font-semibold text-foreground" data-testid="credits">{credits}</span></div>
         </div>
 
-        {/* Characters + location */}
-        <div className="mt-6 grid gap-4 md:grid-cols-2">
-          <div className="rounded-xl border border-border bg-card p-4">
-            <h2 className="mb-3 font-semibold">Персонажи эпизода</h2>
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              {chars.map(({ character: c }: any) => (
-                <div key={c.id} className="rounded-lg border border-border/60 p-2" data-testid="episode-character">
-                  <div className="aspect-[3/4] overflow-hidden rounded bg-muted">
-                    {validUrl(c.imageFront) ? <img src={c.imageFront} alt={c.name} className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-xs text-muted-foreground">нет референса</div>}
-                  </div>
-                  <div className="mt-1 truncate text-sm font-medium">{c.name}</div>
-                  {c.role && <div className="truncate text-xs text-muted-foreground">{c.role}</div>}
-                  {c.appearance && <p className="mt-1 line-clamp-3 text-[11px] text-muted-foreground">{c.appearance}</p>}
-                </div>
-              ))}
+        {/* Episode script + revise-by-prompt */}
+        <div className="mt-6 rounded-xl border border-border bg-card p-4">
+          <h2 className="mb-3 font-display text-xl font-bold">Сценарий эпизода</h2>
+          <ScriptView text={episode.script} scenes={scenes} />
+          <div className="mt-4 space-y-2">
+            <label className="text-xs font-semibold text-muted-foreground">Что изменить в сценарии эпизода (по промпту)</label>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <textarea value={reviseText} onChange={(e) => setReviseText(e.target.value)} rows={2} placeholder="Например: убрать сцену на кухне, усилить конфликт…" className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm" data-testid="episode-revise-input" />
+              <button onClick={() => reviseEpisode()} disabled={revising || !reviseText.trim()} className="inline-flex items-center justify-center gap-1 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50" data-testid="episode-revise-submit">
+                {revising ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Переписать
+              </button>
             </div>
-          </div>
-          <div className="rounded-xl border border-border bg-card p-4">
-            <h2 className="mb-2 inline-flex items-center gap-1 font-semibold"><MapPin className="h-4 w-4" /> Локация: {episode.locationName}</h2>
-            <p className="text-sm text-muted-foreground">{episode.locationDesc}</p>
-            {episode.cliffhanger && <p className="mt-3 text-sm"><span className="font-semibold">Клиффхэнгер:</span> {episode.cliffhanger}</p>}
           </div>
         </div>
 
-        {/* Generate all / assemble */}
+        {/* Stage 12: references of THIS episode + single "generate all" */}
+        <section className="mt-6 rounded-xl border border-border bg-card p-4" data-testid="episode-references">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="inline-flex items-center gap-2 font-display text-xl font-bold"><Images className="h-5 w-5 text-primary" /> Референсы эпизода</h2>
+            {refSession ? (
+              <span className="inline-flex items-center gap-2 text-xs text-muted-foreground" data-testid="refs-progress">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" /> Генерирую референсы: персонажи {refsCharsDone}/{refChars.length}, локации {refsLocsDone}/{refLocs.length}
+                <CancelButton onCancel={cancelRefs} testId="refs-cancel" label="Отменить" pendingLabel="Останавливаю…" />
+              </span>
+            ) : refsReady ? (
+              <span className="text-xs font-medium text-emerald-500" data-testid="refs-status">Все референсы готовы</span>
+            ) : (
+              <button onClick={generateAllRefs} disabled={refStarting} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all-refs">
+                {refStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Сгенерировать всё
+              </button>
+            )}
+          </div>
+          <p className="mt-1 text-sm text-muted-foreground">Персонажи (несколько ракурсов) и локации этого эпизода (несколько кадров, для крупных мест — больше). Все изображения с меткой C2PA. Нажмите на любой кадр, чтобы открыть на весь экран.</p>
+
+          {/* Characters */}
+          <h3 className="mt-4 flex items-center gap-2 text-sm font-semibold"><Users className="h-4 w-4" /> Персонажи ({refChars.length})</h3>
+          <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {refChars.map((c) => {
+              const busy = !!charBusy[c.id] || (refSession && !hasAllImages(c))
+              const imgs = [c.imageFront, c.imageProfile, c.imageFull]
+              return (
+                <div key={c.id} className="rounded-lg border border-border/60 p-3" data-testid="ref-character">
+                  <div className="grid grid-cols-3 gap-2">
+                    {imgs.map((img, i) => (
+                      <button key={i} type="button" onClick={() => validUrl(img) && setLightbox({ url: img as string, alt: `${c.name} — ${SHOT_LABELS[i]}` })} className="group relative aspect-[3/4] overflow-hidden rounded bg-muted" title={SHOT_LABELS[i]} data-testid="ref-image">
+                        {validUrl(img) ? (
+                          <>
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={img as string} alt={`${c.name} — ${SHOT_LABELS[i]}`} className="h-full w-full object-cover" />
+                            <span className="absolute right-1 top-1 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
+                          </>
+                        ) : busy ? (
+                          <div className="flex h-full w-full items-center justify-center"><Loader2 className="h-4 w-4 animate-spin text-primary" /></div>
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center"><ImageOff className="h-4 w-4 text-muted-foreground/40" /></div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-2 truncate text-sm font-medium">{c.name}</div>
+                  {c.role && <div className="truncate text-xs text-muted-foreground">{c.role}</div>}
+                  <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
+                    <input value={charEdit[c.id] ?? ''} onChange={(e) => setCharEdit((t) => ({ ...t, [c.id]: e.target.value }))} placeholder="Изменить по промпту…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-character-input" disabled={busy} />
+                    <button onClick={() => reviseCharacter(c.id)} disabled={busy || !(charEdit[c.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-character-submit">
+                      {charBusy[c.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+            {refChars.length === 0 && <p className="text-sm text-muted-foreground">У эпизода нет привязанных персонажей.</p>}
+          </div>
+
+          {/* Locations */}
+          <h3 className="mt-6 flex items-center gap-2 text-sm font-semibold"><MapPin className="h-4 w-4" /> Локации ({refLocs.length})</h3>
+          <div className="mt-2 grid gap-4 sm:grid-cols-2">
+            {refLocs.map((l) => {
+              const scale = locationScale(l)
+              const want = desiredExtraFrames(l)
+              const base = [{ url: l.imageUrl, label: 'Общий план' }, { url: l.imageReverse, label: 'Обратный ракурс' }, { url: l.imageDetail, label: 'Средний план' }].filter((a) => validUrl(a.url))
+              const extras = parseExtra(l.imageExtra)
+              const busy = !!locBusy[l.id] || (refSession && !(locBaseReady(l) && locExtraReady(l)))
+              return (
+                <div key={l.id} className="rounded-lg border border-border/60 p-3" data-testid="ref-location">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="truncate text-sm font-medium">{l.name}</div>
+                    <span className="rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground" title={`Больше кадров для крупных мест`}>{locationScaleLabel(scale)}{want > 0 ? ` · +${want} кадров` : ''}</span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {base.length > 0 ? [...base.map((a) => ({ url: a.url as string, label: a.label })), ...extras.map((u, i) => ({ url: u, label: `Доп. кадр ${i + 1}` }))].map((a, i) => (
+                      <button key={a.url + i} type="button" onClick={() => setLightbox({ url: a.url, alt: `${l.name} — ${a.label}` })} className="group relative h-24 w-16 overflow-hidden rounded bg-muted" title={a.label} data-testid="ref-image">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={a.url} alt={`${l.name} — ${a.label}`} className="h-full w-full object-cover" />
+                        <span className="absolute right-0.5 top-0.5 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
+                      </button>
+                    )) : busy ? (
+                      <div className="flex h-24 w-16 items-center justify-center rounded bg-muted"><Loader2 className="h-4 w-4 animate-spin text-primary" /></div>
+                    ) : (
+                      <div className="flex h-24 w-16 items-center justify-center rounded bg-muted"><ImageOff className="h-4 w-4 text-muted-foreground/40" /></div>
+                    )}
+                  </div>
+                  <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
+                    <input value={locEdit[l.id] ?? ''} onChange={(e) => setLocEdit((t) => ({ ...t, [l.id]: e.target.value }))} placeholder="Изменить локацию по промпту…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-location-input" disabled={busy} />
+                    <button onClick={() => reviseLocation(l.id)} disabled={busy || !(locEdit[l.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-location-submit">
+                      {locBusy[l.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+            {refLocs.length === 0 && <p className="text-sm text-muted-foreground">У эпизода нет привязанных локаций.</p>}
+          </div>
+        </section>
+
+        {/* Generate all scenes / draft / assemble */}
         <div className="mt-6 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
-          <button onClick={openModal} disabled={startingAll || scenes.length === 0} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all">
-            <Play className="h-4 w-4" /> Генерировать
+          <button onClick={openModal} disabled={startingAll || scenes.length === 0 || !refsReady} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all" title={refsReady ? '' : 'Сначала сгенерируйте все референсы эпизода'}>
+            <Play className="h-4 w-4" /> Сгенерировать все сцены
+          </button>
+          <button onClick={() => setDraftOpen(true)} disabled={!anyClip} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="show-draft" title={anyClip ? '' : 'Появится, когда будет хотя бы один готовый ролик'}>
+            <Film className="h-4 w-4" /> Показать черновик
           </button>
           <button onClick={assemble} disabled={!allReady || assembling} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? '' : 'Доступно, когда все сцены готовы'}>
-            {assembling ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />} Собрать эпизод
+            {assembling ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />} Ассембл (финальная сборка)
           </button>
           {batchActive ? (
             <span className="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground" data-testid="batch-status">
@@ -280,9 +509,9 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
               Генерация отменена · готово {scenes.filter((s) => validUrl(s.videoUrl)).length} из {scenes.length} сцен. Новые сцены не запускаются; уже готовые сохранены.
             </span>
           ) : (
-            <span className="text-xs text-muted-foreground" data-testid="batch-status">{scenes.filter((s) => validUrl(s.videoUrl)).length} из {scenes.length} сцен готово{episode.status === 'assembled' || episode.videoUrl ? ' · эпизод собран' : ''}</span>
+            <span className="text-xs text-muted-foreground" data-testid="batch-status">{scenes.filter((s) => validUrl(s.videoUrl)).length} из {scenes.length} сцен готово{isAssembled ? ' · эпизод собран' : ''}</span>
           )}
-          {!batchActive && scenes.length > 0 && scenes.some((s) => !validUrl(s.videoUrl)) && (
+          {!batchActive && scenes.length > 0 && scenes.some((s) => !validUrl(s.videoUrl)) && refsReady && (
             <button onClick={async () => { setError(null); setRetrying(true); try { await continueBatch(true) } finally { setRetrying(false) } }} disabled={retrying || startingAll} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium disabled:opacity-50" data-testid="continue-batch" title="Продолжить или повторить незавершённые сцены">
               {retrying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Продолжить / повторить незавершённые
             </button>
@@ -290,11 +519,19 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
           {error && <p className="w-full text-sm text-destructive" data-testid="error">{error}</p>}
         </div>
 
+        {/* Assembled episode + go to next */}
         {validUrl(episode.videoUrl) && (
           <div className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="episode-video">
             <h2 className="mb-2 inline-flex items-center gap-1 font-semibold"><Film className="h-4 w-4" /> Собранный эпизод</h2>
             <video src={episode.videoUrl} controls playsInline className="mx-auto max-h-[70vh] w-full max-w-sm rounded-lg bg-black" />
-            <a href={episode.videoUrl} download className="mt-2 inline-flex items-center gap-1 text-sm text-primary"><Download className="h-4 w-4" /> Скачать mp4</a>
+            <div className="mt-2 flex flex-wrap items-center gap-4">
+              <a href={episode.videoUrl} download className="inline-flex items-center gap-1 text-sm text-primary"><Download className="h-4 w-4" /> Скачать mp4</a>
+              {nextEpisode && (
+                <Link href={`/project/${project.id}/episode/${nextEpisode.id}`} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" data-testid="go-to-next-episode">
+                  Перейти к эпизоду {nextEpisode.number} <ArrowRight className="h-4 w-4" />
+                </Link>
+              )}
+            </div>
           </div>
         )}
 
@@ -354,23 +591,9 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
             )
           })}
         </div>
-
-        {/* Full script + episode revise */}
-        <div className="mt-8 rounded-xl border border-border bg-card p-4">
-          <h2 className="mb-3 font-display text-xl font-bold">Сценарий эпизода</h2>
-          <ScriptView text={episode.script} scenes={scenes} />
-          <div className="mt-4 space-y-2">
-            <label className="text-xs font-semibold text-muted-foreground">Что изменить в сценарии эпизода</label>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <textarea value={reviseText} onChange={(e) => setReviseText(e.target.value)} rows={2} placeholder="Например: убрать сцену на кухне, усилить конфликт…" className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm" data-testid="episode-revise-input" />
-              <button onClick={() => reviseEpisode()} disabled={revising || !reviseText.trim()} className="inline-flex items-center justify-center gap-1 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50" data-testid="episode-revise-submit">
-                {revising ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Переписать
-              </button>
-            </div>
-          </div>
-        </div>
       </main>
 
+      {/* Generate-scenes cost modal */}
       {modal && plan && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" data-testid="generate-modal">
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-5">
@@ -381,12 +604,6 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
               <li>Стоимость: <b>{plan.total} кр.</b> за {plan.pendingCount} сцен (до {plan.costPerScene} кр. за сцену)</li>
               <li>Остаток кредитов: <b>{plan.credits}</b>{plan.credits < plan.total && <span className="text-destructive"> — недостаточно</span>}</li>
             </ul>
-            {missingRefs.length > 0 && (
-              <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm" data-testid="missing-references-warning">
-                <p><b>Без референсов:</b> {missingRefs.join(', ')}. Без референса внешность персонажа может меняться от сцены к сцене. Можно продолжить или сначала сгенерировать референсы.</p>
-                <Link href={`/project/${project.id}?tab=references`} className="mt-2 inline-flex items-center gap-1 text-primary underline-offset-2 hover:underline"><Images className="h-4 w-4" /> Перейти к референсам</Link>
-              </div>
-            )}
             <div className="mt-4 flex justify-end gap-2">
               <button onClick={() => setModal(false)} className="rounded-lg border border-border px-3 py-1.5 text-sm">Отмена</button>
               <button onClick={generateAll} disabled={startingAll || plan.pendingCount === 0 || plan.credits < plan.total} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="generate-ok">
@@ -396,6 +613,53 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
           </div>
         </div>
       )}
+
+      {/* Fullscreen reference lightbox */}
+      {lightbox && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/95 p-2" data-testid="lightbox" onClick={() => setLightbox(null)}>
+          <button className="absolute right-3 top-3 rounded-full bg-white/10 p-2 text-white" data-testid="lightbox-close" onClick={(e) => { e.stopPropagation(); setLightbox(null) }}><X className="h-5 w-5" /></button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={lightbox.url} alt={lightbox.alt} className="max-h-full max-w-full object-contain" onClick={(e) => e.stopPropagation()} />
+          <div className="absolute bottom-3 left-0 right-0 text-center text-xs text-white/80">{lightbox.alt}</div>
+        </div>
+      )}
+
+      {/* Draft sequential playlist */}
+      {draftOpen && <DraftPlayer scenes={scenes.filter((s) => validUrl(s.videoUrl))} onClose={() => setDraftOpen(false)} />}
+    </div>
+  )
+}
+
+/** Plays the episode's generated clips back-to-back as a rough draft (no re-encode). */
+function DraftPlayer({ scenes, onClose }: { scenes: Scene[]; onClose: () => void }) {
+  const [idx, setIdx] = useState(0)
+  const videoRef = useRef<HTMLVideoElement>(null)
+  useEffect(() => { videoRef.current?.play().catch(() => {}) }, [idx])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  const cur = scenes[idx]
+  return (
+    <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-black/95 p-3" data-testid="draft-player">
+      <button className="absolute right-3 top-3 rounded-full bg-white/10 p-2 text-white" onClick={onClose} data-testid="draft-close"><X className="h-5 w-5" /></button>
+      <div className="mb-2 text-sm text-white/80">Черновик · сцена {cur?.number ?? idx + 1} ({idx + 1} из {scenes.length})</div>
+      {cur && (
+        <video
+          ref={videoRef}
+          src={cur.videoUrl as string}
+          controls
+          autoPlay
+          playsInline
+          className="max-h-[80vh] w-full max-w-sm rounded-lg bg-black"
+          onEnded={() => setIdx((i) => (i + 1 < scenes.length ? i + 1 : i))}
+        />
+      )}
+      <div className="mt-3 flex items-center gap-3">
+        <button onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0} className="rounded-lg border border-white/20 px-3 py-1.5 text-sm text-white disabled:opacity-40">Назад</button>
+        <button onClick={() => setIdx((i) => Math.min(scenes.length - 1, i + 1))} disabled={idx >= scenes.length - 1} className="rounded-lg border border-white/20 px-3 py-1.5 text-sm text-white disabled:opacity-40">Дальше</button>
+      </div>
     </div>
   )
 }

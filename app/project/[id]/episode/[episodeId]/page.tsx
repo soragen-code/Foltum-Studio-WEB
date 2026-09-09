@@ -16,11 +16,19 @@ export default async function EpisodePage({ params }: { params: Promise<{ id: st
     where: { id: episodeId, season: { projectId: id, project: { userId: user.id } } },
     include: {
       characters: { include: { character: true } },
+      location: true, // stage 12: bound location with reference images
       scenes: { orderBy: { number: 'asc' }, include: { characters: { include: { character: { select: { id: true, name: true, imageFront: true } } } } } },
-      season: { include: { project: { include: { characters: true } } } },
+      season: { include: { project: { include: { characters: true, locations: true } } } },
     },
   })
   if (!episode) notFound()
 
-  return <EpisodeView episode={JSON.parse(JSON.stringify(episode))} project={JSON.parse(JSON.stringify(episode.season.project))} credits={user.credits ?? 0} />
+  // stage 12: sibling episodes (for "go to next episode" navigation after assemble).
+  const siblings = await prisma.episode.findMany({
+    where: { seasonId: episode.seasonId },
+    orderBy: { number: 'asc' },
+    select: { id: true, number: true, title: true, status: true, videoUrl: true },
+  })
+
+  return <EpisodeView episode={JSON.parse(JSON.stringify(episode))} project={JSON.parse(JSON.stringify(episode.season.project))} siblings={JSON.parse(JSON.stringify(siblings))} credits={user.credits ?? 0} />
 }

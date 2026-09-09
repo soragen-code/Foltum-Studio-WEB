@@ -102,5 +102,18 @@ ok(cleanStoryText("x".repeat(STORY_MAX_CHARS + 500)).length === STORY_MAX_CHARS,
   ok(/MINIMAL CHANGE/.test(rvSys) && new RegExp(`${SEASON_MIN_EPISODES}[–-]${SEASON_MAX_EPISODES}`).test(rvSys), "seasonStoryReviseSystemPrompt: minimal change + count range for add/remove");
   ok(/add or remove episodes/i.test(rvSys), "seasonStoryReviseSystemPrompt: author may change episode count via prompt");
 
+  // --- (C) location scale + episode locations --------------------------------
+  const { locationScale, desiredExtraFrames, episodeLocations } = await import("../lib/location-scale");
+  ok(locationScale({ name: "Ночной город", description: "огни небоскрёбов" }) === "huge", "locationScale: city → huge");
+  ok(locationScale({ name: "Морской порт", description: "причалы и краны" }) === "big", "locationScale: harbour → big");
+  ok(locationScale({ name: "Тесная кухня", description: "маленькая комната" }) === "small", "locationScale: small room → small");
+  ok(desiredExtraFrames({ name: "Лес" }) === 6, "desiredExtraFrames: huge → 6 extra frames");
+  ok(desiredExtraFrames({ name: "Склад" }) === 3, "desiredExtraFrames: big → 3 extra frames");
+  ok(desiredExtraFrames({ name: "Кабинет" }) === 0, "desiredExtraFrames: small → base angles only (0 extra)");
+  const locList = [{ id: "l1", name: "Маяк" }, { id: "l2", name: "Пирс" }, { id: "l3", name: "Чердак" }];
+  const epLocs = episodeLocations({ locationId: "l1", locationName: "Маяк", scenes: [{ locationDesc: "разговор на пирсе" }] }, locList);
+  ok(epLocs.some((l: any) => l.id === "l1") && epLocs.some((l: any) => l.id === "l2"), "episodeLocations: bound location + scene-mentioned location");
+  ok(!epLocs.some((l: any) => l.id === "l3"), "episodeLocations: excludes unrelated locations");
+
   console.log(`\nALL STAGE12 CHECKS PASSED (${pass})`);
 })();
