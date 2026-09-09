@@ -54,7 +54,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   if (limited) return limited;
   const { id } = await ctx.params;
   const body = await request.json().catch(() => ({}));
-  // Stage 4: speech is always English (client-side language selector removed); subtitles carry the story language.
+  // Stage 4: speech is always English (client-side language selector removed); the story-language text is shown in the UI only.
   const spokenLang = "en";
   const force = Boolean(body?.force);
 

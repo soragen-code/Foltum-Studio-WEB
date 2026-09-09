@@ -150,7 +150,7 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
     })
   /** episodeId -> true while the "Generate all scenes" batch request is being dispatched. */
   const [startingBatch, setStartingBatch] = useState<Record<string, boolean>>({})
-  // Stage 4: speech is always English (subtitles in the project language are burned in) — no language selector.
+  // Stage 4: speech is always English (no subtitles; story-language text is shown in the UI only) — no language selector.
   const pollTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const [error, setError] = useState('')
   const [expandedSeason, setExpandedSeason] = useState<string | null>(null)

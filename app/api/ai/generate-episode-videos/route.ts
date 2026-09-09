@@ -45,7 +45,7 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => ({}));
     const projectId = String(body?.projectId ?? "");
     const episodeId = String(body?.episodeId ?? "");
-    // Stage 4: speech is always English (client-side language selector removed); subtitles carry the story language.
+    // Stage 4: speech is always English (client-side language selector removed); the story-language text is shown in the UI only.
     const spokenLang = "en";
     if (!projectId || !episodeId)
       return NextResponse.json({ error: "projectId and episodeId are required" }, { status: 400 });

@@ -155,170 +155,6 @@ export interface SceneClipInput {
   videoUrl: string;
   /** Separate voiceover (e.g. uploaded audio). Takes priority over the clip's own audio. */
   audioUrl?: string | null;
-  /** Cleaned spoken text for this scene — burned in as a subtitle over the clip's segment. */
-  subtitle?: string | null;
-}
-
-/* ------------------------------------------------------------------ */
-/*  Subtitles                                                          */
-/* ------------------------------------------------------------------ */
-
-/** Format seconds as an SRT timestamp: HH:MM:SS,mmm */
-function srtTime(sec: number): string {
-  const s = Math.max(0, sec);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const ss = Math.floor(s % 60);
-  const ms = Math.round((s - Math.floor(s)) * 1000);
-  const p = (n: number, w = 2) => String(n).padStart(w, "0");
-  return `${p(h)}:${p(m)}:${p(ss)},${p(ms, 3)}`;
-}
-
-/** Wrap a subtitle line to ~2 lines so it stays readable on a 9:16 frame. */
-function wrapSubtitle(text: string, max = 38): string {
-  const words = text.replace(/\s+/g, " ").trim().split(" ");
-  const lines: string[] = [];
-  let cur = "";
-  for (const w of words) {
-    if ((cur + " " + w).trim().length > max && cur) {
-      lines.push(cur);
-      cur = w;
-    } else {
-      cur = (cur + " " + w).trim();
-    }
-  }
-  if (cur) lines.push(cur);
-  // Keep at most 2 lines; if longer, collapse the tail into the second line.
-  if (lines.length > 2) return [lines[0], lines.slice(1).join(" ")].join("\n");
-  return lines.join("\n");
-}
-
-/**
- * Build an SRT whose cues are timed to each clip's position on the FINAL timeline.
- * With a crossfade of `transition` seconds, clip i begins at
- *   start_i = start_{i-1} + dur_{i-1} - transition  (start_0 = 0)
- * The cue is shown for the fully-visible middle of the clip (skipping the fade in/out)
- * so text never overlaps a transition.
- */
-function buildSrt(subtitles: (string | null | undefined)[], infos: MediaInfo[], transition: number): string {
-  const t = infos.length > 1 ? transition : 0;
-  const starts: number[] = [];
-  let running = 0;
-  for (let i = 0; i < infos.length; i++) {
-    if (i === 0) starts.push(0);
-    else {
-      running = Math.max(0, running - t);
-      starts.push(running);
-    }
-    running = starts[i] + (infos[i].duration || 0);
-  }
-
-  const cues: string[] = [];
-  let idx = 1;
-  for (let i = 0; i < subtitles.length; i++) {
-    const raw = (subtitles[i] ?? "").replace(/\s+/g, " ").trim();
-    if (!raw) continue;
-    const dur = infos[i]?.duration || 0;
-    if (dur <= 0) continue;
-    // Show text over the stable middle of the clip, clear of the fades.
-    const pad = infos.length > 1 ? Math.min(0.25, t) : 0;
-    const from = starts[i] + pad;
-    const to = Math.max(from + 0.4, starts[i] + dur - pad);
-    cues.push(`${idx}\n${srtTime(from)} --> ${srtTime(to)}\n${wrapSubtitle(raw, 32)}\n`);
-    idx++;
-  }
-  return cues.join("\n");
-}
-
-/**
- * Burn an SRT into a video. Runs with cwd=workDir and a bare filename so the
- * subtitles filter never has to escape ':' / '/' in an absolute path.
- * Video is re-encoded; audio is stream-copied. Returns the output path.
- */
-async function burnSubtitles(inputPath: string, srtName: string, outPath: string, workDir: string, styleOverride?: string): Promise<void> {
-  const style =
-    styleOverride ??
-    "FontName=DejaVu Sans,Fontsize=9,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000," +
-    "BorderStyle=1,Outline=1,Shadow=1,Alignment=2,MarginV=34"; // compact 9:16 style (same as per-scene burn)
-  // Serverless images ship no system fonts: without a font libass renders NOTHING (and ffmpeg
-  // still exits 0). Bundle DejaVu Sans with the app and point libass at it via a relative fontsdir.
-  const fontsDir = await stageFonts(workDir);
-  await runFfmpeg(
-    [
-      "-i", inputPath,
-      "-vf", `subtitles=${srtName}${fontsDir ? `:fontsdir=${fontsDir}` : ""}:force_style='${style}'`,
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-      "-c:a", "copy",
-      "-movflags", "+faststart",
-      outPath,
-    ],
-    "burn subtitles",
-    { cwd: workDir }
-  );
-}
-
-/**
- * Stage 4 — burn per-line subtitles into ONE scene clip right after generation.
- *
- * `lines` are the scene's dialogue lines (story language) in speaking order; each line is shown
- * for a share of the clip proportional to its word count (speech fills the whole clip, so the
- * cues follow the rhythm closely enough without a word-level alignment). Returns the mp4 buffer.
- */
-export async function burnSceneSubtitles(videoUrl: string, lines: string[]): Promise<Buffer> {
-  const clean = lines.map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
-  if (!clean.length) throw new Error("no subtitle lines");
-  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "scene-subs-"));
-  try {
-    const src = path.join(workDir, "src.mp4");
-    await downloadToFile(videoUrl, src);
-    const info = await probeMedia(src);
-    if (!info.hasVideo || info.duration <= 0) throw new Error("source clip unreadable");
-    const lead = 0.3; // speech starts almost immediately; keep the text off the very first frames
-    const usable = Math.max(1, info.duration - lead - 0.2);
-    const weights = clean.map((l) => Math.max(1, l.split(" ").length));
-    const total = weights.reduce((a, b) => a + b, 0);
-    let t = lead;
-    const cues = clean.map((text, i) => {
-      const from = t;
-      const to = i === clean.length - 1 ? lead + usable : from + (usable * weights[i]) / total;
-      t = to;
-      return `${i + 1}\n${srtTime(from)} --> ${srtTime(Math.max(from + 0.4, to))}\n${wrapSubtitle(text, 32)}\n`;
-    });
-    await fs.writeFile(path.join(workDir, "subs.srt"), cues.join("\n"), "utf8");
-    const out = path.join(workDir, "out.mp4");
-    // Vertical 9:16 clip: libass scales Fontsize against a 288-line canvas, so 9 ≈ 3% of the frame
-    // height — readable on a phone without covering the faces; MarginV keeps it in the bottom safe area.
-    const style =
-      "FontName=DejaVu Sans,Fontsize=9,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000," +
-      "BorderStyle=1,Outline=1,Shadow=1,Alignment=2,MarginV=34";
-    await burnSubtitles(src, "subs.srt", out, workDir, style);
-    return await fs.readFile(out);
-  } finally {
-    await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
-  }
-}
-
-/** Copy the bundled subtitle fonts next to the SRT (relative path → no ':' escaping issues). */
-async function stageFonts(workDir: string): Promise<string | null> {
-  const candidates = [
-    path.join(process.cwd(), "assets", "fonts"),
-    path.join(__dirname, "..", "assets", "fonts"),
-    path.join(__dirname, "..", "..", "assets", "fonts"),
-  ];
-  for (const dir of candidates) {
-    try {
-      const files = (await fs.readdir(dir)).filter((f) => /\.(ttf|otf)$/i.test(f));
-      if (!files.length) continue;
-      const dest = path.join(workDir, "fonts");
-      await fs.mkdir(dest, { recursive: true });
-      for (const f of files) await fs.copyFile(path.join(dir, f), path.join(dest, f));
-      return "fonts";
-    } catch {
-      /* try next */
-    }
-  }
-  console.warn("[ffmpeg] bundled fonts not found — subtitles may render blank");
-  return null;
 }
 
 export interface AssembleResult {
@@ -527,8 +363,7 @@ export async function assembleEpisodeLocally(scenes: SceneClipInput[]): Promise<
     if (audioPath) await fs.rm(audioPath, { force: true });
   }
 
-  // Probe every normalized clip up-front — needed both for the crossfade math and for
-  // timing the burned-in subtitles to each clip's position on the final timeline.
+  // Probe every normalized clip up-front — needed for the crossfade math.
   const infos = await Promise.all(normalized.map((c) => probeMedia(c)));
 
   const joinedPath = path.join(workDir, "joined.mp4");
@@ -545,24 +380,9 @@ export async function assembleEpisodeLocally(scenes: SceneClipInput[]): Promise<
     }
   }
 
-  // Burn per-scene subtitles (timed to each clip's segment). Always on — the assembled
-  // episode should read like a finished film. Best-effort: keep the video if it fails.
+  // No subtitles are burned in: the clips carry Seedance native speech; the episode is the clean joined video.
   const outputPath = path.join(workDir, "episode.mp4");
-  const hasSubs = scenes.some((s) => (s.subtitle ?? "").trim());
-  if (hasSubs) {
-    try {
-      const srt = buildSrt(scenes.map((s) => s.subtitle), infos, TRANSITION_SEC);
-      const srtName = "subs.srt";
-      await fs.writeFile(path.join(workDir, srtName), srt, "utf8");
-      await burnSubtitles(joinedPath, srtName, outputPath, workDir);
-    } catch (err) {
-      console.warn("[ffmpeg] subtitle burn failed — using video without subtitles:", (err as Error).message);
-      await fs.rm(outputPath, { force: true }).catch(() => {});
-      await fs.copyFile(joinedPath, outputPath);
-    }
-  } else {
-    await fs.copyFile(joinedPath, outputPath);
-  }
+  await fs.copyFile(joinedPath, outputPath);
   await fs.rm(joinedPath, { force: true }).catch(() => {});
 
   const info = await probeMedia(outputPath);

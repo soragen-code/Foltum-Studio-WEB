@@ -298,3 +298,120 @@ export function sanitizeVideoPrompt(input: string, options: SanitizeOptions = {}
 
   return { prompt: text, changes, changed: changes.length > 0 };
 }
+
+/* ====================================================================================== */
+/*  Video-model moderation (Seedance E005 "input or output was flagged as sensitive")      */
+/* ====================================================================================== */
+
+/**
+ * Softening level used for the paid Seedance submission:
+ *  1 — always applied: explicit violence / weapons / blood / intimacy / drugs / death / danger
+ *      → neutral cinematic equivalents (the scene keeps its meaning, only the wording changes);
+ *  2 — 1st automatic retry after E005: also tones down aggression and physical intensifiers
+ *      ("angry", "sharp gesture", "rising anger, cracking voice");
+ *  3 — 2nd retry: additionally removes physical contact / danger from the staging lines
+ *      ([ACTION], [NON-VERBAL], [BLOCKING]) and neutralises delivery cues.
+ */
+export type SoftenLevel = 1 | 2 | 3;
+
+export interface SoftenResult {
+  text: string;
+  /** Original phrases that were rewritten (for logs and the user-facing hint). */
+  hits: string[];
+  changed: boolean;
+}
+
+type SoftRule = [RegExp, string];
+/** Unicode-aware word rule (English + Russian words), case-insensitive. */
+const w = (alts: string, flags = "giu"): RegExp => new RegExp(`(?<!\\p{L})(?:${alts})(?!\\p{L})`, flags);
+
+/** Level 1 — explicit content that video-model moderation reliably flags. */
+const SENSITIVE_L1: SoftRule[] = [
+  // weapons
+  [w("guns?|pistols?|revolvers?|rifles?|shotguns?|firearms?|handguns?|пистолет\\p{L}*|ружь\\p{L}*|винтовк\\p{L}*|оружи\\p{L}*"), "small object"],
+  [w("knife|knives|blades?|daggers?|machetes?|нож\\p{L}*|лезви\\p{L}*|кинжал\\p{L}*"), "tool"],
+  [w("bombs?|explosives?|grenades?|explosions?|explodes?|бомб\\p{L}*|взрыв\\p{L}*"), "loud noise"],
+  [w("shoots? (?:him|her|them|at)|shot (?:him|her|them)|gunshots?|opens? fire|стреля\\p{L}*|выстрел\\p{L}*"), "points at"],
+  // violence / injury
+  [w("kills?|killed|killing|murders?|murdered|slaughters?|убива\\p{L}*|убил\\p{L}*|убить|убийств\\p{L}*"), "confronts"],
+  [w("stabs?|stabbed|stabbing|strangles?|chokes?|choking|suffocat\\p{L}*|душит|задуш\\p{L}*"), "grips"],
+  [w("punch(?:es|ed|ing)?|slaps?|slapped|slapping|kicks?|kicked|beats? (?:him|her|them) up|hits? (?:him|her|them)|strikes? (?:him|her|them)|бьёт|бьет|ударя\\p{L}*|удар\\p{L}*|пощечин\\p{L}*|пощёчин\\p{L}*|избива\\p{L}*"), "gestures sharply toward"],
+  [w("blood|bloody|bleeding|bleeds?|gore|gory|wounds?|wounded|injur(?:y|ies|ed)|кров\\p{L}*|ран\\p{L}{1,4}|окровавлен\\p{L}*"), "shaken"],
+  [w("corpses?|dead bod(?:y|ies)|body bags?|труп\\p{L}*|мертв\\p{L}*|мёртв\\p{L}*"), "still figure"],
+  [w("dies|died|dying|death|deadly|lethal|умира\\p{L}*|умер\\p{L}*|смерт\\p{L}*|гибел\\p{L}*|погиб\\p{L}*"), "loss"],
+  [w("suicide|suicidal|hangs? (?:him|her)self|самоубий\\p{L}*"), "despair"],
+  [w("tortures?|tortured|torturing|hostages?|kidnap\\p{L}*|abducts?|abducted|пыт(?:ает|ка|ки)|заложник\\p{L}*|похи(?:щ|т)\\p{L}*"), "pressures"],
+  [w("violent(?:ly)?|violence|brutal(?:ly)?|savage(?:ly)?|жесток\\p{L}*|насили\\p{L}*"), "tense"],
+  [w("threatens?|threatened|threatening|threats?|угрожа\\p{L}*|угроз\\p{L}*"), "warns"],
+  // danger to children / people
+  [w("drown(?:s|ed|ing)?|тонет|утону\\p{L}*|тону\\p{L}*"), "struggles in the water"],
+  [w("(?:child|kid|boy|girl|teen(?:ager)?s?|children|kids) (?:in danger|at risk|trapped|hurt|injured|screaming|crying for help)"), "young people nearby"],
+  [w("burns? alive|on fire|catches fire|ablaze|горит|загора\\p{L}*|пожар\\p{L}*"), "brightly lit"],
+  [w("crash(?:es|ed|ing)?|collision|car accident|авари\\p{L}*|катастроф\\p{L}*"), "sudden stop"],
+  // intimacy / nudity
+  [w("naked|nude|nudity|undress(?:es|ed|ing)?|topless|lingerie|underwear|обнаж\\p{L}*|голы\\p{L}*|раздева\\p{L}*|нижн\\p{L}* бель\\p{L}*"), "fully dressed"],
+  [w("sex|sexual(?:ly)?|sexy|seductive(?:ly)?|erotic|intimate scene|makes? love|секс\\p{L}*|эротич\\p{L}*|соблазн\\p{L}*|интимн\\p{L}*"), "close"],
+  [w("kiss(?:es|ed|ing)? passionately|passionate kiss|страстн\\p{L}* поцелу\\p{L}*"), "embraces warmly"],
+  // substances
+  [w("cocaine|heroin|meth|drugs?|drug dealers?|syringes?|needles?|overdos(?:e|es|ed)|наркотик\\p{L}*|шприц\\p{L}*|передозировк\\p{L}*"), "medicine"],
+  [w("drunk|wasted|hungover|пьян\\p{L}*"), "tired"],
+  // crime wording
+  [w("rape[ds]?|raping|molest\\p{L}*|abus(?:e|es|ed|ing)|изнасил\\p{L}*|растле\\p{L}*"), "mistreats"],
+  [w("terrorist\\p{L}*|terror|extremist\\p{L}*|террор\\p{L}*|экстремист\\p{L}*"), "stranger"],
+];
+
+/** Level 2 — aggression and physical intensifiers (kept at level 1 because they carry the drama). */
+const SENSITIVE_L2: SoftRule[] = [
+  [w("angry|angrily|furious(?:ly)?|enraged|rage|raging|wrath|зл(?:о|ой|ая|ится|ой)|злобн\\p{L}*|ярост\\p{L}*|гнев\\p{L}*|бешен\\p{L}*"), "tense"],
+  [w("shout(?:s|ed|ing)?|scream(?:s|ed|ing)?|yell(?:s|ed|ing)?|screech\\p{L}*|крич\\p{L}*|кричит|орёт|орет|вопит|визж\\p{L}*"), "raising the voice"],
+  [w("aggressive(?:ly)?|aggression|hostile|hostility|menacing|агрессивн\\p{L}*|агресси\\p{L}*|враждебн\\p{L}*"), "firm"],
+  [w("grabs?|grabbed|grabbing|shoves?|shoved|shoving|pushes? (?:him|her|them)|yanks?|drags? (?:him|her|them)|хвата\\p{L}*|схват\\p{L}*|толка\\p{L}*|дёрга\\p{L}*|дерга\\p{L}*|тащит"), "reaches toward"],
+  [w("slams?|slammed|smash(?:es|ed|ing)?|throws? (?:a|the) [a-z]+ at|шваря\\p{L}*|швыря\\p{L}*|разбива\\p{L}*|хлопа\\p{L}*"), "sets down firmly"],
+  [w("sharp (?:gestures?|movements?|motions?)|abrupt (?:gestures?|movements?)|резк\\p{L}* (?:движени\\p{L}*|жест\\p{L}*|взмах\\p{L}*)"), "expressive gesture"],
+  [w("clench(?:es|ed|ing)? (?:his |her |their )?(?:fists?|jaw|teeth)|сжима\\p{L}* (?:кулак\\p{L}*|челюст\\p{L}*|зубы)"), "tenses up"],
+  [w("rising anger, cracking voice, bitter laugh"), "emotional nuance, a catch in the voice, a quiet laugh"],
+  [w("fights?|fighting|fought|brawls?|struggles? with|wrestl\\p{L}*|дра(?:к|л|т)\\p{L}*|бор(?:ется|ются|ьба)"), "argues with"],
+  [w("desperate(?:ly)?|desperation|отчаян\\p{L}*"), "anxious"],
+  [w("police|cops?|officers?|handcuffs?|arrests?|arrested|полици\\p{L}*|полицейск\\p{L}*|наручник\\p{L}*|арест\\p{L}*"), "official"],
+];
+
+const CONTACT_LINES = /^\[(ACTION|NON-VERBAL|BLOCKING)\]:.*$/gmu;
+const CUE_IN_SPEECH = /(says in \p{L}+), [^,\n"]{1,60},( lips moving on camera)/gu;
+
+function applyRules(text: string, rules: SoftRule[], hits: string[]): string {
+  for (const [re, rep] of rules) {
+    text = text.replace(re, (m) => { hits.push(m); return rep; });
+  }
+  return text;
+}
+
+/**
+ * Rewrites moderation-sensitive wording in the English Seedance prompt (visual directions AND spoken
+ * lines) into neutral cinematic equivalents. Idempotent; never touches [Image#] reference notes' URLs.
+ */
+export function softenForModeration(input: string, level: SoftenLevel = 1): SoftenResult {
+  const hits: string[] = [];
+  let text = input ?? "";
+  text = applyRules(text, SENSITIVE_L1, hits);
+  if (level >= 2) text = applyRules(text, SENSITIVE_L2, hits);
+  if (level >= 3) {
+    // Physical contact / danger lives in the staging lines: replace them with neutral conversational staging.
+    text = text.replace(CONTACT_LINES, (m, tag: string) => {
+      hits.push(m.slice(0, 60));
+      if (tag === "ACTION") return "[ACTION]: the characters talk to each other, turning toward one another as they speak";
+      if (tag === "NON-VERBAL") return "[NON-VERBAL]: attentive expressive faces, natural hand gestures while speaking";
+      return "[BLOCKING]: the characters stand a step apart, facing each other";
+    });
+    // Delivery cues carry intensity ("angry", "desperate") — neutralise them all on the last retry.
+    text = text.replace(CUE_IN_SPEECH, "$1$2");
+  }
+  text = text.replace(/[ \t]{2,}/g, " ").replace(/ ,/g, ",");
+  return { text, hits: Array.from(new Set(hits)), changed: hits.length > 0 };
+}
+
+/** Phrases in the ORIGINAL scene text that a video-model moderation is likely to flag (for the user hint). */
+export function moderationHints(text: string): string[] {
+  const hits: string[] = [];
+  applyRules(text ?? "", [...SENSITIVE_L1, ...SENSITIVE_L2], hits);
+  return Array.from(new Set(hits)).slice(0, 6);
+}

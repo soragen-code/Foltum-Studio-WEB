@@ -69,7 +69,7 @@ export function ScriptView({ text, scenes }: { text?: string | null; scenes?: { 
               <pre className="mt-2 whitespace-pre-wrap break-words font-sans">{s.dialogue}</pre>
               {s.dialogueEn && s.dialogueEn.trim() !== (s.dialogue ?? '').trim() && (
                 <details className="mt-2 text-xs text-muted-foreground">
-                  <summary className="cursor-pointer">Озвучка (English) — субтитры на языке сценария</summary>
+                  <summary className="cursor-pointer">Озвучка (English) — текст сцены на языке сценария</summary>
                   <pre className="mt-1 whitespace-pre-wrap break-words font-sans">{s.dialogueEn}</pre>
                 </details>
               )}

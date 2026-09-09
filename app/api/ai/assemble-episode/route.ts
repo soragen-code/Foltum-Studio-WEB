@@ -9,13 +9,7 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, assembleEpisodeSchema } from "@/lib/validations";
 import { assembleEpisodeLocally } from "@/lib/ffmpeg";
-import { parseDialogue } from "@/lib/voiceover";
 import { uploadBufferToS3 } from "@/lib/s3-upload";
-
-/** Clean a scene's dialogue into plain spoken text for the burned-in subtitle. */
-function subtitleFor(dialogue: string | null | undefined): string {
-  return parseDialogue(dialogue).map((l) => l.text).join(" ").trim();
-}
 
 /**
  * Assemble a full episode from all accepted scene videos (in scene order).
@@ -68,7 +62,6 @@ export async function POST(request: Request) {
       scenes.map((s) => ({
         videoUrl: s.videoUrl as string,
         audioUrl: s.audioUrl,
-        subtitle: s.subtitled ? null : subtitleFor(s.dialogue), // stage 4: already burned per scene
       }))
     );
     workDir = result.workDir;

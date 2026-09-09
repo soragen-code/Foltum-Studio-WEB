@@ -15,12 +15,12 @@ const nextConfig = {
   // ffmpeg-static locates its binary via __dirname at runtime, so file tracing cannot see it —
   // include it explicitly for the episode-assembly function (local mux + concat).
   outputFileTracingIncludes: {
-    '/api/ai/assemble-episode': ['./node_modules/ffmpeg-static/ffmpeg', './assets/fonts/*'],
-    // Stage 4: per-scene subtitle burn-in happens where video jobs finalize (start + polling/resume).
-    '/api/ai/generate-video': ['./node_modules/ffmpeg-static/ffmpeg', './assets/fonts/*'],
-    '/api/ai/generate-episode-videos': ['./node_modules/ffmpeg-static/ffmpeg', './assets/fonts/*'],
-    '/api/ai/episodes/[id]/generate-all': ['./node_modules/ffmpeg-static/ffmpeg', './assets/fonts/*'],
-    '/api/jobs/[id]': ['./node_modules/ffmpeg-static/ffmpeg', './assets/fonts/*'],
+    '/api/ai/assemble-episode': ['./node_modules/ffmpeg-static/ffmpeg'],
+    // Video jobs extract the last frame / audio track with ffmpeg where they finalize (start + polling/resume).
+    '/api/ai/generate-video': ['./node_modules/ffmpeg-static/ffmpeg'],
+    '/api/ai/generate-episode-videos': ['./node_modules/ffmpeg-static/ffmpeg'],
+    '/api/ai/episodes/[id]/generate-all': ['./node_modules/ffmpeg-static/ffmpeg'],
+    '/api/jobs/[id]': ['./node_modules/ffmpeg-static/ffmpeg'],
   },
   // Next 16 BLOCKS unlisted origins on /_next/* and /__nextjs* in dev — including the /_next/hmr
   // WEBSOCKET upgrade, and Turbopack gates client module wiring on that socket, so a blocked origin

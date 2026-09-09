@@ -3,12 +3,13 @@ import { prisma } from "@/lib/db";
 import { startVideoPrediction, startKlingPrediction, startLipsyncPrediction, startImagePrediction, getPredictionState, cancelVideoPrediction, KLING_MODEL, LIPSYNC_MODEL } from "@/lib/replicate";
 import { buildNativeAudioPrompt, translateDialogue, detectSpokenLanguage, languageName, parseDialogue } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
-import { extractLastFrameBuffer, extractAudioBuffer, burnSceneSubtitles } from "@/lib/ffmpeg";
+import { extractLastFrameBuffer, extractAudioBuffer } from "@/lib/ffmpeg";
 import { PACE_DIRECTION } from "@/lib/season";
 import { getBucketConfig } from "@/lib/aws-config";
 import { VISUAL_STYLE_ID, styledVisualPrompt, isStyledAsset, canChainFrame, locationAngleImages } from "@/lib/visual-style";
 import { GenerationAttempt, safeProviderError, classifyProviderError, logAttempt, safeDiagnosticInput } from "@/lib/generation-diagnostics";
 import { updateJob, heartbeatJob, runInBackground } from "@/lib/jobs";
+import { softenForModeration, moderationHints, type SoftenLevel } from "@/lib/sanitize-prompt";
 
 export interface VideoJobParams {
   jobId: string;
@@ -51,7 +52,27 @@ export interface VideoJobState {
   /** Persisted so the audio stage can submit the Seedance speech run on its own. */
   audioPrompt?: string;
   audioDuration?: number;
+  /* --- Seedance moderation (E005) auto-retry, no extra credit charge --- */
+  /** How many softened resubmissions were already made (max MAX_MODERATION_RETRIES). */
+  moderationRetries?: number;
+  /** Everything needed to resubmit the same scene with a softer prompt. */
+  retry?: ModerationRetryInput;
 }
+
+export interface ModerationRetryInput {
+  /** Level-1 sanitized core prompt (visual + speech + pace), WITHOUT the [ImageN] notes. */
+  basePrompt: string;
+  duration: number;
+  resolution: string;
+  /** Adjacent last frame (image-to-video), if the first attempt used one. */
+  image?: string;
+  /** Reference set of the first attempt. */
+  refs: { url: string; kind: string; note: string }[];
+  /** Reduced set for the last retry: speaking characters + one location angle. */
+  fallbackRefs: { url: string; kind: string; note: string }[];
+}
+/** Up to 2 automatic resubmissions after a moderation refusal (3 Seedance attempts total, 1 charge). */
+export const MAX_MODERATION_RETRIES = 2;
 
 const POLL_INTERVAL_MS = 8_000;
 /** Typical Seedance time — only used to animate the progress bar while waiting. */
@@ -118,6 +139,14 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     }
     // Sanitize visual descriptions BEFORE adding speech: never rewrite scripted dialogue.
     let prompt = `${buildNativeAudioPrompt(stripSlowDirections(visualPrompt), dialogue, links.map(l => l.character), targetLanguage)}\n\n${PACE_DIRECTION}`;
+    // Seedance moderation (E005): neutralize explicit wording (weapons, blood, violence, children in
+    // danger, intimacy...) in BOTH the visual prompt and the English dialogue before submitting.
+    const softened = softenForModeration(prompt, 1);
+    if (softened.changed) console.log("[video-job] moderation-safe rewrite (level 1):", { jobId, sceneId, hits: softened.hits });
+    prompt = softened.text;
+    const basePrompt = prompt;
+    let retryRefs: ModerationRetryInput["refs"] = [];
+    let fallbackRefs: ModerationRetryInput["fallbackRefs"] = [];
 
     const previous = scene.number > 1 ? await prisma.scene.findFirst({
       where: { episodeId: scene.episodeId, number: scene.number - 1 },
@@ -126,27 +155,32 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     let image: string | undefined;
     let referenceImages: string[] = [];
     let reference: Record<string, unknown>;
+    // Stage 3 reference set, in priority order: speaking/visible individual characters → the
+    // episode's location reference → crowd groups. Seedance accepts up to MAX_REFERENCE_IMAGES.
+    const styled = links.filter(l => isStyledAsset(l.character.imageFront));
+    const individuals = styled.filter(l => l.character.tier !== "CROWD");
+    const crowds = styled.filter(l => l.character.tier === "CROWD");
+    const episodeLoc = await prisma.episode.findUnique({ where: { id: scene.episodeId }, select: { location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true } } } });
+    // Stage 3b: every generated angle of the SAME location goes in as a reference, so the place,
+    // the time of day and the light stay identical between shots — only the camera angle changes.
+    const locationAngles = episodeLoc?.location ? locationAngleImages(episodeLoc.location) : [];
+    const location = locationAngles.length ? episodeLoc!.location! : null;
+    const characterRefs = individuals.map(l => ({ url: l.character.imageFront!, kind: "character", id: l.characterId, note: `defines ${l.character.name}'s photorealistic appearance and identity; use the scene's staging and camera.` }));
+    const locationRefs = locationAngles.map(a => ({ url: a.url, kind: "location", id: location!.id, note: `the location "${location!.name}" — ${a.angle} angle. Same place, same time of day, same light and palette as the other location references. Keep the camera inside this location and match this lighting exactly.` }));
+    // Reduced set used by the last moderation retry: speaking characters + one location angle.
+    fallbackRefs = [...characterRefs, ...locationRefs.slice(0, 1)].slice(0, MAX_REFERENCE_IMAGES).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
     if (canChainFrame(scene, previous)) {
       image = previous!.lastFrameUrl!;
       reference = { mode: "adjacent_frame", sceneId: previous!.id };
     } else {
-      // Stage 3 reference set, in priority order: speaking/visible individual characters → the
-      // episode's location reference → crowd groups. Seedance accepts up to MAX_REFERENCE_IMAGES.
-      const styled = links.filter(l => isStyledAsset(l.character.imageFront));
-      const individuals = styled.filter(l => l.character.tier !== "CROWD");
-      const crowds = styled.filter(l => l.character.tier === "CROWD");
-      const episodeLoc = await prisma.episode.findUnique({ where: { id: scene.episodeId }, select: { location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true } } } });
-      // Stage 3b: every generated angle of the SAME location goes in as a reference, so the place,
-      // the time of day and the light stay identical between shots — only the camera angle changes.
-      const locationAngles = episodeLoc?.location ? locationAngleImages(episodeLoc.location) : [];
-      const location = locationAngles.length ? episodeLoc!.location! : null;
       if (individuals.length || location || crowds.length) {
         const refs: { url: string; note: string; kind: string; id: string }[] = [
-          ...individuals.map(l => ({ url: l.character.imageFront!, kind: "character", id: l.characterId, note: `defines ${l.character.name}'s photorealistic appearance and identity; use the scene's staging and camera.` })),
-          ...locationAngles.map(a => ({ url: a.url, kind: "location", id: location!.id, note: `the location "${location!.name}" — ${a.angle} angle. Same place, same time of day, same light and palette as the other location references. Keep the camera inside this location and match this lighting exactly.` })),
+          ...characterRefs,
+          ...locationRefs,
           ...crowds.map(l => ({ url: l.character.imageFront!, kind: "crowd", id: l.characterId, note: `defines the look of the group "${l.character.name}" (extras): who they are and how they are dressed.` })),
         ].slice(0, MAX_REFERENCE_IMAGES);
         referenceImages = refs.map(r => r.url);
+        retryRefs = refs.map(r => ({ url: r.url, kind: r.kind, note: r.note }));
         reference = { mode: "character_references", characterIds: refs.filter(r => r.kind !== "location").map(r => r.id), locationId: location?.id ?? null, kinds: refs.map(r => r.kind) };
         prompt += "\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
         if (location) prompt += "\nCamera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location references. Only the camera angle changes between shots.";
@@ -182,7 +216,9 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
         const stored = await uploadRemoteToS3(referenceUrl, key, "image/png");
         referenceImages = [stored];
         reference = { mode: "new_scene_reference", sceneId, referencePredictionId: attempt.predictionId };
-        prompt += "\n[Image1] defines the scene's original photorealistic character designs, clothing and environment. Preserve those designs while performing the scripted action.";
+        const note = "defines the scene's original photorealistic character designs, clothing and environment. Preserve those designs while performing the scripted action.";
+        prompt += `\n[Image1] ${note}`;
+        retryRefs = [{ url: stored, kind: "scene", note }];
       }
     }
     // One paid video attempt. Copyright, general moderation, E003 and timeout remain distinct;
@@ -246,6 +282,9 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       diagnostics.push(attempt); await persist(); logAttempt(attempt);
       predictionId = await startVideoPrediction({ ...input, ...(image ? { image } : { reference_images: referenceImages }) });
       submitMessage = "Submitted to Seedance; checking the same prediction...";
+      // Keep what is needed to resubmit the SAME scene with a softer prompt after a moderation refusal.
+      pipelineExtra.retry = { basePrompt, duration: input.duration, resolution: input.resolution, image, refs: retryRefs, fallbackRefs };
+      pipelineExtra.moderationRetries = 0;
     }
     attempt.predictionId = predictionId; attempt.status = "processing";
     state = { predictionId, sceneId, projectId, userId, cost, startedAt: Date.now(), diagnostics, ...pipelineExtra };
@@ -304,23 +343,8 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, source: str
   const { folderPrefix } = getBucketConfig();
   // Deterministic object names: recovery never creates duplicate published outputs.
   const key = `${folderPrefix}public/videos/${state.projectId}/${scene.episodeId}/${VISUAL_STYLE_ID}/${jobId}`;
-  // Stage 4: burn the scene's subtitles (story-language text) into the clip before publishing.
-  // If burning fails the raw clip is published unsubtitled (subtitled=false → assembly adds them).
-  let videoUrl: string;
-  let subtitled = false;
-  const subtitleLines = parseDialogue(scene.dialogue).map((l) => l.text).filter(Boolean);
-  if (subtitleLines.length) {
-    try {
-      const buf = await burnSceneSubtitles(source, subtitleLines);
-      videoUrl = await uploadBufferToS3(buf, `${key}.mp4`, "video/mp4");
-      subtitled = true;
-    } catch (error) {
-      console.warn("[video-job] subtitles:", safeProviderError(error));
-      videoUrl = await uploadRemoteToS3(source, `${key}.mp4`, "video/mp4");
-    }
-  } else {
-    videoUrl = await uploadRemoteToS3(source, `${key}.mp4`, "video/mp4");
-  }
+  // The Seedance clip is published as-is (native speech, no burned-in subtitles).
+  const videoUrl = await uploadRemoteToS3(source, `${key}.mp4`, "video/mp4");
   let lastFrameUrl: string | null = null;
   try {
     const frame = await extractLastFrameBuffer(videoUrl);
@@ -334,14 +358,26 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, source: str
     } });
     if (!result.count) return;
     await tx.scene.update({ where: { id: state.sceneId }, data: {
-      videoUrl, audioUrl: null, status: "generated", lastFrameUrl, subtitled,
+      videoUrl, audioUrl: null, status: "generated", lastFrameUrl, subtitled: false,
     } });
   });
 }
 
 /** Status transition and refund are atomic and happen only once. */
 async function handleFailure(jobId: string, ctx: { sceneId: string; userId?: string; cost?: number }, error: unknown, state?: VideoJobState) {
-  const message = `[${classifyProviderError(error)}] ${safeProviderError(error)}`;
+  const kind = classifyProviderError(error);
+  let message = `[${kind}] ${safeProviderError(error)}`;
+  if (kind === "moderation") {
+    // Shown verbatim in the UI (job.error). Tell the user what to change instead of the raw provider code.
+    const scene = await prisma.scene.findUnique({ where: { id: ctx.sceneId }, select: { videoPrompt: true, dialogueEn: true, dialogue: true, action: true } }).catch(() => null);
+    const hints = moderationHints([scene?.videoPrompt, scene?.action, scene?.dialogueEn, scene?.dialogue].filter(Boolean).join("\n"));
+    const tries = state?.moderationRetries ? ` (${state.moderationRetries + 1} попытки, включая автоматически смягчённые)` : "";
+    message = `[moderation] Сцена не прошла модерацию Seedance${tries} — измените текст сцены (кнопка «Изменить сцену»). ` +
+      (hints.length
+        ? `Смягчите или уберите: ${hints.map(h => `«${h}»`).join(", ")}. `
+        : "Уберите агрессию, физический контакт, опасность, оружие, кровь и интимные моменты; выразите конфликт через реплики, лица и мизансцену. ") +
+      `Код провайдера: ${safeProviderError(error)}`;
+  }
   console.error("[video-job] failed:", { jobId, sceneId: ctx.sceneId, error: message });
   await prisma.$transaction(async tx => {
     const result = await tx.generationJob.updateMany({
@@ -443,6 +479,62 @@ async function advanceToLipsyncStage(jobId: string, state: VideoJobState, speech
   return true;
 }
 
+/**
+ * Moderation auto-retry. Retry 1 = level 2 (aggression / physical contact / delivery cues softened).
+ * Retry 2 = level 3 (staging lines rewritten to neutral dialogue blocking, delivery cues stripped,
+ * reference set reduced to the speaking characters + one location angle, no start-frame chaining).
+ */
+async function retryAfterModeration(jobId: string, state: VideoJobState, reason: string): Promise<boolean> {
+  const retry = state.retry!;
+  const n = (state.moderationRetries ?? 0) + 1;
+  const level: SoftenLevel = n === 1 ? 2 : 3;
+  const softened = softenForModeration(retry.basePrompt, level);
+  let image = retry.image;
+  let refs = retry.refs;
+  if (level === 3) {
+    if (retry.fallbackRefs.length) { refs = retry.fallbackRefs; image = undefined; }
+    else if (!refs.length && !image) { refs = retry.refs; }
+  }
+  let prompt = softened.text;
+  if (!image && refs.length) {
+    prompt += "\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
+    if (refs.some(r => r.kind === "location")) prompt += "\nCamera stays inside this location across the whole shot; lighting, time of day and palette identical to the location reference.";
+  }
+  const input = {
+    prompt, duration: retry.duration, resolution: retry.resolution,
+    aspect_ratio: image ? "adaptive" : "9:16", generate_audio: true, watermark: false,
+  };
+  const attempt: GenerationAttempt = {
+    jobId, sceneId: state.sceneId, attempt: n + 1, model: "bytedance/seedance-2.5", phase: "video", status: "submitting",
+    style: VISUAL_STYLE_ID,
+    input: safeDiagnosticInput({ ...input, reference: { mode: "moderation_retry", level, previousError: safeProviderError(reason), softenedPhrases: softened.hits, referenceCount: image ? 1 : refs.length } }),
+  };
+  state.diagnostics = [...(state.diagnostics ?? []), attempt];
+  logAttempt(attempt);
+  console.log("[video-job] moderation retry:", { jobId, sceneId: state.sceneId, attempt: n + 1, level, hits: softened.hits, refs: image ? "adjacent_frame" : refs.map(r => r.kind) });
+  try {
+    const predictionId = await startVideoPrediction({ ...input, ...(image ? { image } : { reference_images: refs.map(r => r.url) }) });
+    attempt.predictionId = predictionId; attempt.status = "processing";
+    state.predictionId = predictionId;
+    state.startedAt = Date.now();
+    state.moderationRetries = n;
+    state.providerStatus = undefined; state.providerStartedAt = null; state.providerCompletedAt = null;
+    state.leaseUntil = 0;
+    logAttempt(attempt);
+    await saveOwned(jobId, state, {
+      progress: 5, error: null,
+      message: `Модерация Seedance отклонила сцену — повторяю со смягчённым текстом (попытка ${n + 1} из ${MAX_MODERATION_RETRIES + 1})...`,
+    });
+    return true;
+  } catch (error) {
+    attempt.status = "failed"; attempt.error = safeProviderError(error); attempt.errorKind = classifyProviderError(error);
+    logAttempt(attempt);
+    // Resubmission itself failed: report the original moderation refusal (refund happens once).
+    await handleFailure(jobId, state, new Error(reason), state);
+    return true;
+  }
+}
+
 /** One short provider check per poll, no sleeping invocation and no new prediction. */
 export async function resumeVideoJob(job: { id: string; type: string; status: string; resultData: string | null; updatedAt: Date }): Promise<boolean> {
   if (job.type !== "video" || job.status !== "processing") return false;
@@ -476,6 +568,11 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
     }
     if (prediction.status === "failed" || prediction.status === "canceled") {
       const reason = prediction.error || (Date.now() - state.startedAt >= VIDEO_DEADLINE_MS ? "Prediction timed out at the 30-minute application deadline (cancellation confirmed)" : "Prediction canceled by provider");
+      // Seedance moderation (E005): resubmit the same scene with a progressively softer prompt.
+      // Same job, same charge — the user is never billed for these automatic retries.
+      if (classifyProviderError(reason) === "moderation" && state.retry && !state.lipsync && (state.moderationRetries ?? 0) < MAX_MODERATION_RETRIES) {
+        return await retryAfterModeration(job.id, state, reason);
+      }
       await handleFailure(job.id, state, new Error(reason), state);
       return true;
     }

@@ -107,8 +107,20 @@ export function estimateDurationSec(dialogue: string, action = ""): number {
 export const PACE_DIRECTION =
   "PACE: fast, tight rhythm — lines follow each other with NO pauses, the listener answers instantly, interrupts, overlaps with reactions; nobody waits for a turn. " +
   "No long silent beats, no slow-motion, no empty establishing seconds at the start: the first line is spoken within the first second. " +
-  "CAMERA: 2–4 cuts inside the clip — close-up of the speaker → reverse shot of the listener → medium two-shot → tight reaction close-up; hard cuts, no slow pans, no lingering. " +
-  "PERFORMANCE: expressive, energetic acting — vivid facial expressions, sharp gestures, emotional accents in the voice (rising anger, cracking voice, bitter laugh), eye contact and reactions while the other speaks.";
+  "CAMERA: 2–4 cuts inside the clip — medium two-shot → over-the-shoulder reverse on the listener → medium close-up of the speaker (head and shoulders, environment visible) → medium reaction shot; hard cuts, no slow pans, no lingering. " +
+  "FRAMING: a full-screen face close-up is used at most ONCE per clip and only for a short accent (≤ 3 s); the rest of the clip keeps bodies, hands and the location in frame. " +
+  "PERFORMANCE: expressive, energetic acting — vivid facial expressions, lively hand gestures, emotional nuance in the voice (a catch in the voice, a quiet bitter laugh, controlled intensity), eye contact and reactions while the other speaks.";
+
+/** Wording that the video model's moderation (Seedance E005) flags — shared by all script prompts. */
+export const MODERATION_SAFE_RULE =
+  "MODERATION-SAFE WORDING (the video model rejects scenes otherwise): never describe explicit violence, hitting, grabbing, shoving, choking, weapons, blood, wounds, injuries, death on screen, children in danger, nudity, intimacy or sex, drugs, self-harm, or police brutality. " +
+  "Express conflict through DIALOGUE, faces, distance between the characters and staging (turning away, stepping closer, holding an object, leaving the room) — the [ACTION]/[NON-VERBAL] lines contain no physical contact between characters and no physical danger, and tone cues stay neutral or emotional (\"firmly\", \"holding back tears\", \"quietly\") rather than aggressive (\"screaming\", \"violently\").";
+
+/** Creative bar for the story itself — shared by the season, episode, trailer and revise prompts. */
+export const CREATIVE_RULE =
+  "CREATIVE BAR: the story must be gripping, not generic — every scene contains a concrete reversal, revelation, decision or raised stake (a secret, a lie exposed, an ultimatum, an unexpected ally, a choice with a price). " +
+  "Avoid clichéd phrasing and predictable beats; give each character a distinct voice, a want and a fear, and use specific, sensory details of the location as dramatic tools. " +
+  "Every scene ends on a micro-hook that pulls the viewer into the next shot; the episode ends on a cliffhanger the audience did not see coming but that follows from what was planted.";
 
 const PROMPT_LINES = ["[SHOT TYPE]", "[VISUAL STYLE]", "[LIGHTING]", "[BLOCKING]", "[GAZE]", "[NON-VERBAL]", "[ACTION]", "[CHARACTER]", "[TRANSITION]"];
 
@@ -289,6 +301,8 @@ RULES:
 - Use ONLY the given character names (verbatim; a CROWD group name counts as a character). Every episode lists 2–6 characters actually present: the MAIN characters carrying it plus the SUPPORTING characters (family, colleagues, rivals) involved. Across the season EVERY SUPPORTING character appears in at least one episode, MINOR characters and CROWD groups are used where the story plausibly gathers people (family dinners, workplaces, hospitals, streets, court, celebrations).
 - Each logline is 2–3 sentences of concrete dramatic events (who wants what, what goes wrong). Cliffhanger = the final beat that forces the viewer into the next episode. No summaries like "tension rises".
 - Continuous story: consequences carry over episode to episode; no repetition.
+- ${CREATIVE_RULE}
+- ${MODERATION_SAFE_RULE}
 - All text except "locationDesc" is in ${langName(language)}. Character names stay exactly as given (Western names in Latin letters). Original content: never reuse names, plots or lines of existing films/series.`;
 }
 export function seasonStructureUserPrompt(synopsis: string, characters: CharacterCard[], locations: LocationRef[] = []): string {
@@ -306,26 +320,28 @@ HARD RULES (the script is REJECTED automatically if any is broken):
 R1. The NUMBER OF SCENES follows the drama of this episode's logline (min ${EPISODE_MIN_SCENES}, max ${EPISODE_MAX_SCENES}) — no padding, no filler. Nobody sets a running time: each scene lasts exactly as long as its dialogue needs (15–${SCENE_MAX_SECONDS} s at a brisk ~2.7 words/s; "durationSec" = round(words / 2.7) + 2, clamped to 15–${SCENE_MAX_SECONDS}). All scenes happen in/around the episode's key location; scene 1 may open on a wide shot but someone is ALREADY talking in it.
 R2. AT MOST ${MAX_SILENT_SCENES} scenes in the whole episode may be silent ("[NO DIALOGUE]"). ALL OTHER SCENES contain a real spoken exchange.
 R3. A talking scene = a SUBSTANTIVE exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences in total, spread over 3–6 lines where characters answer each other IMMEDIATELY (the story is told THROUGH the dialogue: decisions, accusations, confessions, information, subtext). Replies are quick, people interrupt and overlap; every second of the clip is filled with speech — at least ~35 words per talking scene (≥ 2 words per second of durationSec). Monologue or voice-over does NOT replace dialogue — when two people are in the shot they talk to each other; a lone character may talk on the phone or to someone off-screen. Short one-liners like "I have to know the truth." alone are REJECTED. One line per row, format: NAME (tone cue): "line". Tone cues like (sharply), (whispering), (holding back tears).
-    "dialogue" is ALWAYS in ENGLISH — it is what the video model voices.${local ? ` "dialogueLocal" is the same lines translated into ${L}, same line structure and cues (shown to the author and burned in as subtitles).` : ""}
+    "dialogue" is ALWAYS in ENGLISH — it is what the video model voices.${local ? ` "dialogueLocal" is the same lines translated into ${L}, same line structure and cues (shown to the author as the script text).` : ""}
     Example of a correct talking scene (6 sentences, 26 s):
     ANNA (quietly): "You knew he wasn't coming back and you still sent the boat? I waited on the pier till morning."
     VICTOR (not looking at her): "I sent the boat because otherwise we'd have lost both of them. You know that, even if you won't admit it."
     ANNA (sharply): "Don't you dare decide who I get to lose. Tomorrow I'm going out to sea myself, and you won't stop me."
 R4. "videoPrompt" and "visualIdentity" are ENTIRELY in ENGLISH (every one of the 9 lines — never ${L}, even though locationDesc/action are in ${L}). "videoPrompt" consists of EXACTLY these 9 lines, each on its own row, in this order, each starting with its bracket tag:
-    [SHOT TYPE]: the CUT LIST inside the clip — 2–4 hard cuts, e.g. "0–8s close-up on Anna → 8–15s reverse over-the-shoulder on Victor → 15–22s medium two-shot → 22–26s tight reaction close-up on Anna"; vertical 9:16; NO slow pans, NO lingering, NO slow motion
+    [SHOT TYPE]: the CUT LIST inside the clip — 2–4 hard cuts, e.g. "0–8s medium two-shot, Anna and Victor at the pier rail → 8–15s over-the-shoulder on Victor → 15–22s medium close-up on Anna, sea behind her → 22–26s medium reaction shot on Victor"; vertical 9:16; at most ONE short full-screen face close-up per clip (≤ 3 s), bodies, hands and the location stay visible in the other cuts; NO slow pans, NO lingering, NO slow motion
     [VISUAL STYLE]: the short visualIdentity sentence — the SAME text in every scene
     [LIGHTING]: time of day, light sources, weather — IDENTICAL wording in every scene of the episode (the whole episode is one continuous time; the location references lock the light, only the camera angle changes)
     [BLOCKING]: where each character stands/moves
     [GAZE]: where each character looks, eye contact and reaction while the other speaks
-    [NON-VERBAL]: EXPRESSIVE acting — concrete facial expressions, sharp gestures, breathing, emotional accents (rising anger, cracking voice, bitter laugh)
-    [ACTION]: what physically happens in the shot, brisk
+    [NON-VERBAL]: EXPRESSIVE acting — concrete facial expressions, lively hand gestures, breathing, emotional nuance (a catch in the voice, a quiet bitter laugh, controlled intensity); no physical contact between characters
+    [ACTION]: what physically happens in the shot, brisk — movement through the location, objects, distance; never hitting, grabbing, weapons or danger
     [CHARACTER]: for EVERY visible character: name, age, hair, skin, build, EXACT clothing for this episode — identical word for word in every scene of the episode
     [TRANSITION]: a hard cut into the next shot (no fades, no pauses)
     The [CHARACTER] line is MANDATORY in every scene. Never put spoken text into the videoPrompt. Never use the words "slowly", "slow motion", "lingering", "long pause".
 
 STYLE RULES:
 S1. ${PACE_DIRECTION}
-S2. LIP-SYNC BIAS: talking scenes cut between Medium shot / Medium close-up / Close-up / Over-the-shoulder with the speaker's face clearly visible; wide framing only as the first 2–3 seconds of an establishing cut.
+S2. LIP-SYNC BIAS: talking scenes cut between Medium shot / Medium close-up / Over-the-shoulder with the speaker's face clearly visible — but NOT filling the screen: at most one short full-screen close-up per scene, and never two close-up-only scenes in a row; wide framing only as the first 2–3 seconds of an establishing cut.
+S7. ${MODERATION_SAFE_RULE}
+S8. ${CREATIVE_RULE}
 S3. "locationDesc": "INT/EXT — place — time of day" in ${L}. "action" (1–2 sentences) in ${L}.
 S4. "visualIdentity": ONE SHORT English sentence (max 25 words) — photoreal live-action look, color palette, lens/grain feel of this episode. Keep it short: it is repeated in every scene.
 S5. Use ONLY the given character names (Western names, Latin letters, exactly as given). "characters" lists the names visible in the shot (a CROWD group name is listed when the group is in frame). SUPPORTING and MINOR characters present in the episode must actually speak in at least one scene each; crowds may have a short collective line or reactions.
@@ -423,5 +439,5 @@ export function sceneReviseSystemPrompt(language: IdeaLanguage): string {
   const local = language !== "en";
   return `You are a film director rewriting ONE shot ("scene", ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS}s, vertical 9:16, AI video model with native speech) of an episode by the author's instruction.
 Return STRICT JSON: {"shotType": string, "durationSec": int, "locationDesc": "INT/EXT — place — time" (${L}), "action": string (${L}), "dialogue": string${local ? ', "dialogueLocal": string' : ""}, "videoPrompt": string}.
-RULES: "dialogue" is ALWAYS in ENGLISH (it is what the model voices), one line per row NAME (tone cue): "line"; a talking scene has a substantive exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences (3–6 quick lines, characters answer each other instantly; the story is told through the dialogue), or exactly "[NO DIALOGUE]" for a rare purely visual beat.${local ? ` "dialogueLocal" = the same lines translated into ${L}, same structure and cues.` : ""} durationSec = round(words / 2.7) + 2 clamped to ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS} (≥ 2 words per second — no timing is set by anyone else). Talking scenes use medium/close shots with the speaker's face visible. ${PACE_DIRECTION} videoPrompt is ENGLISH, exactly 9 lines [SHOT TYPE] (cut list, 2–4 hard cuts with time ranges)/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL] (expressive acting)/[ACTION]/[CHARACTER]/[TRANSITION] (hard cut); keep [VISUAL STYLE] and [CHARACTER] descriptions identical to the given scene unless the instruction requires otherwise; no spoken text in videoPrompt; never "slowly", "slow motion", "lingering", "long pause". Keep continuity with the previous and next shots. Original content only; Western names, Latin letters, exactly as given.`;
+RULES: "dialogue" is ALWAYS in ENGLISH (it is what the model voices), one line per row NAME (tone cue): "line"; a talking scene has a substantive exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences (3–6 quick lines, characters answer each other instantly; the story is told through the dialogue), or exactly "[NO DIALOGUE]" for a rare purely visual beat.${local ? ` "dialogueLocal" = the same lines translated into ${L}, same structure and cues.` : ""} durationSec = round(words / 2.7) + 2 clamped to ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS} (≥ 2 words per second — no timing is set by anyone else). Talking scenes use medium shots / medium close-ups / over-the-shoulder with the speaker's face visible but not filling the screen (at most one short full-screen close-up per scene). ${PACE_DIRECTION} ${MODERATION_SAFE_RULE} ${CREATIVE_RULE} videoPrompt is ENGLISH, exactly 9 lines [SHOT TYPE] (cut list, 2–4 hard cuts with time ranges)/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL] (expressive acting)/[ACTION]/[CHARACTER]/[TRANSITION] (hard cut); keep [VISUAL STYLE] and [CHARACTER] descriptions identical to the given scene unless the instruction requires otherwise; no spoken text in videoPrompt; never "slowly", "slow motion", "lingering", "long pause". Keep continuity with the previous and next shots. Original content only; Western names, Latin letters, exactly as given.`;
 }
