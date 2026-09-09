@@ -11,6 +11,7 @@ import Link from 'next/link'
 import { Loader2, FlaskConical, ArrowRight, Check } from 'lucide-react'
 import { Progress } from '@/components/ui/progress'
 import { JOB_POLL_INTERVAL_MS } from './use-job-polling'
+import { CancelButton } from './cancel-button'
 import { sceneClipPlan } from '@/lib/season'
 import type { PowerTier } from '@/lib/power-tier'
 
@@ -66,6 +67,13 @@ export function TrailerCard({ project }: { project: { id: string; powerTier?: st
     finally { setStarting(false) }
   }
 
+  // Stage 11: cancel the trailer-script job. The worker stops at its next checkpoint and marks canceled.
+  const cancel = async () => {
+    if (!job?.id) return
+    const res = await fetch(`/api/ai/jobs/${job.id}/cancel`, { method: 'POST' })
+    if (res.ok) { setJob((j) => (j ? { ...j, status: 'canceled', message: 'Останавливаю генерацию…' } : j)); setTimeout(() => void load(), 1500) }
+  }
+
   const tier = ((project.powerTier as PowerTier) || 'MEDIUM') as PowerTier
   const plan = sceneClipPlan(tier, episode?.scenes.length ? episode.scenes : 3)
   const generated = episode?.scenes.filter((s) => s.videoUrl).length ?? 0
@@ -92,11 +100,13 @@ export function TrailerCard({ project }: { project: { id: string; powerTier?: st
               <div className="flex items-center gap-2">
                 <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" /><span className="min-w-0 flex-1">{job?.message ?? 'Запуск...'}</span>
                 <span className="tabular-nums font-medium" data-testid="trailer-progress-pct">{Math.max(shown, job?.progress ?? 0)}%</span>
+                {job?.id && !starting && <CancelButton onCancel={cancel} testId="trailer-cancel" className="shrink-0" />}
               </div>
               <Progress value={Math.max(shown, job?.progress ?? 0)} className="h-2" aria-label="Прогресс сценария трейлера" />
               <p className="text-xs text-muted-foreground">Прошло {elapsed} с · обычно сценарий готов за 20–40 с (одно обращение к нейросети)</p>
             </div>
           )}
+          {job?.status === 'canceled' && !active && <p className="mt-2 text-sm text-amber-500" data-testid="trailer-canceled">{job.message ?? 'Генерация отменена'}</p>}
           {job?.status === 'failed' && !active && <p className="mt-2 text-sm text-destructive">Ошибка: {job.error ?? 'генерация прервана'}</p>}
           {!active && (
             <button onClick={start} disabled={starting} className="mt-3 inline-flex items-center gap-2 rounded-lg border border-primary/50 px-3 py-1.5 text-sm text-primary disabled:opacity-50" data-testid="trailer-generate">

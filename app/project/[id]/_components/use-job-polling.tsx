@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Loader2, Check, AlertCircle } from 'lucide-react'
+import { Loader2, Check, AlertCircle, Ban } from 'lucide-react'
 
 export interface JobInfo {
   id: string
@@ -65,7 +65,7 @@ export function useJobPolling({
           if (data?.job) {
             setJob(data.job)
             cbRef.current.onUpdate?.(data)
-            if (data.job.status === 'completed' || data.job.status === 'failed') {
+            if (data.job.status === 'completed' || data.job.status === 'failed' || data.job.status === 'canceled') {
               stop()
               cbRef.current.onFinish?.(data)
               return
@@ -131,8 +131,9 @@ export function JobProgressBar({
 
   const done = job.status === 'completed'
   const failed = job.status === 'failed'
+  const canceled = job.status === 'canceled'
   const pct = done ? 100 : Math.max(0, Math.min(100, job.progress))
-  const eta = done || failed ? '' : estimateRemaining(job, expectedTotalSec)
+  const eta = done || failed || canceled ? '' : estimateRemaining(job, expectedTotalSec)
 
   return (
     <div className={`space-y-2 ${className}`}>
@@ -142,11 +143,13 @@ export function JobProgressBar({
             <Check className="h-3 w-3 flex-shrink-0 text-green-400" />
           ) : failed ? (
             <AlertCircle className="h-3 w-3 flex-shrink-0 text-destructive" />
+          ) : canceled ? (
+            <Ban className="h-3 w-3 flex-shrink-0 text-amber-400" />
           ) : (
             <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-primary" />
           )}
           <span className="truncate">
-            {failed ? job.error ?? 'Generation failed' : job.message ?? 'Working...'}
+            {failed ? job.error ?? 'Generation failed' : canceled ? job.message ?? 'Отменено' : job.message ?? 'Working...'}
             {eta && <span className="text-muted-foreground/70"> · {eta}</span>}
           </span>
         </span>
@@ -154,8 +157,8 @@ export function JobProgressBar({
       </div>
       <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
         <div
-          className={`h-full rounded-full transition-all duration-500 ease-out ${failed ? 'bg-destructive' : 'bg-primary'}`}
-          style={{ width: `${failed ? 100 : pct}%` }}
+          className={`h-full rounded-full transition-all duration-500 ease-out ${failed ? 'bg-destructive' : canceled ? 'bg-amber-500/60' : 'bg-primary'}`}
+          style={{ width: `${failed || canceled ? 100 : pct}%` }}
         />
       </div>
     </div>

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2, Wand2, ArrowRight, ImageOff, Users, RefreshCw, MapPin, Camera } from 'lucide-react'
 import { CharacterCard, type CharacterCardData } from './idea-stage'
 import type { JobInfo } from './use-job-polling'
+import { CancelButton } from './cancel-button'
 import { CHARACTER_REFERENCE_COST } from '@/lib/power-tier'
 import { TIER_LABELS, groupByTier, tierOf, type Tier, type LocationCardData, LocationCard, AddLocationForm } from './cast-and-locations'
 
@@ -265,6 +266,13 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
     await tick()
   }
 
+  // Stage 11: cancel a running reference/location job (character batch, location, extra angles).
+  // Sets cancelRequested server-side; the worker stops at its next checkpoint and keeps images already made.
+  const cancelJob = async (jobId: string) => {
+    try { await fetch(`/api/ai/jobs/${jobId}/cancel`, { method: 'POST' }) } catch {}
+    await tick()
+  }
+
   const continueToScript = async () => {
     setError(''); setContinuing(true)
     try {
@@ -294,10 +302,11 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
         </p>
         {error && <div className="mt-4 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
         {projectJob && (
-          <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground" data-testid="references-progress">
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground" data-testid="references-progress">
             <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-primary" />
-            <span className="truncate">{projectJob.message ?? 'Генерация референсов...'}</span>
-            <span className="ml-auto flex-shrink-0 tabular-nums">{Math.round(projectJob.progress)}%</span>
+            <span className="min-w-0 flex-1 truncate">{projectJob.message ?? 'Генерация референсов...'}</span>
+            <span className="flex-shrink-0 tabular-nums">{Math.round(projectJob.progress)}%</span>
+            <CancelButton onCancel={() => cancelJob(projectJob.id)} testId="references-cancel" />
           </div>
         )}
         {!anyActive && missing.length > 0 && (
@@ -421,20 +430,24 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                   }
                   footer={
                     <div className="mt-3 border-t border-border pt-3">
-                      <button
-                        type="button"
-                        onClick={() => generateLocation(loc.id)}
-                        disabled={!!gen}
-                        className="flex items-center gap-1 rounded-lg bg-muted px-3 py-1.5 text-xs transition hover:bg-muted/80 disabled:opacity-50"
-                        data-testid="location-generate"
-                      >
-                        {gen ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
-                        {gen ? 'Генерация…' : has ? `Перегенерировать (${CHARACTER_REFERENCE_COST} кр.)` : `Сгенерировать референс (${CHARACTER_REFERENCE_COST} кр.)`}
-                      </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => generateLocation(loc.id)}
+                          disabled={!!gen}
+                          className="flex items-center gap-1 rounded-lg bg-muted px-3 py-1.5 text-xs transition hover:bg-muted/80 disabled:opacity-50"
+                          data-testid="location-generate"
+                        >
+                          {gen ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
+                          {gen ? 'Генерация…' : has ? `Перегенерировать (${CHARACTER_REFERENCE_COST} кр.)` : `Сгенерировать референс (${CHARACTER_REFERENCE_COST} кр.)`}
+                        </button>
+                        {gen && gen !== 'local' && <CancelButton onCancel={() => cancelJob((gen as JobInfo).id)} testId="location-cancel" />}
+                      </div>
                       <p className="mt-2 text-[11px] text-muted-foreground">3 ракурса одного места (общий, обратный, средний), одно освещение — все уходят в Seedance как референсы.</p>
                       {has && (() => {
                         const extras = parseExtra(loc.imageExtra)
-                        const busyExtra = !!activeExtra[loc.id]
+                        const extraJob = activeExtra[loc.id]
+                        const busyExtra = !!extraJob
                         return (
                           <div className="mt-3 border-t border-border/60 pt-3" data-testid="location-extra">
                             {extras.length > 0 && (
@@ -445,16 +458,19 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                                 ))}
                               </div>
                             )}
-                            <button
-                              type="button"
-                              onClick={() => generateExtraLocation(loc.id)}
-                              disabled={busyExtra}
-                              className="flex items-center gap-1 rounded-lg bg-muted px-3 py-1.5 text-xs transition hover:bg-muted/80 disabled:opacity-50"
-                              data-testid="location-extra-generate"
-                            >
-                              {busyExtra ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
-                              {busyExtra ? 'Генерация…' : `Добавить ещё ракурсы/кадры (${EXTRA_ANGLES_PER_REQUEST} × ${CHARACTER_REFERENCE_COST} = ${EXTRA_ANGLES_PER_REQUEST * CHARACTER_REFERENCE_COST} кр.)`}
-                            </button>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => generateExtraLocation(loc.id)}
+                                disabled={busyExtra}
+                                className="flex items-center gap-1 rounded-lg bg-muted px-3 py-1.5 text-xs transition hover:bg-muted/80 disabled:opacity-50"
+                                data-testid="location-extra-generate"
+                              >
+                                {busyExtra ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
+                                {busyExtra ? 'Генерация…' : `Добавить ещё ракурсы/кадры (${EXTRA_ANGLES_PER_REQUEST} × ${CHARACTER_REFERENCE_COST} = ${EXTRA_ANGLES_PER_REQUEST * CHARACTER_REFERENCE_COST} кр.)`}
+                              </button>
+                              {extraJob && extraJob !== 'local' && <CancelButton onCancel={() => cancelJob((extraJob as JobInfo).id)} testId="location-extra-cancel" />}
+                            </div>
                             <p className="mt-1.5 text-[11px] text-muted-foreground">Больше ракурсов и деталей места — то же освещение, без людей. Помогает разнообразить кадры сцен.</p>
                           </div>
                         )

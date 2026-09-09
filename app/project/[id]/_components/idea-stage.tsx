@@ -1,8 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Loader2, Wand2, Check, Pencil, User, X, Lightbulb, MessageSquareText, UserPlus, ChevronRight } from 'lucide-react'
 import { LocationCard, AddLocationForm, TierBadge, TIER_LABELS, groupByTier, type LocationCardData } from './cast-and-locations'
+import { CancelButton } from './cancel-button'
 
 export interface CharacterCardData {
   id: string
@@ -393,6 +394,8 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   const [approving, setApproving] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+  const [ideaCanceled, setIdeaCanceled] = useState(false)
+  const ideaAbort = useRef<AbortController | null>(null)
   // Idea source: 'manual' = producer writes the idea; 'auto' = the AI invents it from a genre.
   const [mode, setMode] = useState<'manual' | 'auto'>('manual')
   const [genres, setGenres] = useState<string[]>([])
@@ -428,7 +431,9 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
     } else if (idea.trim().length < 10) {
       setError('Опишите идею хотя бы одним-двумя предложениями'); return
     }
-    setError(''); setNotice(''); setGenerating(true)
+    setError(''); setNotice(''); setIdeaCanceled(false); setGenerating(true)
+    const controller = new AbortController()
+    ideaAbort.current = controller
     try {
       const body = mode === 'auto'
         ? { projectId: project.id, auto: true, genres, extras: extras.trim() }
@@ -437,15 +442,23 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
+        signal: controller.signal,
       })
       const data = await res.json()
       if (!res.ok) { setError(data?.error ?? 'Не удалось сгенерировать'); return }
       setResult({ synopsis: data.synopsis ?? '', language: data.language ?? '', characters: data.characters ?? [], locations: data.locations ?? [] })
       if (data.castWarning) setNotice('Расширенный каст не удалось сгенерировать автоматически — нажмите «Добавить ещё персонажей».')
       await startSeason()
-    } catch { setError('Ошибка сети') }
-    finally { setGenerating(false) }
+    } catch (e: any) {
+      // Stage 11: the author canceled — the request is abandoned, nothing was saved or charged.
+      if (e?.name === 'AbortError') setIdeaCanceled(true)
+      else setError('Ошибка сети')
+    }
+    finally { setGenerating(false); ideaAbort.current = null }
   }
+
+  // Stage 11: stop waiting for the (free) idea generation and abandon the request.
+  const cancelIdea = async () => { ideaAbort.current?.abort() }
 
   const approve = async () => {
     setError(''); setApproving(true)
@@ -541,7 +554,13 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
           {hasResult ? 'Сгенерировать заново' : mode === 'auto' ? 'Придумать историю и написать сезон' : 'Написать сценарий сезона'}
         </button>
         {generating && !chaining && (
-          <p className="mt-2 text-xs text-muted-foreground" data-testid="idea-progress">Шаг 1 из 2 · обычно 40–90 секунд: синопсис, локации и полный каст (главные, семья и окружение, эпизодические, массовка)...</p>
+          <div className="mt-2 flex items-center justify-between gap-2" data-testid="idea-progress">
+            <p className="min-w-0 text-xs text-muted-foreground">Шаг 1 из 2 · обычно 40–90 секунд: синопсис, локации и полный каст (главные, семья и окружение, эпизодические, массовка)...</p>
+            <CancelButton onCancel={cancelIdea} testId="idea-cancel" className="flex-shrink-0" />
+          </div>
+        )}
+        {ideaCanceled && !generating && !chaining && (
+          <p className="mt-2 text-xs text-amber-500" data-testid="idea-canceled">Генерация идеи отменена. Нажмите кнопку выше, чтобы запустить заново.</p>
         )}
         {chaining && (
           <p className="mt-2 inline-flex items-center gap-2 text-xs text-muted-foreground" data-testid="idea-chaining"><Loader2 className="h-3 w-3 animate-spin text-primary" /> Шаг 2 из 2 · запускаю сценарий сезона…</p>

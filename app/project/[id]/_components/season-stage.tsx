@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Loader2, Wand2, ChevronDown, ChevronRight, MapPin, Pencil, ArrowRight, Film, Check, Camera, Images, RefreshCw } from 'lucide-react'
 import { JOB_POLL_INTERVAL_MS } from './use-job-polling'
+import { CancelButton } from './cancel-button'
 import { IdeaEditor } from './idea-stage'
 
 type EpChar = { character: { id: string; name: string; imageFront?: string | null } }
@@ -184,6 +185,18 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
     } catch (e: any) { setError(e?.message ?? 'Ошибка') }
     finally { setStarting(false) }
   }
+
+  // Stage 11: request cancellation of the running season-script job. The worker stops before the
+  // next episode (already-written episodes are kept); the author can resume with «Продолжить».
+  const cancelSeason = async () => {
+    if (!job?.id) return
+    const res = await fetch(`/api/ai/jobs/${job.id}/cancel`, { method: 'POST' })
+    if (res.ok) {
+      continuedFor.current = job.id // suppress auto-continue for this job
+      setJob((j) => (j ? { ...j, status: 'canceled', message: 'Останавливаю генерацию…' } : j))
+      setTimeout(load, 1500) // pull the worker's final canceled state + kept episodes
+    }
+  }
   // Auto-continue when the worker paused on the time budget: the client POSTs again until done
   // (one request per pause — the ref guards against duplicate starts while the POST is in flight).
   const continuedFor = useRef<string | null>(null)
@@ -313,14 +326,25 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
         )}
         {(jobActive || starting) && (
           <div className="mt-4 space-y-2" data-testid="season-progress">
-            <div className="flex items-center gap-2 text-sm">
-              <Loader2 className="h-4 w-4 animate-spin text-primary" />
-              <span>{writingNo ? `Пишу эпизод ${writingNo} из ${total}` : (job?.message ?? 'Запуск…')}</span>
-              {total > 0 && <span className="text-muted-foreground">· готово {done} из {total}</span>}
+            <div className="flex items-center justify-between gap-2 text-sm">
+              <span className="flex min-w-0 items-center gap-2">
+                <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-primary" />
+                <span className="truncate">{writingNo ? `Пишу эпизод ${writingNo} из ${total}` : (job?.message ?? 'Запуск…')}</span>
+                {total > 0 && <span className="flex-shrink-0 text-muted-foreground">· готово {done} из {total}</span>}
+              </span>
+              {job?.id && !starting && <CancelButton onCancel={cancelSeason} testId="season-cancel" className="flex-shrink-0" />}
             </div>
             <div className="h-2 w-full overflow-hidden rounded bg-muted">
               <div className="h-full rounded bg-primary transition-all duration-700" style={{ width: `${Math.max(2, job?.progress ?? 0)}%` }} />
             </div>
+          </div>
+        )}
+        {job?.status === 'canceled' && !jobActive && (
+          <div className="mt-4 space-y-2" data-testid="season-canceled">
+            <p className="text-sm text-amber-500">{job.message ?? 'Генерация отменена'}{total > 0 && <span className="text-muted-foreground"> · сохранено {done} из {total} эпизодов</span>}</p>
+            <button onClick={start} disabled={starting} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm" data-testid="season-continue">
+              <Wand2 className="h-4 w-4" /> Продолжить генерацию
+            </button>
           </div>
         )}
         {job?.status === 'failed' && (

@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Header } from '@/components/header'
-import { Loader2, Wand2, ArrowLeft, MapPin, Film, Download, Play, RefreshCw, Clapperboard, Images } from 'lucide-react'
+import { Loader2, Wand2, ArrowLeft, MapPin, Film, Download, Play, RefreshCw, Clapperboard, Images, Ban } from 'lucide-react'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { ScriptView } from '../../_components/season-stage'
 import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
+import { CancelButton } from '../../_components/cancel-button'
 
 const VIDEO_EXPECTED_SEC = 600
 const validUrl = (u?: string | null) => typeof u === 'string' && u.startsWith('http') && u.length > 10
@@ -34,6 +35,8 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
   // Stage 8: batch auto-continuation (client drives the continue endpoint until every scene is done).
   const [batch, setBatch] = useState<{ active: boolean; total: number; done: number; generating: number; failed: number; pending: number; remaining: number } | null>(null)
   const [retrying, setRetrying] = useState(false)
+  const [batchCanceled, setBatchCanceled] = useState(false)
+  const canceledRef = useRef(false) // suppress client auto-continue after a cancel
   const continueBusy = useRef(false)
   const continueRef = useRef<() => void>(() => {})
 
@@ -81,6 +84,9 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
 
   // Stage 8: one continue "kick". Idempotent server-side; safe to call every few seconds.
   const continueBatch = async (retryFailed = false) => {
+    // After a cancel, suppress the auto-continue loop; only an explicit manual retry may relaunch.
+    if (!retryFailed && canceledRef.current) return
+    if (retryFailed) { canceledRef.current = false; setBatchCanceled(false) }
     if (continueBusy.current) return
     continueBusy.current = true
     try {
@@ -148,7 +154,7 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
     try { await loadPlan(); setModal(true) } catch (e: any) { setError(e?.message ?? 'Ошибка') }
   }
   const generateAll = async () => {
-    setStartingAll(true); setError(null)
+    setStartingAll(true); setError(null); canceledRef.current = false; setBatchCanceled(false)
     try {
       const res = await postJobStart(`/api/ai/episodes/${episode.id}/generate-all`, {})
       const data = await res.json()
@@ -160,6 +166,20 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
       setBatch({ active: true, total: scenes.length, done: scenes.filter((s) => validUrl(s.videoUrl)).length, generating: (data.jobs ?? []).length, failed: 0, pending: 0, remaining: scenes.length })
       void continueBatch(false)
     } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setStartingAll(false) }
+  }
+
+  // Stage 11: stop the batch — mark active video jobs canceled server-side and halt client auto-continue.
+  const cancelBatch = async () => {
+    canceledRef.current = true // stop the auto-continue loop immediately (no new scenes)
+    try {
+      const res = await fetch(`/api/ai/episodes/${episode.id}/generate-all/cancel`, { method: 'POST' })
+      await res.json().catch(() => ({}))
+    } catch {}
+    setBatch((b) => (b ? { ...b, active: false } : b))
+    setBatchCanceled(true)
+    // Reflect canceled scenes locally: any scene still waiting (no video, not a live prediction) becomes pending.
+    setScenes((prev) => prev.map((s) => (activeGen[s.id] && !validUrl(s.videoUrl) ? { ...s, status: 'pending' } : s)))
+    void refreshCredits()
   }
 
   const reviseScene = async (scene: Scene) => {
@@ -247,11 +267,17 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
             {assembling ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />} Собрать эпизод
           </button>
           {batchActive ? (
-            <span className="inline-flex items-center gap-2 text-xs text-muted-foreground" data-testid="batch-status">
+            <span className="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground" data-testid="batch-status">
               <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
               Генерирую сцены: готово {batch?.done ?? 0} из {batch?.total ?? scenes.length}
               {(batch?.generating ?? 0) > 0 && ` · в работе ${batch!.generating}`}
               {(batch?.failed ?? 0) > 0 && <span className="text-destructive"> · не удалось {batch!.failed}</span>}
+              <CancelButton onCancel={cancelBatch} testId="batch-cancel" label="Отменить" pendingLabel="Останавливаю…" />
+            </span>
+          ) : batchCanceled ? (
+            <span className="inline-flex flex-wrap items-center gap-2 text-xs text-amber-500" data-testid="batch-status">
+              <Ban className="h-3.5 w-3.5" />
+              Генерация отменена · готово {scenes.filter((s) => validUrl(s.videoUrl)).length} из {scenes.length} сцен. Новые сцены не запускаются; уже готовые сохранены.
             </span>
           ) : (
             <span className="text-xs text-muted-foreground" data-testid="batch-status">{scenes.filter((s) => validUrl(s.videoUrl)).length} из {scenes.length} сцен готово{episode.status === 'assembled' || episode.videoUrl ? ' · эпизод собран' : ''}</span>
