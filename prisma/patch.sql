@@ -89,3 +89,8 @@ ALTER TABLE "GenerationJob" ADD COLUMN IF NOT EXISTS "cancelRequested" BOOLEAN N
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "presence" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "entrances" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "continuesFrom" TEXT;
+
+
+
+-- Stage 12: whole detailed season story with explicit episode markers (additive, nullable).
+ALTER TABLE "Season" ADD COLUMN IF NOT EXISTS "fullStory" TEXT;

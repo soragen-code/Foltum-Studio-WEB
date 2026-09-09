@@ -519,6 +519,66 @@ export function seasonReviseUserPrompt(input: { synopsis: string; structure: Sea
   return `SYNOPSIS:\n${input.synopsis}\n\nCHARACTERS (with tiers):\n${charactersBlock(input.characters)}\n\nLOCATIONS:\n${input.locations.length ? locationsBlock(input.locations) : "(none)"}\n\nCURRENT SEASON STRUCTURE (JSON):\n${JSON.stringify(input.structure, null, 1)}\n\nINSTRUCTION FROM THE AUTHOR:\n${input.instruction}`;
 }
 
+// ─── Stage 12: whole-season prose story ("Сюжет" screen) ─────────────────────────────
+// The full story is ONE long text the author reads/edits BEFORE any asset or video is made.
+// Episode boundaries are marked by fixed ASCII bars so the UI can find them in any language.
+export const FULL_STORY_START_MARK = "═══";
+export const FULL_STORY_END_MARK = "───";
+export const seasonFullStorySchema = z.object({ fullStory: z.string().min(1) });
+/** Story-screen revise returns BOTH the (possibly re-counted) structure and the rewritten prose. */
+export const seasonStoryReviseSchema = seasonStructureSchema.extend({ fullStory: z.string().min(1) });
+export type SeasonStoryRevise = z.infer<typeof seasonStoryReviseSchema>;
+
+/** How many episode blocks a full-story text contains (counts the start-marker lines). */
+export function countFullStoryEpisodes(text: string | null | undefined): number {
+  if (!text) return 0;
+  return text.split(/\r?\n/).filter((l) => l.trimStart().startsWith(FULL_STORY_START_MARK)).length;
+}
+
+function fullStoryFormatRules(language: IdeaLanguage, episodeCount: number): string {
+  const L = langName(language);
+  return `FORMAT (the app parses episode boundaries by the ═══ / ─── bars — keep them EXACTLY):
+- Open with a 2–4 sentence season overview paragraph (the world, the central conflict, the stakes) — no marker before it.
+- Then, for EACH of the ${episodeCount} episodes IN ORDER (1..${episodeCount}), write one block:
+  • a header ON ITS OWN LINE, exactly: «═══ <word for EPISODE in ${L}> {n}: {episode title} ═══» (keep the ═══ bars verbatim);
+  • 3–6 paragraphs of vivid, concrete PROSE telling everything that happens: the events in order, what each character does / wants / feels, the turns, and the closing cliffhanger — tell the story THROUGH decisive moments, not summaries;
+  • a closing line ON ITS OWN LINE, exactly: «─── <words for END OF EPISODE in ${L}> {n} ───» (keep the ─── bars verbatim).
+- After the last episode's closing line, output nothing else.
+CONTENT:
+- The FIRST time a LOCATION appears, describe it INSIDE the prose (2–3 sentences: architecture, materials, light, mood, the living background around it) — never as a card or bullet list. The FIRST time a CHARACTER appears, introduce them INSIDE the prose (who they are, how they look, their role and what they want).
+- Continuity: consequences carry across episodes; no repetition; the season reads as ONE escalating story.
+- This is the STORY, not a shooting script: no scene numbers, no shot lists, no camera directions.
+- All prose is in ${L}. Character names stay exactly as given (Western names in Latin letters). Original content only: never reuse names, plots or lines from existing films or series.`;
+}
+
+/** Initial generation of Season.fullStory from the already-fixed structure (${episodeCount} episodes). */
+export function seasonFullStorySystemPrompt(language: IdeaLanguage, episodeCount: number): string {
+  return `You are a novelist-showrunner writing the COMPLETE, detailed prose story of ONE season of a short-form vertical drama, as a single continuous read for the author to review and edit before any video is made.
+Return STRICT JSON: {"fullStory": string} — the value is ONE long text.
+Tell the WHOLE season across exactly ${episodeCount} episodes, faithful to the given structure (same episode order, titles, loglines, locations and cast), expanding each episode's logline and cliffhanger into full prose.
+${fullStoryFormatRules(language, episodeCount)}`;
+}
+export function seasonFullStoryUserPrompt(input: { synopsis: string; structure: SeasonStructure; characters: CharacterCard[]; locations: LocationRef[] }): string {
+  return `SYNOPSIS:\n${input.synopsis}\n\nCHARACTERS (with tiers):\n${charactersBlock(input.characters)}\n\nLOCATIONS:\n${input.locations.length ? locationsBlock(input.locations) : "(none)"}\n\nSEASON STRUCTURE (JSON — expand this into full prose, do not change the episode count):\n${JSON.stringify(input.structure, null, 1)}`;
+}
+
+/** Story-screen revise: rewrite the prose per the author's instruction AND keep the structure in sync (count may change). */
+export function seasonStoryReviseSystemPrompt(language: IdeaLanguage, episodeCount: number): string {
+  return `You are the showrunner of a short-form vertical drama. You receive the CURRENT season structure (${episodeCount} episodes), the CURRENT full-story prose, and an INSTRUCTION from the author. Apply the instruction and return the FULL updated season as STRICT JSON:
+{"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string}], "fullStory": string}.
+RULES:
+- MINIMAL CHANGE: keep the structure and prose the author did NOT ask to change VERBATIM. Only touch what the instruction (or the story consistency it forces) requires — the system regenerates scripts only for episodes whose logline / arc / location / cast changed, so needless edits waste the author's work.
+- EPISODE COUNT: keep ${episodeCount} episodes UNLESS the author explicitly asks to add or remove episodes; then return the new count (allowed range ${SEASON_MIN_EPISODES}–${SEASON_MAX_EPISODES}), renumber episodes 1..N contiguously, and make "episodes" and "fullStory" agree exactly (same number of episode blocks, same titles/order). Episode 1 = завязка, last = финал.
+- Use ONLY the given character names verbatim; "locationName" should be one of the given LOCATIONS (verbatim) unless the story truly needs a new place. Loglines are 2–3 sentences of concrete events; cliffhanger = the final beat.
+- ${CREATIVE_RULE}
+- ${MODERATION_SAFE_RULE}
+- In "episodes", all text except "locationDesc" is in ${langName(language)}; "locationDesc" is detailed English. Character names stay exactly as given (Western names in Latin letters).
+${fullStoryFormatRules(language, episodeCount)}`;
+}
+export function seasonStoryReviseUserPrompt(input: { synopsis: string; structure: SeasonStructure; fullStory: string; characters: CharacterCard[]; locations: LocationRef[]; instruction: string }): string {
+  return `SYNOPSIS:\n${input.synopsis}\n\nCHARACTERS (with tiers):\n${charactersBlock(input.characters)}\n\nLOCATIONS:\n${input.locations.length ? locationsBlock(input.locations) : "(none)"}\n\nCURRENT SEASON STRUCTURE (JSON):\n${JSON.stringify(input.structure, null, 1)}\n\nCURRENT FULL STORY:\n${input.fullStory || "(not written yet)"}\n\nINSTRUCTION FROM THE AUTHOR:\n${input.instruction}`;
+}
+
 const norm = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim().toLowerCase();
 /** Does the change to this episode's outline require rewriting its script? Titles alone do not. */
 export function episodeNeedsRewrite(before: EpisodeOutline, after: EpisodeOutline): boolean {

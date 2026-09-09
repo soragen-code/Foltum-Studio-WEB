@@ -10,7 +10,7 @@ import { StructureStage } from './structure-stage'
 import { ScenesStage } from './scenes-stage'
 import { IdeaStage } from './idea-stage'
 import { ReferencesStage } from './references-stage'
-import { SeasonStage } from './season-stage'
+import { StoryStage } from './story-stage'
 import { resolvePowerTier } from '@/lib/power-tier'
 import { FileText, Users, GitBranch, Video, Check, Lightbulb, Gauge, ArrowLeft } from 'lucide-react'
 import { motion } from 'framer-motion'
@@ -27,7 +27,7 @@ const legacyStages = [
 // are an optional tab (`?tab=references`), not a mandatory step.
 const newFlowStages = [
   { id: 'idea', label: 'Идея', icon: Lightbulb },
-  { id: 'structure', label: 'Сценарий', icon: GitBranch },
+  { id: 'structure', label: 'Сюжет', icon: GitBranch },
   { id: 'scenes', label: 'Сцены и видео', icon: Video },
 ]
 
@@ -143,7 +143,7 @@ export function ProjectWizard({ project: initialProject }: { project: any }) {
             <CharactersStage project={project} onRefresh={refreshProject} />
           )}
           {!referencesTab && currentStage === 'structure' && isNewFlow(project) && (
-            <SeasonStage project={project} onRefresh={refreshProject} />
+            <StoryStage project={project} onRefresh={refreshProject} />
           )}
           {!referencesTab && currentStage === 'structure' && !isNewFlow(project) && (
             <StructureStage project={project} onRefresh={refreshProject} />

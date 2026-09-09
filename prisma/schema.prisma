@@ -127,6 +127,7 @@ model Season {
   number      Int
   title       String?
   logline     String?  @db.Text // stage 2: season arc summary
+  fullStory   String?  @db.Text // stage 12: whole detailed season story with explicit episode markers (canon for the whole season)
   status      String   @default("draft") // draft, approved
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt

@@ -15,6 +15,9 @@ import { heartbeatJob, updateJob, completeJob, failJob, isCancelRequested, markC
 import { toCharacterCard, normalizeLanguage, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
 import {
   seasonStructureSchema,
+  seasonFullStorySchema,
+  seasonFullStorySystemPrompt,
+  seasonFullStoryUserPrompt,
   episodeScriptSchema,
   seasonStructureSystemPrompt,
   seasonStructureUserPrompt,
@@ -83,6 +86,28 @@ export async function generateEpisodeScript(input: {
     if (problems.length) console.warn(`[season] ep ${input.episode.number} soft issues:`, problems);
     // Seedance voices `dialogue` → it must be English; swap swapped fields / translate leftovers.
     return ensureEnglishDialogue(script, chatJSON);
+  });
+}
+
+/** Generate the whole-season prose story (the "Сюжет" screen) from the fixed structure. */
+export async function generateFullStory(input: {
+  jobId: string;
+  language: IdeaLanguage;
+  synopsis: string;
+  structure: SeasonStructure;
+  characters: CharacterCard[];
+  locations: { name: string; description?: string | null; visualPrompt?: string | null }[];
+}): Promise<string> {
+  return generateWithRetry(input.jobId, 2, async () => {
+    const raw = await chatJSON(
+      seasonFullStorySystemPrompt(input.language, input.structure.episodes.length),
+      seasonFullStoryUserPrompt({ synopsis: input.synopsis, structure: input.structure, characters: input.characters, locations: input.locations }),
+      { temperature: 0.65, maxTokens: 16000 }
+    );
+    const parsed = seasonFullStorySchema.parse(raw);
+    const text = parsed.fullStory.trim();
+    if (text.length < 200) throw new Error("full story too short");
+    return text;
   });
 }
 
@@ -193,6 +218,20 @@ export async function runSeasonScriptJob(jobId: string, projectId: string, episo
     const seasonStruct: SeasonStructure = { title: season.title ?? "", logline: season.logline ?? "", episodes: season.episodes.map(outlineFromEpisode) };
     const total = season.episodes.length;
     const chars = project.characters.map((c) => ({ id: c.id, name: c.name }));
+
+    // Step 1b — whole-season prose story ("Сюжет" screen). Generated once; resumable (only if missing).
+    if (!season.fullStory) {
+      if (await isCancelRequested(jobId)) { await markCanceled(jobId, "Генерация отменена"); return; }
+      await updateJob(jobId, { status: "processing", progress: 4, message: "Пишу сюжет сезона..." });
+      try {
+        const fullStory = await generateFullStory({ jobId, language, synopsis: project.synopsis, structure: seasonStruct, characters: cards, locations: project.locations });
+        await prisma.season.update({ where: { id: season.id }, data: { fullStory } });
+        season.fullStory = fullStory;
+      } catch (err) {
+        // Never block episode scripts on the prose story — the author can regenerate it from the story screen.
+        console.warn("[season] full story generation failed:", err);
+      }
+    }
 
     // Step 2 — episode scripts, one at a time, only for episodes still missing a script.
     for (const ep of season.episodes) {
