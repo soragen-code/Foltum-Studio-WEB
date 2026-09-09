@@ -1,5 +1,7 @@
 'use client'
 
+import { TrailerCard } from './trailer-card'
+
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2, Wand2, ArrowRight, ImageOff, Users, RefreshCw, MapPin, Camera } from 'lucide-react'
 import { CharacterCard, type CharacterCardData } from './idea-stage'
@@ -47,7 +49,11 @@ function hasAnyImage(c: RefCharacter) {
  * per-character spinner (activeGen map), prompt-based appearance edits that
  * regenerate that character's references, and "Продолжить к сценарию".
  */
-export function ReferencesStage({ project, onRefresh }: { project: any; onRefresh: () => void }) {
+/**
+ * `optional` (stage 5): the screen is opened as the «Референсы» tab from the season script — no
+ * mandatory «Продолжить к сценарию» button; the trailer card lives here too.
+ */
+export function ReferencesStage({ project, onRefresh, optional = false }: { project: any; onRefresh: () => void; optional?: boolean }) {
   const [characters, setCharacters] = useState<RefCharacter[]>(project?.characters ?? [])
   const [locations, setLocations] = useState<LocationCardData[]>(project?.locations ?? [])
   const [jobs, setJobs] = useState<JobInfo[]>([])
@@ -226,8 +232,13 @@ export function ReferencesStage({ project, onRefresh }: { project: any; onRefres
     <div className="space-y-6">
       <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
         <h2 className="flex items-center gap-2 font-display text-xl font-bold">
-          <Users className="h-5 w-5 text-primary" /> Шаг 2 — Персонажи (референсы)
+          <Users className="h-5 w-5 text-primary" /> {optional ? 'Референсы' : 'Шаг 2 — Персонажи (референсы)'}
         </h2>
+        {optional && (
+          <p className="mt-1 text-sm text-muted-foreground">
+            Референсы не обязательны для сценария — они нужны для генерации видео сцен: персонажи и локации будут выглядеть одинаково во всех кадрах.
+          </p>
+        )}
         <p className="mt-1 text-sm text-muted-foreground">
           Фотореалистичные референсы генерируются по описанию внешности каждого персонажа. Готово: {readyCount} из {characters.length}.
           Для главных героев референсы создаются автоматически; второстепенных, эпизодических и массовку можно сгенерировать
@@ -382,7 +393,8 @@ export function ReferencesStage({ project, onRefresh }: { project: any; onRefres
         )}
       </section>
 
-      <button
+      {optional && <TrailerCard project={project} />}
+      {!optional && <button
         onClick={continueToScript}
         disabled={continuing || readyCount === 0}
         className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary py-3 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
@@ -390,8 +402,8 @@ export function ReferencesStage({ project, onRefresh }: { project: any; onRefres
       >
         {continuing ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
         Продолжить к сценарию
-      </button>
-      {readyCount === 0 && (
+      </button>}
+      {!optional && readyCount === 0 && (
         <p className="-mt-3 text-center text-xs text-muted-foreground">
           Кнопка станет доступна, когда будет готов хотя бы один референс.
         </p>

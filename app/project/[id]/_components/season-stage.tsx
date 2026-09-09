@@ -2,9 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, Wand2, ChevronDown, ChevronRight, MapPin, Pencil, ArrowRight, Film, Check, Camera } from 'lucide-react'
+import { Loader2, Wand2, ChevronDown, ChevronRight, MapPin, Pencil, ArrowRight, Film, Check, Camera, Images, RefreshCw } from 'lucide-react'
 import { JOB_POLL_INTERVAL_MS } from './use-job-polling'
-import { TrailerCard } from './trailer-card'
+import { IdeaEditor } from './idea-stage'
 
 type EpChar = { character: { id: string; name: string; imageFront?: string | null } }
 export type SeasonEpisode = {
@@ -36,6 +36,13 @@ export function episodeStatusLabel(ep: SeasonEpisode): string {
   if (ready > 0) return `сцен готово ${ready}/${total}`
   if (ep.script) return 'сценарий готов'
   return 'ожидает сценарий'
+}
+
+/** Which episode the season worker is writing right now (first one without a script), or null. */
+export function writingEpisodeNumber(episodes: { number: number; script?: string | null }[], jobActive: boolean): number | null {
+  if (!jobActive) return null
+  const next = [...episodes].sort((a, b) => a.number - b.number).find((e) => !e.script)
+  return next ? next.number : null
 }
 
 export function CharacterAvatars({ chars, size = 'h-8 w-8' }: { chars: EpChar[]; size?: string }) {
@@ -88,12 +95,17 @@ export function ScriptView({ text, scenes }: { text?: string | null; scenes?: { 
   return <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed">{text ?? ''}</pre>
 }
 
-export function SeasonStage({ project }: { project: any; onRefresh?: () => void }) {
+export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: () => void }) {
   const [season, setSeason] = useState<SeasonData>(null)
   const [job, setJob] = useState<Job>(null)
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Season-level prompt editing (stage 5) and «apply idea edits to the season script».
+  const [seasonText, setSeasonText] = useState('')
+  const [seasonBusy, setSeasonBusy] = useState(false)
+  const [seasonNotice, setSeasonNotice] = useState('')
+  const [ideaChanged, setIdeaChanged] = useState<string[]>([])
   const [open, setOpen] = useState<Record<string, boolean>>({})
   const [reviseText, setReviseText] = useState<Record<string, string>>({})
   const [locText, setLocText] = useState<Record<string, string>>({})
@@ -172,8 +184,46 @@ export function SeasonStage({ project }: { project: any; onRefresh?: () => void 
     } catch (e: any) { setError(e?.message ?? 'Ошибка') }
     finally { setStarting(false) }
   }
-  // Auto-continue when the worker paused on the time budget.
-  useEffect(() => { if (paused && !starting) void start() }, [paused]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Auto-continue when the worker paused on the time budget: the client POSTs again until done
+  // (one request per pause — the ref guards against duplicate starts while the POST is in flight).
+  const continuedFor = useRef<string | null>(null)
+  useEffect(() => {
+    if (!paused || jobActive || starting || !job) return
+    if (continuedFor.current === job.id) return
+    continuedFor.current = job.id
+    void start()
+  }, [paused, jobActive, starting, job]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Once the whole season is written, let the wizard refresh the project (stage badges, cast).
+  const wasActive = useRef(false)
+  useEffect(() => {
+    if (jobActive) { wasActive.current = true; return }
+    if (wasActive.current) { wasActive.current = false; onRefresh?.() }
+  }, [jobActive]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Season-level revise: LLM rewrites the season structure by instruction, the worker regenerates affected episodes. */
+  const reviseSeason = async (opts: { instruction?: string; sync?: boolean; force?: boolean }) => {
+    setSeasonBusy(true); setError(null); setSeasonNotice('')
+    try {
+      const res = await fetch('/api/ai/season/revise', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: project.id, instruction: opts.instruction, sync: !!opts.sync, force: !!opts.force }),
+      })
+      const data = await res.json()
+      if (res.status === 409 && data?.needsForce) {
+        if (confirm(`${data.error}\n\nПродолжить и переписать эти эпизоды?`)) return reviseSeason({ ...opts, force: true })
+        return
+      }
+      if (!res.ok) throw new Error(data?.error ?? 'Не удалось изменить сезон')
+      setSeasonText(''); setIdeaChanged([])
+      const affected: number[] = Array.isArray(data?.affected) ? data.affected : []
+      setSeasonNotice(affected.length
+        ? `Структура сезона обновлена. Переписываю эпизоды: ${affected.join(', ')} — остальные не тронуты.`
+        : 'Структура сезона обновлена (названия/описания). Сценарии эпизодов не изменились.')
+      if (data?.jobId) setJob({ id: data.jobId, status: 'processing', progress: 1, message: 'Запуск…' })
+      await load()
+    } catch (e: any) { setError(e?.message ?? 'Ошибка') }
+    finally { setSeasonBusy(false) }
+  }
 
   const revise = async (ep: SeasonEpisode, force = false) => {
     const instruction = reviseText[ep.id]?.trim()
@@ -186,6 +236,7 @@ export function SeasonStage({ project }: { project: any; onRefresh?: () => void 
         if (confirm(`${data.error}\n\nПродолжить и переписать эпизод?`)) return revise(ep, true)
         return
       }
+      if (res.status === 409 && data?.writing) throw new Error(data.error)
       if (!res.ok) throw new Error(data?.error ?? 'Не удалось переписать эпизод')
       setReviseText((t) => ({ ...t, [ep.id]: '' }))
       await load()
@@ -209,13 +260,44 @@ export function SeasonStage({ project }: { project: any; onRefresh?: () => void 
 
   if (loading) return <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
 
+  const writingNo = writingEpisodeNumber(season?.episodes ?? [], jobActive)
+  const seasonLocked = jobActive || starting || seasonBusy
+
   return (
     <div className="space-y-6" data-testid="season-stage">
-      <TrailerCard project={project} />
+      {project?.synopsis && (
+        <div className="rounded-xl border border-border bg-card p-4 sm:p-6" data-testid="season-idea-block">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-display text-xl font-bold">Идея сезона</h2>
+            <Link href={`/project/${project.id}?tab=references`} className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted" data-testid="open-references">
+              <Images className="h-4 w-4" /> Референсы и трейлер
+            </Link>
+          </div>
+          <p className="mt-1 mb-3 text-sm text-muted-foreground">Синопсис, локации и персонажи — редактируются промптами. Раскройте блок, чтобы изменить.</p>
+          <IdeaEditor
+            project={project}
+            synopsis={project.synopsis}
+            language={project.language}
+            characters={project.characters ?? []}
+            locations={project.locations ?? []}
+            collapsible
+            disabled={seasonLocked}
+            onChanged={(what) => setIdeaChanged((c) => (c.includes(what) ? c : [...c, what]))}
+          />
+          {ideaChanged.length > 0 && season && !seasonLocked && (
+            <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm" data-testid="season-sync-hint">
+              <span>Идея изменилась — сценарий сезона пока не синхронизирован.</span>
+              <button onClick={() => reviseSeason({ sync: true })} className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground" data-testid="season-sync">
+                <RefreshCw className="h-4 w-4" /> Применить изменения к сценарию сезона
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       <div className="rounded-xl border border-border bg-card p-4 sm:p-6">
         <h2 className="font-display text-xl font-bold">Сценарий сезона</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Полный сценарий первого сезона: 6–10 эпизодов, в каждом 10–15 сцен с полноценными диалогами (5–7 реплик-предложений) и раскадровкой для ИИ-экранизации. Каждый эпизод привязан к локации из списка референсов.
+          Полный сценарий первого сезона: 6–10 эпизодов, в каждом 10–15 сцен с полноценными диалогами и раскадровкой для ИИ-экранизации. Эпизоды появляются по мере написания — готовые можно раскрыть и править промптом, не дожидаясь остальных.
         </p>
         {season?.title && (
           <div className="mt-3">
@@ -233,7 +315,7 @@ export function SeasonStage({ project }: { project: any; onRefresh?: () => void 
           <div className="mt-4 space-y-2" data-testid="season-progress">
             <div className="flex items-center gap-2 text-sm">
               <Loader2 className="h-4 w-4 animate-spin text-primary" />
-              <span>{job?.message ?? 'Запуск…'}</span>
+              <span>{writingNo ? `Пишу эпизод ${writingNo} из ${total}` : (job?.message ?? 'Запуск…')}</span>
               {total > 0 && <span className="text-muted-foreground">· готово {done} из {total}</span>}
             </div>
             <div className="h-2 w-full overflow-hidden rounded bg-muted">
@@ -255,6 +337,23 @@ export function SeasonStage({ project }: { project: any; onRefresh?: () => void 
           </button>
         )}
         {allDone && !jobActive && <p className="mt-3 inline-flex items-center gap-1 text-sm text-primary"><Check className="h-4 w-4" /> Все {total} эпизодов написаны</p>}
+        {season && allDone && !jobActive && (
+          <div className="mt-4 space-y-2" data-testid="season-revise">
+            <label className="text-xs font-semibold text-muted-foreground">Что изменить в сезоне</label>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <textarea value={seasonText} onChange={(e) => setSeasonText(e.target.value)} rows={2} disabled={seasonBusy}
+                placeholder="Например: сделай финал 8-го эпизода открытым и добавь второстепенного персонажа-детектива…"
+                className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm" data-testid="season-revise-input" />
+              <button onClick={() => reviseSeason({ instruction: seasonText.trim() })} disabled={seasonBusy || !seasonText.trim()}
+                className="inline-flex items-center justify-center gap-1 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50" data-testid="season-revise-submit">
+                {seasonBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Изменить сезон
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground">ИИ перестроит структуру сезона (арки, локации, персонажи по эпизодам) и перепишет только затронутые эпизоды. Если в них уже есть видео — спросит подтверждение.</p>
+            {seasonBusy && <p className="text-xs text-muted-foreground">Перестраиваю структуру сезона (около минуты)…</p>}
+          </div>
+        )}
+        {seasonNotice && <p className="mt-3 text-sm text-primary" data-testid="season-notice">{seasonNotice}</p>}
         {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
       </div>
 
@@ -272,7 +371,10 @@ export function SeasonStage({ project }: { project: any; onRefresh?: () => void 
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-xs font-semibold uppercase text-muted-foreground">Эпизод {ep.number}</span>
                     {ep.arcRole && <span className="rounded bg-muted px-1.5 py-0.5 text-[11px]">{ep.arcRole}</span>}
-                    <span className="rounded bg-muted px-1.5 py-0.5 text-[11px]" data-testid="episode-status">{episodeStatusLabel(ep)}</span>
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-[11px]" data-testid="episode-status">
+                      {!ep.script && jobActive ? (writingNo === ep.number ? 'пишется…' : 'в очереди') : episodeStatusLabel(ep)}
+                    </span>
+                    {!ep.script && jobActive && writingNo === ep.number && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
                   </div>
                   <h3 className="mt-1 font-semibold">{ep.title}</h3>
                   {ep.logline && <p className="mt-1 text-sm text-muted-foreground">{ep.logline}</p>}
@@ -316,7 +418,7 @@ export function SeasonStage({ project }: { project: any; onRefresh?: () => void 
               {isOpen && (
                 <div className="border-t border-border p-4">
                   {ep.locationDesc && <p className="mb-3 text-xs text-muted-foreground"><span className="font-semibold">Локация:</span> {ep.locationDesc}</p>}
-                  {ep.script ? <ScriptView text={ep.script} /> : <p className="text-sm text-muted-foreground">Сценарий эпизода ещё пишется…</p>}
+                  {ep.script ? <ScriptView text={ep.script} /> : <p className="text-sm text-muted-foreground">{jobActive ? 'Сценарий эпизода ещё пишется — править его можно будет, когда он появится.' : 'Сценарий эпизода ещё не написан.'}</p>}
                   {ep.script && (
                     <div className="mt-4 space-y-2">
                       <label className="text-xs font-semibold text-muted-foreground">Что изменить в эпизоде</label>

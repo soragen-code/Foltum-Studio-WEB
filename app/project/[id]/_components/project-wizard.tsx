@@ -1,6 +1,8 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { Header } from '@/components/header'
 import { SynopsisStage } from './synopsis-stage'
 import { CharactersStage } from './characters-stage'
@@ -10,7 +12,7 @@ import { IdeaStage } from './idea-stage'
 import { ReferencesStage } from './references-stage'
 import { SeasonStage } from './season-stage'
 import { resolvePowerTier } from '@/lib/power-tier'
-import { FileText, Users, GitBranch, Video, Check, Lightbulb, Gauge } from 'lucide-react'
+import { FileText, Users, GitBranch, Video, Check, Lightbulb, Gauge, ArrowLeft } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 // Legacy flow (projects created before the new flow) keeps its stage ids.
@@ -21,10 +23,10 @@ const legacyStages = [
   { id: 'scenes', label: 'Scenes & Video', icon: Video },
 ]
 
-// New flow (stage 1): idea → references → script/scenes (stage 2 replaces the last two).
+// New flow (stage 5): idea → season script → scenes. References (characters/locations/trailer)
+// are an optional tab (`?tab=references`), not a mandatory step.
 const newFlowStages = [
   { id: 'idea', label: 'Идея', icon: Lightbulb },
-  { id: 'references', label: 'Персонажи', icon: Users },
   { id: 'structure', label: 'Сценарий', icon: GitBranch },
   { id: 'scenes', label: 'Сцены и видео', icon: Video },
 ]
@@ -40,8 +42,12 @@ export function ProjectWizard({ project: initialProject }: { project: any }) {
   const [project, setProject] = useState(initialProject)
   const stages = isNewFlow(project) ? newFlowStages : legacyStages
   const currentStage = project?.stage ?? 'synopsis'
-  const stageIdx = stages.findIndex((s) => s.id === currentStage)
+  // Projects that were left on the old mandatory "references" step sit between Идея and Сценарий.
+  const stageIdx = currentStage === 'references' ? 1 : stages.findIndex((s) => s.id === currentStage)
   const power = resolvePowerTier(project ?? {})
+  // Optional «Референсы» tab (stage 5), opened via ?tab=references from the season/episode screens.
+  const searchParams = useSearchParams()
+  const referencesTab = searchParams?.get('tab') === 'references' && isNewFlow(project) && currentStage !== 'idea'
 
   const refreshProject = async () => {
     try {
@@ -111,30 +117,38 @@ export function ProjectWizard({ project: initialProject }: { project: any }) {
         </div>
 
         <motion.div
-          key={currentStage}
+          key={referencesTab ? 'references-tab' : currentStage}
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.3 }}
         >
-          {currentStage === 'idea' && (
+          {referencesTab && (
+            <div className="space-y-4" data-testid="references-tab">
+              <Link href={`/project/${project.id}`} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground" data-testid="back-to-season">
+                <ArrowLeft className="h-4 w-4" /> К сценарию сезона
+              </Link>
+              <ReferencesStage project={project} onRefresh={refreshProject} optional />
+            </div>
+          )}
+          {!referencesTab && currentStage === 'idea' && (
             <IdeaStage project={project} onRefresh={refreshProject} />
           )}
-          {currentStage === 'references' && (
+          {!referencesTab && currentStage === 'references' && (
             <ReferencesStage project={project} onRefresh={refreshProject} />
           )}
-          {currentStage === 'synopsis' && (
+          {!referencesTab && currentStage === 'synopsis' && (
             <SynopsisStage project={project} onRefresh={refreshProject} />
           )}
-          {currentStage === 'characters' && (
+          {!referencesTab && currentStage === 'characters' && (
             <CharactersStage project={project} onRefresh={refreshProject} />
           )}
-          {currentStage === 'structure' && isNewFlow(project) && (
+          {!referencesTab && currentStage === 'structure' && isNewFlow(project) && (
             <SeasonStage project={project} onRefresh={refreshProject} />
           )}
-          {currentStage === 'structure' && !isNewFlow(project) && (
+          {!referencesTab && currentStage === 'structure' && !isNewFlow(project) && (
             <StructureStage project={project} onRefresh={refreshProject} />
           )}
-          {currentStage === 'scenes' && (
+          {!referencesTab && currentStage === 'scenes' && (
             <ScenesStage project={project} onRefresh={refreshProject} />
           )}
         </motion.div>

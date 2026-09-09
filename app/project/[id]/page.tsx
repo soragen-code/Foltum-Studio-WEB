@@ -1,6 +1,7 @@
 import { auth } from '@/auth'
 import { redirect } from 'next/navigation'
 import { prisma } from '@/lib/db'
+import { Suspense } from 'react'
 import { ProjectWizard } from './_components/project-wizard'
 
 export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
@@ -35,5 +36,6 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
 
   if (!project) redirect('/dashboard')
 
-  return <ProjectWizard project={JSON.parse(JSON.stringify(project))} />
+  // Suspense: the wizard reads `?tab=references` via useSearchParams.
+  return <Suspense><ProjectWizard project={JSON.parse(JSON.stringify(project))} /></Suspense>
 }

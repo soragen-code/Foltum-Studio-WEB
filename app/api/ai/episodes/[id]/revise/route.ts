@@ -6,7 +6,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { toCharacterCard, normalizeLanguage } from "@/lib/idea";
-import { generateEpisodeScript, persistEpisodeScript, outlineFromEpisode } from "@/lib/workers/season-script-job";
+import { generateEpisodeScript, persistEpisodeScript, outlineFromEpisode, SEASON_JOB_TYPE } from "@/lib/workers/season-script-job";
 import type { SeasonStructure } from "@/lib/season";
 
 /**
@@ -31,6 +31,12 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     include: { characters: { include: { character: true } }, scenes: { select: { videoUrl: true } }, season: { include: { project: { include: { characters: true } }, episodes: { orderBy: { number: "asc" }, include: { characters: { include: { character: true } } } } } } },
   });
   if (!episode) return NextResponse.json({ error: "Episode not found" }, { status: 404 });
+  // Stage 5: the season job (generation or season-level revise) writes episodes whose `script` is null —
+  // such an episode cannot be revised until the job has finished it.
+  if (!episode.script) {
+    const running = await prisma.generationJob.findFirst({ where: { projectId: episode.season.projectId, type: SEASON_JOB_TYPE, status: { in: ["pending", "processing"] } }, select: { id: true } });
+    if (running) return NextResponse.json({ error: "Этот эпизод сейчас пишется — дождитесь, когда его сценарий будет готов.", writing: true }, { status: 409 });
+  }
   const withVideo = episode.scenes.filter((s) => s.videoUrl).length;
   if (withVideo > 0 && !body?.force) {
     return NextResponse.json({ error: `У ${withVideo} сцен уже есть готовое видео. Переписывание сценария пересоберёт сцены и удалит эти ролики из эпизода.`, needsForce: true, withVideo }, { status: 409 });

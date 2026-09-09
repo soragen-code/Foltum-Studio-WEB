@@ -15,9 +15,13 @@ import { runCharacterImagesJob } from "@/lib/workers/character-images-job";
  * character-images job (Seedream) for every character that has no reference yet.
  * Idempotent: if a job is already running it is returned instead of a new one.
  */
-export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const session = await auth();
+    // { next: "structure" } — stage 5 auto-chain: the idea screen goes straight to the season script;
+    // references become an optional tab, so no reference job is started here.
+    const body = await request.json().catch(() => ({}));
+    const straightToScript = body?.next === "structure";
     if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const { id } = await params;
 
@@ -35,10 +39,11 @@ export async function POST(_request: Request, { params }: { params: Promise<{ id
     await prisma.$transaction([
       prisma.project.update({
         where: { id },
-        data: { synopsisApproved: true, charactersApproved: true, stage: "references" },
+        data: { synopsisApproved: true, charactersApproved: true, stage: straightToScript ? "structure" : "references" },
       }),
       prisma.character.updateMany({ where: { projectId: id, status: "draft" }, data: { status: "approved" } }),
     ]);
+    if (straightToScript) return NextResponse.json({ success: true, jobId: null, stage: "structure" });
 
     await failStaleJobs({ projectId: id, type: "characters" });
     const active = await prisma.generationJob.findFirst({
