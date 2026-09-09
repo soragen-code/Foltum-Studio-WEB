@@ -82,9 +82,16 @@ export const ideaSchema = z
     auto: z.boolean().optional().default(false),
     genres: z.array(z.string().trim().min(1).max(60)).max(10).optional().default([]),
     extras: z.string().trim().max(2_000).optional().default(""),
+    // Stage 12 — story mode: a finished story uploaded as a file and parsed to text on the server.
+    fromStory: z.boolean().optional().default(false),
+    story: z.string().trim().max(60_000).optional(),
   })
   .superRefine((val, ctx) => {
-    if (val.auto) {
+    if (val.fromStory) {
+      if (!val.story || val.story.trim().length < 20) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["story"], message: "Uploaded story is too short" });
+      }
+    } else if (val.auto) {
       if (!val.genres || val.genres.length === 0) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["genres"], message: "Pick at least one genre" });
       }

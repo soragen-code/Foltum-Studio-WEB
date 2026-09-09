@@ -369,6 +369,42 @@ export function ideaAutoUserPrompt(genres: string[], extras?: string): string {
   return `GENRE(S) / DIRECTION: ${genreLine}\n\nADDITIONAL WISHES FROM THE PRODUCER: ${extra ? extra : "(none — you have full creative freedom within the genre)"}\n\nInvent the original season now.`;
 }
 
+/**
+ * Stage 12 — the producer uploaded a FINISHED story (parsed from .txt/.md/.docx/.pdf).
+ * Treat that text as CANON: structure it into a season synopsis, main cast and locations,
+ * rewriting its essence as LITTLE as possible and only filling genuine gaps.
+ * Language is auto-detected from the uploaded story (passed in as `language`).
+ */
+export function ideaFromStorySystemPrompt(language: IdeaLanguage): string {
+  const lang = LANGUAGE_NAMES[language] ?? "Russian";
+  return `You are an award-winning head writer for a short-form vertical drama series. The producer has UPLOADED a finished story. Your job is NOT to invent a new plot — treat the uploaded story as CANON. Preserve its premise, characters, events, tone and ending. Structure it into a season synopsis, the main characters and the locations, rewriting the essence as LITTLE as possible and only filling genuine gaps (unnamed places, thin descriptions) so it can be produced. Return ONLY valid JSON:
+{
+  "language": "${language}",
+  "synopsis": "<plain text, 3-6 short paragraphs separated by blank lines>",
+  "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
+  "locations": [ { "name": "...", "description": "...", "visualPrompt": "..." } ]
+}
+Both arrays are REQUIRED ("locations" must contain 8-14 items).
+
+CANON FIDELITY: do NOT change the story's plot, characters or ending. Keep the same names, relationships and events. If the uploaded story lacks a detail needed for production (a location's look, a character's age), invent it in the SAME spirit — never contradict the source. Do not add new major plot lines.
+
+LANGUAGE: write synopsis, name, age, role, personality, firstAppearance in ${lang} (the same language as the uploaded story). Only "appearance" is in English. (The video model always voices the dialogue in English later — this is only the planning text.)
+
+SYNOPSIS: readable and compact (250-450 words), faithful to the uploaded story. No headings, no markdown, no bullet lists, no labels. Convey the whole season arc: setup, development, key turning points and the finale, exactly as in the source.
+
+CHARACTERS: ${CAST_TARGETS.MAIN} MAIN characters (tier "MAIN") drawn from the uploaded story, each visually distinct. Supporting/minor cast and crowds are produced separately — do NOT include them here.
+${CHARACTER_FIELD_RULES}
+
+LOCATIONS: 8-14 distinct locations that appear in (or are strongly implied by) the uploaded story. Diverse in type, scale and time of day; each visually distinct.
+${LOCATION_FIELD_RULES}
+
+${ORIGINALITY_RULES}`;
+}
+
+export function ideaFromStoryUserPrompt(story: string): string {
+  return `UPLOADED STORY (CANON — structure this, do not replace it):\n\n${story}\n\nStructure this uploaded story into the season synopsis, main cast and locations now, staying faithful to it.`;
+}
+
 export function reviseSynopsisSystemPrompt(language: IdeaLanguage): string {
   const lang = LANGUAGE_NAMES[language] ?? "the same language as the current synopsis";
   return `You are a head writer revising a season synopsis of a short-form vertical drama series according to the producer's instruction.

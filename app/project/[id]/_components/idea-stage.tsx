@@ -1,7 +1,7 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { Loader2, Wand2, Check, Pencil, User, X, Lightbulb, MessageSquareText, UserPlus, ChevronRight } from 'lucide-react'
+import { Loader2, Wand2, Check, Pencil, User, X, Lightbulb, MessageSquareText, UserPlus, ChevronRight, Upload, FileText } from 'lucide-react'
 import { LocationCard, AddLocationForm, TierBadge, TIER_LABELS, groupByTier, type LocationCardData } from './cast-and-locations'
 import { CancelButton } from './cancel-button'
 
@@ -396,16 +396,40 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   const [error, setError] = useState('')
   const [ideaCanceled, setIdeaCanceled] = useState(false)
   const ideaAbort = useRef<AbortController | null>(null)
-  // Idea source: 'manual' = producer writes the idea; 'auto' = the AI invents it from a genre.
-  const [mode, setMode] = useState<'manual' | 'auto'>('manual')
+  // Idea source: 'manual' = producer writes the idea; 'auto' = the AI invents it from a genre;
+  // 'upload' = the producer uploads a finished story file (Stage 12).
+  const [mode, setMode] = useState<'manual' | 'auto' | 'upload'>('manual')
   const [genres, setGenres] = useState<string[]>([])
   const [extras, setExtras] = useState('')
+  // Stage 12 — uploaded story file state.
+  const [storyText, setStoryText] = useState('')
+  const [storyMeta, setStoryMeta] = useState<{ filename: string; kind: string; languageName: string; chars: number } | null>(null)
+  const [parsing, setParsing] = useState(false)
+  const fileInput = useRef<HTMLInputElement | null>(null)
 
   const hasResult = !!result
-  const busy = generating || approving || chaining
+  const busy = generating || approving || chaining || parsing
   const toggleGenre = (id: string) =>
     setGenres((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]))
-  const canGenerate = mode === 'auto' ? genres.length > 0 : idea.trim().length >= 10
+  const canGenerate = mode === 'auto' ? genres.length > 0 : mode === 'upload' ? storyText.trim().length >= 20 : idea.trim().length >= 10
+
+  // Stage 12 — parse the chosen story file into text on the server (no LLM here).
+  const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setError(''); setNotice(''); setStoryText(''); setStoryMeta(null); setParsing(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch('/api/ai/idea/parse-file', { method: 'POST', body: fd })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) { setError(data?.error ?? 'Не удалось разобрать файл'); return }
+      setStoryText(data.text ?? '')
+      setStoryMeta({ filename: data.filename, kind: data.kind, languageName: data.languageName ?? data.language, chars: data.chars ?? (data.text?.length ?? 0) })
+    } catch { setError('Ошибка сети при загрузке файла') }
+    finally { setParsing(false) }
+  }
 
   /** Auto-chain: approve (stage → structure) and start the season-script job, then show the season screen. */
   const startSeason = async () => {
@@ -428,6 +452,8 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   const generate = async () => {
     if (mode === 'auto') {
       if (genres.length === 0) { setError('Выберите хотя бы один жанр'); return }
+    } else if (mode === 'upload') {
+      if (storyText.trim().length < 20) { setError('Загрузите файл с сюжетом (.txt, .md, .docx или .pdf)'); return }
     } else if (idea.trim().length < 10) {
       setError('Опишите идею хотя бы одним-двумя предложениями'); return
     }
@@ -437,6 +463,8 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
     try {
       const body = mode === 'auto'
         ? { projectId: project.id, auto: true, genres, extras: extras.trim() }
+        : mode === 'upload'
+        ? { projectId: project.id, fromStory: true, story: storyText }
         : { projectId: project.id, idea: idea.trim() }
       const res = await fetch('/api/ai/idea', {
         method: 'POST',
@@ -476,7 +504,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
         </p>
 
         {/* Mode toggle: своя идея / авто */}
-        <div className="mt-4 inline-flex rounded-lg border border-border bg-muted/40 p-1" role="tablist" data-testid="idea-mode-toggle">
+        <div className="mt-4 flex flex-wrap gap-1 rounded-lg border border-border bg-muted/40 p-1" role="tablist" data-testid="idea-mode-toggle">
           <button
             type="button"
             onClick={() => setMode('manual')}
@@ -493,7 +521,16 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
             className={`rounded-md px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${mode === 'auto' ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}
             data-testid="idea-mode-auto"
           >
-            Авто (ИИ придумывает историю)
+            Авто по жанру
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('upload')}
+            disabled={busy}
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${mode === 'upload' ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}
+            data-testid="idea-mode-upload"
+          >
+            Загрузить свой сюжет файлом
           </button>
         </div>
 
@@ -510,6 +547,41 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
             className="mt-4 w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
             data-testid="idea-input"
           />
+        ) : mode === 'upload' ? (
+          <div className="mt-4 space-y-3" data-testid="idea-upload-panel">
+            <p className="text-xs text-muted-foreground">
+              Загрузите готовый сюжет файлом — <span className="font-medium text-foreground">.txt, .md, .docx или .pdf</span>. ИИ возьмёт его за канон: структурирует в сезон с эпизодами, локациями и персонажами, минимально переписывая суть. Язык истории определится автоматически по содержимому файла. Озвучка всё равно будет английской.
+            </p>
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".txt,.md,.markdown,.docx,.pdf"
+              onChange={onPickFile}
+              disabled={busy}
+              className="hidden"
+              data-testid="idea-file-input"
+            />
+            <button
+              type="button"
+              onClick={() => fileInput.current?.click()}
+              disabled={busy}
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-background px-4 py-6 text-sm font-medium text-muted-foreground transition hover:border-primary/60 hover:text-foreground disabled:opacity-50"
+              data-testid="idea-file-pick"
+            >
+              {parsing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Upload className="h-5 w-5" />}
+              {parsing ? 'Разбираю файл...' : storyMeta ? 'Выбрать другой файл' : 'Выбрать файл с сюжетом'}
+            </button>
+            {storyMeta && (
+              <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs" data-testid="idea-file-info">
+                <div className="flex items-center gap-2 font-medium text-foreground">
+                  <FileText className="h-4 w-4 flex-shrink-0 text-primary" />
+                  <span className="break-all">{storyMeta.filename}</span>
+                </div>
+                <p className="mt-1 text-muted-foreground">Формат: {storyMeta.kind.toUpperCase()} · символов: {storyMeta.chars.toLocaleString('ru')} · язык: {storyMeta.languageName}</p>
+                <p className="mt-2 line-clamp-4 whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{storyText.slice(0, 400)}{storyText.length > 400 ? '…' : ''}</p>
+              </div>
+            )}
+          </div>
         ) : (
           <div className="mt-4 space-y-3" data-testid="idea-auto-panel">
             <div>
@@ -551,7 +623,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
           data-testid="idea-generate"
         >
           {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-          {hasResult ? 'Сгенерировать заново' : mode === 'auto' ? 'Придумать историю и написать сезон' : 'Написать сценарий сезона'}
+          {hasResult ? 'Сгенерировать заново' : mode === 'auto' ? 'Придумать историю и написать сезон' : mode === 'upload' ? 'Структурировать сюжет и написать сезон' : 'Написать сценарий сезона'}
         </button>
         {generating && !chaining && (
           <div className="mt-2 flex items-center justify-between gap-2" data-testid="idea-progress">
