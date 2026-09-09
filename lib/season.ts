@@ -533,6 +533,73 @@ Return STRICT JSON: {"shotType": string, "durationSec": int, "locationDesc": "IN
 RULES: "dialogue" is ALWAYS in ENGLISH (it is what the model voices), one line per row NAME (tone cue): "line"; a talking scene has a substantive exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences (3–6 quick lines, characters answer each other instantly; the story is told through the dialogue), or exactly "[NO DIALOGUE]" for a rare purely visual beat.${local ? ` "dialogueLocal" = the same lines translated into ${L}, same structure and cues.` : ""} durationSec = round(words / 2.7) + 2 clamped to ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS} (≥ 2 words per second — no timing is set by anyone else). Talking scenes stay on wide / medium two-shots / over-the-shoulder with the speaker's face visible for lip-sync but NEVER filling the screen — NO full-screen face close-ups (tightest is a brief medium close-up with environment behind); the two characters are placed naturally in the location, never squared off face to face. ${PACE_DIRECTION} ${MODERATION_SAFE_RULE} ${CREATIVE_RULE} ${LOCATION_PRESENCE_RULE} ${SCALE_DEPTH_RULE} ${EVERYDAY_BEHAVIOR_RULE} videoPrompt is ENGLISH, exactly 9 lines [SHOT TYPE] (cut list, 2–4 hard cuts with time ranges)/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL] (expressive acting)/[ACTION]/[CHARACTER]/[TRANSITION] (hard cut); keep [VISUAL STYLE] and [CHARACTER] descriptions identical to the given scene unless the instruction requires otherwise; no spoken text in videoPrompt; never "slowly", "slow motion", "lingering", "long pause". ${CONTINUITY_RULE} This shot must still begin from the PREVIOUS shot's ending and hand off cleanly into the NEXT shot (both are given below): keep the same people in place unless the instruction changes that, and if the revision adds or removes someone or moves the action, SHOW that entrance/exit/move. Fill "presence" (who is where at the start, following the previous shot), "entrances" (who enters/leaves during the shot and how, or "none") and "continuesFrom" (same-location-continuation | character-moves | location-change | new-sequence) to match the neighbouring shots. Original content only; Western names, Latin letters, exactly as given.`;
 }
 
+/* ───────────── Stage 13 — episode-level continuity audit («Ассембл» final polish) ───────────── */
+
+/**
+ * Result of the whole-episode continuity review. One entry per scene, in order.
+ * `hasIssue` scenes carry a short `issue` and a full `correctedVideoPrompt` that fixes the seam;
+ * consistent scenes come back with `hasIssue:false` and no corrected prompt (never re-generated).
+ */
+export const episodeContinuityAuditSchema = z.object({
+  scenes: z.array(
+    z.object({
+      number: z.number().int().min(1),
+      hasIssue: z.boolean(),
+      issue: z.string().optional(),
+      correctedVideoPrompt: z.string().optional(),
+    })
+  ),
+});
+export type EpisodeContinuityAudit = z.infer<typeof episodeContinuityAuditSchema>;
+
+/** One scene, as fed to the continuity auditor (ordered chain of the whole episode). */
+export interface AuditSceneInput {
+  number: number;
+  durationSec?: number | null;
+  sceneKind?: string | null;
+  shotType?: string | null;
+  locationDesc?: string | null;
+  dialogueEn?: string | null;
+  voiceover?: string | null;
+  presence?: string | null;
+  entrances?: string | null;
+  continuesFrom?: string | null;
+  videoPrompt?: string | null;
+}
+
+/**
+ * Stage 13 — «Ассембл» final polish. The model re-reviews the WHOLE episode as one continuous
+ * video and fixes ONLY the scenes that break logical continuity at the seams (a character who
+ * vanishes / teleports / appears already in place, a physical arrangement that resets, a prop /
+ * lighting / time-of-day jump, an action left mid-motion). Consistent scenes are left untouched
+ * so no credits are wasted on them.
+ */
+export function episodeContinuityAuditSystemPrompt(language: IdeaLanguage): string {
+  const L = langName(language);
+  return `You are a film continuity supervisor + editor reviewing a FINISHED vertical (9:16) drama episode as ONE continuous video before final assembly. You are given every shot ("scene") IN ORDER. Your job: find LOGICAL CONTINUITY ERRORS at the SEAMS between adjacent scenes and fix ONLY the scenes that break continuity — leave scenes that already flow correctly completely untouched.
+At every boundary between scene N and scene N+1 (and across the whole chain) look for: a character who is present or speaking in one scene but has silently VANISHED or TELEPORTED in the next with no shown exit/entrance; someone who suddenly APPEARS already in place without walking in; the physical arrangement (who is where, seated/standing, what they hold) resetting between a continuing same-location pair instead of carrying over; an object / prop / costume that changes or disappears illogically; time-of-day / lighting / weather that jumps without reason; an action left mid-motion at the end of one scene and not continued at the start of the next; a location change that is not motivated or shown. ${CONTINUITY_RULE}
+Return STRICT JSON: {"scenes":[{"number": int, "hasIssue": boolean, "issue": string (short, ${L}, ONLY when hasIssue is true), "correctedVideoPrompt": string (ONLY when hasIssue is true)}]} — include EVERY scene number exactly once, in order. A scene that already flows correctly: {"number":N,"hasIssue":false}. A scene that breaks continuity: hasIssue=true, "issue" = ONE short sentence naming the seam problem, "correctedVideoPrompt" = the FULL rewritten prompt for THAT scene that fixes the transition — make the entrance / exit / move EXPLICIT in [BLOCKING], [ACTION] and [TRANSITION], and keep positions, props, lighting and time-of-day consistent with the END of the previous scene and the START of the next.
+CORRECTED PROMPT RULES: exactly the 9 lines [SHOT TYPE]/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL]/[ACTION]/[CHARACTER]/[TRANSITION], ENGLISH, NO spoken text inside the videoPrompt, keep [VISUAL STYLE] and [CHARACTER] IDENTICAL to the given scene, preserve the scene's essence, its dialogue / narration and its duration; never "slowly", "slow motion", "lingering", "long pause". ${PACE_DIRECTION} ${MODERATION_SAFE_RULE} ${LOCATION_PRESENCE_RULE} Only flag REAL logical breaks — if the whole chain is already consistent, return every scene with hasIssue=false and change nothing. Original content only; Western names, Latin letters.`;
+}
+
+/** The ordered scene chain rendered for the auditor. */
+export function episodeContinuityAuditUserPrompt(scenes: AuditSceneInput[]): string {
+  const blocks = scenes.map((s) => {
+    const isNarration = s.sceneKind === "narration";
+    const speech = ((isNarration ? s.voiceover : s.dialogueEn) ?? "").replace(/\s+/g, " ").trim().slice(0, 500);
+    return [
+      `### Scene ${s.number}${isNarration ? " (off-screen narration)" : ""} — ${s.locationDesc ?? ""} — ~${s.durationSec ?? 15}s`,
+      `presence: ${s.presence ?? "(none)"}`,
+      `entrances: ${s.entrances ?? "(none)"}`,
+      `continuesFrom: ${s.continuesFrom ?? "(none)"}`,
+      `${isNarration ? "narration(EN)" : "dialogue(EN)"}: ${speech || "(none)"}`,
+      `videoPrompt:`,
+      (s.videoPrompt ?? "").trim() || "(empty)",
+    ].join("\n");
+  });
+  return `The episode has ${scenes.length} scenes, given IN ORDER below. Review the whole chain for seam continuity and return the JSON exactly as specified (every scene number once).\n\n${blocks.join("\n\n")}`;
+}
+
 /* ───────────── Stage 5 — season-level prompt editing ───────────── */
 
 /** Same shape as the structure; the episode COUNT must stay — the revise never adds/removes episodes. */
