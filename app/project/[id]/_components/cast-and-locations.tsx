@@ -29,6 +29,8 @@ export interface LocationCardData {
   /** Stage 3b: extra angles of the same place, same light (reverse + medium). */
   imageReverse?: string | null
   imageDetail?: string | null
+  /** Stage 7: extra on-demand angles/shots (JSON array of URLs). */
+  imageExtra?: string | null
 }
 
 /** Tier badge (and group size for crowds) shown on character cards. */

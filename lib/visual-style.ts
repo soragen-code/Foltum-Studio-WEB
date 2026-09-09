@@ -69,6 +69,37 @@ export function locationAnglePrompt(visualPrompt: string, name = "", angle: Loca
     `Same materials, props, time of day, weather and light direction as the reference — only the framing is closer. Vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;
 }
 
+/**
+ * Extra on-demand angles/shots of the SAME location (beyond the base 3). Each is generated with
+ * the wide shot as image_input so light and materials stay locked. Cycled by index so repeated
+ * requests keep producing different views. Still NO people (reference plates stay people-free).
+ */
+export const LOCATION_EXTRA_VARIANTS = [
+  "photographed from a high angle looking down over the space, showing its full layout and how far it extends",
+  "photographed from a low angle near the floor, foreground objects large and close, the space receding deep behind",
+  "a different corner or zone of the same place not seen before, wide framing that reveals more of its depth",
+  "a doorway/threshold view looking through into the depth of the space (foreground frame, mid-ground, deep background)",
+  "a tight detail shot of a characteristic surface, prop or texture of the place (materials, wear, signs of life)",
+  "photographed from the far end of the space looking back toward the main entrance, long depth of field",
+] as const;
+
+export function locationExtraAnglePrompt(visualPrompt: string, name = "", index = 0): string {
+  const place = sanitizeVideoPrompt(visualPrompt, { keep: [name] }).prompt;
+  const noPeople = "no people, no animals, no text, no signs with readable words, no logos. Real physical environment with authentic wear and detail.";
+  const variant = LOCATION_EXTRA_VARIANTS[((index % LOCATION_EXTRA_VARIANTS.length) + LOCATION_EXTRA_VARIANTS.length) % LOCATION_EXTRA_VARIANTS.length];
+  return `${VISUAL_STYLE}\nThe SAME location as the reference image, ${variant}: ${place}. ` +
+    `Same architecture, materials, props, time of day, weather and light direction as the reference — only the camera position/framing changed. Vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;
+}
+
+/** Parse the stored imageExtra JSON array into a clean list of styled URLs. */
+export function parseLocationExtra(imageExtra?: string | null): string[] {
+  if (!imageExtra) return [];
+  try {
+    const arr = JSON.parse(imageExtra);
+    return Array.isArray(arr) ? arr.filter((u): u is string => typeof u === "string" && isStyledAsset(u)) : [];
+  } catch { return []; }
+}
+
 /** All valid reference angles of a location, wide first. */
 export function locationAngleImages(loc: { imageUrl?: string | null; imageReverse?: string | null; imageDetail?: string | null }): { angle: LocationAngle; label: string; url: string }[] {
   return LOCATION_ANGLES

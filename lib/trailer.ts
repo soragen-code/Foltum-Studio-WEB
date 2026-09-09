@@ -5,7 +5,7 @@
  */
 import { z } from "zod";
 import { LANGUAGE_NAMES, type IdeaLanguage, type CharacterCard } from "@/lib/idea";
-import { sceneScriptSchema, TALK_MIN_SENTENCES, TALK_MAX_SENTENCES, SCENE_MAX_SECONDS, PACE_DIRECTION, MODERATION_SAFE_RULE, CREATIVE_RULE, LOCATION_PRESENCE_RULE, type LocationRef } from "@/lib/season";
+import { sceneScriptSchema, TALK_MIN_SENTENCES, TALK_MAX_SENTENCES, SCENE_MAX_SECONDS, PACE_DIRECTION, MODERATION_SAFE_RULE, CREATIVE_RULE, LOCATION_PRESENCE_RULE, SCALE_DEPTH_RULE, EVERYDAY_BEHAVIOR_RULE, type LocationRef } from "@/lib/season";
 
 export const TRAILER_SEASON_NUMBER = 0;
 export const TRAILER_MIN_SCENES = 3;
@@ -48,6 +48,8 @@ T4. "locationNames" are copied VERBATIM from the given LOCATIONS list (they alre
 T6. ${MODERATION_SAFE_RULE}
 T7. ${CREATIVE_RULE}
 T8. ${LOCATION_PRESENCE_RULE}
+T9. ${SCALE_DEPTH_RULE}
+T10. ${EVERYDAY_BEHAVIOR_RULE}
 T5. Original content only — never reuse names, plots or lines of existing films/series. "title"/"logline" in ${L}, short.`;
 }
 

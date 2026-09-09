@@ -73,10 +73,25 @@ export const structureSchema = z.object({
 });
 
 /* Stage 1 (new flow) */
-export const ideaSchema = z.object({
-  projectId: cuidSchema,
-  idea: z.string().trim().min(10, "Idea is too short").max(10_000),
-});
+export const ideaSchema = z
+  .object({
+    projectId: cuidSchema,
+    // Manual mode: the producer's own idea. Optional when auto=true.
+    idea: z.string().trim().max(10_000).optional(),
+    // Auto mode: the AI invents the story from the chosen genre(s).
+    auto: z.boolean().optional().default(false),
+    genres: z.array(z.string().trim().min(1).max(60)).max(10).optional().default([]),
+    extras: z.string().trim().max(2_000).optional().default(""),
+  })
+  .superRefine((val, ctx) => {
+    if (val.auto) {
+      if (!val.genres || val.genres.length === 0) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["genres"], message: "Pick at least one genre" });
+      }
+    } else if (!val.idea || val.idea.trim().length < 10) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["idea"], message: "Idea is too short" });
+    }
+  });
 
 export const ideaReviseSchema = z.object({
   projectId: cuidSchema,

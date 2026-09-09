@@ -18,6 +18,25 @@ interface RefCharacter extends CharacterCardData {
 const POLL_MS = 3000
 const SHOT_LABELS = ['Портрет', 'Профиль', 'В полный рост']
 const LOCATION_JOB_TYPE = 'location_image'
+const LOCATION_EXTRA_JOB_TYPE = 'location_extra_image'
+const EXTRA_ANGLES_PER_REQUEST = 3
+
+/** Parse the location's imageExtra JSON array into a clean list of URLs. */
+function parseExtra(imageExtra?: string | null): string[] {
+  if (!imageExtra) return []
+  try {
+    const arr = JSON.parse(imageExtra)
+    return Array.isArray(arr) ? arr.filter((u): u is string => typeof u === 'string' && u.startsWith('http')) : []
+  } catch { return [] }
+}
+
+/** Location id covered by an active location_extra_image job (resultData = JSON {locationId}). */
+function jobExtraLocationId(j: JobInfo & { resultData?: string | null }): string | null {
+  try {
+    const rd = j.resultData ? JSON.parse(j.resultData) : (j as any).result
+    return typeof rd?.locationId === 'string' ? rd.locationId : null
+  } catch { return null }
+}
 
 function jobCharacterIds(j: JobInfo & { resultData?: string | null }): string[] | null {
   try {
@@ -58,9 +77,11 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
   const [locations, setLocations] = useState<LocationCardData[]>(project?.locations ?? [])
   const [jobs, setJobs] = useState<JobInfo[]>([])
   const [locJobs, setLocJobs] = useState<JobInfo[]>([])
+  const [locExtraJobs, setLocExtraJobs] = useState<JobInfo[]>([])
   const [bulk, setBulk] = useState<string>('') // which bulk button is sending
   // locationId → jobId started locally (until the server lists the job)
   const [localLoc, setLocalLoc] = useState<Record<string, string>>({})
+  const [localExtra, setLocalExtra] = useState<Record<string, string>>({})
   // Until the first poll answers we don't know whether a job is running — show spinners
   // for characters without references instead of an empty "no image" state.
   const [loaded, setLoaded] = useState(false)
@@ -74,10 +95,11 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
   /** One tick: active character jobs + fresh character rows. */
   const tick = useCallback(async () => {
     try {
-      const [jobsRes, projRes, locJobsRes] = await Promise.all([
+      const [jobsRes, projRes, locJobsRes, locExtraJobsRes] = await Promise.all([
         fetch(`/api/jobs?projectId=${project.id}&type=characters&active=1`, { cache: 'no-store' }),
         fetch(`/api/projects/${project.id}`, { cache: 'no-store' }),
         fetch(`/api/jobs?projectId=${project.id}&type=${LOCATION_JOB_TYPE}&active=1`, { cache: 'no-store' }),
+        fetch(`/api/jobs?projectId=${project.id}&type=${LOCATION_EXTRA_JOB_TYPE}&active=1`, { cache: 'no-store' }),
       ])
       if (!mounted.current) return
       if (locJobsRes.ok) {
@@ -85,6 +107,16 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
         const list: JobInfo[] = Array.isArray(data?.jobs) ? data.jobs : []
         setLocJobs(list)
         setLocalLoc((prev) => {
+          const next: Record<string, string> = {}
+          for (const [lid, jid] of Object.entries(prev)) if (list.some((j) => j.id === jid)) next[lid] = jid
+          return Object.keys(next).length === Object.keys(prev).length ? prev : next
+        })
+      }
+      if (locExtraJobsRes.ok) {
+        const data = await locExtraJobsRes.json()
+        const list: JobInfo[] = Array.isArray(data?.jobs) ? data.jobs : []
+        setLocExtraJobs(list)
+        setLocalExtra((prev) => {
           const next: Record<string, string> = {}
           for (const [lid, jid] of Object.entries(prev)) if (list.some((j) => j.id === jid)) next[lid] = jid
           return Object.keys(next).length === Object.keys(prev).length ? prev : next
@@ -149,6 +181,10 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
   for (const j of locJobs) for (const lid of jobLocationIds(j as any)) activeLoc[lid] = j
   for (const lid of Object.keys(localLoc)) if (!activeLoc[lid]) activeLoc[lid] = 'local'
   const locReady = locations.filter((l) => validUrl(l.imageUrl)).length
+  // Extra-angle job state (one location at a time)
+  const activeExtra: Record<string, JobInfo | 'local'> = {}
+  for (const j of locExtraJobs) { const lid = jobExtraLocationId(j as any); if (lid) activeExtra[lid] = j }
+  for (const lid of Object.keys(localExtra)) if (!activeExtra[lid]) activeExtra[lid] = 'local'
 
   /** Bulk: generate references for the characters (without images) of the given tiers. */
   const startBulk = async (key: string, tiers?: Tier[]) => {
@@ -175,6 +211,18 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
     const data = await res.json()
     if (!res.ok) { setError(data?.error ?? 'Не удалось запустить генерацию локации'); return }
     if (data?.jobId) setLocalLoc((prev) => ({ ...prev, [locationId]: data.jobId }))
+    await tick()
+  }
+
+  const generateExtraLocation = async (locationId: string) => {
+    setError('')
+    const res = await fetch(`/api/ai/locations/${locationId}/extra-images`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ count: EXTRA_ANGLES_PER_REQUEST }),
+    })
+    const data = await res.json()
+    if (!res.ok) { setError(data?.error ?? 'Не удалось запустить генерацию доп. ракурсов'); return }
+    if (data?.jobId) setLocalExtra((prev) => ({ ...prev, [locationId]: data.jobId }))
     await tick()
   }
 
@@ -384,6 +432,33 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                         {gen ? 'Генерация…' : has ? `Перегенерировать (${CHARACTER_REFERENCE_COST} кр.)` : `Сгенерировать референс (${CHARACTER_REFERENCE_COST} кр.)`}
                       </button>
                       <p className="mt-2 text-[11px] text-muted-foreground">3 ракурса одного места (общий, обратный, средний), одно освещение — все уходят в Seedance как референсы.</p>
+                      {has && (() => {
+                        const extras = parseExtra(loc.imageExtra)
+                        const busyExtra = !!activeExtra[loc.id]
+                        return (
+                          <div className="mt-3 border-t border-border/60 pt-3" data-testid="location-extra">
+                            {extras.length > 0 && (
+                              <div className="mb-2 flex flex-wrap gap-1" data-testid="location-extra-thumbs">
+                                {extras.map((url, i) => (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img key={url} src={url} alt={`${loc.name} — доп. ракурс ${i + 1}`} title={`Доп. ракурс ${i + 1}`} className="h-14 w-8 rounded border border-background object-cover shadow" />
+                                ))}
+                              </div>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => generateExtraLocation(loc.id)}
+                              disabled={busyExtra}
+                              className="flex items-center gap-1 rounded-lg bg-muted px-3 py-1.5 text-xs transition hover:bg-muted/80 disabled:opacity-50"
+                              data-testid="location-extra-generate"
+                            >
+                              {busyExtra ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
+                              {busyExtra ? 'Генерация…' : `Добавить ещё ракурсы/кадры (${EXTRA_ANGLES_PER_REQUEST} × ${CHARACTER_REFERENCE_COST} = ${EXTRA_ANGLES_PER_REQUEST * CHARACTER_REFERENCE_COST} кр.)`}
+                            </button>
+                            <p className="mt-1.5 text-[11px] text-muted-foreground">Больше ракурсов и деталей места — то же освещение, без людей. Помогает разнообразить кадры сцен.</p>
+                          </div>
+                        )
+                      })()}
                     </div>
                   }
                 />

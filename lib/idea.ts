@@ -98,7 +98,7 @@ export const ideaResultSchema = z.object({
   language: z.string().optional(),
   synopsis: z.string().trim().min(80).max(12_000),
   characters: z.array(characterCardSchema).min(2).max(MAX_CAST),
-  locations: z.array(locationCardSchema).max(12).optional().default([]),
+  locations: z.array(locationCardSchema).max(16).optional().default([]),
 });
 export type IdeaResult = z.infer<typeof ideaResultSchema>;
 
@@ -202,9 +202,10 @@ Tier meaning: MAIN = leads carrying the season arc; SUPPORTING = recurring chara
 
 const LOCATION_FIELD_RULES = `Location card fields (all REQUIRED):
 - "name": short name of the place in the story language (e.g. "Маяк на мысе", "Кухня семьи Орловых")
-- "description": 1-2 sentences in the story language — what the place is and what happens there in the season
-- "visualPrompt": ALWAYS in ENGLISH, 3-4 sentences, concrete and photoreal: type of place, architecture/interior, materials, colours, time of day and lighting, weather, props and signs of life — but NO PEOPLE and no text/logos. Used verbatim as a prompt for an AI reference image (vertical 9:16 photograph).
-- Locations must be ORIGINAL: no real landmarks, brands, or existing franchises by name.`;
+- "description": 2-3 sentences in the story language — what the place is, its several distinct ZONES the characters move between, and what happens there in the season. Make it a real, lived-in place, not a label.
+- "visualPrompt": ALWAYS in ENGLISH, 3-4 sentences, concrete and photoreal: type of place, architecture/interior, its distinct zones and how far it extends (depth: foreground, mid-ground, deep background), materials, colours, time of day and lighting, weather, props and signs of everyday life (working machines, screens, papers, vehicles, plants) — but NO PEOPLE and no text/logos. Used verbatim as a prompt for an AI reference image (vertical 9:16 photograph).
+- Locations must be ORIGINAL: no real landmarks, brands, or existing franchises by name.
+- The SET of locations must be DIVERSE: mix interiors and exteriors, private and public places, intimate and large/spacious spaces, and different times of day — so the season never feels shot in one kind of room.`;
 
 export const CAST_TARGETS = { MAIN: "3-5", SUPPORTING: "5-10", MINOR: "5-10", CROWD: "2-5" } as const;
 
@@ -218,7 +219,7 @@ From the user's idea produce a season synopsis and the main characters. Return O
   "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
   "locations": [ { "name": "...", "description": "...", "visualPrompt": "..." } ]
 }
-Both arrays are REQUIRED ("locations" must contain 4-8 items).
+Both arrays are REQUIRED ("locations" must contain 8-14 items).
 
 LANGUAGE: detect the language of the idea and write synopsis, name, age, role, personality, firstAppearance in THAT language. Only "appearance" is in English.
 
@@ -227,7 +228,7 @@ SYNOPSIS: readable and compact (250-450 words). No headings, no markdown, no bul
 CHARACTERS: ${CAST_TARGETS.MAIN} MAIN characters only (tier "MAIN"), each visually distinct. The supporting cast, minor characters and crowds are produced in a separate step — do NOT include them here.
 ${CHARACTER_FIELD_RULES}
 
-LOCATIONS: 4-8 key locations where most of the season happens (the leads' homes, workplaces, the central place of the story, the finale's place). Each visually distinct.
+LOCATIONS: 8-14 distinct locations across the season (the leads' homes, workplaces, the central place of the story, transitional public places like streets, cafes, transport, and the finale's place). Diverse in type, scale and time of day; each visually distinct.
 ${LOCATION_FIELD_RULES}
 
 ${ORIGINALITY_RULES}`;
@@ -278,15 +279,15 @@ export function reviseLocationUserPrompt(synopsis: string, card: LocationCard, i
 }
 
 /** Location card generated from a bare name typed by the producer (manual add). */
-/** Fallback when the idea call returned no locations: extract 4-8 key locations from the synopsis. */
+/** Fallback when the idea call returned no locations: extract 8-14 key locations from the synopsis. */
 export function locationsFromSynopsisSystemPrompt(language: IdeaLanguage): string {
-  return `You are a production designer for a short-form vertical drama series. From the season synopsis and cast list the 4-8 key locations where most of the season happens (the leads' homes, workplaces, the central place of the story, the finale's place). Each visually distinct.
+  return `You are a production designer for a short-form vertical drama series. From the season synopsis and cast list 8-14 distinct locations across the season (the leads' homes, workplaces, the central place of the story, transitional public places, and the finale's place). Diverse in type, scale and time of day; each visually distinct.
 Return ONLY valid JSON: { "locations": [ { "name": "...", "description": "...", "visualPrompt": "..." } ] }
 LANGUAGE of "name" and "description": ${LANGUAGE_NAMES[language]}.
 ${LOCATION_FIELD_RULES}
 ${ORIGINALITY_RULES}`;
 }
-export const locationsResultSchema = z.object({ locations: z.array(locationCardSchema).min(1).max(12) });
+export const locationsResultSchema = z.object({ locations: z.array(locationCardSchema).min(1).max(16) });
 
 export function locationFromNameSystemPrompt(language: IdeaLanguage): string {
   const lang = LANGUAGE_NAMES[language] ?? "the story language";
@@ -297,6 +298,75 @@ ${LOCATION_FIELD_RULES}`;
 
 export function ideaUserPrompt(idea: string): string {
   return `IDEA:\n${idea.trim()}`;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Auto-idea mode — the AI invents an original story from a genre     */
+/* ------------------------------------------------------------------ */
+
+/** Genres/directions the producer can pick in AUTO mode (id + Russian label + English descriptor for the model). */
+export const GENRES = [
+  { id: "detective", label: "Детектив", en: "detective / crime mystery" },
+  { id: "horror", label: "Ужасы", en: "horror" },
+  { id: "fantasy", label: "Магия / Фэнтези", en: "magic / fantasy" },
+  { id: "scifi", label: "Сай-фай", en: "science fiction" },
+  { id: "drama", label: "Драма", en: "drama" },
+  { id: "thriller", label: "Триллер", en: "thriller / suspense" },
+  { id: "romance", label: "Романтика", en: "romance" },
+  { id: "comedy", label: "Комедия", en: "comedy" },
+  { id: "adventure", label: "Приключения", en: "adventure" },
+  { id: "postapoc", label: "Постапокалипсис", en: "post-apocalyptic" },
+  { id: "mystery", label: "Мистика", en: "supernatural mystery" },
+  { id: "action", label: "Боевик", en: "action" },
+  { id: "historical", label: "Историческая драма", en: "historical drama" },
+  { id: "melodrama", label: "Мелодрама", en: "melodrama / family saga" },
+] as const;
+export type GenreId = (typeof GENRES)[number]["id"];
+export const GENRE_BY_ID: Record<string, (typeof GENRES)[number]> = Object.fromEntries(GENRES.map((g) => [g.id, g]));
+
+/** Map incoming genre ids (or free labels) to English descriptors for the model, keeping unknown values as-is. */
+export function genresToEnglish(genres: string[]): string[] {
+  const out: string[] = [];
+  for (const g of genres) {
+    const key = (g ?? "").trim();
+    if (!key) continue;
+    const found = GENRE_BY_ID[key.toLowerCase()];
+    out.push(found ? found.en : key);
+  }
+  return out;
+}
+
+export function ideaAutoSystemPrompt(language: IdeaLanguage): string {
+  const lang = LANGUAGE_NAMES[language] ?? "Russian";
+  return `You are an award-winning head writer for a short-form vertical drama series. The producer has NOT written a story — your job is to INVENT one from scratch in the chosen genre(s), then produce the season synopsis, the main characters and the locations. Return ONLY valid JSON:
+{
+  "language": "${language}",
+  "synopsis": "<plain text, 3-6 short paragraphs separated by blank lines>",
+  "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
+  "locations": [ { "name": "...", "description": "...", "visualPrompt": "..." } ]
+}
+Both arrays are REQUIRED ("locations" must contain 8-14 items).
+
+INVENT A GRIPPING, ORIGINAL STORY: a fresh premise with a strong hook, a clear protagonist with a want and a fear, an escalating conflict, real turning points and a season finale with a twist. It must honour the chosen genre(s). AVOID clichés and predictable, generic plots — no "chosen one wakes with amnesia", no tired tropes; surprise the viewer while staying coherent. Combine the genres if more than one is given.
+
+LANGUAGE: write synopsis, name, age, role, personality, firstAppearance in ${lang}. Only "appearance" is in English. (The video model always voices the dialogue in English later — this is only the planning text.)
+
+SYNOPSIS: readable and compact (250-450 words). No headings, no markdown, no bullet lists, no labels. It must convey the whole season arc: the setup (world, hero, hook), the development (rising stakes, relationships), the key turning points, and the finale of the season. Write it as prose a producer can read in one minute.
+
+CHARACTERS: ${CAST_TARGETS.MAIN} MAIN characters only (tier "MAIN"), each visually distinct. The supporting cast, minor characters and crowds are produced in a separate step — do NOT include them here.
+${CHARACTER_FIELD_RULES}
+
+LOCATIONS: 8-14 distinct locations across the season (the leads' homes, workplaces, the central place of the story, transitional public places like streets, cafes, transport, and the finale's place). Diverse in type, scale and time of day; each visually distinct.
+${LOCATION_FIELD_RULES}
+
+${ORIGINALITY_RULES}`;
+}
+
+export function ideaAutoUserPrompt(genres: string[], extras?: string): string {
+  const gl = genresToEnglish(genres);
+  const genreLine = gl.length ? gl.join(", ") : "director's choice — pick a compelling popular genre";
+  const extra = extras?.trim();
+  return `GENRE(S) / DIRECTION: ${genreLine}\n\nADDITIONAL WISHES FROM THE PRODUCER: ${extra ? extra : "(none — you have full creative freedom within the genre)"}\n\nInvent the original season now.`;
 }
 
 export function reviseSynopsisSystemPrompt(language: IdeaLanguage): string {

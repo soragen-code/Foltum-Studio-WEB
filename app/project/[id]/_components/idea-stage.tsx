@@ -21,6 +21,24 @@ const LANGUAGE_LABELS: Record<string, string> = {
   es: 'español', it: 'italiano', pl: 'polski', pt: 'português', tr: 'Türkçe',
 }
 
+/** Genres for AUTO mode. ids must match GENRES in lib/idea.ts. */
+const GENRE_OPTIONS: { id: string; label: string }[] = [
+  { id: 'detective', label: 'Детектив' },
+  { id: 'horror', label: 'Ужасы' },
+  { id: 'fantasy', label: 'Магия / Фэнтези' },
+  { id: 'scifi', label: 'Сай-фай' },
+  { id: 'drama', label: 'Драма' },
+  { id: 'thriller', label: 'Триллер' },
+  { id: 'romance', label: 'Романтика' },
+  { id: 'comedy', label: 'Комедия' },
+  { id: 'adventure', label: 'Приключения' },
+  { id: 'postapoc', label: 'Постапокалипсис' },
+  { id: 'mystery', label: 'Мистика' },
+  { id: 'action', label: 'Боевик' },
+  { id: 'historical', label: 'Историческая драма' },
+  { id: 'melodrama', label: 'Мелодрама' },
+]
+
 /** Read-only character card with a pencil → prompt-based rewrite. */
 export function CharacterCard({
   char,
@@ -349,9 +367,16 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   const [approving, setApproving] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+  // Idea source: 'manual' = producer writes the idea; 'auto' = the AI invents it from a genre.
+  const [mode, setMode] = useState<'manual' | 'auto'>('manual')
+  const [genres, setGenres] = useState<string[]>([])
+  const [extras, setExtras] = useState('')
 
   const hasResult = !!result
   const busy = generating || approving || chaining
+  const toggleGenre = (id: string) =>
+    setGenres((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]))
+  const canGenerate = mode === 'auto' ? genres.length > 0 : idea.trim().length >= 10
 
   /** Auto-chain: approve (stage → structure) and start the season-script job, then show the season screen. */
   const startSeason = async () => {
@@ -372,13 +397,20 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   }
 
   const generate = async () => {
-    if (idea.trim().length < 10) { setError('Опишите идею хотя бы одним-двумя предложениями'); return }
+    if (mode === 'auto') {
+      if (genres.length === 0) { setError('Выберите хотя бы один жанр'); return }
+    } else if (idea.trim().length < 10) {
+      setError('Опишите идею хотя бы одним-двумя предложениями'); return
+    }
     setError(''); setNotice(''); setGenerating(true)
     try {
+      const body = mode === 'auto'
+        ? { projectId: project.id, auto: true, genres, extras: extras.trim() }
+        : { projectId: project.id, idea: idea.trim() }
       const res = await fetch('/api/ai/idea', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: project.id, idea: idea.trim() }),
+        body: JSON.stringify(body),
       })
       const data = await res.json()
       if (!res.ok) { setError(data?.error ?? 'Не удалось сгенерировать'); return }
@@ -401,29 +433,86 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
           <Lightbulb className="h-5 w-5 text-primary" /> Шаг 1 — Идея
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Опишите идею сериала на любом языке. Мы напишем синопсис, персонажей и локации на этом же языке и сразу начнём полный сценарий сезона — все эпизоды со сценами и диалогами, которые можно править промптами.
+          Опишите свою идею — или выберите режим «Авто», и ИИ сам придумает оригинальную историю по выбранному жанру. Мы напишем синопсис, персонажей и локации, а затем сразу начнём полный сценарий сезона со сценами и диалогами.
         </p>
+
+        {/* Mode toggle: своя идея / авто */}
+        <div className="mt-4 inline-flex rounded-lg border border-border bg-muted/40 p-1" role="tablist" data-testid="idea-mode-toggle">
+          <button
+            type="button"
+            onClick={() => setMode('manual')}
+            disabled={busy}
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${mode === 'manual' ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}
+            data-testid="idea-mode-manual"
+          >
+            Своя идея
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode('auto')}
+            disabled={busy}
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${mode === 'auto' ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}
+            data-testid="idea-mode-auto"
+          >
+            Авто (ИИ придумывает историю)
+          </button>
+        </div>
 
         {error && <div className="mt-4 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
         {notice && <div className="mt-4 rounded-lg bg-primary/10 px-4 py-2 text-xs text-primary">{notice}</div>}
 
-        <textarea
-          value={idea}
-          onChange={(e) => setIdea(e.target.value)}
-          placeholder="Например: молодая смотрительница маяка на северном острове находит дневник исчезнувшего предшественника..."
-          rows={5}
-          disabled={busy}
-          className="mt-4 w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
-          data-testid="idea-input"
-        />
+        {mode === 'manual' ? (
+          <textarea
+            value={idea}
+            onChange={(e) => setIdea(e.target.value)}
+            placeholder="Например: молодая смотрительница маяка на северном острове находит дневник исчезнувшего предшественника..."
+            rows={5}
+            disabled={busy}
+            className="mt-4 w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
+            data-testid="idea-input"
+          />
+        ) : (
+          <div className="mt-4 space-y-3" data-testid="idea-auto-panel">
+            <div>
+              <p className="mb-2 text-xs font-medium text-muted-foreground">Выберите направление / жанр (можно несколько):</p>
+              <div className="flex flex-wrap gap-2" data-testid="idea-genres">
+                {GENRE_OPTIONS.map((g) => {
+                  const on = genres.includes(g.id)
+                  return (
+                    <button
+                      key={g.id}
+                      type="button"
+                      onClick={() => toggleGenre(g.id)}
+                      disabled={busy}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 ${on ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-foreground hover:border-primary/60'}`}
+                      data-testid={`genre-${g.id}`}
+                      aria-pressed={on}
+                    >
+                      {g.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+            <textarea
+              value={extras}
+              onChange={(e) => setExtras(e.target.value)}
+              placeholder="Доп. пожелания (необязательно): сеттинг, эпоха, тон, чего хотелось бы избежать… Язык истории определится по этому тексту (по умолчанию — русский)."
+              rows={3}
+              disabled={busy}
+              className="w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
+              data-testid="idea-extras"
+            />
+          </div>
+        )}
         <button
           onClick={generate}
-          disabled={busy || idea.trim().length < 10}
+          disabled={busy || !canGenerate}
           className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50 sm:w-auto"
           data-testid="idea-generate"
         >
           {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-          {hasResult ? 'Сгенерировать заново' : 'Написать сценарий сезона'}
+          {hasResult ? 'Сгенерировать заново' : mode === 'auto' ? 'Придумать историю и написать сезон' : 'Написать сценарий сезона'}
         </button>
         {generating && !chaining && (
           <p className="mt-2 text-xs text-muted-foreground" data-testid="idea-progress">Шаг 1 из 2 · обычно 40–90 секунд: синопсис, локации и полный каст (главные, семья и окружение, эпизодические, массовка)...</p>

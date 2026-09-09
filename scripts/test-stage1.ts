@@ -22,6 +22,11 @@ import {
   ideaSystemPrompt,
   reviseSynopsisSystemPrompt,
   reviseCharacterSystemPrompt,
+  GENRES,
+  GENRE_BY_ID,
+  genresToEnglish,
+  ideaAutoSystemPrompt,
+  ideaAutoUserPrompt,
 } from "../lib/idea";
 import { createProjectSchema, ideaSchema, ideaReviseSchema, characterReviseSchema } from "../lib/validations";
 
@@ -64,6 +69,35 @@ test("validations: createProject принимает powerTier, idea/revise сх�
   assert.ok(characterReviseSchema.safeParse({ characterId: id, instruction: "старше" }).success);
 });
 
+test("stage7 авто-идея: схема, жанры и промпты", () => {
+  const id = "c" + "a".repeat(24);
+  // auto=true с жанром — валиден без текста идеи
+  assert.ok(ideaSchema.safeParse({ projectId: id, auto: true, genres: ["detective"] }).success);
+  // auto=true без жанров — отклоняется
+  assert.ok(!ideaSchema.safeParse({ projectId: id, auto: true, genres: [] }).success);
+  // manual (auto=false) без идеи — отклоняется
+  assert.ok(!ideaSchema.safeParse({ projectId: id, auto: false }).success);
+  // extras опциональны и допустимы
+  assert.ok(ideaSchema.safeParse({ projectId: id, auto: true, genres: ["horror", "drama"], extras: "космос" }).success);
+  // список жанров непустой, у каждого id/label/en
+  assert.ok(GENRES.length >= 10);
+  for (const g of GENRES) assert.ok(g.id && g.label && g.en, `genre ${g.id}`);
+  assert.equal(GENRE_BY_ID["detective"].label, "Детектив");
+  // маппинг id → английский дескриптор, неизвестные значения сохраняются
+  assert.deepEqual(genresToEnglish(["detective", "СвойЖанр"]), [GENRE_BY_ID["detective"].en, "СвойЖанр"]);
+  assert.deepEqual(genresToEnglish([" ", ""]), []);
+  // авто-промпты — непустые строки, требуют 8-14 локаций и оригинальность
+  const sys = ideaAutoSystemPrompt("ru");
+  assert.match(sys, /8-14/);
+  assert.match(sys, /INVENT/);
+  assert.match(sys, /Russian/);
+  assert.match(ideaAutoSystemPrompt("en"), /English/);
+  const user = ideaAutoUserPrompt(["detective"], "маленький город");
+  assert.match(user, /detective/);
+  assert.match(user, /маленький город/);
+  assert.ok(ideaAutoUserPrompt([]).length > 0);
+});
+
 test("язык: кириллица → ru, латиница → en, LLM-ответ нормализуется", () => {
   assert.equal(detectLanguage("Молодая смотрительница маяка находит дневник."), "ru");
   assert.equal(detectLanguage("A young lighthouse keeper finds a diary."), "en");
@@ -87,6 +121,10 @@ test("схема ответа idea: валидный JSON проходит, не
   assert.ok(!ideaResultSchema.safeParse({ ...good, synopsis: "коротко" }).success);
   assert.ok(!ideaResultSchema.safeParse({ ...good, characters: [card, { ...card, appearance: "" }] }).success);
   assert.ok(!characterCardSchema.safeParse({ ...card, firstAppearance: undefined }).success);
+  // stage7: до 16 локаций принимается, 17 — отклоняется
+  const loc = { name: "Порт", description: "A".repeat(60), visualPrompt: "B".repeat(60) };
+  assert.ok(ideaResultSchema.safeParse({ ...good, locations: Array(14).fill(loc) }).success);
+  assert.ok(!ideaResultSchema.safeParse({ ...good, locations: Array(17).fill(loc) }).success);
 });
 
 test("normalizeIdeaResult: язык по идее, markdown снят, внешность санитизирована", () => {

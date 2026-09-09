@@ -75,6 +75,9 @@ END $$;
 ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "imageReverse" TEXT;
 ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "imageDetail" TEXT;
 
+-- Stage 7: extra location angles/shots on demand (JSON array of image URLs).
+ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "imageExtra" TEXT;
+
 -- Stage 4: English speech + per-scene burned-in subtitles (additive)
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "dialogueEn" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "subtitled" BOOLEAN NOT NULL DEFAULT false;

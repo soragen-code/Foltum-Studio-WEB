@@ -7,7 +7,7 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, ideaSchema } from "@/lib/validations";
 import { chatJSON } from "@/lib/ai";
-import { ideaSystemPrompt, ideaUserPrompt, normalizeIdeaResult, castExpansionSystemPrompt, castExpansionUserPrompt, normalizeCastExpansion, characterCardToData, locationsFromSynopsisSystemPrompt, locationsResultSchema, dedupeCast, sanitizeLocationCard, type CharacterCard } from "@/lib/idea";
+import { ideaSystemPrompt, ideaUserPrompt, ideaAutoSystemPrompt, ideaAutoUserPrompt, genresToEnglish, normalizeIdeaResult, castExpansionSystemPrompt, castExpansionUserPrompt, normalizeCastExpansion, characterCardToData, locationsFromSynopsisSystemPrompt, locationsResultSchema, dedupeCast, sanitizeLocationCard, detectLanguage, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
 
 /**
  * POST /api/ai/idea  { projectId, idea }
@@ -26,7 +26,16 @@ export async function POST(request: Request) {
 
     const parsed = await parseBody(request, ideaSchema);
     if (!parsed.ok) return parsed.response;
-    const { projectId, idea } = parsed.data;
+    const { projectId, idea, auto, genres, extras } = parsed.data;
+
+    // AUTO mode: the AI invents the story from the chosen genre(s). Language comes from the
+    // producer's extra wishes if any, otherwise defaults to Russian. MANUAL mode: language is
+    // detected from the idea text inside normalizeIdeaResult.
+    const autoLanguage: IdeaLanguage = (extras && extras.trim() ? detectLanguage(extras) : "ru");
+    // What we persist as the project's "idea" so the producer can see what drove the generation.
+    const ideaForStore = auto
+      ? `[Авто] Жанр: ${genresToEnglish(genres).join(", ") || "—"}${extras && extras.trim() ? `\nПожелания: ${extras.trim()}` : ""}`
+      : (idea ?? "");
 
     const user = await prisma.user.findUnique({ where: { email: session.user.email } });
     if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
@@ -41,8 +50,11 @@ export async function POST(request: Request) {
     let lastError = "";
     for (let attempt = 0; attempt < 2 && !result; attempt++) {
       try {
-        const raw = await chatJSON(ideaSystemPrompt(), ideaUserPrompt(idea), { temperature: 0.8, maxTokens: 3500 });
-        result = normalizeIdeaResult(raw, idea);
+        const raw = auto
+          ? await chatJSON(ideaAutoSystemPrompt(autoLanguage), ideaAutoUserPrompt(genres, extras), { temperature: 0.95, maxTokens: 3800 })
+          : await chatJSON(ideaSystemPrompt(), ideaUserPrompt(idea ?? ""), { temperature: 0.8, maxTokens: 3500 });
+        // In AUTO mode the fallback language is the chosen one (extras/ru); in manual it is the idea text.
+        result = normalizeIdeaResult(raw, auto ? (extras && extras.trim() ? extras : (autoLanguage === "ru" ? "русская история" : "story")) : (idea ?? ""));
       } catch (e: any) {
         lastError = e?.message ?? String(e);
         console.warn(`[idea] attempt ${attempt + 1} failed:`, lastError);
@@ -94,7 +106,7 @@ export async function POST(request: Request) {
       }
       await tx.project.update({
         where: { id: projectId },
-        data: { idea, synopsis: result!.synopsis, language: result!.language, synopsisApproved: false },
+        data: { idea: ideaForStore, synopsis: result!.synopsis, language: result!.language, synopsisApproved: false },
       });
     }, { timeout: 30_000 });
 

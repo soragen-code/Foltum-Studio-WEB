@@ -175,6 +175,7 @@ model Location {
   imageUrl     String?  // PNG reference — wide establishing angle
   imageReverse String?  // same place, reverse angle (generated from imageUrl as reference → identical light)
   imageDetail  String?  // same place, medium/detail angle
+  imageExtra   String?  @db.Text // JSON array of extra angle/shot URLs generated on demand
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
