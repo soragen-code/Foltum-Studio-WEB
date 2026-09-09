@@ -4,6 +4,7 @@ import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob } from "@/lib/jobs";
 
 import { characterImagePrompt, VISUAL_STYLE_ID } from "@/lib/visual-style";
+import { detectC2paFromUrl } from "@/lib/c2pa";
 
 const SHOTS = ["front", "profile", "full"] as const;
 type Shot = (typeof SHOTS)[number];
@@ -38,6 +39,10 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds }: 
     const total = characters.length * SHOTS.length;
     let done = 0;
     let failed = 0;
+    // Non-blocking C2PA diagnostic: confirm every stored reference keeps its
+    // content-credentials metadata (so Seedance moderation never drops it).
+    let c2paMissing = 0;
+    const c2paChecks: { characterId: string; shot: Shot; ok: boolean; signatures: string[]; bytes: number }[] = [];
     // Progress: 5% reserved for the text step already done, 5..100 for images
     const pct = () => 5 + Math.round((done / Math.max(total, 1)) * 95);
 
@@ -59,6 +64,13 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds }: 
           const s3Key = `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/${shot}-${Date.now()}.png`;
           const url = await uploadRemoteToS3(replicateUrl, s3Key, "image/png");
           await prisma.character.update({ where: { id: char.id }, data: { [SHOT_FIELDS[shot]]: url } });
+          // Verify the STORED bytes still carry C2PA / content-credentials metadata.
+          const c2pa = await detectC2paFromUrl(url);
+          c2paChecks.push({ characterId: char.id, shot, ok: c2pa.ok, signatures: c2pa.signatures, bytes: c2pa.bytes });
+          if (!c2pa.ok) {
+            c2paMissing += 1;
+            console.warn(`[images-job] C2PA metadata MISSING on stored ${shot} reference for ${char.name} (${url}) — Seedance moderation may drop it.`);
+          }
         } catch (imgErr: any) {
           failed += 1;
           console.error(`[images-job] ${shot} failed for ${char.name}:`, imgErr?.message ?? imgErr);
@@ -70,7 +82,7 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds }: 
 
     await completeJob(
       jobId,
-      { total, failed },
+      { total, failed, c2paOk: c2paMissing === 0, c2paMissing, c2paChecks },
       failed > 0 ? `Done — ${failed} of ${total} images failed` : "All character images ready"
     );
   } catch (err: any) {
