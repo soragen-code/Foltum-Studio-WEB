@@ -10,7 +10,6 @@ import {
   sceneReviseSystemPrompt,
   CONTINUITY_RULE,
 } from "../lib/season";
-import { trailerSystemPrompt } from "../lib/trailer";
 import { planContinuation, type SceneJobSnapshot, type ContinuationOptions } from "../lib/batch-continue";
 import { TERMINAL_JOB_STATUSES } from "../lib/jobs";
 
@@ -43,12 +42,11 @@ assert(withCont.scenes[0].continuesFrom === "new-sequence", "scene 1 continuesFr
 assert(withCont.scenes[1].presence === "Anna and Mark at the desk" && withCont.scenes[1].entrances === "none" && withCont.scenes[1].continuesFrom === "same-location-continuation", "normalize preserves presence/entrances/continuesFrom");
 assert(withCont.scenes[2].presence === undefined && withCont.scenes[2].continuesFrom === undefined, "absent continuity fields stay undefined (not empty strings) for non-first scenes");
 
-// (c) Continuity rule text present in every script prompt (episode, revise, trailer).
+// (c) Continuity rule text present in every script prompt (episode, revise).
 assert(/SCENE-TO-SCENE CONTINUITY/.test(CONTINUITY_RULE) && /never teleport/i.test(CONTINUITY_RULE) && /MOVEMENT IS SHOWN/.test(CONTINUITY_RULE), "CONTINUITY_RULE says no teleporting + movement shown");
 assert(episodeScriptSystemPrompt("ru").includes(CONTINUITY_RULE) && /presence/.test(episodeScriptSystemPrompt("ru")) && /continuesFrom/.test(episodeScriptSystemPrompt("ru")), "episode prompt embeds CONTINUITY_RULE + asks for presence/continuesFrom");
 assert(episodeScriptSystemPrompt("en").includes(CONTINUITY_RULE), "episode prompt (en) embeds CONTINUITY_RULE");
 assert(sceneReviseSystemPrompt("ru").includes(CONTINUITY_RULE) && /PREVIOUS shot/.test(sceneReviseSystemPrompt("ru")) && /NEXT shot/.test(sceneReviseSystemPrompt("ru")), "scene-revise prompt embeds CONTINUITY_RULE + prev/next hand-off");
-assert(trailerSystemPrompt("ru").includes(CONTINUITY_RULE) && /presence/.test(trailerSystemPrompt("ru")) && /location-change/.test(trailerSystemPrompt("ru")), "trailer prompt embeds CONTINUITY_RULE + continuity fields");
 
 // (d) scene-revise schema accepts continuity fields (and still accepts old payloads).
 assert(sceneReviseSchema.safeParse({ shotType: "Close-up", durationSec: 30, locationDesc: "INT — Office — day", action: "Anna waits.", dialogue: talk, videoPrompt: prompt }).success, "scene revise accepts payload without continuity fields");

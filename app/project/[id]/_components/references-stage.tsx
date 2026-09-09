@@ -1,6 +1,5 @@
 'use client'
 
-import { TrailerCard } from './trailer-card'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2, Wand2, ArrowRight, ImageOff, Users, RefreshCw, MapPin, Camera } from 'lucide-react'
@@ -484,7 +483,6 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
         )}
       </section>
 
-      {optional && <TrailerCard project={project} />}
       {!optional && <button
         onClick={continueToScript}
         disabled={continuing || readyCount === 0}
