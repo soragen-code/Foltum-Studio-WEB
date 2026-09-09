@@ -448,3 +448,47 @@ export function sceneReviseSystemPrompt(language: IdeaLanguage): string {
 Return STRICT JSON: {"shotType": string, "durationSec": int, "locationDesc": "INT/EXT — place — time" (${L}), "action": string (${L}), "dialogue": string${local ? ', "dialogueLocal": string' : ""}, "videoPrompt": string}.
 RULES: "dialogue" is ALWAYS in ENGLISH (it is what the model voices), one line per row NAME (tone cue): "line"; a talking scene has a substantive exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences (3–6 quick lines, characters answer each other instantly; the story is told through the dialogue), or exactly "[NO DIALOGUE]" for a rare purely visual beat.${local ? ` "dialogueLocal" = the same lines translated into ${L}, same structure and cues.` : ""} durationSec = round(words / 2.7) + 2 clamped to ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS} (≥ 2 words per second — no timing is set by anyone else). Talking scenes use medium shots / medium close-ups / over-the-shoulder with the speaker's face visible but not filling the screen (at most one short full-screen close-up per scene). ${PACE_DIRECTION} ${MODERATION_SAFE_RULE} ${CREATIVE_RULE} ${LOCATION_PRESENCE_RULE} videoPrompt is ENGLISH, exactly 9 lines [SHOT TYPE] (cut list, 2–4 hard cuts with time ranges)/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL] (expressive acting)/[ACTION]/[CHARACTER]/[TRANSITION] (hard cut); keep [VISUAL STYLE] and [CHARACTER] descriptions identical to the given scene unless the instruction requires otherwise; no spoken text in videoPrompt; never "slowly", "slow motion", "lingering", "long pause". Keep continuity with the previous and next shots. Original content only; Western names, Latin letters, exactly as given.`;
 }
+
+/* ───────────── Stage 5 — season-level prompt editing ───────────── */
+
+/** Same shape as the structure; the episode COUNT must stay — the revise never adds/removes episodes. */
+export const seasonReviseSchema = seasonStructureSchema;
+
+/** Instruction used by «Применить изменения к сценарию сезона» after the synopsis / cast / locations were edited. */
+export const SEASON_SYNC_INSTRUCTION =
+  "Синхронизируй структуру сезона с обновлённым синопсисом, списком персонажей и локаций: учти новые/изменённые персонажи и места, убери тех, кого больше нет, сохрани всё остальное без изменений.";
+
+export function seasonReviseSystemPrompt(language: IdeaLanguage, episodeCount: number): string {
+  return `You are the showrunner of a short-form vertical drama series. You receive the CURRENT season structure (${episodeCount} episodes) and an INSTRUCTION from the author. Apply the instruction to the structure and return the FULL updated structure as STRICT JSON with exactly the same shape:
+{"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string}]}.
+RULES:
+- Keep EXACTLY ${episodeCount} episodes with the same numbers 1..${episodeCount}. Never add or remove episodes.
+- MINIMAL CHANGE: copy every field of every episode VERBATIM unless the instruction (or story consistency it forces) requires changing it. Episodes that the instruction does not touch must be returned character-for-character identical — the system regenerates only episodes whose logline / arc / location / characters changed, and rewriting untouched episodes wastes the author's work.
+- Use ONLY the given character names verbatim (a new character requested by the author is allowed only if it is present in the CHARACTERS list; otherwise weave the request into the existing cast). "locationName" should be one of the given LOCATIONS (verbatim); a new place only when the story truly needs it.
+- Loglines are 2–3 sentences of concrete dramatic events; cliffhanger = the final beat. Keep continuity: consequences carry over episode to episode.
+- ${CREATIVE_RULE}
+- ${MODERATION_SAFE_RULE}
+- All text except "locationDesc" is in ${langName(language)}; "locationDesc" is a detailed English visual description. Character names stay exactly as given (Western names in Latin letters).`;
+}
+export function seasonReviseUserPrompt(input: { synopsis: string; structure: SeasonStructure; characters: CharacterCard[]; locations: LocationRef[]; instruction: string }): string {
+  return `SYNOPSIS:\n${input.synopsis}\n\nCHARACTERS (with tiers):\n${charactersBlock(input.characters)}\n\nLOCATIONS:\n${input.locations.length ? locationsBlock(input.locations) : "(none)"}\n\nCURRENT SEASON STRUCTURE (JSON):\n${JSON.stringify(input.structure, null, 1)}\n\nINSTRUCTION FROM THE AUTHOR:\n${input.instruction}`;
+}
+
+const norm = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+/** Does the change to this episode's outline require rewriting its script? Titles alone do not. */
+export function episodeNeedsRewrite(before: EpisodeOutline, after: EpisodeOutline): boolean {
+  if (norm(before.logline) !== norm(after.logline)) return true;
+  if (norm(before.cliffhanger) !== norm(after.cliffhanger)) return true;
+  if (before.arcRole !== after.arcRole) return true;
+  if (norm(before.locationName) !== norm(after.locationName)) return true;
+  const a = new Set(before.characters.map(norm));
+  const b = new Set(after.characters.map(norm));
+  if (a.size !== b.size) return true;
+  for (const x of a) if (!b.has(x)) return true;
+  return false;
+}
+/** Episode numbers whose script must be regenerated after a season revise (pure, unit-tested). */
+export function affectedEpisodes(before: SeasonStructure, after: SeasonStructure): number[] {
+  const prev = new Map(before.episodes.map((e) => [e.number, e]));
+  return after.episodes.filter((e) => { const p = prev.get(e.number); return !p || episodeNeedsRewrite(p, e); }).map((e) => e.number).sort((a, b) => a - b);
+}
