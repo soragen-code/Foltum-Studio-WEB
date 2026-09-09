@@ -57,6 +57,13 @@ export const sceneScriptSchema = z.object({
   dialogue: z.string().min(1),
   /** Same lines in the story language for the UI / subtitles; equals `dialogue` for English projects. */
   dialogueLocal: z.string().optional(),
+  // Stage 12 (Commit D) — optional off-screen NARRATOR voice-over (backstory / catch-up).
+  /** ENGLISH narration read by an off-screen narrator (no on-camera lip-sync). Used mainly for the episode-1 opening backstory. */
+  voiceover: z.string().optional(),
+  /** Same narration in the story language for the UI; equals `voiceover` for English projects. */
+  voiceoverLocal: z.string().optional(),
+  /** "narration" = off-screen voice-over scene (b-roll under narration, no talking heads); "dialogue"/undefined = normal on-camera scene. */
+  sceneKind: z.enum(["dialogue", "narration"]).optional().default("dialogue"),
   videoPrompt: z.string().min(40),
   // Stage 11 — scene-to-scene CONTINUITY metadata (all optional so pre-Stage-11 scripts still validate).
   /** Who is present and WHERE at the START of the scene, carried over from the previous scene's ending. */
@@ -166,17 +173,25 @@ export function validateEpisodeScript(script: EpisodeScript): string[] {
   const problems: string[] = [];
   const n = script.scenes.length;
   if (n < EPISODE_MIN_SCENES || n > EPISODE_MAX_SCENES) problems.push(`scene count ${n} not in ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES}`);
-  const silent = script.scenes.filter((s) => isSilent(s.dialogue)).length;
+  // A narration scene (off-screen voice-over) carries an English narration track, so it is NOT a "silent" scene
+  // and must never count against the silent budget — only truly empty on-camera scenes do.
+  const isNarration = (s: SceneScript) => s.sceneKind === "narration" && !!(s.voiceover ?? "").trim();
+  const silent = script.scenes.filter((s) => isSilent(s.dialogue) && !isNarration(s)).length;
   if (silent > MAX_SILENT_SCENES) problems.push(`soft: too many silent scenes: ${silent} (max ${MAX_SILENT_SCENES})`);
-  if (n - silent < 1) problems.push("no dialogue in episode");
+  const speaking = script.scenes.filter((s) => !isSilent(s.dialogue) || isNarration(s)).length;
+  if (speaking < 1) problems.push("no dialogue in episode");
   script.scenes.forEach((s, i) => {
     if (s.number !== i + 1) problems.push(`scene ${i + 1} numbered ${s.number}`);
-    const sentences = dialogueSentenceCount(s.dialogue);
-    if (!isSilent(s.dialogue) && sentences < TALK_MIN_SENTENCES) problems.push(`soft: scene ${s.number}: ${sentences} dialogue sentences (want ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES})`);
-    // Speech density is ADVISORY: durationSec is derived from the word count by normalizeEpisodeScript,
-    // and at the 15 s floor a short exchange (24–28 words) cannot go any shorter — never a hard failure.
-    const words = spokenWordCount(s.dialogue);
-    if (!isSilent(s.dialogue) && s.durationSec > SCENE_MIN_SECONDS && words < MIN_WORDS_PER_SEC * s.durationSec) problems.push(`soft: scene ${s.number}: ${words} words for ${s.durationSec}s (want ≥ ${MIN_WORDS_PER_SEC} words/s so speech fills the clip)`);
+    // Narration scenes are exempt from on-camera dialogue-density checks (they carry narration, not spoken lines),
+    // but they STILL need a complete videoPrompt with all tags — so only skip the dialogue checks.
+    if (!isNarration(s)) {
+      const sentences = dialogueSentenceCount(s.dialogue);
+      if (!isSilent(s.dialogue) && sentences < TALK_MIN_SENTENCES) problems.push(`soft: scene ${s.number}: ${sentences} dialogue sentences (want ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES})`);
+      // Speech density is ADVISORY: durationSec is derived from the word count by normalizeEpisodeScript,
+      // and at the 15 s floor a short exchange (24–28 words) cannot go any shorter — never a hard failure.
+      const words = spokenWordCount(s.dialogue);
+      if (!isSilent(s.dialogue) && s.durationSec > SCENE_MIN_SECONDS && words < MIN_WORDS_PER_SEC * s.durationSec) problems.push(`soft: scene ${s.number}: ${words} words for ${s.durationSec}s (want ≥ ${MIN_WORDS_PER_SEC} words/s so speech fills the clip)`);
+    }
     if (/\b(slow[- ]?motion|slowly|lingering|linger|long pause|beat of silence|holds? for a (few|long)|slow pan)\b/i.test(s.videoPrompt)) problems.push(`soft: scene ${s.number}: videoPrompt contains slow/lingering direction`);
     const missing = PROMPT_LINES.filter((l) => !s.videoPrompt.includes(l));
     if (missing.length) problems.push(`scene ${s.number}: videoPrompt missing ${missing.join(",")}`);
@@ -221,18 +236,27 @@ export function normalizeEpisodeScript(script: EpisodeScript, characters?: Chara
   };
   return {
     ...script,
-    scenes: script.scenes.map((s, i) => ({
+    scenes: script.scenes.map((s, i) => {
+      const narrationText = (s.voiceover ?? "").trim();
+      const isNarr = s.sceneKind === "narration" && !!narrationText;
+      return {
       ...s,
       number: i + 1,
-      durationSec: estimateDurationSec(s.dialogue, s.action),
+      // Narration clips are paced by the length of the spoken narration, normal clips by the dialogue.
+      durationSec: isNarr ? estimateDurationSec(narrationText, s.action) : estimateDurationSec(s.dialogue, s.action),
       dialogue: s.dialogue.trim() || "[NO DIALOGUE]",
       dialogueLocal: (s.dialogueLocal ?? "").trim() || undefined,
+      // Stage 12 (Commit D) — normalize off-screen narration fields.
+      sceneKind: isNarr ? "narration" : "dialogue",
+      voiceover: isNarr ? narrationText : undefined,
+      voiceoverLocal: isNarr ? ((s.voiceoverLocal ?? "").trim() || undefined) : undefined,
       videoPrompt: repairPrompt(s),
       // Stage 11 — carry continuity metadata through; scene 1 always starts a sequence.
       presence: (s.presence ?? "").trim() || undefined,
       entrances: (s.entrances ?? "").trim() || undefined,
       continuesFrom: (s.continuesFrom ?? "").trim() || (i === 0 ? "new-sequence" : undefined),
-    })),
+      };
+    }),
   };
 }
 
@@ -347,16 +371,24 @@ export function seasonStructureUserPrompt(synopsis: string, characters: Characte
   return `SYNOPSIS:\n${synopsis}\n\nCHARACTERS (with tiers):\n${charactersBlock(characters)}\n\nLOCATIONS (use these names verbatim):\n${locations.length ? locationsBlock(locations) : "(none defined — invent 8–14 diverse locations and reuse them across episodes)"}`;
 }
 
-export function episodeScriptSystemPrompt(language: IdeaLanguage): string {
+export function episodeScriptSystemPrompt(language: IdeaLanguage, episodeNumber = 1): string {
   const L = langName(language);
   const local = language !== "en";
-  return `You are a film director + cinematographer writing the FULL shooting script of ONE episode of a short-form VERTICAL drama (9:16). The episode is ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES} consecutive shots ("scenes"), each 15–${SCENE_MAX_SECONDS} seconds, generated by an AI video model WITH native speech: characters really speak their lines out loud, so the DIALOGUE IS THE PRODUCT. A scene without dialogue is a wasted shot.
+  const isFirst = episodeNumber <= 1;
+  const isSecond = episodeNumber === 2;
+  // Off-screen narrator backstory: MANDATORY opening for episode 1, OPTIONAL light catch-up for episode 2, none after.
+  const narrationRule = isFirst
+    ? `\nR7. OPENING NARRATION (MANDATORY for this episode — it is EPISODE 1): scene 1 is an off-screen NARRATOR voice-over that sets up the backstory/world before the drama starts. For that scene set "sceneKind": "narration", put 2–4 sentences of English backstory narration in "voiceover"${local ? ` and its ${L} translation in "voiceoverLocal"` : ""}, and set "dialogue": "[NO DIALOGUE]" (there is NO on-camera talking). Its "videoPrompt" is ATMOSPHERIC ESTABLISHING B-ROLL that plays UNDER the narration — sweeping/observational shots of the location and world, NO talking heads, NO character mouths moving, NO lip-sync; it still contains all 9 [..] lines (the [CHARACTER] line describes anyone glimpsed, and characters may appear in the distance doing ordinary things but NOT speaking). From scene 2 onward the episode is normal on-camera dialogue as usual. Every OTHER scene keeps "sceneKind": "dialogue".`
+    : isSecond
+      ? `\nR7. OPTIONAL CATCH-UP NARRATION: only IF it genuinely helps the viewer, scene 1 MAY be a short off-screen NARRATOR voice-over recapping what matters from earlier (1–3 sentences). If you use it, set "sceneKind": "narration", put the English narration in "voiceover"${local ? ` and its ${L} translation in "voiceoverLocal"` : ""}, "dialogue": "[NO DIALOGUE]", and make its "videoPrompt" atmospheric establishing b-roll (no talking heads, no lip-sync). This is NOT required — most episodes open straight on dialogue. Every non-narration scene keeps "sceneKind": "dialogue".`
+      : `\nR7. NO opening narration in this episode — open straight on on-camera dialogue. Every scene keeps "sceneKind": "dialogue".`;
+  return `You are a film director + cinematographer writing the FULL shooting script of ONE episode (EPISODE ${episodeNumber}) of a short-form VERTICAL drama (9:16). The episode is ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES} consecutive shots ("scenes"), each 15–${SCENE_MAX_SECONDS} seconds, generated by an AI video model WITH native speech: characters really speak their lines out loud, so the DIALOGUE IS THE PRODUCT. A scene without dialogue is a wasted shot (the ONLY exception is a narration scene — see R7).
 
-Return STRICT JSON: {"visualIdentity": string, "scenes": [{"number": int, "shotType": string, "durationSec": int, "locationDesc": string, "characters": [names], "action": string, "dialogue": string${local ? ', "dialogueLocal": string' : ""}, "videoPrompt": string, "presence": string, "entrances": string, "continuesFrom": string}]}.
+Return STRICT JSON: {"visualIdentity": string, "scenes": [{"number": int, "shotType": string, "durationSec": int, "locationDesc": string, "characters": [names], "action": string, "sceneKind": "dialogue"|"narration", "dialogue": string${local ? ', "dialogueLocal": string' : ""}, "voiceover": string, ${local ? '"voiceoverLocal": string, ' : ""}"videoPrompt": string, "presence": string, "entrances": string, "continuesFrom": string}]}. ("voiceover"${local ? '/"voiceoverLocal"' : ""} is used ONLY for narration scenes; leave it "" for normal scenes.)
 
 HARD RULES (the script is REJECTED automatically if any is broken):
-R1. The NUMBER OF SCENES follows the drama of this episode's logline (min ${EPISODE_MIN_SCENES}, max ${EPISODE_MAX_SCENES}) — no padding, no filler. Nobody sets a running time: each scene lasts exactly as long as its dialogue needs (15–${SCENE_MAX_SECONDS} s at a brisk ~2.7 words/s; "durationSec" = round(words / 2.7) + 2, clamped to 15–${SCENE_MAX_SECONDS}). All scenes happen in/around the episode's key location; scene 1 may open on a wide shot but someone is ALREADY talking in it.
-R2. AT MOST ${MAX_SILENT_SCENES} scenes in the whole episode may be silent ("[NO DIALOGUE]"). ALL OTHER SCENES contain a real spoken exchange.
+R1. The NUMBER OF SCENES follows the drama of this episode's logline (min ${EPISODE_MIN_SCENES}, max ${EPISODE_MAX_SCENES}) — no padding, no filler. Nobody sets a running time: each scene lasts exactly as long as its dialogue needs (15–${SCENE_MAX_SECONDS} s at a brisk ~2.7 words/s; "durationSec" = round(words / 2.7) + 2, clamped to 15–${SCENE_MAX_SECONDS}). All scenes happen in/around the episode's key location; scene 1 may open on a wide shot but someone is ALREADY talking in it (UNLESS R7 makes scene 1 an off-screen narration scene).
+R2. AT MOST ${MAX_SILENT_SCENES} scenes in the whole episode may be silent ("[NO DIALOGUE]"). ALL OTHER SCENES contain a real spoken exchange. (A narration scene from R7 does NOT count as silent — it carries an English narration track, not on-camera dialogue.)${narrationRule}
 R3. A talking scene = a SUBSTANTIVE exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences in total, spread over 3–6 lines where characters answer each other IMMEDIATELY (the story is told THROUGH the dialogue: decisions, accusations, confessions, information, subtext). Replies are quick, people interrupt and overlap; every second of the clip is filled with speech — at least ~35 words per talking scene (≥ 2 words per second of durationSec). Monologue or voice-over does NOT replace dialogue — when two people are in the shot they talk to each other; a lone character may talk on the phone or to someone off-screen. Short one-liners like "I have to know the truth." alone are REJECTED. One line per row, format: NAME (tone cue): "line". Tone cues like (sharply), (whispering), (holding back tears).
     "dialogue" is ALWAYS in ENGLISH — it is what the video model voices.${local ? ` "dialogueLocal" is the same lines translated into ${L}, same line structure and cues (shown to the author as the script text).` : ""}
     Example of a correct talking scene (6 sentences, 26 s):
@@ -416,7 +448,14 @@ export function episodeScriptUserPrompt(input: {
 export function renderEpisodeScriptText(ep: EpisodeOutline, script: EpisodeScript): string {
   const head = `ЭПИЗОД ${ep.number}. ${ep.title}\n${ep.logline}\nЛокация: ${ep.locationName}\nПерсонажи: ${ep.characters.join(", ")}\n`;
   const body = script.scenes
-    .map((s) => `\nСЦЕНА ${s.number} · ${s.shotType} · ~${s.durationSec}с\n${s.locationDesc}\n${s.action}\n${s.dialogueLocal ?? s.dialogue}${s.dialogueLocal && s.dialogueLocal !== s.dialogue ? `\n[EN speech]\n${s.dialogue}` : ""}`)
+    .map((s) => {
+      const head2 = `\nСЦЕНА ${s.number}${s.sceneKind === "narration" ? " · ЗАКАДРОВЫЙ ГОЛОС" : ""} · ${s.shotType} · ~${s.durationSec}с\n${s.locationDesc}\n${s.action}`;
+      if (s.sceneKind === "narration" && (s.voiceover ?? "").trim()) {
+        const local = (s.voiceoverLocal ?? "").trim();
+        return `${head2}\nЗакадровый голос: ${local || s.voiceover}${local && local !== s.voiceover ? `\n[EN voiceover]\n${s.voiceover}` : ""}`;
+      }
+      return `${head2}\n${s.dialogueLocal ?? s.dialogue}${s.dialogueLocal && s.dialogueLocal !== s.dialogue ? `\n[EN speech]\n${s.dialogue}` : ""}`;
+    })
     .join("\n");
   return `${head}${body}\n\nКЛИФФХЭНГЕР: ${ep.cliffhanger}\n`;
 }

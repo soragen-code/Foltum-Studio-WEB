@@ -94,3 +94,9 @@ ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "continuesFrom" TEXT;
 
 -- Stage 12: whole detailed season story with explicit episode markers (additive, nullable).
 ALTER TABLE "Season" ADD COLUMN IF NOT EXISTS "fullStory" TEXT;
+
+
+-- Stage 12 (Commit D): off-screen narration scenes (additive, nullable — old scenes keep working).
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "sceneKind" TEXT DEFAULT 'dialogue';
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "voiceover" TEXT;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "voiceoverLocal" TEXT;

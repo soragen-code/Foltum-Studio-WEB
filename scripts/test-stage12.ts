@@ -19,8 +19,16 @@ import {
   seasonStoryReviseSystemPrompt,
   SEASON_MIN_EPISODES,
   SEASON_MAX_EPISODES,
+  episodeScriptSystemPrompt,
+  sceneScriptSchema,
+  validateEpisodeScript,
+  normalizeEpisodeScript,
+  MAX_SILENT_SCENES,
+  EPISODE_MIN_SCENES,
   type SeasonStructure,
+  type EpisodeScript,
 } from "../lib/season";
+import { buildNarrationAudioPrompt, buildNativeAudioPrompt } from "../lib/voiceover";
 
 let pass = 0;
 const ok = (cond: unknown, msg: string) => { assert(cond, msg); console.log("ok:", msg); pass++; };
@@ -114,6 +122,55 @@ ok(cleanStoryText("x".repeat(STORY_MAX_CHARS + 500)).length === STORY_MAX_CHARS,
   const epLocs = episodeLocations({ locationId: "l1", locationName: "Маяк", scenes: [{ locationDesc: "разговор на пирсе" }] }, locList);
   ok(epLocs.some((l: any) => l.id === "l1") && epLocs.some((l: any) => l.id === "l2"), "episodeLocations: bound location + scene-mentioned location");
   ok(!epLocs.some((l: any) => l.id === "l3"), "episodeLocations: excludes unrelated locations");
+
+  // --- (D) episode-1/2 off-screen narration voiceover ------------------------
+  // Scene schema accepts the new narration fields (all optional; defaults to "dialogue").
+  const narrScene = sceneScriptSchema.safeParse({
+    number: 1, shotType: "wide establishing", locationDesc: "EXT lighthouse dawn", action: "waves crash on the rocks",
+    dialogue: "[NO DIALOGUE]", sceneKind: "narration", voiceover: "For thirty years the light never failed.", voiceoverLocal: "Тридцать лет маяк не гас.",
+    videoPrompt: "[SHOT TYPE]: wide sweeping b-roll\n[VISUAL STYLE]: photoreal\n[LIGHTING]: cold dawn\n[BLOCKING]: none\n[GAZE]: none\n[NON-VERBAL]: none\n[ACTION]: gulls wheel over the surf\n[CHARACTER]: distant keeper\n[TRANSITION]: hard cut",
+  });
+  ok(narrScene.success, "sceneScriptSchema accepts narration fields (voiceover/voiceoverLocal/sceneKind)");
+  ok(sceneScriptSchema.parse({ number: 1, shotType: "med", locationDesc: "room", action: "they talk", dialogue: "A: hi", videoPrompt: "x".repeat(41) }).sceneKind === "dialogue", "sceneScriptSchema defaults sceneKind to 'dialogue'");
+
+  // Episode-1 system prompt FORCES an opening narration scene (mandatory backstory voiceover).
+  const ep1sys = episodeScriptSystemPrompt("ru", 1);
+  ok(/MANDATORY/.test(ep1sys) && /EPISODE 1/.test(ep1sys) && /"sceneKind": "narration"/.test(ep1sys), "episodeScriptSystemPrompt(ep1): opening narration MANDATORY");
+  ok(/off-screen NARRATOR/i.test(ep1sys) && /no lip-sync/i.test(ep1sys) && /voiceover/.test(ep1sys), "episodeScriptSystemPrompt(ep1): off-screen narrator, no lip-sync b-roll");
+  ok(/voiceoverLocal/.test(ep1sys), "episodeScriptSystemPrompt(ep1,ru): asks for translated voiceoverLocal");
+  // Episode-2 = OPTIONAL catch-up only (not forced).
+  const ep2sys = episodeScriptSystemPrompt("ru", 2);
+  ok(/OPTIONAL/.test(ep2sys) && /NOT required/i.test(ep2sys), "episodeScriptSystemPrompt(ep2): catch-up narration OPTIONAL, not forced");
+  // Episode-3+ = no narration.
+  const ep3sys = episodeScriptSystemPrompt("ru", 3);
+  ok(/NO opening narration/.test(ep3sys), "episodeScriptSystemPrompt(ep3): no opening narration");
+  // English project: no voiceoverLocal requested.
+  ok(!/voiceoverLocal/.test(episodeScriptSystemPrompt("en", 1)), "episodeScriptSystemPrompt(en): no voiceoverLocal for English projects");
+
+  // validateEpisodeScript: a narration scene (dialogue empty but voiceover present) does NOT count as silent.
+  const vp = "[SHOT TYPE]: wide\n[VISUAL STYLE]: photoreal\n[LIGHTING]: dawn\n[BLOCKING]: move\n[GAZE]: at each other\n[NON-VERBAL]: gestures\n[ACTION]: they cross the room and background life continues\n[CHARACTER]: Anna 30\n[TRANSITION]: hard cut";
+  const talk = (n: number) => ({ number: n, shotType: "medium two-shot", durationSec: 20, locationDesc: "INT room day", characters: ["Anna", "Victor"], action: "they argue and one crosses the room", dialogue: 'ANNA (sharply): "You knew and you said nothing to me all winter." VICTOR (quietly): "I did what kept us both alive that year."', sceneKind: "dialogue" as const, videoPrompt: vp });
+  const narr = { number: 1, shotType: "wide b-roll", durationSec: 18, locationDesc: "EXT dawn", characters: [], action: "waves crash and gulls wheel over the surf", dialogue: "[NO DIALOGUE]", sceneKind: "narration" as const, voiceover: "For thirty years the light never failed, until the night it did.", voiceoverLocal: "Тридцать лет маяк не гас.", videoPrompt: vp };
+  const withNarr: EpisodeScript = normalizeEpisodeScript({ visualIdentity: "photoreal coastal drama", scenes: [narr, ...Array.from({ length: EPISODE_MIN_SCENES }, (_, i) => talk(i + 2))] } as EpisodeScript);
+  const problemsN = validateEpisodeScript(withNarr);
+  ok(!problemsN.some((p) => /too many silent/.test(p)), "validateEpisodeScript: narration scene NOT counted against silent budget");
+  ok(withNarr.scenes[0].sceneKind === "narration" && !!withNarr.scenes[0].voiceover, "normalizeEpisodeScript: keeps narration sceneKind + voiceover");
+  ok(withNarr.scenes[1].sceneKind === "dialogue" && !withNarr.scenes[1].voiceover, "normalizeEpisodeScript: normal scene has no voiceover, kind dialogue");
+
+  // A truly silent (no dialogue, no voiceover) scene still counts toward the silent budget.
+  const trulySilent = { ...talk(2), dialogue: "[NO DIALOGUE]", sceneKind: "dialogue" as const };
+  const manySilent: EpisodeScript = normalizeEpisodeScript({ visualIdentity: "photoreal", scenes: [trulySilent, { ...trulySilent, number: 3 }, { ...trulySilent, number: 4 }, talk(5), talk(6), talk(7)] } as EpisodeScript);
+  ok(validateEpisodeScript(manySilent).some((p) => /too many silent/.test(p)), `validateEpisodeScript: >${MAX_SILENT_SCENES} truly-silent scenes still flagged`);
+
+  // buildNarrationAudioPrompt: English off-screen narrator, verbatim, no music/subtitles/lip-sync.
+  const np = buildNarrationAudioPrompt("[SHOT TYPE]: wide b-roll", "For thirty years the light never failed.");
+  ok(/off-screen narrator/i.test(np) && /English/.test(np), "buildNarrationAudioPrompt: off-screen English narrator");
+  ok(np.includes("For thirty years the light never failed."), "buildNarrationAudioPrompt: reads narration verbatim");
+  ok(/NO background music/i.test(np) && /no.*subtitles/i.test(np) && /no lip-sync/i.test(np), "buildNarrationAudioPrompt: no music, no subtitles, no lip-sync");
+  ok(/NO on-camera dialogue/i.test(np), "buildNarrationAudioPrompt: no on-camera dialogue");
+  // Normal dialogue prompt still lip-syncs on camera (not broken by Commit D).
+  const dp = buildNativeAudioPrompt("[SHOT TYPE]: medium", 'ANNA (softly): "We should go."', [{ name: "Anna" }], "English");
+  ok(/lips moving on camera/i.test(dp), "buildNativeAudioPrompt: normal scenes still lip-sync on camera (unbroken)");
 
   console.log(`\nALL STAGE12 CHECKS PASSED (${pass})`);
 })();

@@ -180,6 +180,28 @@ export function buildNativeAudioPrompt(
   return `${base}\n\nThe characters speak the following lines out loud, on camera, in sync with their lip movements. ${LANGUAGE_DIRECTION}\n${spoken}\n\n${AUDIO_DIRECTION}`;
 }
 
+/**
+ * Stage 12 (Commit D): build the prompt for an OFF-SCREEN NARRATION scene.
+ * An English narrator reads `voiceover` verbatim over atmospheric b-roll — there is NO on-camera
+ * dialogue, NO lip-sync, NO talking heads, NO music and NO subtitles. Used mainly for the episode-1
+ * opening backstory (and an optional episode-2 catch-up).
+ */
+export function buildNarrationAudioPrompt(basePrompt: string, voiceover: string | null | undefined): string {
+  const base = (basePrompt ?? "").trim();
+  const text = (voiceover ?? "").trim();
+  if (!text) {
+    // Defensive: no narration text → treat as ambient-only b-roll.
+    return `${base}\n\nAUDIO TRACK: ambient sound and room tone of the location only. NO background music. NO score. NO soundtrack. No voiceover. No subtitles.`;
+  }
+  const NARRATION_DIRECTION =
+    "AUDIO TRACK: a single OFF-SCREEN NARRATOR voice-over in English, plus the natural ambient sound of the location. " +
+    "The narrator is NOT on camera and NOT any visible character — nobody's lips move to these words. " +
+    "Read the narration exactly and verbatim, word for word, in clear, natural English, without translating, " +
+    "paraphrasing, adding or dropping any words, at a calm measured storytelling pace so it finishes before the clip ends. " +
+    "NO on-camera dialogue, NO lip-sync, NO talking heads. NO background music. NO score. NO instrumental track. NO soundtrack. No on-screen text or subtitles.";
+  return `${base}\n\nAn off-screen narrator speaks the following narration in English over the footage (voice-over only, no visible speaker, no lip movement):\n"${text}"\n\n${NARRATION_DIRECTION}`;
+}
+
 function findCharacter(speaker: string | null, characters: VoiceCharacter[]): VoiceCharacter | undefined {
   if (!speaker) return undefined;
   const s = speaker.toLowerCase();

@@ -41,7 +41,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   try {
     const raw0 = sceneReviseSchema.parse(await chatJSON(sceneReviseSystemPrompt(language), user, { temperature: 0.6, maxTokens: 3000 }));
     // Seedance voices `dialogue` → guarantee English (swap swapped fields / translate).
-    const ensured = await ensureEnglishDialogue({ visualIdentity: "", scenes: [{ ...raw0, number: scene.number, characters: scene.characters.map((c) => c.character.name) }] }, chatJSON);
+    const ensured = await ensureEnglishDialogue({ visualIdentity: "", scenes: [{ ...raw0, number: scene.number, sceneKind: "dialogue" as const, characters: scene.characters.map((c) => c.character.name) }] }, chatJSON);
     const raw = { ...raw0, dialogue: ensured.scenes[0].dialogue, dialogueLocal: ensured.scenes[0].dialogueLocal };
     const { dialogueLocal, ...rest } = raw;
     // Speech is always English (`dialogueEn`); `dialogue` keeps the story-language text for the UI / subtitles.

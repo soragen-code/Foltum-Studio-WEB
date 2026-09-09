@@ -74,7 +74,7 @@ export async function generateEpisodeScript(input: {
   instruction?: string;
 }): Promise<EpisodeScript> {
   return generateWithRetry(input.jobId, 2, async () => {
-    const raw = await chatJSON(episodeScriptSystemPrompt(input.language), episodeScriptUserPrompt(input), {
+    const raw = await chatJSON(episodeScriptSystemPrompt(input.language, input.episode.number), episodeScriptUserPrompt(input), {
       temperature: 0.6,
       maxTokens: 16000,
     });
@@ -140,6 +140,11 @@ export async function persistEpisodeScript(
           presence: s.presence ?? null,
           entrances: s.entrances ?? null,
           continuesFrom: s.continuesFrom ?? null,
+          // Stage 12 (Commit D) — off-screen narration: `voiceover` = English narration voiced by the model,
+          // `voiceoverLocal` = the same narration translated for the UI. `sceneKind` distinguishes narration from dialogue.
+          sceneKind: s.sceneKind ?? "dialogue",
+          voiceover: s.voiceover ?? null,
+          voiceoverLocal: s.voiceoverLocal ?? s.voiceover ?? null,
           language: "en", // speech is always English (Stage 4)
           subtitled: false,
           status: "pending",

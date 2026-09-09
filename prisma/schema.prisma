@@ -220,6 +220,9 @@ model Scene {
   presence      String?  @db.Text // stage 11: continuity — who is present and where at the START of the scene (follows from the previous scene)
   entrances     String?  @db.Text // stage 11: continuity — who enters/leaves inside the scene and how (shown on screen)
   continuesFrom String?  // stage 11: continuity link to the previous scene: same-location-continuation | character-moves | location-change | new-sequence
+  sceneKind     String?  @default("dialogue") // stage 12: "narration" = off-screen voice-over scene (b-roll), "dialogue"/null = normal on-camera scene
+  voiceover     String?  @db.Text // stage 12: ENGLISH off-screen narration voiced by the model (backstory/catch-up), used only for narration scenes
+  voiceoverLocal String? @db.Text // stage 12: the same narration translated into the story language for the UI
   status        String   @default("pending") // pending, generating, generated, accepted
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt

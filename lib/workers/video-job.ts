@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db";
 import { startVideoPrediction, startKlingPrediction, startLipsyncPrediction, startImagePrediction, getPredictionState, cancelVideoPrediction, KLING_MODEL, LIPSYNC_MODEL } from "@/lib/replicate";
-import { buildNativeAudioPrompt, translateDialogue, detectSpokenLanguage, languageName, parseDialogue } from "@/lib/voiceover";
+import { buildNativeAudioPrompt, buildNarrationAudioPrompt, translateDialogue, detectSpokenLanguage, languageName, parseDialogue } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
 import { extractLastFrameBuffer, extractAudioBuffer } from "@/lib/ffmpeg";
 import { PACE_DIRECTION } from "@/lib/season";
@@ -145,13 +145,18 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     // Stage 4: speech is ALWAYS English. `dialogueEn` holds the voiced lines; legacy scenes written in
     // another language are translated once and the translation is saved.
     const targetLanguage = "English";
-    let dialogue = (scene.dialogueEn ?? "").trim() || scene.dialogue;
-    if (dialogue && detectSpokenLanguage(dialogue) !== targetLanguage) {
+    // Stage 12 (Commit D): narration scenes carry an off-screen English narrator (b-roll under narration),
+    // NOT on-camera dialogue — so they never go through the lip-sync/dialogue prompt path.
+    const isNarration = scene.sceneKind === "narration" && !!(scene.voiceover ?? "").trim();
+    let dialogue = isNarration ? "" : ((scene.dialogueEn ?? "").trim() || scene.dialogue);
+    if (!isNarration && dialogue && detectSpokenLanguage(dialogue) !== targetLanguage) {
       dialogue = await translateDialogue(dialogue, targetLanguage);
       await prisma.scene.update({ where: { id: sceneId }, data: { dialogueEn: dialogue, language: "en" } }).catch(() => {});
     }
-    // Sanitize visual descriptions BEFORE adding speech: never rewrite scripted dialogue.
-    let prompt = `${buildNativeAudioPrompt(stripSlowDirections(visualPrompt), dialogue, links.map(l => l.character), targetLanguage)}\n\n${PACE_DIRECTION}`;
+    // Sanitize visual descriptions BEFORE adding speech: never rewrite scripted dialogue / narration.
+    let prompt = isNarration
+      ? `${buildNarrationAudioPrompt(stripSlowDirections(visualPrompt), scene.voiceover)}\n\n${PACE_DIRECTION}`
+      : `${buildNativeAudioPrompt(stripSlowDirections(visualPrompt), dialogue, links.map(l => l.character), targetLanguage)}\n\n${PACE_DIRECTION}`;
     // Seedance moderation (E005): neutralize explicit wording (weapons, blood, violence, children in
     // danger, intimacy...) in BOTH the visual prompt and the English dialogue before submitting.
     const softened = softenForModeration(prompt, 1);

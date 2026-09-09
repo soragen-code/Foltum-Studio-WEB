@@ -20,7 +20,7 @@ function parseExtra(imageExtra?: string | null): string[] {
   try { const a = JSON.parse(imageExtra); return Array.isArray(a) ? a.filter((u): u is string => typeof u === 'string' && u.startsWith('http')) : [] } catch { return [] }
 }
 
-type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; videoPrompt?: string | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; status: string; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
+type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; status: string; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Plan = { sceneCount: number; pendingCount: number; duration: number; costPerScene: number; total: number; credits: number; tier: string; resolution: string }
 type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null }
 
@@ -545,13 +545,26 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               <div key={scene.id} className="rounded-xl border border-border bg-card p-4" data-testid="scene-card" data-scene-status={gen ? 'generating' : validUrl(scene.videoUrl) ? 'ready' : 'pending'}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="font-semibold">Сцена {scene.number} <span className="text-xs font-normal text-muted-foreground">· {scene.shotType} · ~{scene.durationSec ?? 15}с</span></div>
+                    <div className="font-semibold">Сцена {scene.number}
+                      {scene.sceneKind === 'narration' && <span className="ml-2 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary align-middle" data-testid="narration-badge">Закадровый голос</span>}
+                      <span className="text-xs font-normal text-muted-foreground"> · {scene.shotType} · ~{scene.durationSec ?? 15}с</span>
+                    </div>
                     <div className="text-xs text-muted-foreground">{scene.locationDesc}</div>
                   </div>
                   <div className="flex -space-x-1">{scene.characters?.map(({ character: c }) => validUrl(c.imageFront) ? <img key={c.id} src={c.imageFront as string} alt={c.name} title={c.name} className="h-6 w-6 rounded-full border border-background object-cover" /> : null)}</div>
                 </div>
                 {scene.action && <p className="mt-2 text-sm italic">{scene.action}</p>}
-                <pre className="mt-2 whitespace-pre-wrap break-words font-sans text-sm">{scene.dialogue}</pre>
+                {scene.sceneKind === 'narration' ? (
+                  <div className="mt-2 rounded-lg border border-primary/30 bg-primary/5 p-3" data-testid="scene-voiceover">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-primary">Закадровый голос (на видео — на английском)</div>
+                    <p className="mt-1 whitespace-pre-wrap break-words text-sm">{scene.voiceoverLocal || scene.voiceover}</p>
+                    {scene.voiceoverLocal && scene.voiceover && scene.voiceoverLocal !== scene.voiceover && (
+                      <p className="mt-1 whitespace-pre-wrap break-words text-xs italic text-muted-foreground">EN: {scene.voiceover}</p>
+                    )}
+                  </div>
+                ) : (
+                  <pre className="mt-2 whitespace-pre-wrap break-words font-sans text-sm">{scene.dialogue}</pre>
+                )}
 
                 <div className="mt-3 aspect-[9/16] max-h-[420px] overflow-hidden rounded-lg bg-black/80">
                   {gen ? (
