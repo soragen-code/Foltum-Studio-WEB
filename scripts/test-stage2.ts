@@ -29,13 +29,15 @@ assert(withLocal.scenes[0].dialogueLocal === talk, "dialogueLocal preserved by n
 assert(/ALWAYS in ENGLISH/.test(episodeScriptSystemPrompt("ru")) && /dialogueLocal/.test(episodeScriptSystemPrompt("ru")) && !/dialogueLocal/.test(episodeScriptSystemPrompt("en")), "episode prompt: EN speech + local subtitles only for non-EN");
 assert(/Nobody sets a running time/.test(episodeScriptSystemPrompt("ru")) && /Western names/.test(episodeScriptSystemPrompt("ru")), "episode prompt: no running time asked, Western names");
 assert(/NO pauses/.test(PACE_DIRECTION) && /2–4 cuts/.test(PACE_DIRECTION) && episodeScriptSystemPrompt("ru").includes(PACE_DIRECTION), "pace/camera/expression direction in prompt");
-assert(/ALWAYS in ENGLISH/.test(trailerSystemPrompt("ru")) && trailerSystemPrompt("ru").includes(PACE_DIRECTION) && /CUT LIST/.test(trailerSystemPrompt("ru")), "trailer prompt: EN speech, pace, cut list");
+// stage9: the mini-trailer uses a COMPACT craft note (not the heavy season rules) so its single LLM call stays fast.
+assert(/ALWAYS in ENGLISH/.test(trailerSystemPrompt("ru")) && /SPACIOUS & DYNAMIC/.test(trailerSystemPrompt("ru")) && /CUT LIST/.test(trailerSystemPrompt("ru")), "trailer prompt: EN speech, compact craft, cut list");
 // stage7: масштаб/объём сцен + бытовые действия персонажей в промптах эпизода и трейлера
 assert(/SCALE & DEPTH/.test(SCALE_DEPTH_RULE) && /SPACIOUS/.test(SCALE_DEPTH_RULE) && /WIDE or ESTABLISHING/.test(SCALE_DEPTH_RULE) && /foreground/.test(SCALE_DEPTH_RULE), "SCALE_DEPTH_RULE: spacious, wide/establishing, depth");
 assert(/CHARACTERS ACT/.test(EVERYDAY_BEHAVIOR_RULE) && /talking heads/.test(EVERYDAY_BEHAVIOR_RULE) && /lip-sync-safe/.test(EVERYDAY_BEHAVIOR_RULE) && /moderation-safe/.test(EVERYDAY_BEHAVIOR_RULE), "EVERYDAY_BEHAVIOR_RULE: physical business, lip-sync & moderation safe");
 assert(/ALIVE/.test(LOCATION_PRESENCE_RULE) && /background life/.test(LOCATION_PRESENCE_RULE), "LOCATION_PRESENCE_RULE: living background");
 assert(episodeScriptSystemPrompt("ru").includes(SCALE_DEPTH_RULE) && episodeScriptSystemPrompt("ru").includes(EVERYDAY_BEHAVIOR_RULE) && episodeScriptSystemPrompt("ru").includes(LOCATION_PRESENCE_RULE), "episode prompt embeds scale/depth + everyday behavior + location presence");
-assert(trailerSystemPrompt("ru").includes(SCALE_DEPTH_RULE) && trailerSystemPrompt("ru").includes(EVERYDAY_BEHAVIOR_RULE), "trailer prompt embeds scale/depth + everyday behavior");
+// stage9: trailer keeps the ESSENCE of scale/depth + everyday behaviour in a compact form (not the full heavy rules).
+assert(/SPACIOUS & DYNAMIC/.test(trailerSystemPrompt("ru")) && /CHARACTERS ACT/.test(trailerSystemPrompt("ru")) && !trailerSystemPrompt("ru").includes(SCALE_DEPTH_RULE), "trailer prompt: compact craft/action, not the full heavy rules");
 // stage7b: диалоги на общих планах (без крупного лица во весь экран) + естественная расстановка, не «лицом к лицу»
 assert(/never fills the screen/.test(PACE_DIRECTION) && /DO NOT push in to a full-screen face close-up/.test(PACE_DIRECTION), "PACE_DIRECTION: no full-screen face close-up");
 assert(/never two people simply standing face to face/.test(PACE_DIRECTION) && /NATURALLY in the space/.test(PACE_DIRECTION), "PACE_DIRECTION: natural staging, no face-off");

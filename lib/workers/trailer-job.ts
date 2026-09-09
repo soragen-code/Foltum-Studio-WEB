@@ -14,8 +14,10 @@ import { persistEpisodeScript } from "@/lib/workers/season-script-job";
 
 export const TRAILER_TITLE = "Мини-трейлер (тест)";
 
-/** Typical wall time of the trailer LLM call (gpt-4o, ~20–25 s); used only to pace the progress bar. */
-const TRAILER_LLM_EXPECTED_MS = 30_000;
+/** Typical wall time of the trailer LLM call (gpt-4o, ~18–25 s); used only to pace the progress bar. */
+const TRAILER_LLM_EXPECTED_MS = 22_000;
+/** Hard cap for the single trailer script call: 3 scenes never legitimately need longer; on a stall we fail fast with a clear message. */
+const TRAILER_LLM_TIMEOUT_MS = 90_000;
 
 /**
  * Awaits `work` while advancing the job progress from `from` toward `to` on a time basis
@@ -45,20 +47,32 @@ export async function runTrailerJob(jobId: string, projectId: string): Promise<v
     const cards = project.characters.map(toCharacterCard);
     await updateJob(jobId, { status: "processing", progress: 10, message: "Пишу сценарий мини-трейлера..." });
 
-    const raw = await withLiveProgress(
-      jobId,
-      chatJSON(trailerSystemPrompt(language), trailerUserPrompt(project.synopsis, cards, project.locations), { temperature: 0.7, maxTokens: 6000 }),
-      10, 65, TRAILER_LLM_EXPECTED_MS, "Пишу сценарий мини-трейлера (3 сцены, диалоги на EN + перевод)...",
-    );
+    // ONE LLM call writes all 3 scenes with BOTH the English `dialogue` (voiced by the video model)
+    // and the project-language `dialogueLocal` (shown to the author). A bounded timeout + single
+    // retry turns a stalled generation into a fast, clear failure instead of a ~10-min hang.
+    let raw: unknown;
+    try {
+      raw = await withLiveProgress(
+        jobId,
+        chatJSON(trailerSystemPrompt(language), trailerUserPrompt(project.synopsis, cards, project.locations), { temperature: 0.7, maxTokens: 4000, timeoutMs: TRAILER_LLM_TIMEOUT_MS, maxRetries: 1 }),
+        10, 80, TRAILER_LLM_EXPECTED_MS, "Пишу сценарий мини-трейлера (3 сцены, диалоги на EN + перевод)...",
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/timeout|timed out|abort|ETIMEDOUT|ECONNRESET/i.test(msg)) throw new Error("Модель отвечала слишком долго. Попробуйте запустить мини-трейлер ещё раз.");
+      throw err;
+    }
     let script = trailerScriptSchema.parse(raw);
-    await updateJob(jobId, { progress: 68, message: "Проверяю сценарий и английскую озвучку..." });
+    await updateJob(jobId, { progress: 84, message: "Проверяю сценарий и английскую озвучку..." });
+    // Local-only fixes + a single BATCHED translation call ONLY if some scene's dialogue is not English
+    // (the main prompt already returns English, so this normally adds zero LLM calls).
     const normalized = await ensureEnglishDialogue(normalizeEpisodeScript({ visualIdentity: script.visualIdentity, scenes: script.scenes }, cards), chatJSON);
     script = { ...script, scenes: normalized.scenes.slice(0, TRAILER_MAX_SCENES) };
     if (script.scenes.length < TRAILER_MIN_SCENES) throw new Error("trailer script too short");
     const hard = validateEpisodeScript({ visualIdentity: script.visualIdentity, scenes: script.scenes }).filter((p) => !isSoftProblem(p) && !/scene count/.test(p));
     if (hard.length) throw new Error(`trailer script invalid: ${hard.slice(0, 3).join("; ")}`);
 
-    await updateJob(jobId, { progress: 70, message: "Сохраняю трейлер..." });
+    await updateJob(jobId, { progress: 90, message: "Сохраняю трейлер..." });
     const firstLoc = matchLocation(project.locations, script.locationNames[0] ?? "") ?? project.locations[0] ?? null;
     const names = Array.from(new Set(script.scenes.flatMap((s) => s.characters)));
     const outline: EpisodeOutline = {

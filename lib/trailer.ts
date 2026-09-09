@@ -5,7 +5,19 @@
  */
 import { z } from "zod";
 import { LANGUAGE_NAMES, type IdeaLanguage, type CharacterCard } from "@/lib/idea";
-import { sceneScriptSchema, TALK_MIN_SENTENCES, TALK_MAX_SENTENCES, SCENE_MAX_SECONDS, PACE_DIRECTION, MODERATION_SAFE_RULE, CREATIVE_RULE, LOCATION_PRESENCE_RULE, SCALE_DEPTH_RULE, EVERYDAY_BEHAVIOR_RULE, type LocationRef } from "@/lib/season";
+import { sceneScriptSchema, TALK_MIN_SENTENCES, TALK_MAX_SENTENCES, SCENE_MAX_SECONDS, MODERATION_SAFE_RULE, type LocationRef } from "@/lib/season";
+
+/**
+ * Compact craft rules for the SHORT mini-trailer. The full season rules (SCALE_DEPTH_RULE,
+ * EVERYDAY_BEHAVIOR_RULE, PACE_DIRECTION, LOCATION_PRESENCE_RULE, CREATIVE_RULE) are hundreds of
+ * words each and are meant for a full episode; loading all of them into a 3-scene demo only bloats
+ * the prompt and slows the single LLM call. Here we keep the ESSENTIALS — dynamics/framing,
+ * physical action, a living location — as three short lines, plus the shared MODERATION_SAFE_RULE.
+ */
+export const TRAILER_CRAFT =
+  "SPACIOUS & DYNAMIC: play each scene across the location with 2–4 hard cuts on WIDE and MEDIUM shots that keep the environment and the space between characters visible; build depth (foreground → characters → deep background). NO full-screen face close-up — the face never fills the screen (tightest is a brief medium close-up with the location still behind). Place the characters NATURALLY in the space, never squared off face to face. No slow pans, no slow motion, no empty establishing seconds.";
+export const TRAILER_ACTION =
+  "CHARACTERS ACT (no talking heads): while they speak, each character does concrete ordinary business tied to the location's objects (pour, hold, walk, type, open a door) — lip-sync-safe (the speaking face stays clearly in frame) and moderation-safe (no physical contact, no danger). The location is ALIVE: believable background activity behind the leads.";
 
 export const TRAILER_SEASON_NUMBER = 0;
 export const TRAILER_MIN_SCENES = 3;
@@ -32,7 +44,7 @@ Return STRICT JSON: {"title": string, "logline": string, "visualIdentity": strin
 HARD RULES:
 T1. Exactly 3 scenes by default: (1) LOCATION A, two MAIN characters in a substantive exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences (3–6 quick lines, they answer each other instantly); (2) the SAME location from a different angle: an emotional turn (anger → tears, calm → threat) with ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} sentences; (3) LOCATION B (a different listed location), a third character or a crowd joins, ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} sentences ending on a hook. No silent scenes. Nobody sets a running time: "durationSec" = round(words / 2.7) + 2, clamped to 15–${SCENE_MAX_SECONDS} — the clip lasts exactly as long as its dialogue needs, ≥ 2 words per second.
 T2. "dialogue" is ALWAYS in ENGLISH (it is what the video model voices): one line per row, NAME (tone cue): "line". Only real spoken lines — the story is told through the dialogue.${language !== "en" ? ` "dialogueLocal" = the same lines translated into ${L}, same structure and cues (shown to the author as the script text).` : ' "dialogueLocal" = same as "dialogue".'}
-T2b. ${PACE_DIRECTION}
+T2b. ${TRAILER_CRAFT}
 T3. "videoPrompt" and "visualIdentity" are ENTIRELY in ENGLISH (every one of the 9 lines — never ${L}, even though locationDesc/action are in ${L}). "videoPrompt" consists of EXACTLY these 9 lines, each on its own row (separated by \n), in this order, each starting with its bracket tag exactly as written here:
     [SHOT TYPE]: the CUT LIST inside the clip — 2–4 hard cuts with time ranges, e.g. "0–7s medium two-shot of Mara and Ethan in the location → 7–14s over-the-shoulder on Ethan → 14–22s medium close-up on Mara, location visible behind her → 22–26s medium reaction shot"; vertical 9:16; characters speak on wide/medium shots — NO full-screen face close-up (the face never fills the screen, tightest is a brief medium close-up with the location still behind); characters placed naturally in the space, never squared off face to face; no slow pans, no lingering, no slow motion
     [VISUAL STYLE]: the visualIdentity sentence — identical in all scenes
@@ -46,10 +58,8 @@ T3. "videoPrompt" and "visualIdentity" are ENTIRELY in ENGLISH (every one of the
     No spoken text inside the videoPrompt. Never use the words "slowly", "slow motion", "lingering", "long pause".
 T4. "locationNames" are copied VERBATIM from the given LOCATIONS list (they already have reference images); scene "locationDesc" is "INT/EXT — place — time of day" in ${L} and starts with the location name. Use ONLY the given character names (Western names, Latin letters, exactly as given).
 T6. ${MODERATION_SAFE_RULE}
-T7. ${CREATIVE_RULE}
-T8. ${LOCATION_PRESENCE_RULE}
-T9. ${SCALE_DEPTH_RULE}
-T10. ${EVERYDAY_BEHAVIOR_RULE}
+T7. ${TRAILER_ACTION}
+T8. CREATIVE BAR: gripping, not generic — each of the 3 scenes has a concrete reversal or raised stake and ends on a micro-hook; give each character a distinct voice.
 T5. Original content only — never reuse names, plots or lines of existing films/series. "title"/"logline" in ${L}, short.`;
 }
 
