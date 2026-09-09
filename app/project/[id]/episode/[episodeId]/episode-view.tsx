@@ -38,6 +38,13 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [modal, setModal] = useState(false)
   const [startingAll, setStartingAll] = useState(false)
   const [assembling, setAssembling] = useState(false)
+  // Stage 13 — «Ассембл» final polish (audit whole episode → re-gen only inconsistent scenes → stitch).
+  const [polish, setPolish] = useState<{ phase: 'analyzing' | 'regen' | 'stitching'; issues: { number: number; issue: string }[]; done: number; failed: number } | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const polishActiveRef = useRef(false)
+  const polishBusy = useRef(false)
+  const polishIssuesRef = useRef(0)
+  const polishRef = useRef<() => void>(() => {})
   const [activeGen, setActiveGen] = useState<Record<string, boolean>>({})
   const [videoJobs, setVideoJobs] = useState<Record<string, JobInfo>>({})
   const pollTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
@@ -341,13 +348,87 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
 
   const allReady = scenes.length > 0 && scenes.every((s) => validUrl(s.videoUrl) && !activeGen[s.id])
   const anyClip = scenes.some((s) => validUrl(s.videoUrl))
-  const assemble = async () => {
-    setAssembling(true); setError(null)
+
+  // Final stitch of the (now consistent) clips into the episode video — the existing assemble route.
+  const doStitch = async (fixedCount: number) => {
+    setPolish((p) => (p ? { ...p, phase: 'stitching' } : { phase: 'stitching', issues: [], done: 0, failed: 0 }))
     try {
       const res = await fetch('/api/ai/assemble-episode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ episodeId: episode.id }) })
       const data = await res.json(); if (!res.ok) throw new Error(data?.error ?? 'Сборка не удалась')
       setEpisode((p: any) => ({ ...p, videoUrl: data.videoUrl, status: 'assembled' }))
-    } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setAssembling(false) }
+      setNotice(fixedCount > 0
+        ? `Финальная полировка завершена: исправлены логические нестыковки и переходы (${fixedCount} ${fixedCount === 1 ? 'сцена' : 'сцен'}), эпизод собран.`
+        : 'Логических нестыковок не найдено — эпизод собран без перегенерации (кредиты не списаны).')
+    } catch (e: any) { setError(e?.message ?? 'Ошибка сборки') } finally { setPolish(null); void refreshCredits() }
+  }
+
+  // Drive the re-generation of the flagged scenes (reuses the batch /continue planner) until done, then stitch.
+  const pollPolish = async () => {
+    if (!polishActiveRef.current || polishBusy.current) return
+    polishBusy.current = true
+    try {
+      const res = await fetch(`/api/ai/episodes/${episode.id}/generate-all/continue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ retryFailed: false }) })
+      if (!res.ok) { if (res.status === 429) return; const e = await res.json().catch(() => ({})); if (e?.error) setError(e.error); return }
+      const d = await res.json()
+      const remaining = d.remaining ?? 0
+      setPolish((p) => (p ? { ...p, phase: 'regen', done: Math.max(0, polishIssuesRef.current - remaining), failed: d.failed ?? 0 } : p))
+      if (typeof d.creditsRemaining === 'number') setCredits(d.creditsRemaining)
+      for (const s of d.scenes ?? []) {
+        if (s.status === 'generating') {
+          setActiveGen((prev) => (prev[s.sceneId] ? prev : { ...prev, [s.sceneId]: true }))
+          if (s.jobId && !pollTimers.current[s.sceneId]) pollVideoJob(s.sceneId, s.jobId)
+        }
+      }
+      if (remaining === 0) {
+        polishActiveRef.current = false
+        if ((d.failed ?? 0) > 0) {
+          setError('Часть проблемных сцен не удалось перегенерировать. Проверьте сцены и запустите «Ассембл» ещё раз.')
+          setPolish(null)
+          return
+        }
+        await doStitch(polishIssuesRef.current)
+      }
+    } catch {} finally { polishBusy.current = false }
+  }
+  polishRef.current = () => { void pollPolish() }
+  const polishRegen = polish?.phase === 'regen'
+  useEffect(() => {
+    if (!polishRegen) return
+    const id = setInterval(() => polishRef.current(), JOB_POLL_INTERVAL_MS * 3)
+    return () => clearInterval(id)
+  }, [polishRegen])
+
+  const cancelPolish = async () => {
+    polishActiveRef.current = false
+    try { const res = await fetch(`/api/ai/episodes/${episode.id}/generate-all/cancel`, { method: 'POST' }); await res.json().catch(() => ({})) } catch {}
+    setScenes((prev) => prev.map((s) => (activeGen[s.id] && !validUrl(s.videoUrl) ? { ...s, status: 'pending' } : s)))
+    setPolish(null)
+    setNotice('Полировка отменена. Уже готовые сцены сохранены; незавершённые можно достроить кнопкой «Продолжить / повторить незавершённые».')
+    void refreshCredits()
+  }
+
+  // «Ассембл» → final polish: audit the whole episode, re-generate only inconsistent scenes, then stitch.
+  const assemble = async () => {
+    setAssembling(true); setError(null); setNotice(null)
+    setPolish({ phase: 'analyzing', issues: [], done: 0, failed: 0 })
+    try {
+      const res = await fetch('/api/ai/assemble-episode/polish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ episodeId: episode.id }) })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error ?? 'Финальная полировка не удалась')
+      const issues: { number: number; issue: string }[] = data.issues ?? []
+      polishIssuesRef.current = issues.length
+      if (typeof data.creditsRemaining === 'number') setCredits(data.creditsRemaining)
+      if (issues.length === 0) {
+        // No logical inconsistencies — just stitch the existing clips, no credits spent.
+        await doStitch(0)
+        return
+      }
+      // Inconsistencies found → the flagged scenes are being re-generated; drive the continue loop.
+      setPolish({ phase: 'regen', issues, done: 0, failed: 0 })
+      for (const j of data.jobs ?? []) { setActiveGen((p) => ({ ...p, [j.sceneId]: true })); patchScene(j.sceneId, { status: 'generating', videoUrl: null }); if (j.jobId) pollVideoJob(j.sceneId, j.jobId) }
+      polishActiveRef.current = true
+      void pollPolish()
+    } catch (e: any) { setError(e?.message ?? 'Ошибка'); setPolish(null) } finally { setAssembling(false) }
   }
 
   const perScene = plan?.costPerScene
@@ -508,8 +589,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <button onClick={() => setDraftOpen(true)} disabled={!anyClip} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="show-draft" title={anyClip ? '' : 'Появится, когда будет хотя бы один готовый ролик'}>
             <Film className="h-4 w-4" /> Показать черновик
           </button>
-          <button onClick={assemble} disabled={!allReady || assembling} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? '' : 'Доступно, когда все сцены готовы'}>
-            {assembling ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />} Ассембл (финальная сборка)
+          <button onClick={assemble} disabled={!allReady || assembling || !!polish} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? 'Ассембл — финальная полировка: Seedance пересматривает весь эпизод и исправляет логические нестыковки и переходы' : 'Доступно, когда все сцены готовы'}>
+            {assembling || polish ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />} Ассембл (финальная полировка)
           </button>
           {batchActive ? (
             <span className="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground" data-testid="batch-status">
@@ -532,6 +613,31 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               {retrying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Продолжить / повторить незавершённые
             </button>
           )}
+          {/* Stage 13 — what «Ассембл» now does + live polish status */}
+          <p className="w-full text-xs text-muted-foreground" data-testid="assemble-hint">
+            <b>Ассембл — финальная полировка:</b> Seedance пересматривает весь эпизод и исправляет логические нестыковки и переходы (телепортация/исчезновение персонажей, несогласованные позиции и действия на стыках сцен). Перегенерируются только проблемные сцены — согласованные не трогаются, кредиты на них не тратятся.
+          </p>
+          {polish && (
+            <div className="w-full rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm" data-testid="polish-status">
+              <div className="flex flex-wrap items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                <span className="font-medium">
+                  {polish.phase === 'analyzing' && 'Финальная полировка: анализ логики эпизода…'}
+                  {polish.phase === 'regen' && `Финальная полировка: перегенерация ${polish.done}/${polish.issues.length} проблемных сцен${polish.failed > 0 ? ` · не удалось ${polish.failed}` : ''}`}
+                  {polish.phase === 'stitching' && 'Финальная полировка: сборка эпизода…'}
+                </span>
+                {polish.phase === 'regen' && (
+                  <CancelButton onCancel={cancelPolish} testId="polish-cancel" label="Отменить" pendingLabel="Останавливаю…" />
+                )}
+              </div>
+              {polish.issues.length > 0 && (
+                <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground" data-testid="polish-issues">
+                  {polish.issues.map((it) => (<li key={it.number}>Сцена {it.number}: {it.issue}</li>))}
+                </ul>
+              )}
+            </div>
+          )}
+          {notice && !polish && <p className="w-full text-sm text-emerald-500" data-testid="polish-notice">{notice}</p>}
           {error && <p className="w-full text-sm text-destructive" data-testid="error">{error}</p>}
         </div>
 
