@@ -36,6 +36,11 @@ assert(/CHARACTERS ACT/.test(EVERYDAY_BEHAVIOR_RULE) && /talking heads/.test(EVE
 assert(/ALIVE/.test(LOCATION_PRESENCE_RULE) && /background life/.test(LOCATION_PRESENCE_RULE), "LOCATION_PRESENCE_RULE: living background");
 assert(episodeScriptSystemPrompt("ru").includes(SCALE_DEPTH_RULE) && episodeScriptSystemPrompt("ru").includes(EVERYDAY_BEHAVIOR_RULE) && episodeScriptSystemPrompt("ru").includes(LOCATION_PRESENCE_RULE), "episode prompt embeds scale/depth + everyday behavior + location presence");
 assert(trailerSystemPrompt("ru").includes(SCALE_DEPTH_RULE) && trailerSystemPrompt("ru").includes(EVERYDAY_BEHAVIOR_RULE), "trailer prompt embeds scale/depth + everyday behavior");
+// stage7b: диалоги на общих планах (без крупного лица во весь экран) + естественная расстановка, не «лицом к лицу»
+assert(/never fills the screen/.test(PACE_DIRECTION) && /DO NOT push in to a full-screen face close-up/.test(PACE_DIRECTION), "PACE_DIRECTION: no full-screen face close-up");
+assert(/never two people simply standing face to face/.test(PACE_DIRECTION) && /NATURALLY in the space/.test(PACE_DIRECTION), "PACE_DIRECTION: natural staging, no face-off");
+assert(/NO full-screen face close-up/.test(episodeScriptSystemPrompt("ru")) && /squared off face to face/.test(episodeScriptSystemPrompt("ru")), "episode prompt: wide-shot dialogue + natural staging");
+assert(/NO full-screen face close-up/.test(trailerSystemPrompt("ru")), "trailer prompt: wide-shot dialogue");
 assert(!episodeScriptSchema.safeParse({ visualIdentity: "photoreal cinematic", scenes: mk(16) }).success, "16 scenes rejected");
 const bad = { ...ok, scenes: ok.scenes.map((s) => ({ ...s, dialogue: "[NO DIALOGUE]" })) };
 assert(validateEpisodeScript(bad).some((p) => /silent|no dialogue/.test(p)), "all-silent episode flagged");
