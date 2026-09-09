@@ -5,7 +5,7 @@
  */
 import { z } from "zod";
 import { LANGUAGE_NAMES, type IdeaLanguage, type CharacterCard } from "@/lib/idea";
-import { sceneScriptSchema, TALK_MIN_SENTENCES, TALK_MAX_SENTENCES, SCENE_MAX_SECONDS, PACE_DIRECTION, MODERATION_SAFE_RULE, CREATIVE_RULE, type LocationRef } from "@/lib/season";
+import { sceneScriptSchema, TALK_MIN_SENTENCES, TALK_MAX_SENTENCES, SCENE_MAX_SECONDS, PACE_DIRECTION, MODERATION_SAFE_RULE, CREATIVE_RULE, LOCATION_PRESENCE_RULE, type LocationRef } from "@/lib/season";
 
 export const TRAILER_SEASON_NUMBER = 0;
 export const TRAILER_MIN_SCENES = 3;
@@ -37,7 +37,7 @@ T3. "videoPrompt" and "visualIdentity" are ENTIRELY in ENGLISH (every one of the
     [SHOT TYPE]: the CUT LIST inside the clip — 2–4 hard cuts with time ranges, e.g. "0–7s medium two-shot of Mara and Ethan in the location → 7–14s over-the-shoulder on Ethan → 14–22s medium close-up on Mara, location visible behind her → 22–26s medium reaction shot"; vertical 9:16; at most ONE short full-screen face close-up per clip (≤ 3 s); no slow pans, no lingering, no slow motion
     [VISUAL STYLE]: the visualIdentity sentence — identical in all scenes
     [LIGHTING]: time of day, light sources, weather — identical wording within one location (the camera moves, the light does not)
-    [BLOCKING]: where each character stands/moves
+    [BLOCKING]: where each character stands/moves INSIDE the location — which concrete object, surface or corner they use
     [GAZE]: where each character looks; eye contact and reactions while the other speaks
     [NON-VERBAL]: EXPRESSIVE acting — concrete facial expressions, lively hand gestures, emotional nuance in the voice; no physical contact between characters
     [ACTION]: what physically happens in the shot, brisk — movement, objects, distance; never hitting, grabbing, weapons or danger
@@ -47,6 +47,7 @@ T3. "videoPrompt" and "visualIdentity" are ENTIRELY in ENGLISH (every one of the
 T4. "locationNames" are copied VERBATIM from the given LOCATIONS list (they already have reference images); scene "locationDesc" is "INT/EXT — place — time of day" in ${L} and starts with the location name. Use ONLY the given character names (Western names, Latin letters, exactly as given).
 T6. ${MODERATION_SAFE_RULE}
 T7. ${CREATIVE_RULE}
+T8. ${LOCATION_PRESENCE_RULE}
 T5. Original content only — never reuse names, plots or lines of existing films/series. "title"/"logline" in ${L}, short.`;
 }
 

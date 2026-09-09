@@ -183,7 +183,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
         retryRefs = refs.map(r => ({ url: r.url, kind: r.kind, note: r.note }));
         reference = { mode: "character_references", characterIds: refs.filter(r => r.kind !== "location").map(r => r.id), locationId: location?.id ?? null, kinds: refs.map(r => r.kind) };
         prompt += "\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
-        if (location) prompt += "\nCamera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location references. Only the camera angle changes between shots.";
+        if (location) prompt += "\nCamera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location references. Only the camera angle changes between shots. The characters are physically present in this place and interact with its objects and surfaces; the cuts show the same location from different angles with real depth (foreground, characters, background) — never a flat backdrop.";
       } else {
         // One new scene composition, never overwrite the user's old portraits or frames.
         // This is original text-to-image design, not a way to bypass a provider refusal.
