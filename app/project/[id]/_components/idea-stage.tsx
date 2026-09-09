@@ -221,7 +221,7 @@ export function IdeaEditor({
   const Section = ({ id, title, children }: { id: string; title: string; children: React.ReactNode }) =>
     collapsible ? (
       <details className="min-w-0 rounded-xl border border-border bg-card" data-testid={`idea-section-${id}`}>
-        <summary className="cursor-pointer select-none px-4 py-3 font-display text-base font-semibold [&::-webkit-details-marker]:hidden">
+        <summary className="cursor-pointer select-none px-4 py-3 font-display text-base font-semibold list-none [&::-webkit-details-marker]:hidden [&::marker]:hidden">
           <span className="inline-flex items-center gap-2"><ChevronRight className="h-4 w-4 text-muted-foreground transition-transform [details[open]>summary_&]:rotate-90" />{title}</span>
         </summary>
         <div className="border-t border-border p-4">{children}</div>
