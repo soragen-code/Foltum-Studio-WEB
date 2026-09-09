@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { generateImage } from "@/lib/replicate";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
-import { updateJob, completeJob, failJob } from "@/lib/jobs";
+import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { locationAnglePrompt, LOCATION_ANGLES, VISUAL_STYLE_ID } from "@/lib/visual-style";
 import { detectC2paFromUrl } from "@/lib/c2pa";
 
@@ -32,6 +32,11 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds }: { 
     const pct = () => 5 + Math.round((done / Math.max(total, 1)) * 95);
     await updateJob(jobId, { status: "processing", progress: pct(), message: `Генерация ${total} референсов локаций…` });
     for (const loc of locations) {
+      // Stage 11: stop before starting the next location. Finished references stay saved.
+      if (await isCancelRequested(jobId)) {
+        await markCanceled(jobId, `Отменено — готово ${done} из ${total} локаций`);
+        return;
+      }
       await updateJob(jobId, { progress: pct(), message: `Референс локации «${loc.name}» (${done + 1}/${total})…` });
       try {
         const visual = loc.visualPrompt ?? loc.description ?? loc.name;

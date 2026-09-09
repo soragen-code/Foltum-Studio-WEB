@@ -8,7 +8,7 @@ import { PACE_DIRECTION } from "@/lib/season";
 import { getBucketConfig } from "@/lib/aws-config";
 import { VISUAL_STYLE_ID, styledVisualPrompt, isStyledAsset, canChainFrame, locationAngleImages } from "@/lib/visual-style";
 import { GenerationAttempt, safeProviderError, classifyProviderError, logAttempt, safeDiagnosticInput } from "@/lib/generation-diagnostics";
-import { updateJob, heartbeatJob, runInBackground } from "@/lib/jobs";
+import { updateJob, heartbeatJob, runInBackground, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { softenForModeration, moderationHints, type SoftenLevel } from "@/lib/sanitize-prompt";
 
 export interface VideoJobParams {
@@ -126,6 +126,19 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
   try {
     const scene = await prisma.scene.findUnique({ where: { id: sceneId } });
     if (!scene?.videoPrompt) throw new Error("Scene has no video prompt");
+    // Stage 11: if cancellation was requested before we submitted any prediction, stop now —
+    // no Replicate call is made, the scene is reset and the reserved credits are refunded.
+    if (await isCancelRequested(jobId)) {
+      await prisma.$transaction(async tx => {
+        await tx.scene.update({ where: { id: sceneId }, data: { status: "pending" } }).catch(() => {});
+        if (userId && cost > 0) {
+          await tx.user.update({ where: { id: userId }, data: { credits: { increment: cost } } });
+          await tx.creditTransaction.create({ data: { userId, amount: cost, description: `Refund: video generation canceled (${jobId})` } });
+        }
+      });
+      await markCanceled(jobId);
+      return;
+    }
     await updateJob(jobId, { status: "processing", progress: 5, message: "Preparing photorealistic visual references..." });
     const links = await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true } });
     const visualPrompt = styledVisualPrompt(scene.videoPrompt, links.map(l => l.character.name));
@@ -568,6 +581,12 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
     }
     if (prediction.status === "failed" || prediction.status === "canceled") {
       const reason = prediction.error || (Date.now() - state.startedAt >= VIDEO_DEADLINE_MS ? "Prediction timed out at the 30-minute application deadline (cancellation confirmed)" : "Prediction canceled by provider");
+      // Stage 11: the author canceled — never start a NEW prediction (moderation retry). Refund and stop.
+      if (await isCancelRequested(job.id)) {
+        await handleFailure(job.id, state, new Error(reason), state);
+        await markCanceled(job.id);
+        return true;
+      }
       // Seedance moderation (E005): resubmit the same scene with a progressively softer prompt.
       // Same job, same charge — the user is never billed for these automatic retries.
       if (classifyProviderError(reason) === "moderation" && state.retry && !state.lipsync && (state.moderationRetries ?? 0) < MAX_MODERATION_RETRIES) {

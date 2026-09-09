@@ -6,7 +6,7 @@
  */
 import { prisma } from "@/lib/db";
 import { chatJSON } from "@/lib/ai";
-import { updateJob, completeJob, failJob } from "@/lib/jobs";
+import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { toCharacterCard, normalizeLanguage } from "@/lib/idea";
 import { normalizeEpisodeScript, validateEpisodeScript, isSoftProblem, ensureEnglishDialogue, matchLocation, type EpisodeOutline } from "@/lib/season";
 import { trailerScriptSchema, trailerSystemPrompt, trailerUserPrompt, TRAILER_SEASON_NUMBER, TRAILER_MIN_SCENES, TRAILER_MAX_SCENES } from "@/lib/trailer";
@@ -45,6 +45,7 @@ export async function runTrailerJob(jobId: string, projectId: string): Promise<v
     if (!project?.synopsis) throw new Error("Project synopsis missing");
     const language = normalizeLanguage(project.language, project.synopsis);
     const cards = project.characters.map(toCharacterCard);
+    if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
     await updateJob(jobId, { status: "processing", progress: 10, message: "Пишу сценарий мини-трейлера..." });
 
     // ONE LLM call writes all 3 scenes with BOTH the English `dialogue` (voiced by the video model)
@@ -72,6 +73,7 @@ export async function runTrailerJob(jobId: string, projectId: string): Promise<v
     const hard = validateEpisodeScript({ visualIdentity: script.visualIdentity, scenes: script.scenes }).filter((p) => !isSoftProblem(p) && !/scene count/.test(p));
     if (hard.length) throw new Error(`trailer script invalid: ${hard.slice(0, 3).join("; ")}`);
 
+    if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
     await updateJob(jobId, { progress: 90, message: "Сохраняю трейлер..." });
     const firstLoc = matchLocation(project.locations, script.locationNames[0] ?? "") ?? project.locations[0] ?? null;
     const names = Array.from(new Set(script.scenes.flatMap((s) => s.characters)));

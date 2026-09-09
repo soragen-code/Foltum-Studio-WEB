@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { generateImage } from "@/lib/replicate";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
-import { updateJob, completeJob, failJob } from "@/lib/jobs";
+import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { locationExtraAnglePrompt, parseLocationExtra, VISUAL_STYLE_ID } from "@/lib/visual-style";
 import { detectC2paFromUrl } from "@/lib/c2pa";
 
@@ -29,6 +29,11 @@ export async function runLocationExtraImagesJob({ jobId, projectId, locationId, 
 
     await updateJob(jobId, { status: "processing", progress: 8, message: `Дополнительные ракурсы локации «${loc.name}» (0/${count})…` });
     for (let i = 0; i < count; i++) {
+      // Stage 11: stop before the next extra angle. Already-added angles stay saved (persisted incrementally).
+      if (await isCancelRequested(jobId)) {
+        await markCanceled(jobId, added.length ? `Отменено — добавлено ${added.length} ракурсов` : "Отменено");
+        return;
+      }
       await updateJob(jobId, { progress: 8 + Math.round((i / Math.max(count, 1)) * 90), message: `Дополнительные ракурсы локации «${loc.name}» (${i + 1}/${count})…` });
       try {
         const remote = await generateImage(

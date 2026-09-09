@@ -81,3 +81,11 @@ ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "imageExtra" TEXT;
 -- Stage 4: English speech + per-scene burned-in subtitles (additive)
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "dialogueEn" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "subtitled" BOOLEAN NOT NULL DEFAULT false;
+
+-- Stage 11: job cancellation (additive) — author can stop a long generation.
+ALTER TABLE "GenerationJob" ADD COLUMN IF NOT EXISTS "cancelRequested" BOOLEAN NOT NULL DEFAULT false;
+
+-- Stage 11: scene continuity metadata (additive, nullable — old scenes keep working).
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "presence" TEXT;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "entrances" TEXT;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "continuesFrom" TEXT;

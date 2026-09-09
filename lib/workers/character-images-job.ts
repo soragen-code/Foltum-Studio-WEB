@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { generateImage } from "@/lib/replicate";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
-import { updateJob, completeJob, failJob } from "@/lib/jobs";
+import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 
 import { characterImagePrompt, VISUAL_STYLE_ID } from "@/lib/visual-style";
 import { detectC2paFromUrl } from "@/lib/c2pa";
@@ -49,7 +49,17 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds }: 
     await updateJob(jobId, { status: "processing", progress: pct(), message: `Generating ${total} character images...` });
 
     for (const char of characters) {
+      // Stage 11: stop before starting the next character's images. Everything already
+      // generated stays saved; no further Replicate calls (and no charges) are made.
+      if (await isCancelRequested(jobId)) {
+        await markCanceled(jobId, `Отменено — готово ${done} из ${total} изображений`);
+        return;
+      }
       for (const shot of SHOTS) {
+        if (await isCancelRequested(jobId)) {
+          await markCanceled(jobId, `Отменено — готово ${done} из ${total} изображений`);
+          return;
+        }
         await updateJob(jobId, {
           progress: pct(),
           message: `Generating ${SHOT_LABELS[shot]} for ${char.name} (${done + 1}/${total})...`,

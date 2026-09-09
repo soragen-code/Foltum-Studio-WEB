@@ -123,3 +123,43 @@ export async function completeJob(jobId: string, resultData?: unknown, message =
 export async function failJob(jobId: string, error: string): Promise<void> {
   await updateJob(jobId, { status: "failed", message: "Failed", error: error.slice(0, 2000) });
 }
+
+/** Terminal job statuses — polling stops and the UI shows a final state. */
+export const TERMINAL_JOB_STATUSES = ["completed", "failed", "canceled"] as const;
+
+/**
+ * Stage 11 — has the author requested this job be canceled?
+ * Read fresh (workers call this between units of work), never throws.
+ * A job that already reached a terminal state also counts as "should stop".
+ */
+export async function isCancelRequested(jobId: string): Promise<boolean> {
+  try {
+    const job = await prisma.generationJob.findUnique({ where: { id: jobId }, select: { cancelRequested: true, status: true } });
+    if (!job) return false;
+    return job.cancelRequested === true || job.status === "canceled";
+  } catch {
+    return false; // a transient read error must never stop legitimate work
+  }
+}
+
+/** Mark a job as canceled (idempotent). Preserves whatever was already produced. */
+export async function markCanceled(jobId: string, message = "Генерация отменена"): Promise<void> {
+  await updateJob(jobId, { status: "canceled", message, error: null });
+}
+
+/**
+ * Request cancellation of a job (sets the flag). Idempotent and race-safe:
+ * a job already in a terminal state is left untouched. Returns the resulting status.
+ */
+export async function requestCancel(jobId: string): Promise<"canceled" | "requested" | "already-finished" | "not-found"> {
+  try {
+    const job = await prisma.generationJob.findUnique({ where: { id: jobId }, select: { status: true, cancelRequested: true } });
+    if (!job) return "not-found";
+    if (["completed", "failed", "canceled"].includes(job.status)) return "already-finished";
+    await prisma.generationJob.update({ where: { id: jobId }, data: { cancelRequested: true, message: "Останавливаю генерацию…" } });
+    return "requested";
+  } catch (err) {
+    console.error(`[jobs] requestCancel error for ${jobId}:`, err);
+    return "not-found";
+  }
+}

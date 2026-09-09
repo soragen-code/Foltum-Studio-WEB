@@ -11,7 +11,7 @@
  */
 import { prisma } from "@/lib/db";
 import { chatJSON } from "@/lib/ai";
-import { heartbeatJob, updateJob, completeJob, failJob } from "@/lib/jobs";
+import { heartbeatJob, updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { toCharacterCard, normalizeLanguage, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
 import {
   seasonStructureSchema,
@@ -151,6 +151,9 @@ export async function runSeasonScriptJob(jobId: string, projectId: string, episo
     const language = normalizeLanguage(project.language, project.synopsis);
     const cards = project.characters.map(toCharacterCard);
 
+    // Cancellation checkpoint before any heavy LLM work.
+    if (await isCancelRequested(jobId)) { await markCanceled(jobId, "Генерация сценария отменена"); return; }
+
     // Step 1 — structure (skipped when the season already exists).
     let season = await prisma.season.findFirst({ where: { projectId, number: 1 }, include: { episodes: { orderBy: { number: "asc" }, include: { characters: { include: { character: true } } } } } });
     if (!season || season.episodes.length === 0) {
@@ -190,6 +193,13 @@ export async function runSeasonScriptJob(jobId: string, projectId: string, episo
     // Step 2 — episode scripts, one at a time, only for episodes still missing a script.
     for (const ep of season.episodes) {
       if (ep.script) continue;
+      // Cancellation checkpoint: stop BEFORE starting the next episode. Episodes already
+      // written are kept (their scripts stay in the DB); the author can resume later.
+      if (await isCancelRequested(jobId)) {
+        const remaining = season.episodes.filter((e) => !e.script).length;
+        await markCanceled(jobId, `Генерация отменена. Готово эпизодов: ${total - remaining} из ${total}.`);
+        return;
+      }
       if (Date.now() - started > TIME_BUDGET_MS) {
         const remaining = season.episodes.filter((e) => !e.script).length;
         await completeJob(jobId, { done: false, remaining, total }, `Пауза: осталось эпизодов — ${remaining}. Продолжаю…`);

@@ -216,6 +216,9 @@ model Scene {
   shotType      String?  // stage 2: shot type label from the season script
   action        String?  @db.Text // stage 2: readable action description of the shot
   durationSec   Int?     // stage 2: planned duration (10–15s)
+  presence      String?  @db.Text // stage 11: continuity — who is present and where at the START of the scene (follows from the previous scene)
+  entrances     String?  @db.Text // stage 11: continuity — who enters/leaves inside the scene and how (shown on screen)
+  continuesFrom String?  // stage 11: continuity link to the previous scene: same-location-continuation | character-moves | location-change | new-sequence
   status        String   @default("pending") // pending, generating, generated, accepted
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -284,6 +287,7 @@ model GenerationJob {
   sceneId     String?  // for video/scene jobs
   resultData  String?  @db.Text // JSON string
   error       String?  @db.Text
+  cancelRequested Boolean @default(false) // stage 11: author asked to stop — workers check it and mark the job "canceled"
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
