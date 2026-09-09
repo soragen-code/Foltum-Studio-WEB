@@ -31,6 +31,11 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
   const [activeGen, setActiveGen] = useState<Record<string, boolean>>({})
   const [videoJobs, setVideoJobs] = useState<Record<string, JobInfo>>({})
   const pollTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  // Stage 8: batch auto-continuation (client drives the continue endpoint until every scene is done).
+  const [batch, setBatch] = useState<{ active: boolean; total: number; done: number; generating: number; failed: number; pending: number; remaining: number } | null>(null)
+  const [retrying, setRetrying] = useState(false)
+  const continueBusy = useRef(false)
+  const continueRef = useRef<() => void>(() => {})
 
   const patchScene = (sceneId: string, patch: Partial<Scene>) => setScenes((prev) => prev.map((s) => (s.id === sceneId ? { ...s, ...patch } : s)))
   const stopPolling = (sceneId: string) => { const t = pollTimers.current[sceneId]; if (t) clearTimeout(t); delete pollTimers.current[sceneId] }
@@ -72,6 +77,39 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
       const ids = new Set(scenes.map((s) => s.id))
       for (const j of data?.jobs ?? []) if (j?.sceneId && ids.has(j.sceneId) && !pollTimers.current[j.sceneId]) { setActiveGen((p) => ({ ...p, [j.sceneId]: true })); setVideoJobs((p) => ({ ...p, [j.sceneId]: j })); pollVideoJob(j.sceneId, j.id) }
     }).catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Stage 8: one continue "kick". Idempotent server-side; safe to call every few seconds.
+  const continueBatch = async (retryFailed = false) => {
+    if (continueBusy.current) return
+    continueBusy.current = true
+    try {
+      const res = await fetch(`/api/ai/episodes/${episode.id}/generate-all/continue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ retryFailed }) })
+      if (!res.ok) { if (res.status === 429) return; const e = await res.json().catch(() => ({})); if (e?.error) setError(e.error); return }
+      const d = await res.json()
+      setBatch({ active: d.remaining > 0, total: d.total, done: d.done, generating: d.generating, failed: d.failed, pending: d.pending, remaining: d.remaining })
+      if (typeof d.creditsRemaining === 'number') setCredits(d.creditsRemaining)
+      if (d.creditsShort) setError('Недостаточно кредитов для повтора части сцен — пополните баланс и нажмите «Продолжить».')
+      // Ensure each in-flight scene is being polled (advances its Replicate prediction + updates the card).
+      for (const s of d.scenes ?? []) {
+        if (s.status === 'generating') {
+          setActiveGen((p) => (p[s.sceneId] ? p : { ...p, [s.sceneId]: true }))
+          if (s.jobId && !pollTimers.current[s.sceneId]) pollVideoJob(s.sceneId, s.jobId)
+        }
+      }
+    } catch {} finally { continueBusy.current = false }
+  }
+  continueRef.current = () => { void continueBatch(false) }
+  // Poll-and-kick loop while the batch has unfinished scenes (stable interval, no flicker).
+  const batchActive = batch?.active ?? false
+  useEffect(() => {
+    if (!batchActive) return
+    const id = setInterval(() => continueRef.current(), JOB_POLL_INTERVAL_MS * 3)
+    return () => clearInterval(id)
+  }, [batchActive])
+  // On mount / reload: if any scene still lacks a video, sync batch state and auto-continue.
+  useEffect(() => {
+    if (scenes.some((s) => !validUrl(s.videoUrl))) void continueBatch(false)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const reloadEpisode = async () => {
@@ -118,6 +156,9 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
       setModal(false)
       for (const j of data.jobs ?? []) { setActiveGen((p) => ({ ...p, [j.sceneId]: true })); patchScene(j.sceneId, { status: 'generating' }); pollVideoJob(j.sceneId, j.jobId) }
       if (typeof data.creditsRemaining === 'number') setCredits(data.creditsRemaining)
+      // Kick off client-driven auto-continuation so the rest of the scenes generate without another click.
+      setBatch({ active: true, total: scenes.length, done: scenes.filter((s) => validUrl(s.videoUrl)).length, generating: (data.jobs ?? []).length, failed: 0, pending: 0, remaining: scenes.length })
+      void continueBatch(false)
     } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setStartingAll(false) }
   }
 
@@ -205,7 +246,21 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
           <button onClick={assemble} disabled={!allReady || assembling} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? '' : 'Доступно, когда все сцены готовы'}>
             {assembling ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />} Собрать эпизод
           </button>
-          <span className="text-xs text-muted-foreground">{scenes.filter((s) => validUrl(s.videoUrl)).length} из {scenes.length} сцен готово{episode.status === 'assembled' || episode.videoUrl ? ' · эпизод собран' : ''}</span>
+          {batchActive ? (
+            <span className="inline-flex items-center gap-2 text-xs text-muted-foreground" data-testid="batch-status">
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+              Генерирую сцены: готово {batch?.done ?? 0} из {batch?.total ?? scenes.length}
+              {(batch?.generating ?? 0) > 0 && ` · в работе ${batch!.generating}`}
+              {(batch?.failed ?? 0) > 0 && <span className="text-destructive"> · не удалось {batch!.failed}</span>}
+            </span>
+          ) : (
+            <span className="text-xs text-muted-foreground" data-testid="batch-status">{scenes.filter((s) => validUrl(s.videoUrl)).length} из {scenes.length} сцен готово{episode.status === 'assembled' || episode.videoUrl ? ' · эпизод собран' : ''}</span>
+          )}
+          {!batchActive && scenes.length > 0 && scenes.some((s) => !validUrl(s.videoUrl)) && (
+            <button onClick={async () => { setError(null); setRetrying(true); try { await continueBatch(true) } finally { setRetrying(false) } }} disabled={retrying || startingAll} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium disabled:opacity-50" data-testid="continue-batch" title="Продолжить или повторить незавершённые сцены">
+              {retrying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Продолжить / повторить незавершённые
+            </button>
+          )}
           {error && <p className="w-full text-sm text-destructive" data-testid="error">{error}</p>}
         </div>
 
