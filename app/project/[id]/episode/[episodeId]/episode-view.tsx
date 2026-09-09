@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Header } from '@/components/header'
-import { Loader2, Wand2, ArrowLeft, MapPin, Film, Download, Play, RefreshCw, Clapperboard } from 'lucide-react'
+import { Loader2, Wand2, ArrowLeft, MapPin, Film, Download, Play, RefreshCw, Clapperboard, Images } from 'lucide-react'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { ScriptView } from '../../_components/season-stage'
 import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
@@ -151,12 +151,19 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
 
   const perScene = plan?.costPerScene
   const chars = episode.characters?.length ? episode.characters : (project.characters ?? []).map((c: any) => ({ character: c }))
+  // Stage 5: references are optional — warn (not block) when scene characters have no reference image yet.
+  const missingRefs: string[] = Array.from(new Set<string>(
+    scenes.flatMap((sc) => (sc.characters ?? []).filter(({ character: c }: any) => !validUrl(c.imageFront)).map(({ character: c }: any) => c.name as string))
+  ))
 
   return (
     <div className="min-h-screen bg-background">
       <Header />
       <main className="mx-auto max-w-[1200px] px-4 py-6" data-testid="episode-page">
-        <Link href={`/project/${project.id}`} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> К сценарию сезона</Link>
+        <div className="flex flex-wrap items-center gap-4">
+          <Link href={`/project/${project.id}`} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> К сценарию сезона</Link>
+          <Link href={`/project/${project.id}?tab=references`} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground" data-testid="open-references"><Images className="h-4 w-4" /> Референсы</Link>
+        </div>
         <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-xs font-semibold uppercase text-muted-foreground">Эпизод {episode.number}{episode.arcRole ? ` · ${episode.arcRole}` : ''}</div>
@@ -293,6 +300,12 @@ export function EpisodeView({ episode: initial, project, credits: initialCredits
               <li>Стоимость: <b>{plan.total} кр.</b> за {plan.pendingCount} сцен (до {plan.costPerScene} кр. за сцену)</li>
               <li>Остаток кредитов: <b>{plan.credits}</b>{plan.credits < plan.total && <span className="text-destructive"> — недостаточно</span>}</li>
             </ul>
+            {missingRefs.length > 0 && (
+              <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm" data-testid="missing-references-warning">
+                <p><b>Без референсов:</b> {missingRefs.join(', ')}. Без референса внешность персонажа может меняться от сцены к сцене. Можно продолжить или сначала сгенерировать референсы.</p>
+                <Link href={`/project/${project.id}?tab=references`} className="mt-2 inline-flex items-center gap-1 text-primary underline-offset-2 hover:underline"><Images className="h-4 w-4" /> Перейти к референсам</Link>
+              </div>
+            )}
             <div className="mt-4 flex justify-end gap-2">
               <button onClick={() => setModal(false)} className="rounded-lg border border-border px-3 py-1.5 text-sm">Отмена</button>
               <button onClick={generateAll} disabled={startingAll || plan.pendingCount === 0 || plan.credits < plan.total} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="generate-ok">
