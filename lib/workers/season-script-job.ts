@@ -111,6 +111,10 @@ export async function persistEpisodeScript(
           shotType: s.shotType,
           action: s.action,
           durationSec: s.durationSec,
+          // Stage 11 — scene-to-scene continuity metadata (who is present, entrances/exits, link to prev scene).
+          presence: s.presence ?? null,
+          entrances: s.entrances ?? null,
+          continuesFrom: s.continuesFrom ?? null,
           language: "en", // speech is always English (Stage 4)
           subtitled: false,
           status: "pending",
