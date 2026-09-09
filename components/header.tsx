@@ -6,7 +6,7 @@ import { Coins, Film, LogOut, Plus, User, CreditCard } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 
-export function Header() {
+export function Header({ showNewProject = true }: { showNewProject?: boolean } = {}) {
   const { data: session, status } = useSession()
   const [credits, setCredits] = useState(0)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -34,13 +34,15 @@ export function Header() {
 
         {session?.user ? (
           <div className="flex items-center gap-3">
-            <Link
-              href="/project/new"
-              className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
-            >
-              <Plus className="h-4 w-4" />
-              New Project
-            </Link>
+            {showNewProject && (
+              <Link
+                href="/project/new"
+                className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
+              >
+                <Plus className="h-4 w-4" />
+                New Project
+              </Link>
+            )}
             <Link
               href="/pricing"
               className="flex items-center gap-1.5 rounded-lg bg-muted px-3 py-1.5 text-sm font-medium transition hover:bg-muted/80"

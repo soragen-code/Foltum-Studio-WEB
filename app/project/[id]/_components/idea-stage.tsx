@@ -135,6 +135,41 @@ export function CharacterCard({
 }
 
 /**
+ * Section wrapper: plain block on the Idea step, collapsible on the season screen.
+ * IMPORTANT: this is a module-level component (NOT defined inside IdeaEditor). Defining it inline
+ * made React treat it as a new component type on every render, so each poll of the season job
+ * remounted the native <details> and reset its open state — the blocks "closed themselves". Now the
+ * open/closed state is React-controlled and lives in IdeaEditor, so it survives re-renders/polling.
+ */
+function Section({
+  id, title, collapsible, open, onToggle, children,
+}: {
+  id: string
+  title: string
+  collapsible: boolean
+  open: boolean
+  onToggle: () => void
+  children: React.ReactNode
+}) {
+  if (!collapsible) return <div data-testid={`idea-section-${id}`}>{children}</div>
+  return (
+    <div className="min-w-0 rounded-xl border border-border bg-card" data-testid={`idea-section-${id}`}>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="flex w-full cursor-pointer select-none items-center gap-2 px-4 py-3 text-left font-display text-base font-semibold"
+        data-testid={`idea-section-toggle-${id}`}
+      >
+        <ChevronRight className={`h-4 w-4 text-muted-foreground transition-transform ${open ? 'rotate-90' : ''}`} />
+        {title}
+      </button>
+      {open && <div className="border-t border-border p-4">{children}</div>}
+    </div>
+  )
+}
+
+/**
  * Synopsis + locations + cast with prompt-based edits. Used by the Idea step (stacked) and, since
  * stage 5, at the top of the season-script screen (collapsible blocks). `onChanged` fires after every
  * successful edit so the season screen can offer «Применить изменения к сценарию сезона».
@@ -167,6 +202,10 @@ export function IdeaEditor({
   const [instruction, setInstruction] = useState('')
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
+  // Which collapsible sections are open. Lives here (not in the <details> DOM) so it survives the
+  // season-job polling re-renders that previously snapped the blocks shut.
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({})
+  const toggleSection = (id: string) => setOpenSections((o) => ({ ...o, [id]: !o[id] }))
   const busy = disabled || revising || addingCast
 
   const addCast = async () => {
@@ -235,23 +274,10 @@ export function IdeaEditor({
     onChanged?.('characters')
   }
 
-  /** Section wrapper: plain block on the Idea step, <details> on the season screen. */
-  const Section = ({ id, title, children }: { id: string; title: string; children: React.ReactNode }) =>
-    collapsible ? (
-      <details className="min-w-0 rounded-xl border border-border bg-card" data-testid={`idea-section-${id}`}>
-        <summary className="cursor-pointer select-none px-4 py-3 font-display text-base font-semibold list-none [&::-webkit-details-marker]:hidden [&::marker]:hidden">
-          <span className="inline-flex items-center gap-2"><ChevronRight className="h-4 w-4 text-muted-foreground transition-transform [details[open]>summary_&]:rotate-90" />{title}</span>
-        </summary>
-        <div className="border-t border-border p-4">{children}</div>
-      </details>
-    ) : (
-      <div data-testid={`idea-section-${id}`}>{children}</div>
-    )
-
   return (
     <div className={collapsible ? 'space-y-3' : 'space-y-6'} data-testid="idea-editor">
       {error && <div className="rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
-      <Section id="synopsis" title="Синопсис сезона">
+      <Section id="synopsis" title="Синопсис сезона" collapsible={collapsible} open={!!openSections['synopsis']} onToggle={() => toggleSection('synopsis')}>
         <div className={collapsible ? '' : 'rounded-xl border border-border bg-card p-4 sm:p-6'} style={collapsible ? undefined : { boxShadow: 'var(--shadow-md)' }}>
           <div className="flex flex-wrap items-center justify-between gap-2">
             {!collapsible && <h3 className="font-display text-lg font-semibold">Синопсис сезона</h3>}
@@ -293,7 +319,7 @@ export function IdeaEditor({
         </div>
       </Section>
 
-      <Section id="locations" title={`Локации (${locations.length})`}>
+      <Section id="locations" title={`Локации (${locations.length})`} collapsible={collapsible} open={!!openSections['locations']} onToggle={() => toggleSection('locations')}>
         <div data-testid="idea-locations">
           {!collapsible && <h3 className="mb-1 font-display text-lg font-semibold">Локации ({locations.length})</h3>}
           <p className="mb-3 text-xs text-muted-foreground">Ключевые места сезона. Фотореалистичные референсы для них (и для персонажей) — на вкладке «Референсы»; видеомодель использует их вместе с персонажами.</p>
@@ -308,7 +334,7 @@ export function IdeaEditor({
         </div>
       </Section>
 
-      <Section id="cast" title={`Персонажи (${characters.length})`}>
+      <Section id="cast" title={`Персонажи (${characters.length})`} collapsible={collapsible} open={!!openSections['cast']} onToggle={() => toggleSection('cast')}>
         <div data-testid="idea-cast">
           {!collapsible && <h3 className="mb-3 font-display text-lg font-semibold">Персонажи ({characters.length})</h3>}
           {groupByTier(characters).map((g) => (

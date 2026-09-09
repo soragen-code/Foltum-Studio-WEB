@@ -284,11 +284,11 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
             disabled={seasonLocked}
             onChanged={(what) => setIdeaChanged((c) => (c.includes(what) ? c : [...c, what]))}
           />
-          {ideaChanged.length > 0 && season && !seasonLocked && (
+          {ideaChanged.length > 0 && season && (!seasonLocked || seasonBusy) && (
             <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm" data-testid="season-sync-hint">
               <span>Идея изменилась — сценарий сезона пока не синхронизирован.</span>
-              <button onClick={() => reviseSeason({ sync: true })} className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground" data-testid="season-sync">
-                <RefreshCw className="h-4 w-4" /> Применить изменения к сценарию сезона
+              <button onClick={() => reviseSeason({ sync: true })} disabled={seasonBusy} className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="season-sync">
+                {seasonBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Применить изменения к сценарию сезона
               </button>
             </div>
           )}
