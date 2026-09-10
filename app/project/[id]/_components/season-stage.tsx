@@ -118,9 +118,10 @@ function SceneProse({ s }: { s: BookScene }) {
   const speech = (s.dialogue || '').trim()
   return (
     <div className="space-y-2" data-testid="book-scene">
-      {s.locationDesc && <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{s.locationDesc}</p>}
+      {/* Only the story itself is shown here: action/description, narration and dialogue.
+          Grey auxiliary meta (location caption, shot/plan, duration, labels) is intentionally omitted. */}
       {s.action && <p className="whitespace-pre-wrap leading-relaxed">{s.action}</p>}
-      {isNarration && narration && <p className="whitespace-pre-wrap italic leading-relaxed text-muted-foreground">{narration}</p>}
+      {isNarration && narration && <p className="whitespace-pre-wrap italic leading-relaxed">{narration}</p>}
       {!isNarration && speech && <p className="whitespace-pre-wrap leading-relaxed">{speech}</p>}
     </div>
   )

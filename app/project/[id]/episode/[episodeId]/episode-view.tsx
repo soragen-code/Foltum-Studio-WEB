@@ -51,6 +51,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [plan, setPlan] = useState<Plan | null>(null)
   const [modal, setModal] = useState(false)
   const [startingAll, setStartingAll] = useState(false)
+  const [openingModal, setOpeningModal] = useState(false) // spinner while the plan loads before the modal opens
   const [assembling, setAssembling] = useState(false)
   // Stage 19 — «Ассембл» final polish now runs as a SERVER-DRIVEN background job (episode_assemble):
   // the route returns a jobId immediately and the whole orchestration (audit → re-gen only the flagged
@@ -421,8 +422,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   }, [episode.id])
   useEffect(() => { loadPlan().catch(() => {}) }, [loadPlan])
   const openModal = async () => {
-    setError(null)
-    try { await loadPlan(); setModal(true) } catch (e: any) { setError(e?.message ?? 'Ошибка') }
+    setError(null); setOpeningModal(true)
+    try { await loadPlan(); setModal(true) } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setOpeningModal(false) }
   }
   const generateAll = async () => {
     setStartingAll(true); setError(null); canceledRef.current = false; setBatchCanceled(false)
@@ -675,7 +676,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                         </button>
                       </div>
                       <button onClick={() => lockCharacter(c.id)} disabled={busy || refSession || !hasAllImages(c)} className="mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-character-lock" title="Зафиксировать без изменений">
-                        <Lock className="h-3.5 w-3.5" /> Сохранить навсегда
+                        {charBusy[c.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lock className="h-3.5 w-3.5" />} Сохранить навсегда
                       </button>
                     </>
                   )}
@@ -726,7 +727,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                         </button>
                       </div>
                       <button onClick={() => lockLocation(l.id)} disabled={busy || refSession || !(locBaseReady(l) && locExtraReady(l))} className="mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-location-lock" title="Зафиксировать без изменений">
-                        <Lock className="h-3.5 w-3.5" /> Сохранить навсегда
+                        {locBusy[l.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lock className="h-3.5 w-3.5" />} Сохранить навсегда
                       </button>
                     </>
                   )}
@@ -753,8 +754,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <button onClick={() => goPhase('script')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted" data-testid="back-to-script">
             <ArrowLeft className="h-4 w-4" /> Сценарий
           </button>
-          <button onClick={openModal} disabled={startingAll || scenes.length === 0 || !refsReady} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all" title={refsReady ? '' : 'Сначала сгенерируйте все референсы эпизода'}>
-            <Play className="h-4 w-4" /> Сгенерировать все сцены
+          <button onClick={openModal} disabled={openingModal || startingAll || scenes.length === 0 || !refsReady} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all" title={refsReady ? '' : 'Сначала сгенерируйте все референсы эпизода'}>
+            {openingModal ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Сгенерировать все сцены
           </button>
           <button onClick={() => setDraftOpen(true)} disabled={!anyClip} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="show-draft" title={anyClip ? '' : 'Появится, когда будет хотя бы один готовый ролик'}>
             <Film className="h-4 w-4" /> Показать черновик
@@ -870,9 +871,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   </div>
                   {regenAsk === scene.id && (
                     <div className="rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm" data-testid="regen-confirm">
-                      Сцена переписана. Перегенерировать ролик? Стоимость {perScene ?? '…'} кр. {perScene === undefined && <button className="underline" onClick={openModal}>(рассчитать)</button>}
+                      Сцена переписана. Перегенерировать ролик? Стоимость {perScene ?? '…'} кр. {perScene === undefined && <button className="inline-flex items-center gap-1 underline disabled:opacity-50" onClick={openModal} disabled={openingModal}>{openingModal && <Loader2 className="h-3.5 w-3.5 animate-spin" />}(рассчитать)</button>}
                       <div className="mt-2 flex gap-2">
-                        <button onClick={() => regenScene(scene.id)} className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-primary-foreground" data-testid="regen-ok"><RefreshCw className="h-4 w-4" /> Перегенерировать</button>
+                        <button onClick={() => regenScene(scene.id)} disabled={gen} className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-primary-foreground disabled:opacity-50" data-testid="regen-ok">{gen ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Перегенерировать</button>
                         <button onClick={() => setRegenAsk(null)} className="rounded-lg border border-border px-3 py-1.5">Позже</button>
                       </div>
                     </div>
