@@ -52,6 +52,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
   const [storyText, setStoryText] = useState('')
   const [storyBusy, setStoryBusy] = useState(false)
   const [storyNotice, setStoryNotice] = useState('')
+  const [openingEpisode, setOpeningEpisode] = useState<string | null>(null) // episodeId being navigated to
   const abortRef = useRef<AbortController | null>(null)
 
   const load = useCallback(async () => {
@@ -243,8 +244,8 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
                     </div>
                   </div>
                   {ready ? (
-                    <Link href={`/project/${project.id}/episode/${ep.id}`} className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted" data-testid="open-episode">
-                      Открыть <ArrowRight className="h-4 w-4" />
+                    <Link href={`/project/${project.id}/episode/${ep.id}`} onClick={() => setOpeningEpisode(ep.id)} aria-disabled={openingEpisode === ep.id} className={`inline-flex shrink-0 items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted ${openingEpisode === ep.id ? 'pointer-events-none opacity-60' : ''}`} data-testid="open-episode">
+                      {openingEpisode === ep.id ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Открыть <ArrowRight className="h-4 w-4" />
                     </Link>
                   ) : (
                     <span className="shrink-0 text-xs text-muted-foreground">{jobActive ? 'сценарий пишется' : 'ожидает'}</span>

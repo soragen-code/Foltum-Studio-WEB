@@ -189,6 +189,7 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
   const [locText, setLocText] = useState<Record<string, string>>({})
   const [locOpen, setLocOpen] = useState<Record<string, boolean>>({})
   const [busy, setBusy] = useState<Record<string, string>>({}) // episodeId -> 'revise' | 'location'
+  const [openingEpisode, setOpeningEpisode] = useState<string | null>(null) // episodeId being navigated to
   // Location references (id → imageUrl); refreshed while a location image job runs.
   const [locImages, setLocImages] = useState<Record<string, string | null>>(() =>
     Object.fromEntries(((project?.locations ?? []) as { id: string; imageUrl?: string | null }[]).map((l) => [l.id, l.imageUrl ?? null]))
@@ -511,8 +512,8 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
                   )}
                 </div>
                 {ep.script && (
-                  <Link href={`/project/${project.id}/episode/${ep.id}`} className="hidden shrink-0 items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted sm:inline-flex" data-testid="open-episode">
-                    <Film className="h-4 w-4" /> Открыть эпизод
+                  <Link href={`/project/${project.id}/episode/${ep.id}`} onClick={() => setOpeningEpisode(ep.id)} aria-disabled={openingEpisode === ep.id} className={`hidden shrink-0 items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted sm:inline-flex ${openingEpisode === ep.id ? 'pointer-events-none opacity-60' : ''}`} data-testid="open-episode">
+                    {openingEpisode === ep.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Открыть эпизод
                   </Link>
                 )}
               </div>
@@ -533,8 +534,8 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
                     </div>
                   )}
                   {ep.script && (
-                    <Link href={`/project/${project.id}/episode/${ep.id}`} className="mt-4 inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted sm:hidden">
-                      <Film className="h-4 w-4" /> Открыть эпизод <ArrowRight className="h-4 w-4" />
+                    <Link href={`/project/${project.id}/episode/${ep.id}`} onClick={() => setOpeningEpisode(ep.id)} aria-disabled={openingEpisode === ep.id} className={`mt-4 inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted sm:hidden ${openingEpisode === ep.id ? 'pointer-events-none opacity-60' : ''}`}>
+                      {openingEpisode === ep.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Открыть эпизод <ArrowRight className="h-4 w-4" />
                     </Link>
                   )}
                 </div>

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ChevronDown, Check } from 'lucide-react'
+import { ChevronDown, Check, Loader2 } from 'lucide-react'
 
 export type NavEpisode = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null }
 
@@ -27,6 +27,7 @@ function statusOf(s: NavEpisode): { label: string; done: boolean } {
  */
 export function EpisodeNavGrid({ projectId, episodes, currentId }: { projectId: string; episodes: NavEpisode[]; currentId: string }) {
   const [open, setOpen] = useState(false)
+  const [openingId, setOpeningId] = useState<string | null>(null) // episodeId being navigated to
   const ref = useRef<HTMLDivElement | null>(null)
   const sorted = [...episodes].sort((a, b) => a.number - b.number)
   const current = sorted.find((e) => e.id === currentId)
@@ -71,17 +72,24 @@ export function EpisodeNavGrid({ projectId, episodes, currentId }: { projectId: 
                 <Link
                   key={s.id}
                   href={`/project/${projectId}/episode/${s.id}`}
-                  onClick={() => setOpen(false)}
+                  onClick={() => { if (active) { setOpen(false); return } setOpeningId(s.id) }}
+                  aria-disabled={openingId === s.id}
                   data-testid="episode-nav-item"
                   data-active={active}
                   title={`Эпизод ${s.number}: ${s.title} — ${st.label}`}
-                  className={`flex aspect-square flex-col items-center justify-center gap-0.5 rounded-lg border p-1 text-center transition ${active ? 'border-primary bg-primary/10 font-semibold text-foreground' : 'border-border text-muted-foreground hover:border-primary/60 hover:text-foreground'}`}
+                  className={`flex aspect-square flex-col items-center justify-center gap-0.5 rounded-lg border p-1 text-center transition ${active ? 'border-primary bg-primary/10 font-semibold text-foreground' : 'border-border text-muted-foreground hover:border-primary/60 hover:text-foreground'} ${openingId === s.id ? 'pointer-events-none opacity-70' : ''}`}
                 >
-                  <span className="text-sm font-bold leading-none">{s.number}</span>
-                  <span className="flex items-center gap-0.5 text-[9px] leading-none">
-                    {st.done && <Check className="h-2.5 w-2.5 text-primary" />}
-                    {st.label}
-                  </span>
+                  {openingId === s.id ? (
+                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                  ) : (
+                    <>
+                      <span className="text-sm font-bold leading-none">{s.number}</span>
+                      <span className="flex items-center gap-0.5 text-[9px] leading-none">
+                        {st.done && <Check className="h-2.5 w-2.5 text-primary" />}
+                        {st.label}
+                      </span>
+                    </>
+                  )}
                 </Link>
               )
             })}

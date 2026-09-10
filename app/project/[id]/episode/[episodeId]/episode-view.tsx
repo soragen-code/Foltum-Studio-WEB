@@ -427,12 +427,12 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try { await loadPlan(); setModal(true) } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setOpeningModal(false) }
   }
   const generateAll = async () => {
+    setModal(false) // close the plan modal immediately on «ОК»; generation continues in the background
     setStartingAll(true); setError(null); canceledRef.current = false; setBatchCanceled(false)
     try {
       const res = await postJobStart(`/api/ai/episodes/${episode.id}/generate-all`, {})
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error ?? 'Не удалось запустить генерацию')
-      setModal(false)
       for (const j of data.jobs ?? []) { setActiveGen((p) => ({ ...p, [j.sceneId]: true })); patchScene(j.sceneId, { status: 'generating' }); pollVideoJob(j.sceneId, j.jobId) }
       if (typeof data.creditsRemaining === 'number') setCredits(data.creditsRemaining)
       setBatch({ active: true, total: scenes.length, done: scenes.filter((s) => validUrl(s.videoUrl)).length, generating: (data.jobs ?? []).length, failed: 0, pending: 0, remaining: scenes.length })
@@ -919,8 +919,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             </ul>
             <div className="mt-4 flex justify-end gap-2">
               <button onClick={() => setModal(false)} className="rounded-lg border border-border px-3 py-1.5 text-sm">Отмена</button>
-              <button onClick={generateAll} disabled={startingAll || plan.pendingCount === 0 || plan.credits < plan.total} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="generate-ok">
-                {startingAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} ОК
+              <button onClick={generateAll} disabled={plan.pendingCount === 0 || plan.credits < plan.total} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="generate-ok">
+                <Play className="h-4 w-4" /> ОК
               </button>
             </div>
           </div>
