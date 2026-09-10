@@ -152,3 +152,9 @@ ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "refLocked" BOOLEAN NOT NULL DEF
 -- Model picker: persist the chosen video model / provider per scene so batch continuation
 -- and single-scene regeneration reuse the producer's choice ("seedance" default, or "kling").
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "videoModel" TEXT;
+
+
+-- Stage 31: manual per-scene prompt override (additive, nullable). When non-empty it replaces
+-- the auto-assembled final prompt TEXT verbatim; NULL = use the auto prompt. Frame/reference
+-- chaining is unaffected.
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "promptOverride" TEXT;

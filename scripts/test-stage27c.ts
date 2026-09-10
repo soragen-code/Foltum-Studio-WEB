@@ -138,6 +138,58 @@ const baseScene = {
   ok(built.model === "seedance" && built.modelSlug === "bytedance/seedance-2.5", "unknown provider normalizes to the default (seedance 2.5)");
 }
 
+// ── 8. Stage 31 promptOverride: replaces the TEXT verbatim, keeps the reference/chaining plan ───────
+{
+  const override = "MY CUSTOM PROMPT — verbatim, no softening, no notes.";
+  // 8a. character_references scene with an override: prompt is the override text, NO [ImageN] notes,
+  //     but referenceImages / referenceKind are still computed as usual (override changes text only).
+  const built = buildScenePrompt({
+    scene: { ...baseScene, promptOverride: override },
+    characters: [
+      { characterId: "yara", name: "Yara", tier: "MAIN", imageFront: styledUrl("yara") },
+      { characterId: "theo", name: "Theo", tier: "MAIN", imageFront: styledUrl("theo") },
+    ],
+    location: null,
+    previous: null,
+    provider: "seedance",
+  });
+  ok(built.prompt === override, "override replaces the final prompt text verbatim");
+  ok(built.basePrompt === override, "override also becomes the basePrompt (no softening applied)");
+  ok(!built.prompt.includes("[Image1]") && !built.prompt.includes("[Image2]"), "override prompt carries NO [ImageN] notes");
+  ok(built.referenceKind === "character_references" && built.referenceImages.length === 2, "reference plan (character_references + 2 images) is still computed under an override");
+
+  // 8b. override still allows frame chaining — image-to-video seed is unaffected by the text override.
+  const prevFrame = styledUrl("prev-lastframe");
+  const chained = buildScenePrompt({
+    scene: { ...baseScene, id: "scene-3", number: 3, locationDesc: "A sunlit apartment", promptOverride: override },
+    characters: [{ characterId: "yara", name: "Yara", tier: "MAIN", imageFront: styledUrl("yara") }],
+    location: null,
+    previous: { id: "scene-2", number: 2, locationDesc: "A sunlit apartment", lastFrameUrl: prevFrame },
+    provider: "seedance",
+  });
+  ok(chained.prompt === override && chained.referenceKind === "adjacent_frame" && chained.image === prevFrame, "override keeps adjacent_frame chaining (image seed) while replacing the text");
+
+  // 8c. whitespace-only override is treated as no override (auto prompt is used).
+  const blank = buildScenePrompt({
+    scene: { ...baseScene, promptOverride: "   \n  " },
+    characters: [{ characterId: "yara", name: "Yara", tier: "MAIN", imageFront: styledUrl("yara") }],
+    location: null,
+    previous: null,
+    provider: "seedance",
+  });
+  ok(blank.prompt.includes("[Image1]"), "whitespace-only override is ignored → auto prompt with [ImageN] notes");
+
+  // 8d. no override (undefined) keeps the auto prompt unchanged.
+  const auto = buildScenePrompt({
+    scene: { ...baseScene },
+    characters: [{ characterId: "yara", name: "Yara", tier: "MAIN", imageFront: styledUrl("yara") }],
+    location: null,
+    previous: null,
+    provider: "seedance",
+  });
+  ok(auto.prompt.includes("[Image1]") && auto.prompt !== override, "absent override → normal auto-assembled prompt");
+}
+
 ok(MAX_REFERENCE_IMAGES === 30, "MAX_REFERENCE_IMAGES is 30 (Seedance reference cap)");
 
 console.log(`\nStage 27c: ${pass} checks passed.`);

@@ -36,6 +36,12 @@ export interface ScenePromptScene {
   language?: string | null;
   locationDesc?: string | null;
   continuesFrom?: string | null;
+  /**
+   * Stage 31: manual final-prompt override. When non-empty it REPLACES the auto-assembled prompt
+   * TEXT verbatim (no moderation softening, no `[ImageN]` notes appended); image/reference chaining
+   * is still computed as usual. null/empty = use the auto prompt.
+   */
+  promptOverride?: string | null;
 }
 
 export interface ScenePromptCharacterLink {
@@ -149,10 +155,19 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   let prompt = isNarration
     ? `${buildNarrationAudioPrompt(stripSlowDirections(visualPrompt), scene.voiceover)}\n\n${PACE_DIRECTION}`
     : `${buildNativeAudioPrompt(stripSlowDirections(visualPrompt), dialogue, characters.map(c => ({ name: c.name })), targetLanguage)}\n\n${PACE_DIRECTION}`;
-  // Seedance moderation (E005): neutralize explicit wording in BOTH the visual prompt and the
-  // English dialogue before submitting.
-  const softened = softenForModeration(prompt, 1);
-  prompt = softened.text;
+  // Stage 31: a manual override replaces the auto-assembled TEXT verbatim — no moderation
+  // softening (the producer is responsible for the wording) and no `[ImageN]` notes appended below.
+  // Image/reference chaining is still computed as usual, so the override changes only the text.
+  const override = (scene.promptOverride ?? "").trim();
+  const hasOverride = override.length > 0;
+  if (hasOverride) {
+    prompt = override;
+  } else {
+    // Seedance moderation (E005): neutralize explicit wording in BOTH the visual prompt and the
+    // English dialogue before submitting.
+    const softened = softenForModeration(prompt, 1);
+    prompt = softened.text;
+  }
   const basePrompt = prompt;
 
   const model = normalizeVideoModel(input.provider);
@@ -195,8 +210,11 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     retryRefs = refs.map(r => ({ url: r.url, kind: r.kind, note: r.note }));
     reference = { mode: "character_references", characterIds: refs.filter(r => r.kind !== "location").map(r => r.id), locationId: effectiveLocation?.id ?? null, kinds: refs.map(r => r.kind) };
     referenceKind = "character_references";
-    prompt += "\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
-    if (effectiveLocation) prompt += "\nCamera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location references. Only the camera angle changes between shots. The characters are physically present in this place and interact with its objects and surfaces; the cuts show the same location from different angles with real depth (foreground, characters, background) — never a flat backdrop.";
+    // With a manual override the producer owns the full text — never append the reference notes.
+    if (!hasOverride) {
+      prompt += "\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
+      if (effectiveLocation) prompt += "\nCamera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location references. Only the camera angle changes between shots. The characters are physically present in this place and interact with its objects and surfaces; the cuts show the same location from different angles with real depth (foreground, characters, background) — never a flat backdrop.";
+    }
   } else {
     // One new scene composition, never overwrite the user's old portraits or frames. This is
     // original text-to-image design, not a way to bypass a provider refusal. The worker generates
@@ -206,7 +224,8 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     referenceKind = "new_scene_reference";
     newSceneReference = true;
     newSceneReferenceNote = "defines the scene's original photorealistic character designs, clothing and environment. Preserve those designs while performing the scripted action.";
-    prompt += `\n[Image1] ${newSceneReferenceNote}`;
+    // With a manual override the producer owns the full text — never append the reference note.
+    if (!hasOverride) prompt += `\n[Image1] ${newSceneReferenceNote}`;
   }
 
   return {

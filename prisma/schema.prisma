@@ -266,6 +266,7 @@ model Scene {
   voiceoverLocal String? @db.Text // stage 12: the same narration translated into the story language for the UI
   status        String   @default("pending") // pending, generating, generated, accepted
   videoModel    String?  // chosen video model / provider for this scene: "seedance" (default) or "kling" — persisted so batch continuation and single-scene regen reuse the producer's choice
+  promptOverride String? @db.Text // stage 31: manual per-scene final-prompt override — when non-empty it replaces the auto-assembled prompt TEXT verbatim (image/reference chaining is unaffected); null = use auto prompt
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

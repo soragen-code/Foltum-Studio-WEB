@@ -53,5 +53,50 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     provider: scene.videoModel,
   });
 
-  return NextResponse.json({ prompt: built.prompt, model: built.model });
+  return NextResponse.json({ prompt: built.prompt, model: built.model, hasOverride: !!(scene.promptOverride ?? "").trim() });
+}
+
+/**
+ * PUT /api/ai/scenes/[id]/prompt
+ *
+ * Save (or reset) the scene's manual final-prompt override. Body: { prompt: string }.
+ *   - non-empty  → stored verbatim (edge-trimmed) and used as the final prompt TEXT on the next
+ *                  generation(s) of this scene, until changed;
+ *   - empty / whitespace → resets to null, so the auto-assembled prompt is used again.
+ *
+ * The override changes only the TEXT — frame/reference chaining is always recomputed at generation
+ * time. Response: { ok: true, hasOverride: boolean }. Same ownership chain as GET.
+ */
+export async function PUT(request: Request, ctx: { params: Promise<{ id: string }> }) {
+  const session = await auth();
+  if (!session?.user?.id) return NextResponse.json({ error: "Требуется вход" }, { status: 401 });
+
+  const limited = rateLimitByUser(request, "ai:scene-prompt", session.user.email ?? session.user.id, RATE_LIMITS.ai);
+  if (limited) return limited;
+
+  const { id } = await ctx.params;
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Некорректный запрос" }, { status: 400 });
+  }
+  const raw = (body as { prompt?: unknown } | null)?.prompt;
+  if (raw !== undefined && typeof raw !== "string") {
+    return NextResponse.json({ error: "Некорректный промпт" }, { status: 400 });
+  }
+  const trimmed = (raw ?? "").toString().trim();
+  const promptOverride = trimmed.length ? trimmed : null;
+
+  // Ownership is enforced in the query: a scene of another user's project simply returns null.
+  const scene = await prisma.scene.findFirst({
+    where: { id, episode: { season: { project: { userId: session.user.id } } } },
+    select: { id: true },
+  });
+  if (!scene) return NextResponse.json({ error: "Сцена не найдена" }, { status: 404 });
+
+  await prisma.scene.update({ where: { id: scene.id }, data: { promptOverride } });
+
+  return NextResponse.json({ ok: true, hasOverride: promptOverride !== null });
 }

@@ -313,7 +313,7 @@ async function handleFailure(jobId: string, ctx: { sceneId: string; userId?: str
     const scene = await prisma.scene.findUnique({ where: { id: ctx.sceneId }, select: { videoPrompt: true, dialogueEn: true, dialogue: true, action: true } }).catch(() => null);
     const hints = moderationHints([scene?.videoPrompt, scene?.action, scene?.dialogueEn, scene?.dialogue].filter(Boolean).join("\n"));
     // Fail-fast: no automatic rewrite. Tell the user to edit the prompt manually and retry.
-    message = `[moderation] Сцена не прошла модерацию провайдера. Отредактируйте промпт вручную: скопируйте его кнопкой «Копировать промпт», исправьте и запустите генерацию заново.` +
+    message = `[moderation] Сцена не прошла модерацию провайдера. Отредактируйте промпт вручную: откройте его кнопкой «Смотреть промпт», исправьте, сохраните свой вариант и запустите генерацию заново.` +
       (hints.length ? ` Вероятные триггеры: ${hints.map(h => `«${h}»`).join(", ")}.` : "") +
       ` Код провайдера: ${safeProviderError(error)}`;
   }

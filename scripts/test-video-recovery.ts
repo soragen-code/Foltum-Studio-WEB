@@ -169,7 +169,7 @@ test("moderation (fail-fast): a refusal fails the job immediately — no resubmi
     assert.equal(row.status, "failed");           // the job fails right away
     assert.equal(refunds, 1);                      // credit refunded exactly once
     assert.match(row.error, /\[moderation\]/);    // moderation-specific message prefix
-    assert.match(row.error, /Копировать промпт/); // tells the user to edit the prompt manually
+    assert.match(row.error, /Смотреть промпт/);   // tells the user to open & edit the prompt manually
   } finally { Date.now = originalNow; }
 });
 

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Header } from '@/components/header'
-import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Lock, Copy, Check } from 'lucide-react'
+import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Lock, Copy, Check, FileText, RotateCcw, Save } from 'lucide-react'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
@@ -35,7 +35,7 @@ const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.ima
 // serverless window and get killed — chunking + re-firing guarantees the target is actually reached).
 const LOCATION_EXTRA_CHUNK = 6
 
-type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; status: string; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
+type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; status: string; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null }
 
 export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits }: { episode: any; project: any; siblings?: Sibling[]; credits: number }) {
@@ -49,9 +49,15 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [sceneBusy, setSceneBusy] = useState<Record<string, boolean>>({})
   const [regenAsk, setRegenAsk] = useState<string | null>(null) // sceneId awaiting paid regen confirmation
   const [sceneError, setSceneError] = useState<Record<string, string>>({}) // per-scene generation error shown on the card
-  // Stage 27c — per-scene "copy full prompt" feedback (manual prompt editing).
-  const [promptCopied, setPromptCopied] = useState<string | null>(null) // sceneId that just showed «Скопировано»
-  const [copyBusy, setCopyBusy] = useState<Record<string, boolean>>({}) // per-scene copy spinner while the prompt loads
+  // Stage 31 — "Смотреть промпт" modal: view / copy / manually override the scene's final prompt.
+  const [promptModal, setPromptModal] = useState<{ sceneId: string; number: number; model?: VideoModelId } | null>(null)
+  const [promptText, setPromptText] = useState('')          // editable textarea content
+  const [promptLoading, setPromptLoading] = useState(false) // GET in flight
+  const [promptErr, setPromptErr] = useState<string | null>(null)
+  const [promptHasOverride, setPromptHasOverride] = useState(false) // scene currently uses a manual override
+  const [promptSaving, setPromptSaving] = useState(false)   // PUT in flight (save or reset)
+  const [promptCopied, setPromptCopied] = useState(false)   // flashed «Скопировано» inside the modal
+  const [promptSaved, setPromptSaved] = useState(false)     // flashed «Сохранено» inside the modal
   // «Собрать» — pure concatenation of the ready scene clips into one episode (no audit / no polish / no re-gen).
   const [stitching, setStitching] = useState(false)
   // AI video model chosen in the always-visible global selector next to the scenes (EDIT 5);
@@ -408,23 +414,65 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // Regen keeps the model already stored on the scene (no provider override).
   const regenScene = (sceneId: string) => generateScene(sceneId, false)
 
-  // Stage 30 — copy the scene's FINAL Seedance prompt to the clipboard and flash «Скопировано» for ~2s.
-  // The prompt is exactly what the worker submits (with [ImageN] placeholders instead of real reference
-  // URLs and no LLM translation), fetched on demand. Used for manual prompt editing after a refusal.
-  const copyScenePrompt = async (scene: Scene) => {
-    setCopyBusy((b) => ({ ...b, [scene.id]: true })); setError(null)
+  // Stage 31 — open the "Смотреть промпт" modal and load the scene's FINAL prompt (override if set,
+  // else the auto-assembled prompt). The prompt is exactly what the worker submits (with [ImageN]
+  // placeholders instead of real reference URLs and no LLM translation).
+  const openPromptModal = async (scene: Scene) => {
+    setPromptModal({ sceneId: scene.id, number: scene.number })
+    setPromptText(''); setPromptErr(null); setPromptHasOverride(false)
+    setPromptCopied(false); setPromptSaved(false); setPromptLoading(true)
     try {
       const res = await fetch(`/api/ai/scenes/${scene.id}/prompt`)
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || 'Не удалось загрузить промпт')
-      const text = String(data.prompt ?? '')
-      await navigator.clipboard.writeText(text)
-      setPromptCopied(scene.id)
-      setTimeout(() => setPromptCopied((cur) => (cur === scene.id ? null : cur)), 2000)
+      setPromptText(String(data.prompt ?? ''))
+      setPromptHasOverride(!!data.hasOverride)
+      setPromptModal((m) => (m && m.sceneId === scene.id ? { ...m, model: data.model } : m))
     } catch (e: any) {
-      setError(e?.message ?? 'Не удалось скопировать — попробуйте ещё раз')
+      setPromptErr(e?.message ?? 'Не удалось загрузить промпт')
     } finally {
-      setCopyBusy((b) => { const n = { ...b }; delete n[scene.id]; return n })
+      setPromptLoading(false)
+    }
+  }
+
+  // Copy the current textarea contents (so a hand-edited prompt is copied as shown) and flash «Скопировано».
+  const copyPromptModal = async () => {
+    try {
+      await navigator.clipboard.writeText(promptText)
+      setPromptCopied(true)
+      setTimeout(() => setPromptCopied(false), 2000)
+    } catch { setPromptErr('Не удалось скопировать') }
+  }
+
+  // Save the textarea as a manual override (reset=false), or reset to the auto prompt (reset=true).
+  // The override persists until changed and is used verbatim on the next generation(s) of the scene.
+  const savePromptOverride = async (reset = false) => {
+    if (!promptModal) return
+    const sceneId = promptModal.sceneId
+    setPromptSaving(true); setPromptErr(null); setPromptSaved(false)
+    try {
+      const res = await fetch(`/api/ai/scenes/${sceneId}/prompt`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: reset ? '' : promptText }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || 'Не удалось сохранить')
+      setPromptHasOverride(!!data.hasOverride)
+      // Reflect the override flag on the scene card without an extra fetch.
+      setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, promptOverride: reset ? null : (promptText.trim() || null) } : s)))
+      if (reset) {
+        // Reload the freshly-auto-assembled prompt into the textarea.
+        const g = await fetch(`/api/ai/scenes/${sceneId}/prompt`)
+        const gd = await g.json().catch(() => ({}))
+        if (g.ok) { setPromptText(String(gd.prompt ?? '')); setPromptHasOverride(!!gd.hasOverride) }
+      } else {
+        setPromptSaved(true)
+        setTimeout(() => setPromptSaved(false), 2000)
+      }
+    } catch (e: any) {
+      setPromptErr(e?.message ?? 'Не удалось сохранить')
+    } finally {
+      setPromptSaving(false)
     }
   }
 
@@ -748,20 +796,20 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       {sceneBusy[scene.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Изменить
                     </button>
                   </div>
-                  {/* Stage 30 — copy the exact final Seedance prompt for this scene so the user can edit
-                      it manually after a moderation refusal. Lightweight secondary utility (muted,
-                      compact) so it doesn't compete with the primary generate/revise actions above. */}
+                  {/* Stage 31 — view / copy / manually override the exact final Seedance prompt for this
+                      scene in a modal (edit it with your own LLM after a moderation refusal). Lightweight
+                      secondary utility (muted, compact) so it doesn't compete with the primary actions. */}
                   {scene.videoPrompt ? (
                     <div className="border-t border-border/60 pt-2">
                       <button
-                        onClick={() => copyScenePrompt(scene)}
-                        disabled={!!copyBusy[scene.id]}
-                        className="inline-flex w-full items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
-                        data-testid="scene-copy-prompt"
-                        title="Скопировать полный промпт в буфер обмена"
+                        onClick={() => openPromptModal(scene)}
+                        className="inline-flex w-full items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                        data-testid="scene-view-prompt"
+                        title="Посмотреть, скопировать или изменить полный промпт"
                       >
-                        {copyBusy[scene.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" /> : promptCopied === scene.id ? <Check className="h-3.5 w-3.5 shrink-0" /> : <Copy className="h-3.5 w-3.5 shrink-0" />}
-                        {promptCopied === scene.id ? 'Скопировано' : 'Копировать промпт'}
+                        <FileText className="h-3.5 w-3.5 shrink-0" />
+                        Смотреть промпт
+                        {scene.promptOverride ? <span className="ml-1 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary" data-testid="scene-override-badge">изменён</span> : null}
                       </button>
                     </div>
                   ) : null}
@@ -853,6 +901,75 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               <button onClick={generateAllRefs} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="ref-model-ok">
                 <Wand2 className="h-4 w-4" /> Сгенерировать
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stage 31 — "Смотреть промпт" modal: view / copy / manually override the scene's final prompt. */}
+      {promptModal && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" data-testid="scene-prompt-modal">
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-xl border border-border bg-card shadow-xl">
+            <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
+              <div>
+                <h3 className="flex items-center gap-2 font-display text-lg font-bold"><FileText className="h-5 w-5" /> Полный промпт · Сцена {promptModal.number}</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Это точный текст, который отправляется модели. Референсы показаны как <code className="rounded bg-muted px-1">[Image1]…[ImageN]</code>. Можно скопировать, изменить своим ИИ и сохранить — сохранённый текст будет использоваться при следующей генерации сцены (кадровая склейка сохраняется).
+                </p>
+                {promptHasOverride && (
+                  <p className="mt-2 inline-flex items-center gap-1 rounded bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary" data-testid="scene-prompt-override-indicator">Промпт изменён вручную</p>
+                )}
+              </div>
+              <button onClick={() => setPromptModal(null)} className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Закрыть" data-testid="scene-prompt-close"><X className="h-5 w-5" /></button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+              {promptLoading ? (
+                <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /> Загрузка промпта…</div>
+              ) : (
+                <>
+                  {promptErr && <p className="mb-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive" data-testid="scene-prompt-error">{promptErr}</p>}
+                  <textarea
+                    value={promptText}
+                    onChange={(e) => setPromptText(e.target.value)}
+                    spellCheck={false}
+                    className="h-[45vh] w-full resize-none whitespace-pre-wrap rounded-lg border border-border bg-background px-3 py-2 font-mono text-xs leading-relaxed"
+                    data-testid="scene-prompt-text"
+                    placeholder="Промпт сцены…"
+                  />
+                  {promptModal.model && <p className="mt-2 text-[11px] text-muted-foreground">Модель: {VIDEO_MODELS.find((m) => m.id === promptModal.model)?.label ?? promptModal.model}</p>}
+                </>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-5 py-4">
+              {promptHasOverride && (
+                <button
+                  onClick={() => savePromptOverride(true)}
+                  disabled={promptSaving || promptLoading}
+                  className="mr-auto inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
+                  data-testid="scene-reset-prompt"
+                >
+                  {promptSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />} Сбросить к авто
+                </button>
+              )}
+              <button
+                onClick={copyPromptModal}
+                disabled={promptLoading || !promptText}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+                data-testid="scene-copy-prompt"
+              >
+                {promptCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />} {promptCopied ? 'Скопировано' : 'Копировать'}
+              </button>
+              <button
+                onClick={() => savePromptOverride(false)}
+                disabled={promptSaving || promptLoading}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50"
+                data-testid="scene-save-prompt"
+              >
+                {promptSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : promptSaved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />} {promptSaved ? 'Сохранено' : 'Сохранить'}
+              </button>
+              <button onClick={() => setPromptModal(null)} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted">Закрыть</button>
             </div>
           </div>
         </div>
