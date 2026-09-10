@@ -771,7 +771,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   <div className="flex -space-x-1">{scene.characters?.map(({ character: c }) => validUrl(c.imageFront) ? <img key={c.id} src={c.imageFront as string} alt={c.name} title={c.name} className="h-6 w-6 rounded-full border border-background object-cover" /> : null)}</div>
                 </div>
 
-                <div className="mt-3 aspect-[9/16] max-h-[420px] overflow-hidden rounded-lg bg-black/80">
+                {/* Stage 34: the 9:16 preview is centered horizontally inside the card (height-driven width). */}
+                <div className="mt-3 flex justify-center">
+                <div className="aspect-[9/16] h-[420px] max-h-[420px] max-w-full overflow-hidden rounded-lg bg-black/80" data-testid="scene-preview">
                   {gen ? (
                     <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center" data-testid="scene-spinner">
                       <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -783,6 +785,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   ) : (
                     <div className="flex h-full items-center justify-center text-xs text-muted-foreground">Видео ещё не сгенерировано</div>
                   )}
+                </div>
                 </div>
 
                 {sceneError[scene.id] && <p className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive" data-testid="scene-error">{sceneError[scene.id]}</p>}
