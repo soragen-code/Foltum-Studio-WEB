@@ -17,7 +17,7 @@ import { normalizePromptOverride } from "@/lib/prompt-override";
  *   - no real reference image is generated or exposed — references appear only as the
  *     `[Image1]…[ImageN]` placeholders the worker itself writes into the prompt.
  *
- * Response: { prompt, model, hasOverride, skipReferences, referenceKind } where referenceKind is
+ * Response: { prompt, model, hasOverride, skipReferences, skipPreviousFrame, referenceKind } where referenceKind is
  * character_references | new_scene_reference | text_only (Stage 36: no first-frame mode anymore).
  * Ownership: scene → episode → season → project → userId.
  */
@@ -62,6 +62,8 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     hasOverride: !!(scene.promptOverride ?? "").trim(),
     // Stage 33: the per-scene "no reference images" toggle and the resolved reference strategy.
     skipReferences: !!scene.skipReferences,
+    // Stage 37: the per-scene "no previous frame" toggle.
+    skipPreviousFrame: !!scene.skipPreviousFrame,
     referenceKind: built.referenceKind,
   });
 }
@@ -70,17 +72,20 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
  * PUT /api/ai/scenes/[id]/prompt
  *
  * Save (or reset) the scene's manual final-prompt override and/or the "send without reference
- * images" toggle. Body: { prompt?: string, skipReferences?: boolean } — each field is updated only
+ * images" / "skip previous frame" toggles. Body: { prompt?: string, skipReferences?: boolean,
+ * skipPreviousFrame?: boolean } — each field is updated only
  * when present.
  *   - prompt non-empty  → normalized (Stage 36, see lib/prompt-override.ts: Markdown fences and any
  *                         chatty preamble before the first `[SECTION]` header are stripped) and used as
  *                         the final prompt TEXT on the next generation(s) of this scene, until changed;
  *   - prompt empty / whitespace (after normalization) → resets to null, so the auto prompt is used again;
  *   - skipReferences (Stage 36) → persisted per scene; when true the video is submitted text-only for
- *                         ANY scene (no portraits, no location angles, no previous-scene frame).
+ *                         ANY scene (no portraits, no location angles, no previous-scene frame);
+ *   - skipPreviousFrame (Stage 37) → persisted per scene; when true only the previous scene's last frame
+ *                         is dropped from the reference set (portraits / location angles still sent).
  *
  * The override changes only the TEXT — the reference image set is always recomputed at generation time.
- * Response: { ok: true, hasOverride: boolean, skipReferences: boolean, prompt: string | null } where
+ * Response: { ok: true, hasOverride: boolean, skipReferences: boolean, skipPreviousFrame: boolean, prompt: string | null } where
  * `prompt` is the normalized text actually saved (null after a reset). Same ownership chain as GET.
  */
 export async function PUT(request: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -106,7 +111,11 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
   if (rawSkip !== undefined && typeof rawSkip !== "boolean") {
     return NextResponse.json({ error: "Некорректное значение skipReferences" }, { status: 400 });
   }
-  if (raw === undefined && rawSkip === undefined) {
+  const rawSkipPrev = (body as { skipPreviousFrame?: unknown } | null)?.skipPreviousFrame;
+  if (rawSkipPrev !== undefined && typeof rawSkipPrev !== "boolean") {
+    return NextResponse.json({ error: "Некорректное значение skipPreviousFrame" }, { status: 400 });
+  }
+  if (raw === undefined && rawSkip === undefined && rawSkipPrev === undefined) {
     return NextResponse.json({ error: "Нечего сохранять" }, { status: 400 });
   }
   const normalized = normalizePromptOverride((raw ?? "").toString());
@@ -115,7 +124,7 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
   // Ownership is enforced in the query: a scene of another user's project simply returns null.
   const scene = await prisma.scene.findFirst({
     where: { id, episode: { season: { project: { userId: session.user.id } } } },
-    select: { id: true, promptOverride: true, skipReferences: true },
+    select: { id: true, promptOverride: true, skipReferences: true, skipPreviousFrame: true },
   });
   if (!scene) return NextResponse.json({ error: "Сцена не найдена" }, { status: 404 });
 
@@ -124,14 +133,16 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
     data: {
       ...(raw !== undefined ? { promptOverride } : {}),
       ...(rawSkip !== undefined ? { skipReferences: rawSkip } : {}),
+      ...(rawSkipPrev !== undefined ? { skipPreviousFrame: rawSkipPrev } : {}),
     },
-    select: { promptOverride: true, skipReferences: true },
+    select: { promptOverride: true, skipReferences: true, skipPreviousFrame: true },
   });
 
   return NextResponse.json({
     ok: true,
     hasOverride: !!(updated.promptOverride ?? "").trim(),
     skipReferences: updated.skipReferences,
+    skipPreviousFrame: updated.skipPreviousFrame,
     // Stage 36: what was actually saved, so the modal can show the normalized text.
     prompt: raw !== undefined ? promptOverride : undefined,
   });

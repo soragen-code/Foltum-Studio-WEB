@@ -1,5 +1,6 @@
 /**
- * Stage 36 tests — reference mode for every scene + manual prompt override normalization.
+ * Stage 36/37 tests — reference mode for every scene, manual prompt override normalization,
+ * per-scene skipPreviousFrame switch (Stage 37).
  * Run: npx tsx scripts/test-stage36.ts
  *
  * Pure-logic only (NO Replicate / network / LLM / DB).
@@ -85,4 +86,23 @@ const crowd = { characterId: "crowd", name: "Guests", tier: "CROWD", imageFront:
   ok(normalizePromptOverride("[ACTION]: keep me\nbody") === "[ACTION]: keep me\nbody", "header at the very start: nothing dropped");
 }
 
-console.log(`\nStage 36: ${pass} checks passed.`);
+// ── G. Stage 37: skipPreviousFrame on a chained scene → portraits + location kept, frame dropped ──
+{
+  const b = buildScenePrompt({ scene: { ...scene, skipPreviousFrame: true }, characters: cast, location: loc, previous, provider: "seedance" });
+  const kinds = b.retryRefs.map(r => r.kind);
+  ok(b.referenceKind === "character_references", "skipPreviousFrame: still character_references (not text_only)");
+  ok(!kinds.includes("previous_frame"), "skipPreviousFrame: no previous_frame among the references");
+  ok(kinds.filter(k => k === "character").length === 5 && kinds.filter(k => k === "location").length === 3 && b.referenceImages.length === 8, "skipPreviousFrame: 5 portraits + 3 location angles still sent");
+  ok(b.previousFrameSceneId === null && (b.reference as any).previousFrameSceneId === null, "skipPreviousFrame: previousFrameSceneId is null");
+  ok((b.reference as any).previousFrameSkipped === true, "skipPreviousFrame: diagnostics flag previousFrameSkipped");
+  ok(!b.prompt.includes("final frame of the previous scene"), "skipPreviousFrame: no continuity note in the prompt");
+  ok(!b.referenceImages.includes(previous.lastFrameUrl), "skipPreviousFrame: previous frame URL not sent");
+  // flag on a scene that was not chainable anyway → no previousFrameSkipped marker
+  const c = buildScenePrompt({ scene: { ...scene, skipPreviousFrame: true, continuesFrom: "location-change" }, characters: cast, location: loc, previous, provider: "seedance" });
+  ok((c.reference as any).previousFrameSkipped === undefined && c.previousFrameSceneId === null, "skipPreviousFrame on a non-chainable scene: no marker, no frame");
+  // flag off → previous frame still chained (regression)
+  const d = buildScenePrompt({ scene: { ...scene, skipPreviousFrame: false }, characters: cast, location: loc, previous, provider: "seedance" });
+  ok(d.retryRefs.some(r => r.kind === "previous_frame") && d.previousFrameSceneId === "s2", "skipPreviousFrame=false: previous frame still chained");
+}
+
+console.log(`\nStage 36/37: ${pass} checks passed.`);

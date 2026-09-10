@@ -217,7 +217,7 @@ test("moderation (Stage 36): previous frame among the references → explicit hi
     await check();
     assert.equal(row.status, "failed");
     assert.match(row.error, /Отправлено изображений: 4 — портретов: 1, ракурсов локации: 2, массовки: 0, кадр предыдущей сцены: да/);
-    assert.match(row.error, /Если блокируется кадр предыдущей сцены — включите «Отправить без референс‑изображений» или перегенерируйте предыдущую сцену/);
+    assert.match(row.error, /Если блокируется кадр предыдущей сцены — включите «Не использовать кадр предыдущей сцены» в окне «Смотреть промпт» \(портреты и локация останутся\) или перегенерируйте предыдущую сцену/);
     assert.doesNotMatch(row.error, /Первый кадр берётся/);
     assert.match(row.error, /Код провайдера: /);
     // The exact submitted list survives in the persisted state for the UI previews.

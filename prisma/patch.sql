@@ -163,3 +163,8 @@ ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "promptOverride" TEXT;
 -- When true and the scene is not frame-chained, the video is submitted as plain text-to-video
 -- (no character/location references). Chained scenes still use the previous scene's last frame.
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "skipReferences" BOOLEAN NOT NULL DEFAULT false;
+
+-- Stage 37: per-scene "skip previous frame" toggle (additive, NOT NULL with default).
+-- When true the previous scene's last frame is NOT sent as a reference image; character portraits,
+-- location angles and crowds are still sent as usual.
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "skipPreviousFrame" BOOLEAN NOT NULL DEFAULT false;

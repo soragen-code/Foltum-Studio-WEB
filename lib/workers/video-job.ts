@@ -380,7 +380,7 @@ async function moderationMessage(sceneId: string, error: unknown, state?: VideoJ
       (hints.length ? ` Вероятные триггеры: ${hints.map(h => `«${h}»`).join(", ")}.` : "") +
       (state?.referenceKind === "text_only" ? " Референс‑изображения не отправлялись (только текст)." : countsText);
   }
-  if (withPreviousFrame) message += " Если блокируется кадр предыдущей сцены — включите «Отправить без референс‑изображений» или перегенерируйте предыдущую сцену.";
+  if (withPreviousFrame) message += " Если блокируется кадр предыдущей сцены — включите «Не использовать кадр предыдущей сцены» в окне «Смотреть промпт» (портреты и локация останутся) или перегенерируйте предыдущую сцену.";
   message += ` Код провайдера: ${safeProviderError(error)}`;
   return message;
 }

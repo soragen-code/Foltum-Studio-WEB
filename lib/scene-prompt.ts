@@ -56,6 +56,12 @@ export interface ScenePromptScene {
    * references, no crowd groups, no previous-scene frame, no `[ImageN]` notes, no Flux still.
    */
   skipReferences?: boolean | null;
+  /**
+   * Stage 37: when true the previous scene's last frame is NOT appended as the "previous_frame"
+   * reference — character portraits, location angles and crowds are still sent as usual. This is the
+   * targeted fix when the provider blocks exactly that frame (skipReferences would drop everything).
+   */
+  skipPreviousFrame?: boolean | null;
 }
 
 export interface ScenePromptCharacterLink {
@@ -238,7 +244,9 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const characterRefs: Ref[] = individuals.map(c => ({ url: c.imageFront!, kind: "character", id: c.characterId, note: `defines ${c.name}'s photorealistic appearance and identity; use the scene's staging and camera.` }));
   const locationRefs: Ref[] = locationAngles.map(a => ({ url: a.url, kind: "location", id: effectiveLocation!.id, note: `the location "${effectiveLocation!.name}" — ${a.angle} angle. Same place, same time of day, same light and palette in every shot. Keep the camera inside this location and match this lighting exactly.` }));
   const crowdRefs: Ref[] = crowds.map(c => ({ url: c.imageFront!, kind: "crowd", id: c.characterId, note: `defines the look of the group "${c.name}" (extras): who they are and how they are dressed.` }));
-  const chained = canChainFrame(scene, previous);
+  const chainable = canChainFrame(scene, previous);
+  const skipPreviousFrame = !!scene.skipPreviousFrame;
+  const chained = chainable && !skipPreviousFrame;
   const previousFrameRefs: Ref[] = chained
     ? [{ url: previous!.lastFrameUrl!, kind: "previous_frame", id: previous!.id, note: "the final frame of the previous scene: start this scene from the same camera position, character placement, lighting and time of day; continue the action from here." }]
     : [];
@@ -267,7 +275,9 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
       characterIds: refs.filter(r => r.kind === "character" || r.kind === "crowd").map(r => r.id),
       locationId: keptLocation.length ? effectiveLocation!.id : null,
       kinds: refs.map(r => r.kind),
-      ...(previousFrameSceneId ? { previousFrameSceneId } : {}),
+      previousFrameSceneId,
+      // Stage 37: the chain conditions held but the producer switched the previous frame off.
+      ...(chainable && skipPreviousFrame ? { previousFrameSkipped: true } : {}),
     };
     referenceKind = "character_references";
     // With a manual override the producer owns the full text — never append the reference notes

@@ -267,7 +267,8 @@ model Scene {
   status        String   @default("pending") // pending, generating, generated, accepted
   videoModel    String?  // chosen video model / provider for this scene: "seedance" (default) or "kling" — persisted so batch continuation and single-scene regen reuse the producer's choice
   promptOverride String? @db.Text // stage 31: manual per-scene final-prompt override — when non-empty it replaces the auto-assembled prompt TEXT verbatim (image/reference chaining is unaffected); null = use auto prompt
-  skipReferences Boolean @default(false) // stage 33: submit this scene WITHOUT reference images (text-only) when it is not frame-chained; chained scenes ignore it
+  skipReferences Boolean @default(false) // stage 33/36: submit this scene WITHOUT any reference images (text-only), previous-scene frame included
+  skipPreviousFrame Boolean @default(false) // stage 37: keep character/location references but do NOT send the previous scene's last frame (moderation trigger)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
