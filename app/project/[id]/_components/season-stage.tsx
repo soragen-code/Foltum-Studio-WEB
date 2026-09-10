@@ -96,6 +96,82 @@ export function ScriptView({ text, scenes }: { text?: string | null; scenes?: { 
   return <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed">{text ?? ''}</pre>
 }
 
+/**
+ * Stage 14 (D1/D2): the episode script rendered as flowing prose — "как по книге".
+ * Setting + action + dialogue are merged into readable text; dialogue is shown in the
+ * story language (no English, no subtitles, no technical prompt lines). By default only the
+ * key opening (first `keyCount` scenes) is shown; the rest is behind «Показать полностью».
+ */
+type BookScene = {
+  number: number
+  locationDesc?: string | null
+  action?: string | null
+  dialogue?: string | null
+  sceneKind?: string | null
+  voiceover?: string | null
+  voiceoverLocal?: string | null
+}
+
+function SceneProse({ s }: { s: BookScene }) {
+  const isNarration = s.sceneKind === 'narration'
+  const narration = (s.voiceoverLocal || s.voiceover || '').trim()
+  const speech = (s.dialogue || '').trim()
+  return (
+    <div className="space-y-2" data-testid="book-scene">
+      {s.locationDesc && <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{s.locationDesc}</p>}
+      {s.action && <p className="whitespace-pre-wrap leading-relaxed">{s.action}</p>}
+      {isNarration && narration && <p className="whitespace-pre-wrap italic leading-relaxed text-muted-foreground">{narration}</p>}
+      {!isNarration && speech && <p className="whitespace-pre-wrap leading-relaxed">{speech}</p>}
+    </div>
+  )
+}
+
+export function BookScript({ text, scenes, keyCount = 2 }: { text?: string | null; scenes?: BookScene[]; keyCount?: number }) {
+  const [full, setFull] = useState(false)
+  if (scenes && scenes.length) {
+    const key = scenes.slice(0, keyCount)
+    const rest = scenes.slice(keyCount)
+    return (
+      <div className="space-y-5 text-sm leading-relaxed" data-testid="book-script">
+        {key.map((s) => <SceneProse key={s.number} s={s} />)}
+        {rest.length > 0 && full && rest.map((s) => <SceneProse key={s.number} s={s} />)}
+        {rest.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setFull((f) => !f)}
+            className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
+            data-testid="script-toggle-full"
+            aria-expanded={full}
+          >
+            {full ? <><ChevronDown className="h-3.5 w-3.5 rotate-180" /> Свернуть</> : <><ChevronDown className="h-3.5 w-3.5" /> Показать полностью (ещё {rest.length})</>}
+          </button>
+        )}
+      </div>
+    )
+  }
+  // Plain-text fallback for old episodes without structured scenes.
+  const t = (text ?? '').trim()
+  const LIMIT = 700
+  const long = t.length > LIMIT
+  const shown = full || !long ? t : t.slice(0, LIMIT).trimEnd() + '…'
+  return (
+    <div className="space-y-3 text-sm" data-testid="book-script">
+      <pre className="whitespace-pre-wrap break-words font-sans leading-relaxed">{shown}</pre>
+      {long && (
+        <button
+          type="button"
+          onClick={() => setFull((f) => !f)}
+          className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
+          data-testid="script-toggle-full"
+          aria-expanded={full}
+        >
+          {full ? <><ChevronDown className="h-3.5 w-3.5 rotate-180" /> Свернуть</> : <><ChevronDown className="h-3.5 w-3.5" /> Показать полностью</>}
+        </button>
+      )}
+    </div>
+  )
+}
+
 export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: () => void }) {
   const [season, setSeason] = useState<SeasonData>(null)
   const [job, setJob] = useState<Job>(null)

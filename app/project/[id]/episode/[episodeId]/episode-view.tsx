@@ -5,11 +5,14 @@ import Link from 'next/link'
 import { Header } from '@/components/header'
 import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, Play, RefreshCw, Clapperboard, Images, Ban, X, Maximize2, Users, ImageOff } from 'lucide-react'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
-import { ScriptView } from '../../_components/season-stage'
+import { BookScript } from '../../_components/season-stage'
+import { StickyReviseBar } from '../../_components/sticky-revise-bar'
 import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
 import { CancelButton } from '../../_components/cancel-button'
 import { desiredExtraFrames, locationScale, locationScaleLabel, episodeLocations } from '@/lib/location-scale'
 import { EpisodeNavGrid } from './episode-nav-grid'
+
+type EpisodePhase = 'script' | 'references' | 'scenes'
 
 const VIDEO_EXPECTED_SEC = 600
 const REF_POLL_MS = 3500
@@ -73,6 +76,14 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [lightbox, setLightbox] = useState<{ url: string; alt: string } | null>(null)
   // Sequential draft playlist.
   const [draftOpen, setDraftOpen] = useState(false)
+
+  // Stage 14 (D4): the episode is a guided flow — script → (confirm) → references → (ready) → scenes.
+  // Old episodes that already have generated scenes open straight on the scenes step.
+  const [phase, setPhase] = useState<EpisodePhase>(() => {
+    const anyScene = ((initial.scenes ?? []) as Scene[]).some((s) => validUrl(s.videoUrl))
+    return anyScene || validUrl(initial.videoUrl) ? 'scenes' : 'script'
+  })
+  const goPhase = (p: EpisodePhase) => { setPhase(p); if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' }) }
 
   const patchScene = (sceneId: string, patch: Partial<Scene>) => setScenes((prev) => prev.map((s) => (s.id === sceneId ? { ...s, ...patch } : s)))
   const stopPolling = (sceneId: string) => { const t = pollTimers.current[sceneId]; if (t) clearTimeout(t); delete pollTimers.current[sceneId] }
@@ -439,7 +450,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   return (
     <div className="min-h-screen bg-background">
       <Header />
-      <main className="mx-auto max-w-[1200px] px-4 py-6" data-testid="episode-page">
+      <main className={`mx-auto max-w-[1200px] px-4 py-6 ${phase === 'script' ? 'pb-44' : ''}`} data-testid="episode-page">
         {/* Stage 14 (C): episode nav — right-aligned «Эпизоды» dropdown grid (10/row desktop), any order. */}
         <div className="flex flex-wrap items-center gap-4">
           <Link href={`/project/${project.id}`} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> К сюжету сезона</Link>
@@ -454,23 +465,43 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <div className="text-sm text-muted-foreground">Кредиты: <span className="font-semibold text-foreground" data-testid="credits">{credits}</span></div>
         </div>
 
-        {/* Episode script + revise-by-prompt */}
-        <div className="mt-6 rounded-xl border border-border bg-card p-4">
-          <h2 className="mb-3 font-display text-xl font-bold">Сценарий эпизода</h2>
-          <ScriptView text={episode.script} scenes={scenes} />
-          <div className="mt-4 space-y-2">
-            <label className="text-xs font-semibold text-muted-foreground">Что изменить в сценарии эпизода (по промпту)</label>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <textarea value={reviseText} onChange={(e) => setReviseText(e.target.value)} rows={2} placeholder="Например: убрать сцену на кухне, усилить конфликт…" className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm" data-testid="episode-revise-input" />
-              <button onClick={() => reviseEpisode()} disabled={revising || !reviseText.trim()} className="inline-flex items-center justify-center gap-1 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50" data-testid="episode-revise-submit">
-                {revising ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Переписать
+        {/* Stage 14 (D): guided steps — script → references → scenes */}
+        <div className="mt-4 flex flex-wrap items-center gap-2 text-xs" data-testid="phase-steps">
+          {(([['script', '1 · Сценарий'], ['references', '2 · Референсы'], ['scenes', '3 · Сцены']]) as [EpisodePhase, string][]).map(([key, label]) => {
+            const reached = key === 'script' || key === 'references' || refsReady || scenes.some((s) => validUrl(s.videoUrl))
+            const active = phase === key
+            return (
+              <button
+                key={key}
+                type="button"
+                onClick={() => reached && goPhase(key)}
+                disabled={!reached}
+                data-testid={`phase-step-${key}`}
+                data-active={active}
+                className={`rounded-full border px-3 py-1 font-medium transition ${active ? 'border-primary bg-primary text-primary-foreground' : reached ? 'border-border hover:bg-muted' : 'border-border/50 text-muted-foreground/50'}`}
+              >
+                {label}
+              </button>
+            )
+          })}
+        </div>
+
+        {/* Step 1 — episode script in book format (D1/D2) */}
+        {phase === 'script' && (
+          <div className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="phase-script">
+            <h2 className="mb-3 font-display text-xl font-bold">Сценарий эпизода</h2>
+            <BookScript text={episode.script} scenes={scenes} />
+            <div className="mt-5 flex flex-wrap items-center justify-end gap-3 border-t border-border pt-4">
+              <button onClick={() => goPhase('references')} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" data-testid="confirm-script">
+                Подтвердить сценарий · к референсам <ArrowRight className="h-4 w-4" />
               </button>
             </div>
           </div>
-        </div>
+        )}
 
-        {/* Stage 12: references of THIS episode + single "generate all" */}
-        <section className="mt-6 rounded-xl border border-border bg-card p-4" data-testid="episode-references">
+        {/* Step 2 — Stage 12: references of THIS episode + single "generate all" */}
+        {phase === 'references' && (
+        <section className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="episode-references">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="inline-flex items-center gap-2 font-display text-xl font-bold"><Images className="h-5 w-5 text-primary" /> Референсы эпизода</h2>
             {refSession ? (
@@ -566,10 +597,26 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             })}
             {refLocs.length === 0 && <p className="text-sm text-muted-foreground">У эпизода нет привязанных локаций.</p>}
           </div>
-        </section>
 
-        {/* Generate all scenes / draft / assemble */}
-        <div className="mt-6 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
+          {/* Step-2 navigation (D4): back to script · to scenes (enabled only when all refs are ready) */}
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+            <button onClick={() => goPhase('script')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="back-to-script">
+              <ArrowLeft className="h-4 w-4" /> К сценарию
+            </button>
+            <button onClick={() => goPhase('scenes')} disabled={!refsReady} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="go-to-scenes" title={refsReady ? '' : 'Сначала сгенерируйте все референсы эпизода'}>
+              Перейти к сценам <ArrowRight className="h-4 w-4" />
+            </button>
+          </div>
+        </section>
+        )}
+
+        {/* Step 3 — scenes: generate all / draft / assemble */}
+        {phase === 'scenes' && (
+        <>
+        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
+          <button onClick={() => goPhase('references')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted" data-testid="back-to-references">
+            <ArrowLeft className="h-4 w-4" /> К референсам
+          </button>
           <button onClick={openModal} disabled={startingAll || scenes.length === 0 || !refsReady} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all" title={refsReady ? '' : 'Сначала сгенерируйте все референсы эпизода'}>
             <Play className="h-4 w-4" /> Сгенерировать все сцены
           </button>
@@ -713,7 +760,24 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             )
           })}
         </div>
+        </>
+        )}
       </main>
+
+      {/* Stage 14 (D3): episode-level revise-by-prompt as a sticky bottom bar (whole episode or a named scene) */}
+      {phase === 'script' && (
+        <StickyReviseBar
+          value={reviseText}
+          onChange={setReviseText}
+          onSubmit={() => reviseEpisode()}
+          busy={revising}
+          testId="episode-revise"
+          label="Изменить сценарий эпизода по промпту (весь эпизод или конкретную сцену)"
+          placeholder="Например: убрать сцену на кухне, усилить конфликт в сцене 3…"
+          submitLabel="Переписать"
+          hint="Правки применяются ко всему сценарию. Можно указать сцену по номеру. Ctrl/⌘+Enter — отправить."
+        />
+      )}
 
       {/* Generate-scenes cost modal */}
       {modal && plan && (
