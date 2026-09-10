@@ -66,7 +66,7 @@ export async function POST(request: Request) {
     const raw = await chatJSON(
       seasonStoryReviseSystemPrompt(language, before.episodes.length),
       seasonStoryReviseUserPrompt({ synopsis: project.synopsis, structure: before, fullStory: season.fullStory ?? "", characters: cards, locations: project.locations, instruction }),
-      { temperature: 0.5, maxTokens: 20000 }
+      { temperature: 0.5, maxTokens: 16000 }
     );
     const parsed = seasonStoryReviseSchema.parse(raw);
     if (parsed.episodes.length < SEASON_MIN_EPISODES || parsed.episodes.length > SEASON_MAX_EPISODES) throw new Error(`LLM вернул ${parsed.episodes.length} эпизодов (допустимо ${SEASON_MIN_EPISODES}–${SEASON_MAX_EPISODES})`);
