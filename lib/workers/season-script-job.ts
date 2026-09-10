@@ -35,6 +35,8 @@ import {
   matchCharacter,
   matchLocation,
 } from "@/lib/season";
+import { anchorSceneLocation } from "@/lib/location-anchor";
+import { episodeCastFromScenes } from "@/lib/episode-cast";
 
 export const SEASON_JOB_TYPE = "season_script";
 /** Stop starting new episodes after this many ms (Vercel maxDuration is 800s). */
@@ -121,6 +123,9 @@ export async function persistEpisodeScript(
 ) {
   const idOf = (n: string) => matchCharacter(characters, n)?.id;
   const text = renderEpisodeScriptText(outline, script);
+  // Stage 20 (D1): the accurate episode cast is the UNION of characters that actually appear in the
+  // generated scenes — collected here per scene, deduped below (not the declared outline.characters).
+  const sceneCastIds: string[][] = [];
   await prisma.$transaction(async (tx) => {
     await tx.scene.deleteMany({ where: { episodeId } });
     for (const s of script.scenes) {
@@ -131,7 +136,9 @@ export async function persistEpisodeScript(
           // `dialogue` = story-language text (UI + burned-in subtitles); `dialogueEn` = the English lines the model voices.
           dialogue: s.dialogueLocal ?? s.dialogue,
           dialogueEn: s.dialogue,
-          locationDesc: s.locationDesc,
+          // Stage 20 (A2): lock every non-location-change scene to the episode's single canonical location
+          // (Episode.locationDesc) so the place never drifts scene-to-scene and frame-chaining stays reliable.
+          locationDesc: anchorSceneLocation(s.locationDesc, outline.locationDesc, s.continuesFrom),
           videoPrompt: s.videoPrompt,
           shotType: s.shotType,
           action: s.action,
@@ -151,9 +158,14 @@ export async function persistEpisodeScript(
         },
       });
       const ids = Array.from(new Set(s.characters.map(idOf).filter((x): x is string => !!x)));
+      sceneCastIds.push(ids);
       if (ids.length) await tx.sceneCharacter.createMany({ data: ids.map((characterId) => ({ sceneId: scene.id, characterId })), skipDuplicates: true });
     }
-    const epIds = Array.from(new Set(outline.characters.map(idOf).filter((x): x is string => !!x)));
+    // Stage 20 (D1/D2): EpisodeCharacter = the UNION of characters actually used across the scenes
+    // (so the References tab + readiness gate only require characters that really appear). If somehow
+    // no scene names any character, fall back to the declared outline cast so the episode is never empty.
+    const declaredIds = Array.from(new Set(outline.characters.map(idOf).filter((x): x is string => !!x)));
+    const epIds = episodeCastFromScenes(sceneCastIds, declaredIds);
     await tx.episodeCharacter.deleteMany({ where: { episodeId } });
     if (epIds.length) await tx.episodeCharacter.createMany({ data: epIds.map((characterId) => ({ episodeId, characterId })), skipDuplicates: true });
     await tx.episode.update({

@@ -8,6 +8,7 @@ import { parseBody, scenesSchema } from "@/lib/validations";
 import { chatJSON } from "@/lib/ai";
 
 import { VISUAL_STYLE } from "@/lib/visual-style";
+import { anchorSceneLocation } from "@/lib/location-anchor";
 
 const EPISODE_MIN_SECONDS = Number(process.env.EPISODE_MIN_SECONDS ?? 60);
 // Seedance 2.5 renders one scene = one ~5 s clip. To reach ~1 minute per episode
@@ -255,7 +256,8 @@ Direct this episode as ONE continuous piece of film: first write "visualIdentity
           episodeId,
           number: s.number,
           dialogue: s.dialogue,
-          locationDesc: s.locationDesc,
+          // Stage 20 (A2): lock scenes to the episode's single canonical location so the place never drifts.
+          locationDesc: anchorSceneLocation(s.locationDesc, episode.locationDesc, undefined),
           videoPrompt: s.videoPrompt,
           status: "pending",
         },

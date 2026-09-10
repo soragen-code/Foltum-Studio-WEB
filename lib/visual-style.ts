@@ -174,12 +174,26 @@ export function isStyledAsset(url?: string | null): boolean {
 }
 
 const normalizedLocation = (s?: string | null) => (s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+/**
+ * Stage 20 (A3): chain the previous scene's last frame into this scene's first frame only when the two
+ * shots are truly the SAME place. After anchorSceneLocation, non-location-change scenes share the
+ * IDENTICAL canonical locationDesc, so normalized-location equality is now a reliable same-location key.
+ * The chain is broken when: the previous frame isn't the adjacent scene, the previous frame isn't a
+ * styled asset, the current scene is a deliberately SHOWN location-change, the two canonical locations
+ * differ, or the text signals an explicit time/place jump ("cut to" / "hours later" / "days later").
+ */
 export function canChainFrame(
-  scene: { number: number; locationDesc?: string | null },
+  scene: { number: number; locationDesc?: string | null; continuesFrom?: string | null },
   previous?: { number: number; locationDesc?: string | null; lastFrameUrl?: string | null } | null
 ): boolean {
   // Never jump back to an older nonadjacent frame, or assume an untagged upload is stylized.
-  return !!previous && previous.number === scene.number - 1 && isStyledAsset(previous.lastFrameUrl) &&
-    !!normalizedLocation(scene.locationDesc) && normalizedLocation(scene.locationDesc) === normalizedLocation(previous.locationDesc) &&
-    !/\b(?:cut to|hours? later|days? later)\b/i.test(scene.locationDesc ?? "");
+  if (!previous || previous.number !== scene.number - 1) return false;
+  if (!isStyledAsset(previous.lastFrameUrl)) return false;
+  // A deliberately shown move to a new place must NOT carry the previous location's frame.
+  if ((scene.continuesFrom ?? "").trim().toLowerCase() === "location-change") return false;
+  // Same canonical episode location (identical anchored locationDesc after A2).
+  if (!normalizedLocation(scene.locationDesc) || normalizedLocation(scene.locationDesc) !== normalizedLocation(previous.locationDesc)) return false;
+  // An explicit time/place jump in the text still breaks the chain.
+  if (/\b(?:cut to|hours? later|days? later)\b/i.test(scene.locationDesc ?? "")) return false;
+  return true;
 }
