@@ -9,6 +9,13 @@ import { parseBody, charactersReferencesSchema } from "@/lib/validations";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runCharacterImagesJob } from "@/lib/workers/character-images-job";
 import { CHARACTER_REFERENCE_COST } from "@/lib/power-tier";
+import { CHARACTER_PHOTO_COUNT, parseImageArray } from "@/lib/reference-counts";
+
+/** Extra angles required beyond the 3 base shots so a character reaches the full photo set. */
+const CHARACTER_EXTRA_COUNT = Math.max(0, CHARACTER_PHOTO_COUNT - 3);
+const missingBase = (c: { imageFront: string | null; imageProfile: string | null; imageFull: string | null }) =>
+  !c.imageFront || !c.imageProfile || !c.imageFull;
+const missingExtra = (c: { imageExtra: string | null }) => parseImageArray(c.imageExtra).length < CHARACTER_EXTRA_COUNT;
 
 /**
  * POST /api/ai/characters/references  { projectId, tiers?: [...], characterIds?: [...] }
@@ -36,29 +43,41 @@ export async function POST(request: Request) {
     const active = await prisma.generationJob.findFirst({ where: { projectId, type: "characters", status: { in: ["pending", "processing"] } }, orderBy: { createdAt: "desc" } });
     if (active) return NextResponse.json({ jobId: active.id, resumed: true, count: 0 });
 
-    const pending = project.characters.filter((c) =>
-      (!c.imageFront || !c.imageProfile || !c.imageFull) &&
+    // Stage 17: a character reference is only complete with the full 5-photo set (3 base + 2 extra
+    // angles). Previously `pending` matched only characters missing a BASE shot — so a character that
+    // had all 3 base shots but was interrupted before its extras were generated (a serverless timeout
+    // during the extra pass) could NEVER be finished: re-running did nothing and the gate stayed
+    // blocked forever. Now we resume ANY incomplete character. Characters missing a base shot are
+    // CHARGED (fresh set); characters that only lack extra angles are already paid for, so they ride
+    // along for FREE (the job is idempotent and skips shots that already exist).
+    const scope = project.characters.filter((c) =>
       (!tiers || tiers.includes(c.tier as any)) &&
       (!characterIds || characterIds.includes(c.id))
     );
-    if (pending.length === 0) return NextResponse.json({ jobId: null, count: 0 });
+    const needBase = scope.filter(missingBase);
+    const needExtraOnly = scope.filter((c) => !missingBase(c) && missingExtra(c));
+    const jobCharacterIds = [...needBase, ...needExtraOnly].map((c) => c.id);
+    if (jobCharacterIds.length === 0) return NextResponse.json({ jobId: null, count: 0 });
 
-    const cost = pending.length * CHARACTER_REFERENCE_COST;
+    // Only characters that need a full (re)generation are charged; extra-only top-ups are free.
+    const cost = needBase.length * CHARACTER_REFERENCE_COST;
     if ((user.credits ?? 0) < cost)
-      return NextResponse.json({ error: `Недостаточно кредитов: нужно ${cost} (${pending.length} × ${CHARACTER_REFERENCE_COST}), на балансе ${user.credits ?? 0}` }, { status: 402 });
+      return NextResponse.json({ error: `Недостаточно кредитов: нужно ${cost} (${needBase.length} × ${CHARACTER_REFERENCE_COST}), на балансе ${user.credits ?? 0}` }, { status: 402 });
 
-    await prisma.user.update({ where: { id: user.id }, data: { credits: { decrement: cost } } });
-    await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Референсы персонажей: ${pending.length} шт.` } });
-    await prisma.character.updateMany({ where: { id: { in: pending.map((c) => c.id) }, status: "draft" }, data: { status: "approved" } });
+    if (cost > 0) {
+      await prisma.user.update({ where: { id: user.id }, data: { credits: { decrement: cost } } });
+      await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Референсы персонажей: ${needBase.length} шт.` } });
+    }
+    await prisma.character.updateMany({ where: { id: { in: jobCharacterIds }, status: "draft" }, data: { status: "approved" } });
 
     const job = await prisma.generationJob.create({
-      data: { type: "characters", status: "processing", progress: 5, message: `Генерация референсов для ${pending.length} персонажей…`, projectId },
+      data: { type: "characters", status: "processing", progress: 5, message: `Генерация референсов для ${jobCharacterIds.length} персонажей…`, projectId },
     });
     runInBackground(async () => {
-      await runCharacterImagesJob({ jobId: job.id, projectId, characterIds: pending.map((c) => c.id) });
+      await runCharacterImagesJob({ jobId: job.id, projectId, characterIds: jobCharacterIds });
       try {
-        // Refund the characters that got nothing at all.
-        const after = await prisma.character.findMany({ where: { id: { in: pending.map((c) => c.id) } }, select: { id: true, name: true, imageFront: true, imageProfile: true, imageFull: true } });
+        // Refund only the CHARGED characters that got nothing at all.
+        const after = await prisma.character.findMany({ where: { id: { in: needBase.map((c) => c.id) } }, select: { id: true, name: true, imageFront: true, imageProfile: true, imageFull: true } });
         const none = after.filter((c) => !c.imageFront && !c.imageProfile && !c.imageFull);
         if (none.length) {
           const refund = none.length * CHARACTER_REFERENCE_COST;
@@ -67,7 +86,7 @@ export async function POST(request: Request) {
         }
       } catch (e) { console.error("[characters/references] refund check failed:", e); }
     });
-    return NextResponse.json({ jobId: job.id, count: pending.length, cost, creditsRemaining: (user.credits ?? 0) - cost });
+    return NextResponse.json({ jobId: job.id, count: jobCharacterIds.length, cost, creditsRemaining: (user.credits ?? 0) - cost });
   } catch (err: any) {
     console.error("Characters references error:", err);
     return NextResponse.json({ error: "Failed: " + (err?.message ?? "Unknown error") }, { status: 500 });

@@ -9,7 +9,7 @@ import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
 import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
 import { CancelButton } from '../../_components/cancel-button'
-import { desiredExtraFrames, locationScale, locationScaleLabel, episodeLocations } from '@/lib/location-scale'
+import { desiredExtraFrames, locationScale, locationScaleLabel, episodeLocations, LOCATION_TOTAL_TARGET } from '@/lib/location-scale'
 import { CHARACTER_PHOTO_COUNT, ARTIFACT_FRAME_COUNT } from '@/lib/reference-counts'
 import { EpisodeNavGrid } from './episode-nav-grid'
 
@@ -31,6 +31,11 @@ const hasAllImages = (c: any) => validUrl(c?.imageFront) && validUrl(c?.imagePro
 // Stage 14 (E): an artifact reference is complete with ARTIFACT_FRAME_COUNT frames.
 const artifactPhotos = (a: any): string[] => [a?.imageUrl, ...parseExtra(a?.imageExtra)].filter(validUrl)
 const artifactReady = (a: any) => artifactPhotos(a).length >= ARTIFACT_FRAME_COUNT
+// Stage 17: total generated frames of a location = present base angles + extra angles (target = 15).
+const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.imageDetail].filter(validUrl).length + parseExtra(l?.imageExtra).length
+// Stage 17: top up location extras in serverless-safe chunks (a single 12-frame job can overrun the
+// serverless window and get killed — chunking + re-firing guarantees the target is actually reached).
+const LOCATION_EXTRA_CHUNK = 6
 
 type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; status: string; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Plan = { sceneCount: number; pendingCount: number; duration: number; costPerScene: number; total: number; credits: number; tier: string; resolution: string }
@@ -117,11 +122,14 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // ---- Reference readiness ----
   const locBaseReady = (l: any) => validUrl(l?.imageUrl)
   const locExtraReady = (l: any) => parseExtra(l?.imageExtra).length >= desiredExtraFrames(l)
-  // Existing artifacts must all be ready; artifacts are auto-detected, so an episode with none
-  // does not block progress (scenes unlock on characters + locations once no artifact is pending).
-  const refsReady = refChars.every(hasAllImages) && refLocs.every((l) => locBaseReady(l) && locExtraReady(l)) && refArtifacts.every(artifactReady)
+  // Stage 17: important objects (artifacts) are OPTIONAL — they never gate scene generation. The
+  // scenes step unlocks as soon as the MANDATORY references are ready: every character has its full
+  // photo set and every episode location has its full frame set. Artifacts can still be generated and
+  // edited, but a missing/partial artifact must never block progress (the previous gate included
+  // `refArtifacts.every(artifactReady)`, which could keep scenes locked forever).
+  const refsReady = refChars.every(hasAllImages) && refLocs.every((l) => locBaseReady(l) && locExtraReady(l))
   const refsCharsDone = refChars.filter(hasAllImages).length
-  const refsLocsDone = refLocs.filter(locBaseReady).length
+  const refsLocsDone = refLocs.filter((l) => locBaseReady(l) && locExtraReady(l)).length
   const refsArtsDone = refArtifacts.filter(artifactReady).length
 
   // Fullscreen carousel keyboard nav: Esc closes, ←/→ move between a reference's photos.
@@ -200,28 +208,63 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     } catch { return }
   }, [project.id, episode.id])
 
-  // Poll while a reference session is active: refresh data, kick extra angles for big locations, stop when ready.
+  // Poll while a reference session is active: refresh data, DURABLY resume any incomplete references,
+  // stop when the mandatory set is ready.
+  // Stage 17: the previous loop fired each location's extra-angle job at most ONCE per session and
+  // never re-fired if that job died partway (serverless timeout) — so characters/locations could get
+  // stuck at "base only" forever and the scenes gate stayed blocked. Now every tick we look at which
+  // reference jobs are actually ACTIVE (from the DB) and re-fire the missing work in serverless-safe
+  // chunks: characters that still lack any of their photos are resumed (idempotent — extra-only
+  // top-ups are free), and locations short of their frame target get the next chunk of extra angles.
   useEffect(() => {
     if (!refSession) return
     let stopped = false
     const loop = async () => {
       const fresh = await refreshRefs()
       if (stopped || refCanceled.current) return
-      // Kick extra angles for big locations whose base is ready but still lack enough extra frames.
-      if (fresh) {
-        for (const l of refLocs) {
-          const loc = fresh.plocs.find((x: any) => x.id === l.id)
-          if (!loc) continue
-          const want = desiredExtraFrames(loc)
-          const have = parseExtra(loc.imageExtra).length
-          if (want > 0 && validUrl(loc.imageUrl) && have < want && !refJobs.current.extra[loc.id]) {
-            try {
-              const res = await fetch(`/api/ai/locations/${loc.id}/extra-images`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ count: want - have }) })
-              const dd = await res.json().catch(() => ({}))
-              if (res.ok && dd?.jobId) refJobs.current.extra[loc.id] = dd.jobId
-              else if (!res.ok && dd?.error) setError(dd.error)
-            } catch {}
+      if (!fresh) { void refreshCredits(); return }
+
+      // Which reference jobs are currently running? (avoids duplicate starts across ticks / reloads)
+      let activeCharJob = false
+      const activeExtraLocs = new Set<string>()
+      try {
+        const jr = await fetch(`/api/jobs?projectId=${project.id}&active=1`, { cache: 'no-store' })
+        if (jr.ok) {
+          const jd = await jr.json()
+          for (const j of jd?.jobs ?? []) {
+            if (j?.type === 'characters') activeCharJob = true
+            if (j?.type === 'location_extra_image') { try { const rd = JSON.parse(j?.resultData ?? '{}'); if (rd?.locationId) activeExtraLocs.add(rd.locationId) } catch {} }
           }
+        }
+      } catch {}
+      if (stopped || refCanceled.current) return
+
+      // Characters: resume any episode character that is not fully complete (missing base OR extras).
+      const incompleteChars = refChars.filter((c) => !hasAllImages(fresh.pchars.find((x: any) => x.id === c.id) ?? c))
+      if (incompleteChars.length > 0 && !activeCharJob) {
+        try {
+          const res = await fetch('/api/ai/characters/references', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, characterIds: incompleteChars.map((c) => c.id) }) })
+          const d = await res.json().catch(() => ({}))
+          if (res.ok && d?.jobId) refJobs.current.char = d.jobId
+          else if (!res.ok && d?.error) setError(d.error)
+          if (typeof d?.creditsRemaining === 'number') setCredits(d.creditsRemaining)
+        } catch {}
+      }
+
+      // Locations: top up extra angles in chunks until each reaches its frame target.
+      for (const l of refLocs) {
+        const loc = fresh.plocs.find((x: any) => x.id === l.id)
+        if (!loc) continue
+        const want = desiredExtraFrames(loc)
+        const have = parseExtra(loc.imageExtra).length
+        if (want > 0 && validUrl(loc.imageUrl) && have < want && !activeExtraLocs.has(loc.id)) {
+          const chunk = Math.min(LOCATION_EXTRA_CHUNK, want - have)
+          try {
+            const res = await fetch(`/api/ai/locations/${loc.id}/extra-images`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ count: chunk }) })
+            const dd = await res.json().catch(() => ({}))
+            if (res.ok && dd?.jobId) refJobs.current.extra[loc.id] = dd.jobId
+            else if (!res.ok && dd?.error) setError(dd.error)
+          } catch {}
         }
       }
       void refreshCredits()
@@ -229,10 +272,23 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     void loop()
     const id = setInterval(loop, REF_POLL_MS)
     return () => { stopped = true; clearInterval(id) }
-  }, [refSession, refreshRefs, refreshCredits, refLocs])
+  }, [refSession, refreshRefs, refreshCredits, refLocs, refChars, project.id])
 
   // Stop the reference session once everything is ready.
   useEffect(() => { if (refSession && refsReady) { setRefSession(false); refJobs.current = { loc: {}, extra: {} } } }, [refSession, refsReady])
+
+  // Stage 17: self-heal a stuck episode. If references were already initiated in a previous session
+  // (some character/location already has a base image) but the mandatory set is NOT complete and no
+  // session is running, auto-start the polling session on open. This drives the durable resume loop
+  // above to completion after a reload / serverless timeout, so the scenes gate reliably unlocks
+  // without the user having to click "generate" again. Runs once per mount.
+  const autoResumedRef = useRef(false)
+  useEffect(() => {
+    if (autoResumedRef.current) return
+    if (refSession || refStarting || refsReady) return
+    const initiated = refChars.some((c) => validUrl(c?.imageFront)) || refLocs.some((l) => validUrl(l?.imageUrl))
+    if (initiated) { autoResumedRef.current = true; refCanceled.current = false; setRefSession(true) }
+  }, [refSession, refStarting, refsReady, refChars, refLocs])
 
   /** Single button: generate every missing reference for this episode's characters and locations. */
   const generateAllRefs = async () => {
@@ -639,8 +695,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               return (
                 <div key={l.id} className="rounded-lg border border-border/60 p-3" data-testid="ref-location">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="truncate text-sm font-medium">{l.name}</div>
-                    <span className="rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground" title={`Больше кадров для крупных мест`}>{locationScaleLabel(scale)}{want > 0 ? ` · +${want} кадров` : ''}</span>
+                    <div className="min-w-0 truncate text-sm font-medium">{l.name} <span className="font-normal text-muted-foreground">· {Math.min(locationFrames(l), LOCATION_TOTAL_TARGET)}/{LOCATION_TOTAL_TARGET} кадров</span></div>
+                    <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground" title={`Больше кадров для крупных мест`}>{locationScaleLabel(scale)}{want > 0 ? ` · +${want} кадров` : ''}</span>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {(() => { const all = [...base.map((a) => ({ url: a.url as string, label: a.label })), ...extras.map((u, i) => ({ url: u, label: `Доп. кадр ${i + 1}` }))]; const urls = all.map((a) => a.url); return base.length > 0 ? all.map((a, i) => (
@@ -670,7 +726,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           {/* Artifacts / important objects (Stage 14 E): 2 reference frames each, auto-detected from the script */}
           {(refArtifacts.length > 0 || refSession) && (
             <>
-              <h3 className="mt-6 flex items-center gap-2 text-sm font-semibold"><Film className="h-4 w-4" /> Важные объекты ({refArtifacts.length})</h3>
+              <h3 className="mt-6 flex items-center gap-2 text-sm font-semibold"><Film className="h-4 w-4" /> Важные объекты ({refArtifacts.length}) <span className="rounded bg-muted px-2 py-0.5 text-[10px] font-normal text-muted-foreground">необязательно</span></h3>
+              <p className="mt-1 text-xs text-muted-foreground">Важные объекты можно сгенерировать и отредактировать, но они не влияют на переход к сценам — для сцен достаточно готовых персонажей и локаций.</p>
               <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {refArtifacts.map((a) => {
                   const photos = artifactPhotos(a)
