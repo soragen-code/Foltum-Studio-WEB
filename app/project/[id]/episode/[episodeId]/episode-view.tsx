@@ -7,7 +7,7 @@ import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, Play, Re
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
-import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
+import { useJobPolling, JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
 import { CancelButton } from '../../_components/cancel-button'
 import { desiredExtraFrames, desiredTotalFrames, locationScale, locationScaleLabel, episodeLocations } from '@/lib/location-scale'
 import { CHARACTER_PHOTO_COUNT, ARTIFACT_FRAME_COUNT } from '@/lib/reference-counts'
@@ -55,13 +55,15 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [modal, setModal] = useState(false)
   const [startingAll, setStartingAll] = useState(false)
   const [assembling, setAssembling] = useState(false)
-  // Stage 13 — «Ассембл» final polish (audit whole episode → re-gen only inconsistent scenes → stitch).
+  // Stage 19 — «Ассембл» final polish now runs as a SERVER-DRIVEN background job (episode_assemble):
+  // the route returns a jobId immediately and the whole orchestration (audit → re-gen only the flagged
+  // scenes → stitch) runs on the server, surviving navigation. The client just polls the job and mirrors
+  // its resultData (phase/issues/done/total/failed) into this `polish` panel state.
   const [polish, setPolish] = useState<{ phase: 'analyzing' | 'regen' | 'stitching'; issues: { number: number; issue: string }[]; done: number; failed: number } | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const polishActiveRef = useRef(false)
-  const polishBusy = useRef(false)
-  const polishIssuesRef = useRef(0)
-  const polishRef = useRef<() => void>(() => {})
+  const [assembleJobId, setAssembleJobId] = useState<string | null>(null)
+  const assembleJobIdRef = useRef<string | null>(null)
+  assembleJobIdRef.current = assembleJobId
   const [activeGen, setActiveGen] = useState<Record<string, boolean>>({})
   const [videoJobs, setVideoJobs] = useState<Record<string, JobInfo>>({})
   const pollTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
@@ -493,65 +495,51 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const allReady = scenes.length > 0 && scenes.every((s) => validUrl(s.videoUrl) && !activeGen[s.id])
   const anyClip = scenes.some((s) => validUrl(s.videoUrl))
 
-  // Final stitch of the (now consistent) clips into the episode video — the existing assemble route.
-  const doStitch = async (fixedCount: number) => {
-    setPolish((p) => (p ? { ...p, phase: 'stitching' } : { phase: 'stitching', issues: [], done: 0, failed: 0 }))
-    try {
-      const res = await fetch('/api/ai/assemble-episode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ episodeId: episode.id }) })
-      const data = await res.json(); if (!res.ok) throw new Error(data?.error ?? 'Сборка не удалась')
-      setEpisode((p: any) => ({ ...p, videoUrl: data.videoUrl, status: 'assembled' }))
-      setNotice(fixedCount > 0
-        ? `Финальная полировка завершена: исправлены логические нестыковки и переходы (${fixedCount} ${fixedCount === 1 ? 'сцена' : 'сцен'}), эпизод собран.`
-        : 'Логических нестыковок не найдено — эпизод собран без перегенерации (кредиты не списаны).')
-    } catch (e: any) { setError(e?.message ?? 'Ошибка сборки') } finally { setPolish(null); void refreshCredits() }
+  // Stage 19 — mirror the background episode_assemble job's resultData into the local `polish` panel.
+  const applyAssembleJob = (job?: JobInfo | null) => {
+    if (!job) return
+    const rd = job.result ?? {}
+    const phase = rd.phase as 'analyzing' | 'regen' | 'stitching' | 'done' | undefined
+    if (!phase || phase === 'done') return // terminal state is handled by finishAssembleJob
+    setPolish({
+      phase,
+      issues: Array.isArray(rd.issues) ? rd.issues : [],
+      done: typeof rd.done === 'number' ? rd.done : 0,
+      failed: typeof rd.failed === 'number' ? rd.failed : 0,
+    })
   }
 
-  // Drive the re-generation of the flagged scenes (reuses the batch /continue planner) until done, then stitch.
-  const pollPolish = async () => {
-    if (!polishActiveRef.current || polishBusy.current) return
-    polishBusy.current = true
-    try {
-      const res = await fetch(`/api/ai/episodes/${episode.id}/generate-all/continue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ retryFailed: false }) })
-      if (!res.ok) { if (res.status === 429) return; const e = await res.json().catch(() => ({})); if (e?.error) setError(e.error); return }
-      const d = await res.json()
-      const remaining = d.remaining ?? 0
-      setPolish((p) => (p ? { ...p, phase: 'regen', done: Math.max(0, polishIssuesRef.current - remaining), failed: d.failed ?? 0 } : p))
-      if (typeof d.creditsRemaining === 'number') setCredits(d.creditsRemaining)
-      for (const s of d.scenes ?? []) {
-        if (s.status === 'generating') {
-          setActiveGen((prev) => (prev[s.sceneId] ? prev : { ...prev, [s.sceneId]: true }))
-          if (s.jobId && !pollTimers.current[s.sceneId]) pollVideoJob(s.sceneId, s.jobId)
-        }
-      }
-      if (remaining === 0) {
-        polishActiveRef.current = false
-        if ((d.failed ?? 0) > 0) {
-          setError('Часть проблемных сцен не удалось перегенерировать. Проверьте сцены и запустите «Ассембл» ещё раз.')
-          setPolish(null)
-          return
-        }
-        await doStitch(polishIssuesRef.current)
-      }
-    } catch {} finally { polishBusy.current = false }
-  }
-  polishRef.current = () => { void pollPolish() }
-  const polishRegen = polish?.phase === 'regen'
-  useEffect(() => {
-    if (!polishRegen) return
-    const id = setInterval(() => polishRef.current(), JOB_POLL_INTERVAL_MS * 3)
-    return () => clearInterval(id)
-  }, [polishRegen])
-
-  const cancelPolish = async () => {
-    polishActiveRef.current = false
-    try { const res = await fetch(`/api/ai/episodes/${episode.id}/generate-all/cancel`, { method: 'POST' }); await res.json().catch(() => ({})) } catch {}
-    setScenes((prev) => prev.map((s) => (activeGen[s.id] && !validUrl(s.videoUrl) ? { ...s, status: 'pending' } : s)))
+  // The job reached a terminal state (completed / failed / canceled) — settle the UI.
+  const finishAssembleJob = (job?: JobInfo | null) => {
     setPolish(null)
-    setNotice('Полировка отменена. Уже готовые сцены сохранены; незавершённые можно достроить кнопкой «Продолжить / повторить незавершённые».')
+    setAssembling(false)
+    setAssembleJobId(null)
     void refreshCredits()
+    if (!job) return
+    if (job.status === 'completed') {
+      const rd = job.result ?? {}
+      const fixed: number = typeof rd.fixedCount === 'number' ? rd.fixedCount : 0
+      if (validUrl(rd.videoUrl)) setEpisode((p: any) => ({ ...p, videoUrl: rd.videoUrl, status: 'assembled' }))
+      setNotice(fixed > 0
+        ? `Финальная полировка завершена: исправлены логические нестыковки и переходы (${fixed} ${fixed === 1 ? 'сцена' : 'сцен'}), эпизод собран.`
+        : 'Логических нестыковок не найдено — эпизод собран без перегенерации (кредиты не списаны).')
+      // The flagged scenes were re-generated on the server — refresh so the cards show the new clips.
+      void reloadEpisode()
+    } else if (job.status === 'canceled') {
+      setNotice('Полировка отменена. Уже готовые сцены сохранены; незавершённые можно достроить кнопкой «Продолжить / повторить незавершённые».')
+      void reloadEpisode()
+    } else if (job.status === 'failed') {
+      setError(job.error ?? 'Финальная полировка не удалась')
+      void reloadEpisode()
+    }
   }
 
-  // «Ассембл» → final polish: audit the whole episode, re-generate only inconsistent scenes, then stitch.
+  const assemblePoll = useJobPolling({
+    onUpdate: (res: JobPollResponse) => applyAssembleJob(res.job),
+    onFinish: (res: JobPollResponse) => finishAssembleJob(res.job),
+  })
+
+  // «Ассембл» → kick off the server-driven final-polish job and poll it.
   const assemble = async () => {
     setAssembling(true); setError(null); setNotice(null)
     setPolish({ phase: 'analyzing', issues: [], done: 0, failed: 0 })
@@ -559,21 +547,37 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       const res = await fetch('/api/ai/assemble-episode/polish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ episodeId: episode.id }) })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error ?? 'Финальная полировка не удалась')
-      const issues: { number: number; issue: string }[] = data.issues ?? []
-      polishIssuesRef.current = issues.length
-      if (typeof data.creditsRemaining === 'number') setCredits(data.creditsRemaining)
-      if (issues.length === 0) {
-        // No logical inconsistencies — just stitch the existing clips, no credits spent.
-        await doStitch(0)
-        return
-      }
-      // Inconsistencies found → the flagged scenes are being re-generated; drive the continue loop.
-      setPolish({ phase: 'regen', issues, done: 0, failed: 0 })
-      for (const j of data.jobs ?? []) { setActiveGen((p) => ({ ...p, [j.sceneId]: true })); patchScene(j.sceneId, { status: 'generating', videoUrl: null }); if (j.jobId) pollVideoJob(j.sceneId, j.jobId) }
-      polishActiveRef.current = true
-      void pollPolish()
-    } catch (e: any) { setError(e?.message ?? 'Ошибка'); setPolish(null) } finally { setAssembling(false) }
+      if (!data?.jobId) throw new Error('Не удалось запустить финальную полировку')
+      setAssembleJobId(data.jobId)
+      assemblePoll.start(data.jobId)
+    } catch (e: any) { setError(e?.message ?? 'Ошибка'); setPolish(null); setAssembling(false); setAssembleJobId(null) }
   }
+
+  const cancelAssemble = async () => {
+    const id = assembleJobIdRef.current
+    if (!id) return
+    try { await fetch(`/api/ai/jobs/${id}/cancel`, { method: 'POST' }) } catch {}
+    // The poll's onFinish will settle the UI once the job flips to canceled.
+  }
+
+  // Auto-resume: if a background assemble job is still running for this episode (e.g. after a reload
+  // or navigating back), pick it up and keep showing live progress.
+  useEffect(() => {
+    let stale = false
+    ;(async () => {
+      try {
+        const r = await fetch(`/api/ai/assemble-episode/status?episodeId=${episode.id}`, { cache: 'no-store' })
+        if (!r.ok) return
+        const d = await r.json()
+        if (stale || !d?.activeJobId) return
+        setAssembleJobId(d.activeJobId)
+        setAssembling(true)
+        setPolish((p) => p ?? { phase: 'analyzing', issues: [], done: 0, failed: 0 })
+        assemblePoll.start(d.activeJobId)
+      } catch {}
+    })()
+    return () => { stale = true }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const perScene = plan?.costPerScene
   const isAssembled = episode.status === 'assembled' || validUrl(episode.videoUrl)
@@ -599,7 +603,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
 
         {/* Stage 14 (D): guided steps — script → references → scenes */}
         <div className="mt-4 flex flex-wrap items-center gap-2 text-xs" data-testid="phase-steps">
-          {(([['script', '1 · Сценарий'], ['references', '2 · Референсы'], ['scenes', '3 · Сцены']]) as [EpisodePhase, string][]).map(([key, label]) => {
+          {(([['references', '1 · Референсы'], ['script', '2 · Сценарий'], ['scenes', '3 · Сцены']]) as [EpisodePhase, string][]).map(([key, label]) => {
             const reached = key === 'script' || key === 'references' || refsReady || scenes.some((s) => validUrl(s.videoUrl))
             const active = phase === key
             return (
@@ -804,9 +808,16 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <button onClick={() => setDraftOpen(true)} disabled={!anyClip} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="show-draft" title={anyClip ? '' : 'Появится, когда будет хотя бы один готовый ролик'}>
             <Film className="h-4 w-4" /> Показать черновик
           </button>
-          <button onClick={assemble} disabled={!allReady || assembling || !!polish} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? 'Ассембл — финальная полировка: Seedance пересматривает весь эпизод и исправляет логические нестыковки и переходы' : 'Доступно, когда все сцены готовы'}>
-            {assembling || polish ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />} Ассембл (финальная полировка)
+          <button onClick={assemble} disabled={!allReady || assembling || !!polish || !!assembleJobId} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? 'Ассембл — финальная полировка: Seedance пересматривает весь эпизод и исправляет логические нестыковки и переходы' : 'Доступно, когда все сцены готовы'}>
+            {assembling || polish || assembleJobId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />} Ассембл (финальная полировка)
           </button>
+          {/* Stage 19 (TASK 2) — compact inline result player + download, right by the «Ассембл» button. */}
+          {validUrl(episode.videoUrl) && (
+            <div className="w-full max-w-xs" data-testid="assemble-inline-video">
+              <video src={episode.videoUrl} controls playsInline className="w-full rounded-lg bg-black" />
+              <a href={episode.videoUrl} download className="mt-1 inline-flex items-center gap-1 text-sm text-primary" data-testid="assemble-inline-download"><Download className="h-4 w-4" /> Скачать mp4</a>
+            </div>
+          )}
           {batchActive ? (
             <span className="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground" data-testid="batch-status">
               <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
@@ -841,8 +852,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   {polish.phase === 'regen' && `Финальная полировка: перегенерация ${polish.done}/${polish.issues.length} проблемных сцен${polish.failed > 0 ? ` · не удалось ${polish.failed}` : ''}`}
                   {polish.phase === 'stitching' && 'Финальная полировка: сборка эпизода…'}
                 </span>
-                {polish.phase === 'regen' && (
-                  <CancelButton onCancel={cancelPolish} testId="polish-cancel" label="Отменить" pendingLabel="Останавливаю…" />
+                {(polish.phase === 'analyzing' || polish.phase === 'regen') && (
+                  <CancelButton onCancel={cancelAssemble} testId="polish-cancel" label="Отменить" pendingLabel="Останавливаю…" />
                 )}
               </div>
               {polish.issues.length > 0 && (
@@ -884,24 +895,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   <div className="min-w-0">
                     <div className="font-semibold">Сцена {scene.number}
                       {scene.sceneKind === 'narration' && <span className="ml-2 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary align-middle" data-testid="narration-badge">Закадровый голос</span>}
-                      <span className="text-xs font-normal text-muted-foreground"> · {scene.shotType} · ~{scene.durationSec ?? 15}с</span>
+                      <span className="text-xs font-normal text-muted-foreground"> · ~{scene.durationSec ?? 15}с</span>
                     </div>
-                    <div className="text-xs text-muted-foreground">{scene.locationDesc}</div>
                   </div>
                   <div className="flex -space-x-1">{scene.characters?.map(({ character: c }) => validUrl(c.imageFront) ? <img key={c.id} src={c.imageFront as string} alt={c.name} title={c.name} className="h-6 w-6 rounded-full border border-background object-cover" /> : null)}</div>
                 </div>
-                {scene.action && <p className="mt-2 text-sm italic">{scene.action}</p>}
-                {scene.sceneKind === 'narration' ? (
-                  <div className="mt-2 rounded-lg border border-primary/30 bg-primary/5 p-3" data-testid="scene-voiceover">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-primary">Закадровый голос (на видео — на английском)</div>
-                    <p className="mt-1 whitespace-pre-wrap break-words text-sm">{scene.voiceoverLocal || scene.voiceover}</p>
-                    {scene.voiceoverLocal && scene.voiceover && scene.voiceoverLocal !== scene.voiceover && (
-                      <p className="mt-1 whitespace-pre-wrap break-words text-xs italic text-muted-foreground">EN: {scene.voiceover}</p>
-                    )}
-                  </div>
-                ) : (
-                  <pre className="mt-2 whitespace-pre-wrap break-words font-sans text-sm">{scene.dialogue}</pre>
-                )}
 
                 <div className="mt-3 aspect-[9/16] max-h-[420px] overflow-hidden rounded-lg bg-black/80">
                   {gen ? (
