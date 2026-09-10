@@ -29,24 +29,26 @@ export function characterImagePrompt(appearance: string, shot: "front" | "profil
     const size = groupSize ? ` (${groupSize} people)` : "";
     return `${VISUAL_STYLE}\nGroup of people${size}: ${sanitizeVideoPrompt(appearance, { keep: [name] }).prompt}. ${framing} Realistic environment matching the group. No text or logos.`;
   }
+  // Stage 16: the 3 base shots of the fixed 5-angle set → face close-up, LEFT profile,
+  // full-body FRONT. (The 2 extras — RIGHT profile + full-body BACK — are in CHARACTER_EXTRA_VARIANTS.)
   const framing = {
-    front: "Close-up front portrait, facing camera, eye contact.",
-    profile: "Side profile portrait, soft rim lighting.",
-    full: "Full-body standing portrait, all clothing and silhouette visible.",
+    front: "Close-up front portrait, the face filling the frame, facing the camera directly, eye contact, sharp facial detail.",
+    profile: "Left-side profile portrait — camera on the character's LEFT side, showing the left cheek and side of the face in clean profile, soft rim lighting.",
+    full: "Full-body standing portrait from the FRONT, facing the camera, entire figure head to toe, all clothing and silhouette visible.",
   }[shot];
   return `${VISUAL_STYLE}\nCharacter: ${sanitizeVideoPrompt(appearance, { keep: [name] }).prompt}. ${framing} Neutral unobtrusive background. No text or logos.`;
 }
 
 /**
- * Stage 14 (E): extra character angles (beyond front/profile/full) → 5 photos total.
- * Generated with the front portrait as image_input so face/hair/wardrobe stay identical —
- * only the pose/framing changes. Cycled by index so repeated requests keep varying.
+ * Stage 16: the 2 EXTRA angles that complete the FIXED 5-photo character set (beyond the
+ * 3 base shots face / left-profile / full-front): index 0 = RIGHT profile, index 1 = full-body
+ * BACK. This is a fixed ordered set (NOT random) so every character is covered from the same
+ * predictable viewpoints. Generated with the front portrait as image_input so the SAME face,
+ * hair, wardrobe and lighting are preserved — only the angle changes.
  */
 export const CHARACTER_EXTRA_VARIANTS = [
-  "Three-quarter angle portrait (body turned ~45° to camera), same face, hair, wardrobe and lighting as the reference, natural relaxed pose.",
-  "Full-body action pose in a natural stance (mid-gesture, walking or reaching), same face, hair and wardrobe as the reference, dynamic but clear silhouette.",
-  "Medium shot from a slightly high angle, same face, hair and wardrobe as the reference, candid expression, no eye contact.",
-  "Full-body back/over-the-shoulder view showing hairstyle and outfit from behind, same wardrobe and colours as the reference.",
+  "Right-side profile portrait — camera on the character's RIGHT side, showing the right cheek and side of the face in clean profile, same face, hair, wardrobe and lighting as the reference.",
+  "Full-body standing view from directly BEHIND (back view), the whole figure head to toe, showing the hairstyle and the outfit from the back, same wardrobe, colours and lighting as the reference.",
 ] as const;
 
 export function characterExtraAnglePrompt(appearance: string, name = "", index = 0): string {
@@ -56,13 +58,15 @@ export function characterExtraAnglePrompt(appearance: string, name = "", index =
 }
 
 /**
- * Stage 14 (E): reference frames for an important object / artifact (2 per artifact).
- * Object only — no people. Frame 0 is a clean isolated reference; frame 1 shows it in context
- * with realistic scale and wear, generated with frame 0 as image_input so it stays identical.
+ * Stage 16: reference frames for an important object / artifact (3 per artifact).
+ * Object only — no people. Frame 0 is a clean isolated reference; frames 1 and 2 are generated
+ * with frame 0 as image_input so the object stays identical: frame 1 shows it in a realistic
+ * in-story context at true scale, frame 2 is a close-up detail of its defining feature.
  */
 export const ARTIFACT_VARIANTS = [
   "Clean isolated product-style reference on a neutral surface, the whole object in frame, sharp focus, showing its true shape, materials, colour and defining details.",
   "The SAME object as the reference image, shown in a realistic in-story context at true scale (held or resting where it belongs), same shape, materials, colour, wear and markings as the reference — only the setting and framing changed.",
+  "The SAME object as the reference image, extreme close-up detail of its most defining feature (texture, markings, mechanism or edge), macro focus, same materials, colour and wear as the reference — only the framing is much tighter.",
 ] as const;
 
 export function artifactImagePrompt(visualPrompt: string, name = "", index = 0): string {
@@ -105,25 +109,46 @@ export function locationAnglePrompt(visualPrompt: string, name = "", angle: Loca
 }
 
 /**
- * Extra on-demand angles/shots of the SAME location (beyond the base 3). Each is generated with
- * the wide shot as image_input so light and materials stay locked. Cycled by index so repeated
- * requests keep producing different views. Still NO people (reference plates stay people-free).
+ * Stage 16 (B2): 15 DISTINCT camera/position formulations for the extra angles of the SAME
+ * location (beyond the base 3 = wide/reverse/detail). With the base set that is 18 distinct
+ * formulations total; the episode generator uses 12 of these to reach 15 frames per location.
+ * Each is a genuinely different viewpoint — different height, side, focal length and part of the
+ * space — so the frames are recognizably the SAME place seen from clearly different positions,
+ * NOT near-copies of the wide shot. Still NO people (reference plates stay people-free).
  */
 export const LOCATION_EXTRA_VARIANTS = [
-  "photographed from a high angle looking down over the space, showing its full layout and how far it extends",
-  "photographed from a low angle near the floor, foreground objects large and close, the space receding deep behind",
-  "a different corner or zone of the same place not seen before, wide framing that reveals more of its depth",
-  "a doorway/threshold view looking through into the depth of the space (foreground frame, mid-ground, deep background)",
-  "a tight detail shot of a characteristic surface, prop or texture of the place (materials, wear, signs of life)",
-  "photographed from the far end of the space looking back toward the main entrance, long depth of field",
+  "a high bird's-eye angle looking straight down over the whole space, revealing its full layout and how far it extends",
+  "a very low angle near the floor, foreground objects large and close, the space receding deep behind",
+  "a wide establishing view of a different corner or zone of the place not seen before, revealing more of its depth",
+  "a doorway/threshold view looking through the entrance into the depth of the space (foreground frame, mid-ground, deep background)",
+  "an extreme close-up detail of a characteristic surface, prop or texture of the place (materials, wear, small signs of life)",
+  "a long shot from the far end of the space looking back toward the main entrance, deep depth of field",
+  "an eye-level shot looking straight down the LENGTH of the space, strong leading lines receding into the distance",
+  "a three-quarter angle from a raised position showing two walls or sides meeting at a corner of the place",
+  "a shot aimed toward the main window or light source, backlit, showing how the daylight enters the space",
+  "a shot with the camera's back to the window, the light falling across the front-lit surfaces of the space",
+  "an elevated overview from one upper corner covering most of the floor and the far wall",
+  "a ground-level wide shot from the opposite short side of the space, the far end now closest to camera",
+  "a medium shot of the secondary focal area of the place (the work zone, seating, counter or feature)",
+  "a narrow shot pushing into a tight nook, alcove or passage of the place, compressed framing",
+  "a wide establishing shot from just inside the entrance at standing eye height, taking in the whole room",
 ] as const;
 
-export function locationExtraAnglePrompt(visualPrompt: string, name = "", index = 0): string {
+/**
+ * Stage 16 (B1): by default the extra angles are NOT hard-bound to the wide shot via image_input
+ * (that pins the viewpoint and produces near-copies). When `withBaseImage` is false the prompt
+ * anchors consistency purely on the rich textual description of the place; when true (a periodic
+ * re-anchor frame) it also references the base image. Either way the camera position must change.
+ */
+export function locationExtraAnglePrompt(visualPrompt: string, name = "", index = 0, opts?: { withBaseImage?: boolean }): string {
   const place = sanitizeVideoPrompt(visualPrompt, { keep: [name] }).prompt;
   const noPeople = "no people, no animals, no text, no signs with readable words, no logos. Real physical environment with authentic wear and detail.";
   const variant = LOCATION_EXTRA_VARIANTS[((index % LOCATION_EXTRA_VARIANTS.length) + LOCATION_EXTRA_VARIANTS.length) % LOCATION_EXTRA_VARIANTS.length];
-  return `${VISUAL_STYLE}\nThe SAME location as the reference image, ${variant}: ${place}. ` +
-    `Same architecture, materials, props, time of day, weather and light direction as the reference — only the camera position/framing changed. Vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;
+  const anchor = opts?.withBaseImage
+    ? "The SAME location as the reference image"
+    : "The SAME specific location described below — keep its architecture, materials, colour palette, props, time of day, weather and light direction identical";
+  return `${VISUAL_STYLE}\n${anchor}, ${variant}: ${place}. ` +
+    `This is a DIFFERENT camera position and viewpoint of that same place — do NOT reproduce the earlier framing. Only the camera position/height/framing changes; the place itself stays identical. Vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;
 }
 
 /** Parse the stored imageExtra JSON array into a clean list of styled URLs. */

@@ -17,7 +17,8 @@ type EpisodePhase = 'script' | 'references' | 'scenes'
 
 const VIDEO_EXPECTED_SEC = 600
 const REF_POLL_MS = 3500
-const SHOT_LABELS = ['Портрет', 'Профиль', 'В полный рост', 'Ракурс 3/4', 'В действии']
+// Stage 16: fixed 5-angle set, in stored order (face, left profile, full front, right profile, back).
+const SHOT_LABELS = ['Портрет (лицо)', 'Левый профиль', 'В полный рост (спереди)', 'Правый профиль', 'Со спины']
 const CHAR_EXTRA_MIN = Math.max(0, CHARACTER_PHOTO_COUNT - 3) // extra angles required beyond the 3 base shots → 5 photos
 const validUrl = (u?: string | null) => typeof u === 'string' && u.startsWith('http') && u.length > 10
 function parseExtra(imageExtra?: string | null): string[] {

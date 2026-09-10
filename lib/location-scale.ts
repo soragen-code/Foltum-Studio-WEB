@@ -44,23 +44,22 @@ export function locationScale(loc: { name?: string | null; description?: string 
 }
 
 /**
- * Stage 14 (E): every episode location must have MANY angles — ~15 frames, within a 10–20
- * range scaled by size. The base 3 angles (imageUrl/imageReverse/imageDetail) are always
- * generated, so the EXTRA count below tops the total up to: compact → 15, крупная → 18,
- * очень крупная → 20. This gives Seedance dense spatial coverage of each place.
+ * Stage 16 (A3): every episode location has a FIXED 15 reference frames, regardless of scale
+ * (the previous 15/18/20 spread is removed — big/huge locations could never reach their higher
+ * target because of the per-request clamp, which permanently blocked progress to scenes). The
+ * base 3 angles (imageUrl/imageReverse/imageDetail) are always generated, so the EXTRA count
+ * below always tops the total up to exactly 15 → 12 extra frames from distinct camera positions.
+ * `locationScale` is retained for UI labelling only.
  */
-export const LOCATION_TOTAL_MIN = 10
+export const LOCATION_TOTAL_MIN = 15
 export const LOCATION_TOTAL_TARGET = 15
-export const LOCATION_TOTAL_MAX = 20
+export const LOCATION_TOTAL_MAX = 15
 /** Base angles always generated on the Location row (imageUrl + imageReverse + imageDetail). */
 export const LOCATION_BASE_FRAMES = 3
 
-export function desiredTotalFrames(loc: { name?: string | null; description?: string | null; visualPrompt?: string | null }): number {
-  switch (locationScale(loc)) {
-    case 'huge': return LOCATION_TOTAL_MAX // 20
-    case 'big': return 18
-    default: return LOCATION_TOTAL_TARGET // 15
-  }
+/** Stage 16: fixed at 15 frames for every location scale. */
+export function desiredTotalFrames(_loc?: { name?: string | null; description?: string | null; visualPrompt?: string | null }): number {
+  return LOCATION_TOTAL_TARGET // 15 for all scales
 }
 
 export function desiredExtraFrames(loc: { name?: string | null; description?: string | null; visualPrompt?: string | null }): number {

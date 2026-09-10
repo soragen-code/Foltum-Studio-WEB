@@ -35,11 +35,18 @@ export async function runLocationExtraImagesJob({ jobId, projectId, locationId, 
         return;
       }
       await updateJob(jobId, { progress: 8 + Math.round((i / Math.max(count, 1)) * 90), message: `Дополнительные ракурсы локации «${loc.name}» (${i + 1}/${count})…` });
+      // Stage 16 (B1): DON'T hard-bind every extra frame to the wide shot — that pins the viewpoint
+      // and yields near-copies. Re-anchor to the base image only on every 3rd frame; the rest rely on
+      // the rich textual location description so the camera genuinely moves while the place stays the same.
+      const idx = startIndex + i;
+      const withBaseImage = idx % 3 === 2;
       try {
-        const remote = await generateImage(
-          { prompt: locationExtraAnglePrompt(visual, loc.name, startIndex + i), aspect_ratio: "9:16", image_input: [loc.imageUrl] },
-          { jobId }
-        );
+        const input: { prompt: string; aspect_ratio: string; image_input?: string[] } = {
+          prompt: locationExtraAnglePrompt(visual, loc.name, idx, { withBaseImage }),
+          aspect_ratio: "9:16",
+        };
+        if (withBaseImage) input.image_input = [loc.imageUrl];
+        const remote = await generateImage(input, { jobId });
         const url = await uploadRemoteToS3(remote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-extra-${Date.now()}-${startIndex + i}.png`, "image/png");
         added.push(url);
         // Persist incrementally so a partial failure still keeps finished shots.

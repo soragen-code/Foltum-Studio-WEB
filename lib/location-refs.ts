@@ -3,7 +3,11 @@ import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runLocationImagesJob } from "@/lib/workers/location-image-job";
 import { runLocationExtraImagesJob } from "@/lib/workers/location-extra-image-job";
 import { parseLocationExtra } from "@/lib/visual-style";
+import { LOCATION_TOTAL_TARGET, LOCATION_BASE_FRAMES } from "@/lib/location-scale";
 import { CHARACTER_REFERENCE_COST } from "@/lib/power-tier";
+
+/** Stage 16: max extra angles one request may generate — the full top-up to 15 frames (12 extra). */
+const MAX_EXTRA_PER_REQUEST = LOCATION_TOTAL_TARGET - LOCATION_BASE_FRAMES;
 
 export const LOCATION_JOB_TYPE = "location_image";
 export const LOCATION_EXTRA_JOB_TYPE = "location_extra_image";
@@ -55,7 +59,7 @@ export async function startLocationImageJob(opts: { user: { id: string; credits:
  */
 export async function startLocationExtraImageJob(opts: { user: { id: string; credits: number | null }; projectId: string; locationId: string; count?: number }) {
   const { user, projectId, locationId } = opts;
-  const count = Math.max(1, Math.min(opts.count ?? EXTRA_ANGLES_PER_REQUEST, 6));
+  const count = Math.max(1, Math.min(opts.count ?? EXTRA_ANGLES_PER_REQUEST, MAX_EXTRA_PER_REQUEST));
   await failStaleJobs({ projectId, type: LOCATION_EXTRA_JOB_TYPE });
 
   const loc = await prisma.location.findFirst({ where: { id: locationId, projectId }, select: { id: true, name: true, imageUrl: true, imageExtra: true } });

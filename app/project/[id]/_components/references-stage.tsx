@@ -16,7 +16,7 @@ interface RefCharacter extends CharacterCardData {
 }
 
 const POLL_MS = 3000
-const SHOT_LABELS = ['Портрет', 'Профиль', 'В полный рост']
+const SHOT_LABELS = ['Портрет (лицо)', 'Левый профиль', 'В полный рост']
 const LOCATION_JOB_TYPE = 'location_image'
 const LOCATION_EXTRA_JOB_TYPE = 'location_extra_image'
 const EXTRA_ANGLES_PER_REQUEST = 3

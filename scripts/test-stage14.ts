@@ -42,22 +42,22 @@ const ok = (c: unknown, m: string) => {
 async function main() {
   // --- (A) reference counts ---------------------------------------------------
   ok(CHARACTER_PHOTO_COUNT === 5, "character reference = 5 photos");
-  ok(ARTIFACT_FRAME_COUNT === 2, "artifact/important object = 2 frames");
+  ok(ARTIFACT_FRAME_COUNT === 3, "artifact/important object = 3 frames (Stage 16)");
   ok(REF_BATCH_CONCURRENCY === 20, "parallel batch concurrency = 20");
   ok(CHARACTER_SHOTS.length === 5, "5 character shot slots defined");
   ok(new Set(CHARACTER_SHOTS).size === 5, "character shot slots are distinct");
 
-  // --- (B) location scale: 10–20 angles, 15/18/20 targets ---------------------
+  // --- (B) location scale: Stage 16 → FIXED 15 angles for every scale ---------
   ok(LOCATION_BASE_FRAMES === 3, "location base angles = 3");
-  ok(LOCATION_TOTAL_MIN >= 10 && LOCATION_TOTAL_MAX <= 20, "location scale bounded within 10–20");
+  ok(LOCATION_TOTAL_MIN === 15 && LOCATION_TOTAL_MAX === 15, "location total fixed at 15 (Stage 16)");
   ok(desiredTotalFrames({ name: "Кабинет" }) === 15, "small location → 15 angles total");
-  ok(desiredTotalFrames({ name: "Склад" }) === 18, "big location → 18 angles total");
-  ok(desiredTotalFrames({ name: "Ночной город" }) === 20, "huge location → 20 angles total");
+  ok(desiredTotalFrames({ name: "Склад" }) === 15, "big location → 15 angles total (fixed)");
+  ok(desiredTotalFrames({ name: "Ночной город" }) === 15, "huge location → 15 angles total (fixed)");
   ok(
     desiredExtraFrames({ name: "Кабинет" }) === desiredTotalFrames({ name: "Кабинет" }) - LOCATION_BASE_FRAMES,
     "extra frames = total − base (base 3 subtracted)",
   );
-  ok(desiredTotalFrames({ name: "Ночной город" }) <= 20, "never exceeds 20-angle cap");
+  ok(desiredExtraFrames({ name: "Ночной город" }) === 12, "every location → 12 extra frames (Stage 16)");
 
   // --- (C) runWithConcurrency: order preserved + never exceeds limit ----------
   {
@@ -100,7 +100,7 @@ async function main() {
 
   // --- (E) prompt builders: correct variant counts + key phrasing ------------
   ok(CHARACTER_EXTRA_VARIANTS.length >= CHARACTER_PHOTO_COUNT - 3, "character extra-variant pool covers the 2 extra photos of the 5-photo set");
-  ok(ARTIFACT_VARIANTS.length === ARTIFACT_FRAME_COUNT, "artifact variants = 2 frames");
+  ok(ARTIFACT_VARIANTS.length === ARTIFACT_FRAME_COUNT, "artifact variants = 3 frames (Stage 16)");
   const cp = characterExtraAnglePrompt("weathered fisherman, grey beard", "Marco", 0);
   ok(/fisherman|beard/i.test(cp) && cp.length > 40, "characterExtraAnglePrompt embeds the appearance description");
   const ap0 = artifactImagePrompt("an antique brass compass", "Compass", 0);

@@ -128,26 +128,31 @@ export async function runArtifactImagesJob({ jobId, projectId, episodeId }: Arti
       finally { done += 1; await bump(); }
     });
 
-    // Pass B: frame 1 (in-context), chained on the stored frame 0 so the object stays identical.
+    // Pass B: the remaining frames (frame 1 in-context + frame 2 close-up detail), each chained on
+    // the stored frame 0 so the object stays identical. One task per artifact generates its missing
+    // extras sequentially (so concurrent tasks never clobber the shared imageExtra array).
     if (!(await canceled())) {
-      const frame1 = linked.filter((a) => { const s = state.get(a.id)!; return s.primary && s.extra.length < ARTIFACT_FRAME_COUNT - 1; });
-      await runWithConcurrency(frame1, REF_BATCH_CONCURRENCY, async (art) => {
-        if (await canceled()) return;
+      const needExtra = linked.filter((a) => { const s = state.get(a.id)!; return s.primary && s.extra.length < ARTIFACT_FRAME_COUNT - 1; });
+      await runWithConcurrency(needExtra, REF_BATCH_CONCURRENCY, async (art) => {
         const s = state.get(art.id)!;
-        if (!s.primary) { done += 1; await bump(); return; }
-        try {
-          const remote = await generateImage(
-            { prompt: artifactImagePrompt(art.visualPrompt ?? art.name, art.name, 1), aspect_ratio: "1:1", image_input: [s.primary] },
-            { jobId }
-          );
-          const url = await uploadRemoteToS3(remote, `media/public/artifacts/${projectId}/${art.id}/${VISUAL_STYLE_ID}/frame1-${Date.now()}.png`, "image/png");
-          s.extra.push(url);
-          await prisma.artifact.update({ where: { id: art.id }, data: { imageExtra: JSON.stringify(s.extra) } });
-          const c2pa = await detectC2paFromUrl(url);
-          c2paChecks.push({ artifactId: art.id, frame: 1, ok: c2pa.ok, signatures: c2pa.signatures, bytes: c2pa.bytes });
-          if (!c2pa.ok) { c2paMissing += 1; console.warn(`[artifact-job] C2PA MISSING frame1 for ${art.name} (${url})`); }
-        } catch (e: any) { failed += 1; console.error(`[artifact-job] frame1 failed for ${art.name}:`, e?.message ?? e); }
-        finally { done += 1; await bump(); }
+        if (!s.primary) { done += ARTIFACT_FRAME_COUNT - 1 - s.extra.length; await bump(); return; }
+        // Frame index in the ARTIFACT_VARIANTS cycle: frame 0 is the primary; extras are frames 1..N-1.
+        for (let frame = s.extra.length + 1; frame <= ARTIFACT_FRAME_COUNT - 1; frame++) {
+          if (await canceled()) return;
+          try {
+            const remote = await generateImage(
+              { prompt: artifactImagePrompt(art.visualPrompt ?? art.name, art.name, frame), aspect_ratio: "1:1", image_input: [s.primary] },
+              { jobId }
+            );
+            const url = await uploadRemoteToS3(remote, `media/public/artifacts/${projectId}/${art.id}/${VISUAL_STYLE_ID}/frame${frame}-${Date.now()}.png`, "image/png");
+            s.extra.push(url);
+            await prisma.artifact.update({ where: { id: art.id }, data: { imageExtra: JSON.stringify(s.extra) } });
+            const c2pa = await detectC2paFromUrl(url);
+            c2paChecks.push({ artifactId: art.id, frame, ok: c2pa.ok, signatures: c2pa.signatures, bytes: c2pa.bytes });
+            if (!c2pa.ok) { c2paMissing += 1; console.warn(`[artifact-job] C2PA MISSING frame${frame} for ${art.name} (${url})`); }
+          } catch (e: any) { failed += 1; console.error(`[artifact-job] frame${frame} failed for ${art.name}:`, e?.message ?? e); }
+          finally { done += 1; await bump(); }
+        }
       });
     }
 
