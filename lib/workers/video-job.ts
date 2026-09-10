@@ -11,6 +11,7 @@ import { buildScenePrompt } from "@/lib/scene-prompt";
 import { GenerationAttempt, safeProviderError, classifyProviderError, logAttempt, safeDiagnosticInput } from "@/lib/generation-diagnostics";
 import { updateJob, heartbeatJob, runInBackground, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { moderationHints } from "@/lib/sanitize-prompt";
+import { downscaleReference, downscaleReferences, REFERENCE_WIDTH } from "@/lib/reference-downscale";
 
 export interface VideoJobParams {
   jobId: string;
@@ -20,8 +21,8 @@ export interface VideoJobParams {
   cost?: number;
   duration?: number;
   resolution?: string;
-  /** "seedance" (2.5, default, native audio) or "seedance-2.0" (native audio, max 15s). */
-  provider?: "seedance" | "seedance-2.0";
+  /** Legacy field, accepted and ignored: every job renders on Seedance 2.5 (see normalizeVideoModel). */
+  provider?: string | null;
 }
 
 /** Persisted in GenerationJob.resultData while the job is running, so it can be resumed. */
@@ -48,12 +49,23 @@ export interface VideoJobState {
   videoModel?: string;
   /** Everything needed to resubmit the same scene with a softer prompt. */
   retry?: ModerationRetryInput;
+  /* --- Stage 33: what was ACTUALLY submitted, for honest moderation diagnostics --- */
+  /** Exact prompt text sent to the provider. */
+  submittedPrompt?: string;
+  /** true when submittedPrompt is the producer's manual override (Stage 31). */
+  hasOverride?: boolean;
+  /** adjacent_frame | character_references | new_scene_reference | text_only */
+  referenceKind?: string;
+  /** Counts of the reference images actually sent. */
+  refCounts?: { characters: number; location: number; crowd: number; scene: number; chained: boolean };
+  /** Width the references were downscaled to before submission. */
+  referenceWidth?: number;
 }
 
 export interface ModerationRetryInput {
   /** Level-1 sanitized core prompt (visual + speech + pace), WITHOUT the [ImageN] notes. */
   basePrompt: string;
-  /** Replicate Seedance slug to resubmit on (2.5 default or 2.0). */
+  /** Replicate Seedance slug the attempt was submitted on (always Seedance 2.5). */
   model: string;
   duration: number;
   resolution: string;
@@ -74,8 +86,8 @@ const EXPECTED_VIDEO_MS = Number(process.env.SEEDANCE_EXPECTED_MS ?? 10 * 60 * 1
 // End-to-end budget, not an invocation timer. Check provider terminal state BEFORE enforcing it.
 export const VIDEO_DEADLINE_MS = 30 * 60 * 1000;
 const CHECK_LEASE_MS = 60_000;
-/** Seedance 2.5 accepts up to 30 reference images ([Image1]..[ImageN] in the prompt). */
-export { MAX_REFERENCE_IMAGES } from "@/lib/scene-prompt";
+/** Stage 33: lean reference set — at most REFERENCE_IMAGE_CAP images ([Image1]..[ImageN] in the prompt). */
+export { MAX_REFERENCE_IMAGES, REFERENCE_IMAGE_CAP } from "@/lib/scene-prompt";
 const FINALIZE_LEASE_MS = 12 * 60 * 1000;
 
 function sleep(ms: number) {
@@ -164,7 +176,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     let prompt = built.prompt;
     const basePrompt = built.basePrompt;
     const fallbackRefs = built.fallbackRefs;
-    const image = built.image;
+    let image = built.image;
     let referenceImages = built.referenceImages;
     let retryRefs = built.retryRefs;
     let reference = built.reference;
@@ -200,14 +212,14 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       // Seedream reference is PNG (keeps its C2PA content-credentials watermark on purpose).
       const key = `${folderPrefix}public/references/${projectId}/${VISUAL_STYLE_ID}/${sceneId}-${jobId}.png`;
       const stored = await uploadRemoteToS3(referenceUrl, key, "image/png");
-      referenceImages = [stored];
+      // Stage 33: the still is sent to Seedance as a lean 768px JPEG too (PNG master stays in S3).
+      referenceImages = [await downscaleReference(stored, projectId)];
       reference = { ...reference, referencePredictionId: attempt.predictionId };
       retryRefs = [{ url: stored, kind: "scene", note: built.newSceneReferenceNote! }];
     }
     // One paid video attempt. Copyright, general moderation, E003 and timeout remain distinct;
     // none silently trigger another generation or switch the audio off.
-    // Both providers are Seedance (native audio); Seedance 2.0 is a different Replicate slug
-    // and renders at most 15 s per clip (2.5 goes up to 30 s).
+    // Stage 33: Seedance 2.5 is the only video model (native audio, up to 30 s per clip).
     const provider = normalizeVideoModel(params.provider);
     const modelSlug = videoModelSlug(provider);
     let predictionId: string;
@@ -216,17 +228,37 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     // Extra state persisted alongside the prediction (moderation auto-recovery).
     const pipelineExtra: Partial<VideoJobState> = {};
 
-    // Seedance 2.0 caps at 15 s per clip; 2.5 keeps the planned duration (already ≤30 s upstream).
-    const clipDuration = provider === "seedance-2.0"
-      ? Math.min(15, Number(params.duration ?? 5))
-      : Number(params.duration ?? 5);
+    // The planned duration is already ≤30 s upstream (Seedance 2.5 limit); no per-model cap.
+    const clipDuration = Number(params.duration ?? 5);
+
+    // Stage 33: lean references — every image actually sent (portraits, location angle, crowds,
+    // the chained last frame, the new-scene still) is a 768px-wide JPEG. Fail-safe: originals on error.
+    if (built.referenceKind === "text_only") {
+      // Producer asked for text-only submission: no images at all, plain text-to-video.
+      referenceImages = [];
+      retryRefs = [];
+    } else {
+      if (image) image = await downscaleReference(image, projectId);
+      if (referenceImages.length) referenceImages = await downscaleReferences(referenceImages, projectId);
+    }
+    const refCounts = {
+      characters: retryRefs.filter(r => r.kind === "character").length,
+      location: retryRefs.filter(r => r.kind === "location").length,
+      crowd: retryRefs.filter(r => r.kind === "crowd").length,
+      scene: retryRefs.filter(r => r.kind === "scene").length,
+      chained: !!image,
+    };
+    const submission = {
+      hasOverride: built.hasOverride, referenceKind: built.referenceKind, refCounts,
+      referenceWidth: REFERENCE_WIDTH, referenceImageCount: image ? 1 : referenceImages.length,
+    };
     const input = {
       prompt, model: modelSlug, duration: clipDuration, resolution: String(params.resolution ?? "480p"),
       aspect_ratio: image ? "adaptive" : "9:16", generate_audio: true, watermark: false,
     };
     attempt = {
       jobId, sceneId, attempt: 1, model: modelSlug, phase: "video", status: "submitting",
-      style: VISUAL_STYLE_ID, language: scene.language || "en", input: safeDiagnosticInput({ ...input, reference }),
+      style: VISUAL_STYLE_ID, language: scene.language || "en", input: safeDiagnosticInput({ ...input, reference, ...submission }),
     };
     diagnostics.push(attempt); await persist(); logAttempt(attempt);
     predictionId = await startVideoPrediction({ ...input, ...(image ? { image } : { reference_images: referenceImages }) });
@@ -237,6 +269,13 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       basePrompt, model: modelSlug, duration: input.duration, resolution: input.resolution, image, refs: retryRefs, fallbackRefs,
     };
     pipelineExtra.moderationRetries = 0;
+    // What was ACTUALLY submitted — handleFailure builds its moderation message from this, never
+    // from the scene's stored text (which may differ from a manual override).
+    pipelineExtra.submittedPrompt = prompt;
+    pipelineExtra.hasOverride = built.hasOverride;
+    pipelineExtra.referenceKind = built.referenceKind;
+    pipelineExtra.refCounts = refCounts;
+    pipelineExtra.referenceWidth = REFERENCE_WIDTH;
     attempt.predictionId = predictionId; attempt.status = "processing";
     state = { predictionId, sceneId, projectId, userId, cost, startedAt: Date.now(), diagnostics, ...pipelineExtra };
     // This checkpoint MUST succeed: never swallow the prediction ID write.
@@ -304,18 +343,46 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, source: str
   });
 }
 
+/**
+ * Stage 33 — honest moderation diagnostics. Shown verbatim in the UI (job.error).
+ * The hints are computed from the prompt that was ACTUALLY submitted (persisted in the job state at
+ * submit time), not from the scene's stored text. When the text is a manual override and carries no
+ * textual trigger, the images are the likely cause — say so, with the exact counts that were sent,
+ * and point to the text-only toggle. Fail-fast: no automatic rewrite or resubmission.
+ */
+async function moderationMessage(sceneId: string, error: unknown, state?: VideoJobState): Promise<string> {
+  let submitted = state?.submittedPrompt ?? "";
+  if (!submitted) {
+    // Pre-submit failure or legacy state without the submitted text: fall back to the scene fields.
+    const scene = await prisma.scene.findUnique({ where: { id: sceneId }, select: { videoPrompt: true, dialogueEn: true, dialogue: true, action: true, promptOverride: true } }).catch(() => null);
+    submitted = (scene?.promptOverride ?? "").trim() || [scene?.videoPrompt, scene?.action, scene?.dialogueEn, scene?.dialogue].filter(Boolean).join("\n");
+  }
+  const hints = moderationHints(submitted);
+  const chained = state?.referenceKind === "adjacent_frame" || !!state?.refCounts?.chained;
+  const counts = state?.refCounts;
+  const imagesSent = counts ? counts.characters + counts.location + counts.crowd + counts.scene + (counts.chained ? 1 : 0) : null;
+  const countsText = counts
+    ? ` Отправлено изображений: ${imagesSent} (портреты: ${counts.characters}, локация: ${counts.location}, массовка: ${counts.crowd}${counts.scene ? `, кадр сцены: ${counts.scene}` : ""}${counts.chained ? ", кадр предыдущей сцены" : ""}).`
+    : "";
+  let message: string;
+  if (state?.hasOverride && !hints.length && state.referenceKind !== "text_only") {
+    message = `[moderation] Сцена не прошла модерацию провайдера. Текст промпта — ручной (override), текстовые триггеры не найдены; вероятная причина — референс‑изображения (лица персонажей/локация).${countsText} Попробуйте вариант «Отправить без референс‑изображений» в окне «Смотреть промпт».`;
+  } else {
+    message = `[moderation] Сцена не прошла модерацию провайдера. Отредактируйте промпт вручную: откройте его кнопкой «Смотреть промпт», исправьте, сохраните свой вариант и запустите генерацию заново.` +
+      (hints.length ? ` Вероятные триггеры: ${hints.map(h => `«${h}»`).join(", ")}.` : "") +
+      (state?.referenceKind === "text_only" ? " Референс‑изображения не отправлялись (только текст)." : countsText);
+  }
+  if (chained) message += " Первый кадр берётся из предыдущей сцены; если блокируется он — перегенерируйте предыдущую сцену.";
+  message += ` Код провайдера: ${safeProviderError(error)}`;
+  return message;
+}
+
 /** Status transition and refund are atomic and happen only once. */
 async function handleFailure(jobId: string, ctx: { sceneId: string; userId?: string; cost?: number }, error: unknown, state?: VideoJobState) {
   const kind = classifyProviderError(error);
   let message = `[${kind}] ${safeProviderError(error)}`;
   if (kind === "moderation") {
-    // Shown verbatim in the UI (job.error). Tell the user what to change instead of the raw provider code.
-    const scene = await prisma.scene.findUnique({ where: { id: ctx.sceneId }, select: { videoPrompt: true, dialogueEn: true, dialogue: true, action: true } }).catch(() => null);
-    const hints = moderationHints([scene?.videoPrompt, scene?.action, scene?.dialogueEn, scene?.dialogue].filter(Boolean).join("\n"));
-    // Fail-fast: no automatic rewrite. Tell the user to edit the prompt manually and retry.
-    message = `[moderation] Сцена не прошла модерацию провайдера. Отредактируйте промпт вручную: откройте его кнопкой «Смотреть промпт», исправьте, сохраните свой вариант и запустите генерацию заново.` +
-      (hints.length ? ` Вероятные триггеры: ${hints.map(h => `«${h}»`).join(", ")}.` : "") +
-      ` Код провайдера: ${safeProviderError(error)}`;
+    message = await moderationMessage(ctx.sceneId, error, state);
   }
   console.error("[video-job] failed:", { jobId, sceneId: ctx.sceneId, error: message });
   await prisma.$transaction(async tx => {

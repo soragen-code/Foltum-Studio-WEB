@@ -56,8 +56,8 @@ export async function POST(request: Request) {
 
     const sceneData = await prisma.scene.findUnique({ where: { id: sceneId } });
     if (!sceneData) return NextResponse.json({ error: "Scene not found" }, { status: 404 });
-    // Video provider: explicit request wins, else the model picked for this scene at batch time,
-    // else Seedance 2.5. Both providers have native audio; Seedance 2.0 is capped at 15s per clip.
+    // Stage 33: Seedance 2.5 is the only video model. A legacy `provider` in the request body (or a
+    // legacy value stored on the scene) is accepted and normalized to it — never an error.
     const provider = normalizeVideoModel(parsed.data.provider ?? sceneData.videoModel);
     if (!sceneData.videoPrompt)
       return NextResponse.json({ error: "Scene has no video prompt" }, { status: 400 });
@@ -70,9 +70,8 @@ export async function POST(request: Request) {
     const duration = sceneData.durationSec
       ? sceneClipSeconds(tier.power, sceneData.durationSec)
       : Math.min(SCENE_MAX_SECONDS, Math.max(SCENE_MIN_SECONDS, tier.duration, Math.ceil(EPISODE_MIN_SECONDS / sceneCount)));
-    // Seedance 2.0 renders at most 15 s per clip (2.5 goes up to 30 s). Cap honestly so the
-    // clip length AND the credit cost reflect what the chosen model actually produces.
-    const effectiveDuration = provider === "seedance-2.0" ? Math.min(15, duration) : duration;
+    // Seedance 2.5 renders the planned duration as-is (already ≤ SCENE_MAX_SECONDS upstream).
+    const effectiveDuration = duration;
     const config = {
       resolution: tier.resolution,
       duration: effectiveDuration,

@@ -11,7 +11,7 @@ const nextConfig = {
     ignoreBuildErrors: true,
   },
   images: { unoptimized: true },
-  serverExternalPackages: ['@prisma/client', 'prisma', 'ffmpeg-static', 'mammoth', 'pdf-parse', 'pdfjs-dist'],
+  serverExternalPackages: ['@prisma/client', 'prisma', 'ffmpeg-static', 'mammoth', 'pdf-parse', 'pdfjs-dist', 'sharp'],
   // ffmpeg-static locates its binary via __dirname at runtime, so file tracing cannot see it —
   // include it explicitly for the episode-assembly function (local mux + concat).
   outputFileTracingIncludes: {

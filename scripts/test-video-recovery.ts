@@ -138,13 +138,16 @@ test("submission (default): без provider используется Seedance 2.
   assert.equal(lastVideoInput.generate_audio, true);
 });
 
-test("submission (seedance-2.0): другой slug, аудио включено, длительность ограничена 15 с", async () => {
+test("submission (legacy provider seedance-2.0): игнорируется — Seedance 2.5, без ограничения 15 с", async () => {
   reset();
   await runVideoJob({ jobId: "job", sceneId: "scene", projectId: "project", userId: "test", cost: 8, duration: 20, provider: "seedance-2.0" });
   assert.equal(submissions, 1);
-  assert.equal(lastVideoInput.model, "bytedance/seedance-2.0");
-  assert.equal(lastVideoInput.duration, 15); // capped from 20 to Seedance 2.0's 15 s max
-  assert.equal(lastVideoInput.generate_audio, true); // Seedance 2.0 also has native audio
+  assert.equal(lastVideoInput.model, "bytedance/seedance-2.5"); // Stage 33: single model
+  assert.equal(lastVideoInput.duration, 20); // no per-model cap anymore
+  assert.equal(lastVideoInput.generate_audio, true);
+  const st = JSON.parse(row.resultData);
+  assert.equal(st.submittedPrompt, lastVideoInput.prompt); // exact submitted text persisted for diagnostics
+  assert.equal(st.referenceWidth, 768);
   assert.equal(row.status, "processing");
   assert.equal(JSON.parse(row.resultData).predictionId, "existing");
 });
@@ -170,6 +173,45 @@ test("moderation (fail-fast): a refusal fails the job immediately — no resubmi
     assert.equal(refunds, 1);                      // credit refunded exactly once
     assert.match(row.error, /\[moderation\]/);    // moderation-specific message prefix
     assert.match(row.error, /Смотреть промпт/);   // tells the user to open & edit the prompt manually
+  } finally { Date.now = originalNow; }
+});
+
+test("moderation (Stage 33): override without textual triggers → blames the reference images, exact counts, text-only hint", async () => {
+  Date.now = () => clock;
+  try {
+    reset();
+    row.resultData = JSON.stringify({
+      ...base(), submittedPrompt: "[ACTION]: Theo looks out of the window.", hasOverride: true,
+      referenceKind: "character_references", refCounts: { characters: 2, location: 1, crowd: 0, scene: 0, chained: false }, referenceWidth: 768,
+    });
+    provider = { status: "failed", error: "flagged as sensitive E005" };
+    await check();
+    assert.equal(submissions, 0);
+    assert.equal(row.status, "failed");
+    assert.equal(refunds, 1);
+    assert.match(row.error, /^\[moderation\]/);
+    assert.match(row.error, /ручной \(override\)/);
+    assert.match(row.error, /Отправлено изображений: 3 \(портреты: 2, локация: 1, массовка: 0\)/);
+    assert.match(row.error, /Отправить без референс‑изображений/);
+    assert.match(row.error, /Код провайдера: /);
+    assert.doesNotMatch(row.error, /Первый кадр берётся из предыдущей сцены/);
+  } finally { Date.now = originalNow; }
+});
+
+test("moderation (Stage 33): chained scene adds the previous-frame note", async () => {
+  Date.now = () => clock;
+  try {
+    reset();
+    row.resultData = JSON.stringify({
+      ...base(), submittedPrompt: "[ACTION]: Theo stands.", hasOverride: false,
+      referenceKind: "adjacent_frame", refCounts: { characters: 0, location: 0, crowd: 0, scene: 0, chained: true }, referenceWidth: 768,
+    });
+    provider = { status: "failed", error: "flagged as sensitive E005" };
+    await check();
+    assert.equal(row.status, "failed");
+    assert.match(row.error, /Первый кадр берётся из предыдущей сцены/);
+    assert.match(row.error, /кадр предыдущей сцены/);
+    assert.match(row.error, /Код провайдера: /);
   } finally { Date.now = originalNow; }
 });
 

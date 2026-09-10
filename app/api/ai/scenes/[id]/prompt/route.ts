@@ -16,7 +16,8 @@ import { buildScenePrompt } from "@/lib/scene-prompt";
  *   - no real reference image is generated or exposed — references appear only as the
  *     `[Image1]…[ImageN]` placeholders the worker itself writes into the prompt.
  *
- * Response: { prompt, model }. Ownership: scene → episode → season → project → userId.
+ * Response: { prompt, model, hasOverride, skipReferences, referenceKind }.
+ * Ownership: scene → episode → season → project → userId.
  */
 export async function GET(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
@@ -49,23 +50,34 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     characters: scene.characters.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront })),
     location: scene.episode.location ?? null,
     previous,
-    // The scene's chosen model ("seedance" | "seedance-2.0"); the worker resolves it the same way.
+    // Stage 33: always Seedance 2.5 (legacy stored ids are normalized the same way in the worker).
     provider: scene.videoModel,
   });
 
-  return NextResponse.json({ prompt: built.prompt, model: built.model, hasOverride: !!(scene.promptOverride ?? "").trim() });
+  return NextResponse.json({
+    prompt: built.prompt,
+    model: built.model,
+    hasOverride: !!(scene.promptOverride ?? "").trim(),
+    // Stage 33: the per-scene "no reference images" toggle and the resolved reference strategy.
+    skipReferences: !!scene.skipReferences,
+    referenceKind: built.referenceKind,
+  });
 }
 
 /**
  * PUT /api/ai/scenes/[id]/prompt
  *
- * Save (or reset) the scene's manual final-prompt override. Body: { prompt: string }.
- *   - non-empty  → stored verbatim (edge-trimmed) and used as the final prompt TEXT on the next
- *                  generation(s) of this scene, until changed;
- *   - empty / whitespace → resets to null, so the auto-assembled prompt is used again.
+ * Save (or reset) the scene's manual final-prompt override and/or the "send without reference
+ * images" toggle. Body: { prompt?: string, skipReferences?: boolean } — each field is updated only
+ * when present.
+ *   - prompt non-empty  → stored verbatim (edge-trimmed) and used as the final prompt TEXT on the
+ *                         next generation(s) of this scene, until changed;
+ *   - prompt empty / whitespace → resets to null, so the auto-assembled prompt is used again;
+ *   - skipReferences (Stage 33) → persisted per scene; when true and the scene is not frame-chained
+ *                         the video is submitted text-only (no character/location references).
  *
- * The override changes only the TEXT — frame/reference chaining is always recomputed at generation
- * time. Response: { ok: true, hasOverride: boolean }. Same ownership chain as GET.
+ * The override changes only the TEXT — frame chaining is always recomputed at generation time.
+ * Response: { ok: true, hasOverride: boolean, skipReferences: boolean }. Same ownership chain as GET.
  */
 export async function PUT(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
@@ -86,17 +98,31 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
   if (raw !== undefined && typeof raw !== "string") {
     return NextResponse.json({ error: "Некорректный промпт" }, { status: 400 });
   }
+  const rawSkip = (body as { skipReferences?: unknown } | null)?.skipReferences;
+  if (rawSkip !== undefined && typeof rawSkip !== "boolean") {
+    return NextResponse.json({ error: "Некорректное значение skipReferences" }, { status: 400 });
+  }
+  if (raw === undefined && rawSkip === undefined) {
+    return NextResponse.json({ error: "Нечего сохранять" }, { status: 400 });
+  }
   const trimmed = (raw ?? "").toString().trim();
   const promptOverride = trimmed.length ? trimmed : null;
 
   // Ownership is enforced in the query: a scene of another user's project simply returns null.
   const scene = await prisma.scene.findFirst({
     where: { id, episode: { season: { project: { userId: session.user.id } } } },
-    select: { id: true },
+    select: { id: true, promptOverride: true, skipReferences: true },
   });
   if (!scene) return NextResponse.json({ error: "Сцена не найдена" }, { status: 404 });
 
-  await prisma.scene.update({ where: { id: scene.id }, data: { promptOverride } });
+  const updated = await prisma.scene.update({
+    where: { id: scene.id },
+    data: {
+      ...(raw !== undefined ? { promptOverride } : {}),
+      ...(rawSkip !== undefined ? { skipReferences: rawSkip } : {}),
+    },
+    select: { promptOverride: true, skipReferences: true },
+  });
 
-  return NextResponse.json({ ok: true, hasOverride: promptOverride !== null });
+  return NextResponse.json({ ok: true, hasOverride: !!(updated.promptOverride ?? "").trim(), skipReferences: updated.skipReferences });
 }

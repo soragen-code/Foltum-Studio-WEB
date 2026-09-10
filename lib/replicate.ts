@@ -26,11 +26,8 @@ function extractUrl(output: unknown): string {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Seedance — video generation (native audio)                        */
-/*  Two real models share this same payload/schema:                    */
-/*    - "bytedance/seedance-2.5" (default) — up to 30s per clip;        */
-/*    - "bytedance/seedance-2.0"           — up to 15s per clip.        */
-/*  Both generate synchronized native audio. Pick via `model`.         */
+/*  Seedance 2.5 — video generation (synchronized native audio)        */
+/*  Single model: "bytedance/seedance-2.5" — up to 30s per clip.       */
 /* ------------------------------------------------------------------ */
 
 /** Default Seedance Replicate slug when a caller does not specify `model`. */
@@ -38,7 +35,7 @@ export const SEEDANCE_MODEL = "bytedance/seedance-2.5";
 
 export interface SeedanceInput {
   prompt: string;
-  /** Replicate model slug: "bytedance/seedance-2.5" (default) or "bytedance/seedance-2.0". */
+  /** Replicate model slug (always "bytedance/seedance-2.5"). */
   model?: string;
   /** Duration in seconds, 1-30 or -1 for auto. Default 5. */
   duration?: number;

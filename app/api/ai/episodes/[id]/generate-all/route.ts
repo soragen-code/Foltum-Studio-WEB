@@ -63,7 +63,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   // Stage 4: speech is always English (client-side language selector removed); the story-language text is shown in the UI only.
   const spokenLang = "en";
   const force = Boolean(body?.force);
-  // Producer-picked video model (see lib/ai-models.ts) → the worker `provider`. Default Seedance.
+  // Stage 33: Seedance 2.5 only — a legacy `provider`/`videoModel` in the body is accepted and ignored.
   const provider = normalizeVideoModel(body?.provider ?? body?.videoModel);
 
   const episode = await loadEpisode(id, session.user.id);

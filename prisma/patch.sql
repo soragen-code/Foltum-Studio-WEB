@@ -158,3 +158,8 @@ ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "videoModel" TEXT;
 -- the auto-assembled final prompt TEXT verbatim; NULL = use the auto prompt. Frame/reference
 -- chaining is unaffected.
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "promptOverride" TEXT;
+
+-- Stage 33: per-scene "send without reference images" toggle (additive, NOT NULL with default).
+-- When true and the scene is not frame-chained, the video is submitted as plain text-to-video
+-- (no character/location references). Chained scenes still use the previous scene's last frame.
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "skipReferences" BOOLEAN NOT NULL DEFAULT false;

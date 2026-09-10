@@ -8,7 +8,7 @@
  * NEVER leaks a real reference URL into the prompt text: references appear only as [ImageN] notes.
  */
 import assert from "node:assert";
-import { buildScenePrompt, MAX_REFERENCE_IMAGES } from "../lib/scene-prompt";
+import { buildScenePrompt, MAX_REFERENCE_IMAGES, REFERENCE_IMAGE_CAP } from "../lib/scene-prompt";
 import { VISUAL_STYLE_ID } from "../lib/visual-style";
 
 let pass = 0;
@@ -58,7 +58,7 @@ const baseScene = {
   ok(built.dialogue.includes("Hello there") && !built.isNarration, "resolved dialogue set, not a narration scene");
 }
 
-// ── 2. new_scene_reference branch: no styled refs, no chain → single [Image1] still note, model 2.0 ─
+// ── 2. new_scene_reference branch: no styled refs, no chain → single [Image1] still note; legacy provider ─
 {
   const built = buildScenePrompt({
     scene: { ...baseScene, id: "scene-2" },
@@ -72,7 +72,7 @@ const baseScene = {
   ok(!built.prompt.includes("[Image2]"), "new-scene reference adds exactly one note");
   ok(typeof built.referencePrompt === "string" && built.referencePrompt!.length > 0, "referencePrompt (Flux still) is provided for the worker");
   ok(noUrl(built.prompt), "new_scene_reference prompt text contains NO URL");
-  ok(built.model === "seedance-2.0" && built.modelSlug === "bytedance/seedance-2.0", "provider seedance-2.0 → 2.0 slug");
+  ok(built.model === "seedance" && built.modelSlug === "bytedance/seedance-2.5", "legacy provider seedance-2.0 is ignored → Seedance 2.5 slug (Stage 33)");
 }
 
 // ── 3. adjacent_frame branch: same-location adjacent styled last frame → image-to-video, no notes ───
@@ -190,6 +190,54 @@ const baseScene = {
   ok(auto.prompt.includes("[Image1]") && auto.prompt !== override, "absent override → normal auto-assembled prompt");
 }
 
-ok(MAX_REFERENCE_IMAGES === 30, "MAX_REFERENCE_IMAGES is 30 (Seedance reference cap)");
+ok(REFERENCE_IMAGE_CAP === 6 && MAX_REFERENCE_IMAGES === REFERENCE_IMAGE_CAP, "REFERENCE_IMAGE_CAP is 6 (Stage 33 lean references; MAX_REFERENCE_IMAGES alias kept)");
+
+// ── Stage 33: lean reference set — max 4 individuals (mentioned first), exactly 1 location angle, cap 6 ─
+{
+  const many = ["Ann", "Bob", "Cid", "Dee", "Eve", "Fay"].map(n => ({ characterId: n.toLowerCase(), name: n, tier: "MAIN", imageFront: styledUrl(n.toLowerCase()) }));
+  const crowd = [{ characterId: "crowd", name: "Market crowd", tier: "CROWD", imageFront: styledUrl("crowd") }];
+  const loc = { id: "loc", name: "Old market", imageUrl: styledUrl("loc-wide"), imageReverse: styledUrl("loc-reverse"), imageDetail: styledUrl("loc-detail") };
+  const built = buildScenePrompt({
+    scene: { ...baseScene, id: "scene-lean", videoPrompt: "[ACTION]: Fay argues with Eve by the stall.", dialogue: 'Fay: "Enough."' },
+    characters: [...many, ...crowd],
+    location: loc,
+    previous: null,
+    provider: "seedance",
+  });
+  ok(built.referenceKind === "character_references", "lean: still character_references");
+  const kinds = (built.reference as any).kinds as string[];
+  ok(kinds.filter(k => k === "character").length === 4, "lean: at most 4 individual character portraits");
+  ok(kinds.filter(k => k === "location").length === 1, "lean: exactly one location angle");
+  ok(built.referenceImages[4] === loc.imageUrl, "lean: the wide `imageUrl` angle is the one sent");
+  ok(built.referenceImages.length <= REFERENCE_IMAGE_CAP, "lean: total references within the cap of 6");
+  const firstTwo = [built.referenceImages[0], built.referenceImages[1]].sort();
+  ok(firstTwo[0] === styledUrl("eve") && firstTwo[1] === styledUrl("fay"), "lean: characters mentioned in the scene are ranked first (linked order kept among them)");
+  ok(kinds.filter(k => k === "crowd").length === 1, "lean: crowd group fills the remaining room");
+  ok(!built.prompt.includes("[Image7]"), "lean: no [Image7] note");
+}
+
+// ── Stage 33: skipReferences → text_only (no images, no notes, no Flux still); chaining wins over it ─
+{
+  const built = buildScenePrompt({
+    scene: { ...baseScene, id: "scene-skip", skipReferences: true },
+    characters: [{ characterId: "yara", name: "Yara", tier: "MAIN", imageFront: styledUrl("yara") }],
+    location: null,
+    previous: null,
+    provider: "seedance",
+  });
+  ok(built.referenceKind === "text_only" && built.referenceImages.length === 0 && !built.newSceneReference, "skipReferences → text_only, no images, no Flux still");
+  ok(!built.prompt.includes("[Image1]"), "text_only prompt has no [ImageN] notes");
+  ok(built.hasOverride === false, "hasOverride is reported (false without an override)");
+
+  const prevFrame = styledUrl("prev-lastframe");
+  const chained = buildScenePrompt({
+    scene: { ...baseScene, id: "scene-skip-chain", number: 3, skipReferences: true, locationDesc: "Kitchen" },
+    characters: [],
+    location: null,
+    previous: { id: "prev", number: 2, locationDesc: "Kitchen", lastFrameUrl: prevFrame },
+    provider: "seedance",
+  });
+  ok(chained.referenceKind === "adjacent_frame" && chained.image === prevFrame, "skipReferences does NOT disable adjacent-frame chaining");
+}
 
 console.log(`\nStage 27c: ${pass} checks passed.`);

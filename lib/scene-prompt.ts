@@ -22,8 +22,17 @@ import { PACE_DIRECTION } from "@/lib/season";
 import { styledVisualPrompt, isStyledAsset, canChainFrame, locationAngleImages } from "@/lib/visual-style";
 import { normalizeVideoModel, videoModelSlug, type VideoModelId } from "@/lib/ai-models";
 
-/** Seedance 2.5 accepts up to 30 reference images ([Image1]..[ImageN] in the prompt). */
-export const MAX_REFERENCE_IMAGES = 30;
+/**
+ * Stage 33: hard cap on reference images per submission. Seedance 2.5 technically accepts up to 30,
+ * but a lean set (a few faces + ONE location angle) keeps the composition cinematic instead of
+ * flattening every character into the frame, and fewer photoreal faces = fewer moderation false
+ * positives on the input images.
+ */
+export const REFERENCE_IMAGE_CAP = 6;
+/** @deprecated alias kept for older imports — use REFERENCE_IMAGE_CAP. */
+export const MAX_REFERENCE_IMAGES = REFERENCE_IMAGE_CAP;
+/** Max individual (non-crowd) character portraits per submission. */
+export const REFERENCE_CHARACTER_CAP = 4;
 
 export interface ScenePromptScene {
   id: string;
@@ -42,6 +51,12 @@ export interface ScenePromptScene {
    * is still computed as usual. null/empty = use the auto prompt.
    */
   promptOverride?: string | null;
+  /**
+   * Stage 33: when true and the scene is NOT frame-chained, the video is submitted text-only —
+   * no character / location reference images, no `[ImageN]` notes, no Flux still. A chained scene
+   * ignores it (the previous scene's last frame is always the first frame).
+   */
+  skipReferences?: boolean | null;
 }
 
 export interface ScenePromptCharacterLink {
@@ -74,7 +89,7 @@ export interface BuildScenePromptInput {
   location: ScenePromptLocation | null;
   /** The adjacent previous scene, used to decide frame chaining. */
   previous: ScenePromptPrevious | null;
-  /** Video model id / worker provider ("seedance" | "seedance-2.0"); defaults to the registry default. */
+  /** Legacy video model id / worker provider; always normalized to Seedance 2.5. */
   provider?: string | null;
   /**
    * English dialogue to voice, already resolved by the caller (the worker passes the translated
@@ -84,7 +99,7 @@ export interface BuildScenePromptInput {
   resolvedDialogueEn?: string | null;
 }
 
-export type ScenePromptReferenceKind = "adjacent_frame" | "character_references" | "new_scene_reference";
+export type ScenePromptReferenceKind = "adjacent_frame" | "character_references" | "new_scene_reference" | "text_only";
 
 export interface BuildScenePromptResult {
   /** The FINAL prompt submitted to Seedance (with the `[ImageN]` notes already appended). */
@@ -99,9 +114,11 @@ export interface BuildScenePromptResult {
   modelSlug: string;
   /** Which reference strategy the scene resolves to. */
   referenceKind: ScenePromptReferenceKind;
+  /** true when the submitted text is the producer's manual override (Stage 31). */
+  hasOverride: boolean;
   /** Reference descriptor persisted with the prediction (referencePredictionId is added later for new_scene_reference). */
   reference: Record<string, unknown>;
-  /** Reference image URLs for character_references; empty for adjacent_frame and (until the worker generates it) new_scene_reference. */
+  /** Reference image URLs for character_references; empty for adjacent_frame, text_only and (until the worker generates it) new_scene_reference. */
   referenceImages: string[];
   /** Full reference set for moderation resubmission (empty until the worker fills it for new_scene_reference). */
   retryRefs: { url: string; kind: string; note: string }[];
@@ -180,30 +197,51 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   let referencePrompt: string | undefined;
   let newSceneReferenceNote: string | undefined;
 
-  // Reference set, in priority order: speaking/visible individual characters → the episode's
-  // location reference → crowd groups. Seedance accepts up to MAX_REFERENCE_IMAGES.
+  // Stage 33 — LEAN reference set (non-chained scenes only). Priority order:
+  //   1. up to REFERENCE_CHARACTER_CAP individual characters that are actually IN THIS SCENE — the
+  //      SceneCharacter links are already scene-specific (written per scene by the season worker);
+  //      characters named in this scene's dialogue / videoPrompt are ranked first, then the rest of
+  //      the linked list in its original order (deterministic);
+  //   2. exactly ONE location angle — the wide `imageUrl` when present, else the first styled angle;
+  //   3. crowd groups only while room remains under REFERENCE_IMAGE_CAP.
   const styled = characters.filter(c => isStyledAsset(c.imageFront));
-  const individuals = styled.filter(c => c.tier !== "CROWD");
+  const individualsAll = styled.filter(c => c.tier !== "CROWD");
   const crowds = styled.filter(c => c.tier === "CROWD");
-  // Every generated angle of the SAME location goes in as a reference, so the place, the time of
-  // day and the light stay identical between shots — only the camera angle changes.
+  const mentionText = `${scene.videoPrompt ?? ""}\n${dialogue}\n${scene.voiceover ?? ""}`.toLowerCase();
+  const isMentioned = (name: string) => {
+    const n = name.trim().toLowerCase();
+    return n.length > 0 && mentionText.includes(n);
+  };
+  const mentioned = individualsAll.filter(c => isMentioned(c.name));
+  const unmentioned = individualsAll.filter(c => !isMentioned(c.name));
+  const individuals = [...mentioned, ...unmentioned].slice(0, REFERENCE_CHARACTER_CAP);
   const locationAngles = location ? locationAngleImages(location) : [];
   const effectiveLocation = locationAngles.length ? location : null;
+  // The wide establishing angle carries the place best; the builder's own ordering already puts it
+  // first when available, so "first styled angle" == wide-when-present.
+  const wideAngle = locationAngles.find(a => a.url === (location?.imageUrl ?? "")) ?? locationAngles[0];
   const characterRefs = individuals.map(c => ({ url: c.imageFront!, kind: "character", id: c.characterId, note: `defines ${c.name}'s photorealistic appearance and identity; use the scene's staging and camera.` }));
-  const locationRefs = locationAngles.map(a => ({ url: a.url, kind: "location", id: effectiveLocation!.id, note: `the location "${effectiveLocation!.name}" — ${a.angle} angle. Same place, same time of day, same light and palette as the other location references. Keep the camera inside this location and match this lighting exactly.` }));
-  // Reduced set used by the last moderation retry: speaking characters + one location angle.
-  const fallbackRefs = [...characterRefs, ...locationRefs.slice(0, 1)].slice(0, MAX_REFERENCE_IMAGES).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
+  const locationRefs = wideAngle ? [{ url: wideAngle.url, kind: "location", id: effectiveLocation!.id, note: `the location "${effectiveLocation!.name}" — ${wideAngle.angle} angle. Same place, same time of day, same light and palette in every shot. Keep the camera inside this location and match this lighting exactly.` }] : [];
+  // Reduced set (speaking characters + one location angle) kept for diagnostics.
+  const fallbackRefs = [...characterRefs, ...locationRefs].slice(0, REFERENCE_IMAGE_CAP).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
+  const skipReferences = !!scene.skipReferences;
 
   if (canChainFrame(scene, previous)) {
     image = previous!.lastFrameUrl!;
     reference = { mode: "adjacent_frame", sceneId: previous!.id };
     referenceKind = "adjacent_frame";
+  } else if (skipReferences) {
+    // Stage 33: producer asked for text-only submission (no reference images at all) — typically
+    // after a provider block that the text alone cannot explain. Plain text-to-video.
+    reference = { mode: "text_only", sceneId: scene.id };
+    referenceKind = "text_only";
   } else if (individuals.length || effectiveLocation || crowds.length) {
+    const room = Math.max(0, REFERENCE_IMAGE_CAP - characterRefs.length - locationRefs.length);
     const refs: { url: string; note: string; kind: string; id: string }[] = [
       ...characterRefs,
       ...locationRefs,
-      ...crowds.map(c => ({ url: c.imageFront!, kind: "crowd", id: c.characterId, note: `defines the look of the group "${c.name}" (extras): who they are and how they are dressed.` })),
-    ].slice(0, MAX_REFERENCE_IMAGES);
+      ...crowds.slice(0, room).map(c => ({ url: c.imageFront!, kind: "crowd", id: c.characterId, note: `defines the look of the group "${c.name}" (extras): who they are and how they are dressed.` })),
+    ].slice(0, REFERENCE_IMAGE_CAP);
     referenceImages = refs.map(r => r.url);
     retryRefs = refs.map(r => ({ url: r.url, kind: r.kind, note: r.note }));
     reference = { mode: "character_references", characterIds: refs.filter(r => r.kind !== "location").map(r => r.id), locationId: effectiveLocation?.id ?? null, kinds: refs.map(r => r.kind) };
@@ -211,7 +249,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     // With a manual override the producer owns the full text — never append the reference notes.
     if (!hasOverride) {
       prompt += "\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
-      if (effectiveLocation) prompt += "\nCamera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location references. Only the camera angle changes between shots. The characters are physically present in this place and interact with its objects and surfaces; the cuts show the same location from different angles with real depth (foreground, characters, background) — never a flat backdrop.";
+      if (effectiveLocation) prompt += "\nCamera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location reference. Only the camera angle changes between shots. The characters are physically present in this place and interact with its objects and surfaces; the cuts show the same location from different angles with real depth (foreground, characters, background) — never a flat backdrop.";
     }
   } else {
     // One new scene composition, never overwrite the user's old portraits or frames. This is
@@ -233,6 +271,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     model,
     modelSlug,
     referenceKind,
+    hasOverride,
     reference,
     referenceImages,
     retryRefs,

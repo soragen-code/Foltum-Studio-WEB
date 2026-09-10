@@ -45,8 +45,11 @@ export const generateVideoSchema = z.object({
   projectId: cuidSchema,
   sceneId: cuidSchema,
   language: z.enum(["en", "ru"]).optional().nullable(),
-  /** Video provider (both native audio): "seedance" (2.5, default, up to 30s) or "seedance-2.0" (up to 15s). */
-  provider: z.enum(["seedance", "seedance-2.0"]).optional().nullable(),
+  /**
+   * Legacy video provider field. Stage 33: only Seedance 2.5 exists, so the value is accepted for
+   * backward compatibility (old clients may still send it) and ignored — any string passes.
+   */
+  provider: z.string().max(64).optional().nullable(),
 });
 
 export const charactersSchema = z.object({

@@ -11,7 +11,7 @@ import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_M
 import { CancelButton } from '../../_components/cancel-button'
 import { desiredExtraFrames, desiredTotalFrames, locationScale, locationScaleLabel, episodeLocations } from '@/lib/location-scale'
 import { CHARACTER_PHOTO_COUNT } from '@/lib/reference-counts'
-import { IMAGE_MODELS, VIDEO_MODELS, DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, type ImageModelId, type VideoModelId } from '@/lib/ai-models'
+import { IMAGE_MODELS, DEFAULT_IMAGE_MODEL, VIDEO_MODEL_LABEL, type ImageModelId } from '@/lib/ai-models'
 import { EpisodeNavGrid } from './episode-nav-grid'
 
 type EpisodePhase = 'script' | 'references' | 'scenes'
@@ -35,7 +35,7 @@ const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.ima
 // serverless window and get killed — chunking + re-firing guarantees the target is actually reached).
 const LOCATION_EXTRA_CHUNK = 6
 
-type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; status: string; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
+type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; status: string; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null }
 
 export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits }: { episode: any; project: any; siblings?: Sibling[]; credits: number }) {
@@ -50,7 +50,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [regenAsk, setRegenAsk] = useState<string | null>(null) // sceneId awaiting paid regen confirmation
   const [sceneError, setSceneError] = useState<Record<string, string>>({}) // per-scene generation error shown on the card
   // Stage 31 — "Смотреть промпт" modal: view / copy / manually override the scene's final prompt.
-  const [promptModal, setPromptModal] = useState<{ sceneId: string; number: number; model?: VideoModelId } | null>(null)
+  const [promptModal, setPromptModal] = useState<{ sceneId: string; number: number } | null>(null)
   const [promptText, setPromptText] = useState('')          // editable textarea content
   const [promptLoading, setPromptLoading] = useState(false) // GET in flight
   const [promptErr, setPromptErr] = useState<string | null>(null)
@@ -58,11 +58,13 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [promptSaving, setPromptSaving] = useState(false)   // PUT in flight (save or reset)
   const [promptCopied, setPromptCopied] = useState(false)   // flashed «Скопировано» inside the modal
   const [promptSaved, setPromptSaved] = useState(false)     // flashed «Сохранено» inside the modal
+  // Stage 33 — per-scene «Отправить без референс-изображений» toggle (persisted on Scene.skipReferences).
+  const [promptSkipRefs, setPromptSkipRefs] = useState(false)
+  const [promptSkipSaving, setPromptSkipSaving] = useState(false)
+  // Reference strategy the builder resolved for this scene ("adjacent_frame" = chained to the previous scene).
+  const [promptRefKind, setPromptRefKind] = useState<string | null>(null)
   // «Собрать» — pure concatenation of the ready scene clips into one episode (no audit / no polish / no re-gen).
   const [stitching, setStitching] = useState(false)
-  // AI video model chosen in the always-visible global selector next to the scenes (EDIT 5);
-  // passed as `provider` into each single-scene generation.
-  const [videoModel, setVideoModel] = useState<VideoModelId>(DEFAULT_VIDEO_MODEL)
   // AI image model chosen for reference generation (EDIT 1). `refModalOpen` gates the picker
   // shown before «Сгенерировать всё»; the ref keeps the choice available to the resume poll loop.
   const [imageModel, setImageModel] = useState<ImageModelId>(DEFAULT_IMAGE_MODEL)
@@ -395,23 +397,18 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setSceneBusy((b) => { const n = { ...b }; delete n[scene.id]; return n }) }
   }
 
-  // EDIT 5 — single-scene background generation (POST /api/ai/generate-video → runVideoJob).
-  //   • withModel=true  (fresh generation): send the model chosen in the global selector as `provider`,
-  //     which the route persists to scene.videoModel.
-  //   • withModel=false (regen of an already-generated scene): omit `provider` so the route reuses the
-  //     model previously stored on the scene — same behaviour as before.
-  const generateScene = async (sceneId: string, withModel: boolean) => {
+  // Single-scene background generation (POST /api/ai/generate-video → runVideoJob).
+  // Stage 33: Seedance 2.5 is the only video model — no `provider` is sent; the route resolves it.
+  const generateScene = async (sceneId: string, _withModel: boolean) => {
     setRegenAsk(null); setActiveGen((p) => ({ ...p, [sceneId]: true })); setError(null)
     setSceneError((prev) => { const n = { ...prev }; delete n[sceneId]; return n })
     try {
       const body: Record<string, unknown> = { projectId: project.id, sceneId }
-      if (withModel) body.provider = videoModel
       const res = await postJobStart('/api/ai/generate-video', body)
       const data = await res.json(); if (!res.ok) throw new Error(data?.error ?? 'Не удалось запустить генерацию')
       patchScene(sceneId, { status: 'generating' }); pollVideoJob(sceneId, data.jobId); void refreshCredits()
     } catch (e: any) { clearGen(sceneId); setError(e?.message ?? 'Ошибка') }
   }
-  // Regen keeps the model already stored on the scene (no provider override).
   const regenScene = (sceneId: string) => generateScene(sceneId, false)
 
   // Stage 31 — open the "Смотреть промпт" modal and load the scene's FINAL prompt (override if set,
@@ -421,13 +418,15 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     setPromptModal({ sceneId: scene.id, number: scene.number })
     setPromptText(''); setPromptErr(null); setPromptHasOverride(false)
     setPromptCopied(false); setPromptSaved(false); setPromptLoading(true)
+    setPromptSkipRefs(!!scene.skipReferences); setPromptRefKind(null)
     try {
       const res = await fetch(`/api/ai/scenes/${scene.id}/prompt`)
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || 'Не удалось загрузить промпт')
       setPromptText(String(data.prompt ?? ''))
       setPromptHasOverride(!!data.hasOverride)
-      setPromptModal((m) => (m && m.sceneId === scene.id ? { ...m, model: data.model } : m))
+      setPromptSkipRefs(!!data.skipReferences)
+      setPromptRefKind(typeof data.referenceKind === 'string' ? data.referenceKind : null)
     } catch (e: any) {
       setPromptErr(e?.message ?? 'Не удалось загрузить промпт')
     } finally {
@@ -442,6 +441,33 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       setPromptCopied(true)
       setTimeout(() => setPromptCopied(false), 2000)
     } catch { setPromptErr('Не удалось скопировать') }
+  }
+
+  // Stage 33 — persist the «без референс-изображений» toggle immediately (PUT { skipReferences }).
+  // The text override is untouched by this call; the GET is re-run so the [ImageN] notes reflect the mode.
+  const toggleSkipReferences = async (next: boolean) => {
+    if (!promptModal) return
+    const sceneId = promptModal.sceneId
+    setPromptSkipSaving(true); setPromptErr(null)
+    try {
+      const res = await fetch(`/api/ai/scenes/${sceneId}/prompt`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skipReferences: next }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || 'Не удалось сохранить')
+      setPromptSkipRefs(!!data.skipReferences)
+      setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, skipReferences: !!data.skipReferences } : s)))
+      if (!promptHasOverride) {
+        const g = await fetch(`/api/ai/scenes/${sceneId}/prompt`)
+        const gd = await g.json().catch(() => ({}))
+        if (g.ok) { setPromptText(String(gd.prompt ?? '')); setPromptRefKind(typeof gd.referenceKind === 'string' ? gd.referenceKind : null) }
+      }
+    } catch (e: any) {
+      setPromptErr(e?.message ?? 'Не удалось сохранить')
+    } finally {
+      setPromptSkipSaving(false)
+    }
   }
 
   // Save the textarea as a manual override (reset=false), or reset to the auto prompt (reset=true).
@@ -691,20 +717,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <button onClick={() => goPhase('script')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted" data-testid="back-to-script">
             <ArrowLeft className="h-4 w-4" /> Сценарий
           </button>
-          {/* EDIT 5 — always-visible global video-model selector. The chosen model is passed as `provider`
-              into each single-scene generation and persisted on the scene. */}
-          <label className="inline-flex items-center gap-2 text-sm" htmlFor="video-model-select">
-            <Film className="h-4 w-4 text-primary" /> Модель ИИ (видео):
-            <select
-              id="video-model-select"
-              data-testid="video-model-select"
-              value={videoModel}
-              onChange={(e) => setVideoModel(e.target.value as VideoModelId)}
-              className="rounded-lg border border-border bg-background px-3 py-1.5 text-sm"
-            >
-              {VIDEO_MODELS.map((m) => (<option key={m.id} value={m.id}>{m.label}</option>))}
-            </select>
-          </label>
+          {/* Stage 33: a single video model — shown statically, no selector. */}
+          <span className="inline-flex items-center gap-2 text-sm text-muted-foreground" data-testid="video-model-label">
+            <Film className="h-4 w-4 text-primary" /> Модель видео: {VIDEO_MODEL_LABEL}
+          </span>
           <button onClick={stitch} disabled={!allReady || stitching} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? 'Склеить готовые сцены в один эпизод' : 'Доступно, когда все сцены готовы'}>
             {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Собрать
           </button>
@@ -937,7 +953,26 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                     data-testid="scene-prompt-text"
                     placeholder="Промпт сцены…"
                   />
-                  {promptModal.model && <p className="mt-2 text-[11px] text-muted-foreground">Модель: {VIDEO_MODELS.find((m) => m.id === promptModal.model)?.label ?? promptModal.model}</p>}
+                  <p className="mt-2 text-[11px] text-muted-foreground">Модель: {VIDEO_MODEL_LABEL}</p>
+                  {/* Stage 33 — send this scene without reference images (text-only). Persisted per scene. */}
+                  <label className="mt-3 flex items-start gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 h-4 w-4"
+                      checked={promptSkipRefs}
+                      disabled={promptSkipSaving}
+                      onChange={(e) => toggleSkipReferences(e.target.checked)}
+                      data-testid="scene-skip-refs"
+                    />
+                    <span>
+                      <span className="font-medium">Отправить без референс‑изображений (только текст)</span>
+                      {promptSkipSaving && <Loader2 className="ml-1 inline h-3 w-3 animate-spin" />}
+                      <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                        Персонажи и локация не будут переданы картинками. Кадр из предыдущей сцены всё равно используется.
+                        {promptRefKind === 'adjacent_frame' && ' Эта сцена продолжает предыдущую: первый кадр берётся из неё, референсы и так не отправляются.'}
+                      </span>
+                    </span>
+                  </label>
                 </>
               )}
             </div>
