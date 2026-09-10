@@ -761,25 +761,28 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       {sceneBusy[scene.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Изменить
                     </button>
                   </div>
-                  {/* Stage 27c — inspect / copy the exact final Seedance prompt for this scene. */}
+                  {/* Stage 27c — inspect / copy the exact final Seedance prompt for this scene.
+                      Rendered as lightweight secondary utilities (muted, compact) so they don't
+                      compete visually with the primary generate/revise actions above. */}
                   {scene.videoPrompt ? (
-                    <div className="flex flex-col gap-2 sm:flex-row">
+                    <div className="flex items-center gap-1 border-t border-border/60 pt-2">
                       <button
                         onClick={() => showScenePrompt(scene)}
-                        className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
+                        className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                         data-testid="scene-show-prompt"
                         title="Показать полный промпт, который отправляется в модель"
                       >
-                        <FileText className="h-4 w-4" /> Показать полный промпт
+                        <FileText className="h-3.5 w-3.5 shrink-0" /> Показать промпт
                       </button>
+                      <span className="h-4 w-px bg-border/60" aria-hidden />
                       <button
                         onClick={() => copyScenePrompt(scene)}
                         disabled={!!copyBusy[scene.id]}
-                        className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+                        className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
                         data-testid="scene-copy-prompt"
                         title="Скопировать полный промпт в буфер обмена"
                       >
-                        {copyBusy[scene.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : promptCopied === scene.id ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                        {copyBusy[scene.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" /> : promptCopied === scene.id ? <Check className="h-3.5 w-3.5 shrink-0" /> : <Copy className="h-3.5 w-3.5 shrink-0" />}
                         {promptCopied === scene.id ? 'Скопировано' : 'Копировать'}
                       </button>
                     </div>
