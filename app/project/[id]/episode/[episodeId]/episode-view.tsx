@@ -9,6 +9,7 @@ import { ScriptView } from '../../_components/season-stage'
 import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
 import { CancelButton } from '../../_components/cancel-button'
 import { desiredExtraFrames, locationScale, locationScaleLabel, episodeLocations } from '@/lib/location-scale'
+import { EpisodeNavGrid } from './episode-nav-grid'
 
 const VIDEO_EXPECTED_SEC = 600
 const REF_POLL_MS = 3500
@@ -439,25 +440,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     <div className="min-h-screen bg-background">
       <Header />
       <main className="mx-auto max-w-[1200px] px-4 py-6" data-testid="episode-page">
+        {/* Stage 14 (C): episode nav — right-aligned «Эпизоды» dropdown grid (10/row desktop), any order. */}
         <div className="flex flex-wrap items-center gap-4">
           <Link href={`/project/${project.id}`} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> К сюжету сезона</Link>
+          <EpisodeNavGrid projectId={project.id} episodes={siblings} currentId={episode.id} />
         </div>
-        {/* Stage 12 (E): episode nav — jump to ANY episode out of order, each with its status. */}
-        {siblings.length > 0 && (
-          <nav className="mt-3 flex flex-wrap gap-2" data-testid="episode-nav" aria-label="Эпизоды сезона">
-            {[...siblings].sort((a, b) => a.number - b.number).map((s) => {
-              const active = s.id === episode.id
-              const st = (s.status === 'assembled' || validUrl(s.videoUrl)) ? 'собран' : s.status === 'scenes_ready' ? 'сцены' : s.status === 'approved' ? 'рефы' : s.status === 'script_ready' ? 'сюжет' : '—'
-              return (
-                <Link key={s.id} href={`/project/${project.id}/episode/${s.id}`} data-testid="episode-nav-item" data-active={active}
-                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs ${active ? 'border-primary bg-primary/10 font-semibold text-foreground' : 'border-border text-muted-foreground hover:text-foreground'}`}>
-                  <span>Эп {s.number}</span>
-                  <span className="rounded bg-muted px-1 py-0.5 text-[10px]">{st}</span>
-                </Link>
-              )
-            })}
-          </nav>
-        )}
         <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-xs font-semibold uppercase text-muted-foreground">Эпизод {episode.number}{episode.arcRole ? ` · ${episode.arcRole}` : ''}</div>
