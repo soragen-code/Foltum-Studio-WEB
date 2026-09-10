@@ -10,6 +10,7 @@ import { VISUAL_STYLE_ID, styledVisualPrompt, isStyledAsset, canChainFrame, loca
 import { GenerationAttempt, safeProviderError, classifyProviderError, logAttempt, safeDiagnosticInput } from "@/lib/generation-diagnostics";
 import { updateJob, heartbeatJob, runInBackground, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { softenForModeration, moderationHints, type SoftenLevel } from "@/lib/sanitize-prompt";
+import { sanitizePromptWithLlm } from "@/lib/moderation-sanitizer";
 
 export interface VideoJobParams {
   jobId: string;
@@ -52,10 +53,14 @@ export interface VideoJobState {
   /** Persisted so the audio stage can submit the Seedance speech run on its own. */
   audioPrompt?: string;
   audioDuration?: number;
-  /* --- Seedance moderation (E005) auto-retry, no extra credit charge --- */
-  /** How many softened resubmissions were already made (max MAX_MODERATION_RETRIES). */
+  /* --- Seedance moderation (E005) auto-recovery, no extra credit charge --- */
+  /** How many LLM-sanitized resubmissions were already made on Seedance (max MAX_MODERATION_RETRIES). */
   moderationRetries?: number;
-  /** Everything needed to resubmit the same scene with a softer prompt. */
+  /** True once the automatic fallback to the alternative model (Kling) has been submitted. */
+  moderationFallback?: boolean;
+  /** Model that actually produced the final video, persisted to scene.videoModel on success. */
+  videoModel?: string;
+  /** Everything needed to resubmit the same scene with a softer prompt or on another model. */
   retry?: ModerationRetryInput;
 }
 
@@ -70,8 +75,17 @@ export interface ModerationRetryInput {
   refs: { url: string; kind: string; note: string }[];
   /** Reduced set for the last retry: speaking characters + one location angle. */
   fallbackRefs: { url: string; kind: string; note: string }[];
+  /* --- extra state needed for the automatic fallback to Kling --- */
+  /** Clean styled VISUAL prompt (no spoken-dialogue instructions) — fed to silent Kling. */
+  visualPrompt?: string;
+  /** True when the scene has spoken lines (fallback then runs the Kling+lipsync pipeline). */
+  hasDialogue?: boolean;
+  /** Pre-built stylized native-speech prompt for the lipsync pipeline's audio stage. */
+  audioPrompt?: string;
+  /** Duration used for the Kling clip / lipsync audio (Kling caps at 10s). */
+  audioDuration?: number;
 }
-/** Up to 2 automatic resubmissions after a moderation refusal (3 Seedance attempts total, 1 charge). */
+/** Up to 2 automatic LLM-sanitized resubmissions on Seedance before the model fallback (1 charge total). */
 export const MAX_MODERATION_RETRIES = 2;
 
 const POLL_INTERVAL_MS = 8_000;
@@ -300,8 +314,18 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       diagnostics.push(attempt); await persist(); logAttempt(attempt);
       predictionId = await startVideoPrediction({ ...input, ...(image ? { image } : { reference_images: referenceImages }) });
       submitMessage = "Submitted to Seedance; checking the same prediction...";
-      // Keep what is needed to resubmit the SAME scene with a softer prompt after a moderation refusal.
-      pipelineExtra.retry = { basePrompt, duration: input.duration, resolution: input.resolution, image, refs: retryRefs, fallbackRefs };
+      // Keep what is needed to auto-recover the SAME scene after a moderation refusal:
+      // (1) resubmit Seedance with an LLM-rewritten prompt, then (2) fall back to Kling.
+      const spokenLines = parseDialogue(dialogue);
+      const stylizedBase =
+        "Simple hand-drawn 2D animated cartoon, flat colours and soft outlines: an original " +
+        "stylized character speaking to camera in a plain setting. Non-photorealistic illustration.";
+      pipelineExtra.retry = {
+        basePrompt, duration: input.duration, resolution: input.resolution, image, refs: retryRefs, fallbackRefs,
+        visualPrompt, hasDialogue: spokenLines.length > 0,
+        audioPrompt: spokenLines.length ? buildNativeAudioPrompt(stylizedBase, dialogue, links.map(l => l.character), targetLanguage) : undefined,
+        audioDuration: Math.min(10, Number(params.duration ?? 10)),
+      };
       pipelineExtra.moderationRetries = 0;
     }
     attempt.predictionId = predictionId; attempt.status = "processing";
@@ -377,6 +401,8 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, source: str
     if (!result.count) return;
     await tx.scene.update({ where: { id: state.sceneId }, data: {
       videoUrl, audioUrl: null, status: "generated", lastFrameUrl, subtitled: false,
+      // Persist the model that actually succeeded (set only when the auto-fallback switched models).
+      ...(state.videoModel ? { videoModel: state.videoModel } : {}),
     } });
   });
 }
@@ -389,8 +415,15 @@ async function handleFailure(jobId: string, ctx: { sceneId: string; userId?: str
     // Shown verbatim in the UI (job.error). Tell the user what to change instead of the raw provider code.
     const scene = await prisma.scene.findUnique({ where: { id: ctx.sceneId }, select: { videoPrompt: true, dialogueEn: true, dialogue: true, action: true } }).catch(() => null);
     const hints = moderationHints([scene?.videoPrompt, scene?.action, scene?.dialogueEn, scene?.dialogue].filter(Boolean).join("\n"));
-    const tries = state?.moderationRetries ? ` (${state.moderationRetries + 1} попытки, включая автоматически смягчённые)` : "";
-    message = `[moderation] Сцена не прошла модерацию Seedance${tries} — измените текст сцены (кнопка «Изменить сцену»). ` +
+    // Tell the user what was already tried automatically before giving up.
+    const rewrote = (state?.moderationRetries ?? 0) > 0;
+    const switched = !!state?.moderationFallback;
+    let autoNote = "";
+    if (rewrote && switched) autoNote = "Мы автоматически переписали и смягчили текст сцены, а затем переключились на другую модель (Kling), но модерация всё равно отклонила видео. ";
+    else if (switched) autoNote = "Мы автоматически попробовали другую модель (Kling), но модерация всё равно отклонила видео. ";
+    else if (rewrote) autoNote = "Мы автоматически переписали и смягчили текст сцены, но модерация всё равно отклонила видео. ";
+    message = `[moderation] Сцена не прошла модерацию — измените текст сцены (кнопка «Изменить сцену»). ` +
+      autoNote +
       (hints.length
         ? `Смягчите или уберите: ${hints.map(h => `«${h}»`).join(", ")}. `
         : "Уберите агрессию, физический контакт, опасность, оружие, кровь и интимные моменты; выразите конфликт через реплики, лица и мизансцену. ") +
@@ -498,59 +531,139 @@ async function advanceToLipsyncStage(jobId: string, state: VideoJobState, speech
 }
 
 /**
- * Moderation auto-retry. Retry 1 = level 2 (aggression / physical contact / delivery cues softened).
- * Retry 2 = level 3 (staging lines rewritten to neutral dialogue blocking, delivery cues stripped,
- * reference set reduced to the speaking characters + one location angle, no start-frame chaining).
+ * Moderation auto-recovery, step 1 — automatic prompt rewrite on the SAME model (Seedance).
+ *
+ * The prompt is rewritten by the LLM (Russian "sanitizer" instruction) so it passes moderation
+ * while keeping plot, characters, spoken lines, emotions and staging; the rule-based softener is
+ * then applied on top as a safety net. Two escalating passes:
+ *   pass 1 — LLM strictness 1 + rule level 2 (aggression / physical contact / delivery cues);
+ *   pass 2 — LLM strictness 2 + rule level 3 (staging lines rewritten to neutral blocking,
+ *            delivery cues stripped, reference set reduced to speaking characters + one location
+ *            angle, no start-frame chaining).
+ *
+ * The LLM call + resubmission can take a while, so we take a long finalize-length lease first and
+ * do the work in the background — exactly like the Kling+lipsync stage transitions — so a second
+ * poll never claims the job and submits a duplicate prediction.
  */
 async function retryAfterModeration(jobId: string, state: VideoJobState, reason: string): Promise<boolean> {
   const retry = state.retry!;
-  const n = (state.moderationRetries ?? 0) + 1;
-  const level: SoftenLevel = n === 1 ? 2 : 3;
-  const softened = softenForModeration(retry.basePrompt, level);
-  let image = retry.image;
-  let refs = retry.refs;
-  if (level === 3) {
-    if (retry.fallbackRefs.length) { refs = retry.fallbackRefs; image = undefined; }
-    else if (!refs.length && !image) { refs = retry.refs; }
-  }
-  let prompt = softened.text;
-  if (!image && refs.length) {
-    prompt += "\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
-    if (refs.some(r => r.kind === "location")) prompt += "\nCamera stays inside this location across the whole shot; lighting, time of day and palette identical to the location reference.";
-  }
-  const input = {
-    prompt, duration: retry.duration, resolution: retry.resolution,
-    aspect_ratio: image ? "adaptive" : "9:16", generate_audio: true, watermark: false,
-  };
-  const attempt: GenerationAttempt = {
-    jobId, sceneId: state.sceneId, attempt: n + 1, model: "bytedance/seedance-2.5", phase: "video", status: "submitting",
-    style: VISUAL_STYLE_ID,
-    input: safeDiagnosticInput({ ...input, reference: { mode: "moderation_retry", level, previousError: safeProviderError(reason), softenedPhrases: softened.hits, referenceCount: image ? 1 : refs.length } }),
-  };
-  state.diagnostics = [...(state.diagnostics ?? []), attempt];
-  logAttempt(attempt);
-  console.log("[video-job] moderation retry:", { jobId, sceneId: state.sceneId, attempt: n + 1, level, hits: softened.hits, refs: image ? "adjacent_frame" : refs.map(r => r.kind) });
-  try {
-    const predictionId = await startVideoPrediction({ ...input, ...(image ? { image } : { reference_images: refs.map(r => r.url) }) });
-    attempt.predictionId = predictionId; attempt.status = "processing";
-    state.predictionId = predictionId;
-    state.startedAt = Date.now();
-    state.moderationRetries = n;
-    state.providerStatus = undefined; state.providerStartedAt = null; state.providerCompletedAt = null;
-    state.leaseUntil = 0;
-    logAttempt(attempt);
-    await saveOwned(jobId, state, {
-      progress: 5, error: null,
-      message: `Модерация Seedance отклонила сцену — повторяю со смягчённым текстом (попытка ${n + 1} из ${MAX_MODERATION_RETRIES + 1})...`,
-    });
-    return true;
-  } catch (error) {
-    attempt.status = "failed"; attempt.error = safeProviderError(error); attempt.errorKind = classifyProviderError(error);
-    logAttempt(attempt);
-    // Resubmission itself failed: report the original moderation refusal (refund happens once).
+  const n = (state.moderationRetries ?? 0) + 1; // 1 or 2
+  state.leaseUntil = Date.now() + FINALIZE_LEASE_MS;
+  if (!await saveOwned(jobId, state, {
+    progress: 5, error: null,
+    message: `Сцена не прошла модерацию — переписываю текст и пробую снова (попытка ${n + 1} из ${MAX_MODERATION_RETRIES + 1})…`,
+  })) return false;
+  runInBackground(async () => {
+    try {
+      // 1. LLM rewrite (escalating strictness), then 2. rule-based softening as a safety net.
+      const llm = await sanitizePromptWithLlm(retry.basePrompt, n === 1 ? 1 : 2);
+      const level: SoftenLevel = n === 1 ? 2 : 3;
+      const softened = softenForModeration(llm.prompt, level);
+      let image = retry.image;
+      let refs = retry.refs;
+      if (level === 3) {
+        if (retry.fallbackRefs.length) { refs = retry.fallbackRefs; image = undefined; }
+        else if (!refs.length && !image) { refs = retry.refs; }
+      }
+      let prompt = softened.text;
+      if (!image && refs.length) {
+        prompt += "\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
+        if (refs.some(r => r.kind === "location")) prompt += "\nCamera stays inside this location across the whole shot; lighting, time of day and palette identical to the location reference.";
+      }
+      const input = {
+        prompt, duration: retry.duration, resolution: retry.resolution,
+        aspect_ratio: image ? "adaptive" : "9:16", generate_audio: true, watermark: false,
+      };
+      const attempt: GenerationAttempt = {
+        jobId, sceneId: state.sceneId, attempt: n + 1, model: "bytedance/seedance-2.5", phase: "video", status: "submitting",
+        style: VISUAL_STYLE_ID,
+        input: safeDiagnosticInput({ ...input, reference: { mode: "moderation_retry", level, llmRewritten: llm.changed, previousError: safeProviderError(reason), softenedPhrases: softened.hits, referenceCount: image ? 1 : refs.length } }),
+      };
+      logAttempt(attempt);
+      console.log("[video-job] moderation retry (LLM sanitize):", { jobId, sceneId: state.sceneId, attempt: n + 1, level, llmRewritten: llm.changed, hits: softened.hits, refs: image ? "adjacent_frame" : refs.map(r => r.kind) });
+      const predictionId = await startVideoPrediction({ ...input, ...(image ? { image } : { reference_images: refs.map(r => r.url) }) });
+      attempt.predictionId = predictionId; attempt.status = "processing"; logAttempt(attempt);
+      state.diagnostics = [...(state.diagnostics ?? []), attempt];
+      state.predictionId = predictionId;
+      state.startedAt = Date.now();
+      state.moderationRetries = n;
+      state.providerStatus = undefined; state.providerStartedAt = null; state.providerCompletedAt = null;
+      state.leaseUntil = 0;
+      await saveOwned(jobId, state, {
+        progress: 5, error: null,
+        message: `Сцена не прошла модерацию — переписал текст и повторяю (попытка ${n + 1} из ${MAX_MODERATION_RETRIES + 1})…`,
+      });
+    } catch (error) {
+      // Resubmission itself failed: report the original moderation refusal (refund happens once).
+      state.moderationRetries = n;
+      await handleFailure(jobId, state, new Error(reason), state);
+    }
+  });
+  return true;
+}
+
+/**
+ * Moderation auto-recovery, step 2 — automatic fallback to the alternative model (Kling v2.1),
+ * whose moderation differs from Seedance. Runs only after both Seedance sanitizer passes still
+ * failed. Kling is image-to-video (needs a start frame) and silent, capped at 10s:
+ *   - silent scene → single-stage Kling;
+ *   - scene with spoken lines → the existing Kling+lipsync pipeline (silent Kling video →
+ *     stylized Seedance native speech → sync/lipsync-2), reusing advanceToAudioStage/Lipsync.
+ * The winning model is saved to scene.videoModel on finalize. Same job, same charge.
+ */
+async function fallbackToKling(jobId: string, state: VideoJobState, reason: string): Promise<boolean> {
+  const retry = state.retry!;
+  const startImage = retry.image ?? retry.refs[0]?.url ?? retry.fallbackRefs[0]?.url;
+  if (!startImage) {
+    // Kling is image-to-video only; without any usable start frame we cannot switch models.
+    state.moderationFallback = true;
     await handleFailure(jobId, state, new Error(reason), state);
     return true;
   }
+  state.leaseUntil = Date.now() + FINALIZE_LEASE_MS;
+  if (!await saveOwned(jobId, state, { progress: 5, error: null, message: "Сцена не прошла модерацию — пробую другую модель (Kling)…" })) return false;
+  runInBackground(async () => {
+    try {
+      const klingDuration = Math.min(10, Number(retry.audioDuration ?? retry.duration ?? 10));
+      // Soften the clean visual once (level 1) before feeding it to Kling — cheap, and Kling
+      // rarely moderates, but the whole reason we are here is a moderation refusal.
+      const visual = softenForModeration(retry.visualPrompt ?? retry.basePrompt, 1).text;
+      // Mark the switch up front so any further failure fails for good (no re-cascade).
+      state.moderationFallback = true;
+      state.videoModel = "kling";
+      if (retry.hasDialogue && retry.audioPrompt) {
+        // Rebuild the realistic Kling+lipsync pipeline (same as a manual Kling scene with dialogue).
+        state.lipsync = true;
+        state.stage = "video";
+        state.audioDuration = klingDuration;
+        state.audioPrompt = retry.audioPrompt;
+      }
+      const attempt: GenerationAttempt = {
+        jobId, sceneId: state.sceneId, attempt: MAX_MODERATION_RETRIES + 2, model: KLING_MODEL, phase: "video", status: "submitting",
+        style: VISUAL_STYLE_ID,
+        input: safeDiagnosticInput({ prompt: visual, duration: klingDuration, mode: "standard", start_image: startImage, reference: { mode: "moderation_fallback", previousError: safeProviderError(reason), lipsync: !!state.lipsync } }),
+      };
+      logAttempt(attempt);
+      console.log("[video-job] moderation fallback to Kling:", { jobId, sceneId: state.sceneId, lipsync: !!state.lipsync, duration: klingDuration });
+      const predictionId = await startKlingPrediction({ prompt: visual, start_image: startImage, duration: klingDuration, mode: "standard" });
+      attempt.predictionId = predictionId; attempt.status = "processing"; logAttempt(attempt);
+      state.diagnostics = [...(state.diagnostics ?? []), attempt];
+      state.predictionId = predictionId;
+      state.startedAt = Date.now();
+      state.providerStatus = undefined; state.providerStartedAt = null; state.providerCompletedAt = null;
+      state.leaseUntil = 0;
+      await saveOwned(jobId, state, {
+        progress: 5, error: null,
+        message: state.lipsync
+          ? "Пробую другую модель (Kling): создаю видео, затем добавлю озвучку и синхронизацию губ…"
+          : "Пробую другую модель (Kling): создаю видео…",
+      });
+    } catch (error) {
+      // The Kling submit itself failed: give up (moderationFallback already set → no re-cascade).
+      await handleFailure(jobId, state, new Error(reason), state);
+    }
+  });
+  return true;
 }
 
 /** One short provider check per poll, no sleeping invocation and no new prediction. */
@@ -592,10 +705,18 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
         await markCanceled(job.id);
         return true;
       }
-      // Seedance moderation (E005): resubmit the same scene with a progressively softer prompt.
-      // Same job, same charge — the user is never billed for these automatic retries.
-      if (classifyProviderError(reason) === "moderation" && state.retry && !state.lipsync && (state.moderationRetries ?? 0) < MAX_MODERATION_RETRIES) {
-        return await retryAfterModeration(job.id, state, reason);
+      // Seedance moderation (E005) auto-recovery cascade, all within this one scene, no extra charge:
+      //   1. rewrite the prompt with the LLM (2 escalating passes) and resubmit Seedance;
+      //   2. if still moderated, fall back to the alternative model (Kling), whose moderation differs.
+      // `!state.lipsync` gates this to the Seedance path — once we've switched to the Kling+lipsync
+      // pipeline (or the fallback set state.lipsync), a further failure fails for good.
+      if (classifyProviderError(reason) === "moderation" && state.retry && !state.lipsync) {
+        if ((state.moderationRetries ?? 0) < MAX_MODERATION_RETRIES) {
+          return await retryAfterModeration(job.id, state, reason);
+        }
+        if (!state.moderationFallback) {
+          return await fallbackToKling(job.id, state, reason);
+        }
       }
       await handleFailure(job.id, state, new Error(reason), state);
       return true;
