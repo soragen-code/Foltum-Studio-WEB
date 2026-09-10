@@ -43,15 +43,24 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     }
     if (!card) return NextResponse.json({ error: "AI returned an invalid result: " + lastError }, { status: 502 });
 
-    const updated = await prisma.location.update({ where: { id }, data: { name: card.name, description: card.description, visualPrompt: card.visualPrompt } });
+    // Stage 22: a single prompt edit also finalizes the reference (refLocked) — no further edits allowed.
+    const updated = await prisma.location.update({ where: { id }, data: { name: card.name, description: card.description, visualPrompt: card.visualPrompt, refLocked: true } });
     // Keep bound episodes' display fields in sync (they still carry locationName/locationDesc for legacy views).
     await prisma.episode.updateMany({ where: { locationId: id }, data: { locationName: card.name, locationDesc: card.description } });
 
     const visualChanged = card.visualPrompt.trim() !== (location.visualPrompt ?? "").trim();
     if (regenerate && location.imageUrl && visualChanged) {
+      // Stage 22: clear the stored reference photos BEFORE regeneration so the frontend's
+      // completeness check flips to false → reference polling resumes and the spinner holds
+      // until the new photos land. The location worker overwrites imageUrl anyway, and the
+      // refund check reads its own `before` map after this, so clearing first is safe.
+      const cleared = await prisma.location.update({
+        where: { id },
+        data: { imageUrl: null, imageReverse: null, imageDetail: null, imageExtra: null },
+      });
       const started = await startLocationImageJob({ user, projectId: location.projectId, locationIds: [id] });
-      if ("error" in started) return NextResponse.json({ location: updated, ...started }, { status: started.status });
-      return NextResponse.json({ location: updated, ...started });
+      if ("error" in started) return NextResponse.json({ location: cleared, ...started }, { status: started.status });
+      return NextResponse.json({ location: cleared, ...started });
     }
     return NextResponse.json({ location: updated, jobId: null });
   } catch (err: any) {

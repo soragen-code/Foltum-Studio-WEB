@@ -112,6 +112,7 @@ model Character {
   imageProfileIsPublic Boolean @default(true)
   imageFullIsPublic   Boolean @default(true)
   isLocked    Boolean  @default(false)
+  refLocked   Boolean  @default(false) // Stage 22: reference finalized ("save forever" or after one prompt edit) — no further edits allowed
   // Stage 3 (extended cast): MAIN / SUPPORTING / MINOR / CROWD; groupSize only for CROWD groups.
   tier        String   @default("MAIN")
   groupSize   Int?
@@ -182,6 +183,7 @@ model Location {
   imageReverse String?  // same place, reverse angle (generated from imageUrl as reference → identical light)
   imageDetail  String?  // same place, medium/detail angle
   imageExtra   String?  @db.Text // JSON array of extra angle/shot URLs generated on demand
+  refLocked    Boolean  @default(false) // Stage 22: reference finalized ("save forever" or after one prompt edit) — no further edits allowed
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

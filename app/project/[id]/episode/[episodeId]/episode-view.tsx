@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Header } from '@/components/header'
-import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, Play, RefreshCw, Clapperboard, Images, Ban, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, Play, RefreshCw, Clapperboard, Images, Ban, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Lock } from 'lucide-react'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
@@ -332,7 +332,29 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       if (!res.ok) { setError(d?.error ?? 'Не удалось изменить локацию'); return }
       if (d?.location) setRefLocs((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...d.location } : l)))
       setLocEdit((t) => ({ ...t, [locationId]: '' }))
-      setRefSession(true)
+      if (d?.jobId) setRefSession(true) // poll only when a regeneration job actually started
+    } catch { setError('Ошибка сети') } finally { setLocBusy((b) => { const n = { ...b }; delete n[locationId]; return n }) }
+  }
+
+  /** Stage 22 — "Сохранить навсегда": lock a character reference without regeneration. */
+  const lockCharacter = async (characterId: string) => {
+    setCharBusy((b) => ({ ...b, [characterId]: true })); setError('')
+    try {
+      const res = await fetch('/api/ai/characters/lock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ characterId }) })
+      const d = await res.json()
+      if (!res.ok) { setError(d?.error ?? 'Не удалось зафиксировать персонажа'); return }
+      if (d?.character) setRefChars((prev) => prev.map((c) => (c.id === characterId ? { ...c, ...d.character } : c)))
+    } catch { setError('Ошибка сети') } finally { setCharBusy((b) => { const n = { ...b }; delete n[characterId]; return n }) }
+  }
+
+  /** Stage 22 — "Сохранить навсегда": lock a location reference without regeneration. */
+  const lockLocation = async (locationId: string) => {
+    setLocBusy((b) => ({ ...b, [locationId]: true })); setError('')
+    try {
+      const res = await fetch(`/api/ai/locations/${locationId}/lock`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
+      const d = await res.json()
+      if (!res.ok) { setError(d?.error ?? 'Не удалось зафиксировать локацию'); return }
+      if (d?.location) setRefLocs((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...d.location } : l)))
     } catch { setError('Ошибка сети') } finally { setLocBusy((b) => { const n = { ...b }; delete n[locationId]; return n }) }
   }
 
@@ -640,12 +662,23 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   </div>
                   <div className="mt-2 truncate text-sm font-medium">{c.name} <span className="font-normal text-muted-foreground">· {photos.length}/{CHARACTER_PHOTO_COUNT} фото</span></div>
                   {c.role && <div className="truncate text-xs text-muted-foreground">{c.role}</div>}
-                  <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
-                    <input value={charEdit[c.id] ?? ''} onChange={(e) => setCharEdit((t) => ({ ...t, [c.id]: e.target.value }))} placeholder="Изменить по промпту…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-character-input" disabled={busy} />
-                    <button onClick={() => reviseCharacter(c.id)} disabled={busy || !(charEdit[c.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-character-submit">
-                      {charBusy[c.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
-                    </button>
-                  </div>
+                  {c.refLocked ? (
+                    <div className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 px-2 py-1 text-xs text-muted-foreground" data-testid="ref-character-locked">
+                      <Lock className="h-3.5 w-3.5" /> Зафиксировано
+                    </div>
+                  ) : (
+                    <>
+                      <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
+                        <input value={charEdit[c.id] ?? ''} onChange={(e) => setCharEdit((t) => ({ ...t, [c.id]: e.target.value }))} placeholder="Изменить по промпту…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-character-input" disabled={busy} />
+                        <button onClick={() => reviseCharacter(c.id)} disabled={busy || !(charEdit[c.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-character-submit" title="Изменить по промпту (после правки референс фиксируется)">
+                          {charBusy[c.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+                        </button>
+                      </div>
+                      <button onClick={() => lockCharacter(c.id)} disabled={busy || refSession || !hasAllImages(c)} className="mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-character-lock" title="Зафиксировать без изменений">
+                        <Lock className="h-3.5 w-3.5" /> Сохранить навсегда
+                      </button>
+                    </>
+                  )}
                 </div>
               )
             })}
@@ -680,12 +713,23 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       <div className="flex h-24 w-16 items-center justify-center rounded bg-muted"><ImageOff className="h-4 w-4 text-muted-foreground/40" /></div>
                     ) })()}
                   </div>
-                  <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
-                    <input value={locEdit[l.id] ?? ''} onChange={(e) => setLocEdit((t) => ({ ...t, [l.id]: e.target.value }))} placeholder="Изменить локацию по промпту…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-location-input" disabled={busy} />
-                    <button onClick={() => reviseLocation(l.id)} disabled={busy || !(locEdit[l.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-location-submit">
-                      {locBusy[l.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
-                    </button>
-                  </div>
+                  {l.refLocked ? (
+                    <div className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 px-2 py-1 text-xs text-muted-foreground" data-testid="ref-location-locked">
+                      <Lock className="h-3.5 w-3.5" /> Зафиксировано
+                    </div>
+                  ) : (
+                    <>
+                      <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
+                        <input value={locEdit[l.id] ?? ''} onChange={(e) => setLocEdit((t) => ({ ...t, [l.id]: e.target.value }))} placeholder="Изменить локацию по промпту…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-location-input" disabled={busy} />
+                        <button onClick={() => reviseLocation(l.id)} disabled={busy || !(locEdit[l.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-location-submit" title="Изменить по промпту (после правки референс фиксируется)">
+                          {locBusy[l.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+                        </button>
+                      </div>
+                      <button onClick={() => lockLocation(l.id)} disabled={busy || refSession || !(locBaseReady(l) && locExtraReady(l))} className="mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-location-lock" title="Зафиксировать без изменений">
+                        <Lock className="h-3.5 w-3.5" /> Сохранить навсегда
+                      </button>
+                    </>
+                  )}
                 </div>
               )
             })}

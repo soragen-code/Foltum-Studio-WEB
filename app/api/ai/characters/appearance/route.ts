@@ -91,9 +91,22 @@ export async function POST(request: Request) {
       },
     });
 
+    // Stage 22: clear the stored reference shots BEFORE regeneration so that
+    // (a) the idempotent character worker regenerates all 3 shots (front → profile/full),
+    // (b) the frontend's completeness check flips to false → reference polling resumes and
+    //     the spinner holds until the new photos land.
+    // A single prompt edit also finalizes the reference (refLocked), matching the UI contract.
     const updated = await prisma.character.update({
       where: { id: characterId },
-      data: { appearance, status: "approved" },
+      data: {
+        appearance,
+        status: "approved",
+        imageFront: null,
+        imageProfile: null,
+        imageFull: null,
+        imageExtra: null,
+        refLocked: true,
+      },
     });
 
     // 3. Background regeneration of the 3 reference shots for this character only
