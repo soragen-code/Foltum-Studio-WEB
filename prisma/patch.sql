@@ -104,3 +104,42 @@ ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "voiceoverLocal" TEXT;
 
 -- Stage 14 (B): producer-chosen number of episodes for the season (additive, nullable — old projects keep AI-chosen count).
 ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "episodeCount" INTEGER;
+
+
+
+-- Stage 14 (E): richer episode references — 5 character photos, artifacts/important objects (2 frames each).
+-- All additive: new nullable column + new tables. Old projects keep working (columns default NULL / no rows).
+ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "imageExtra" TEXT;
+
+CREATE TABLE IF NOT EXISTS "Artifact" (
+  "id"           TEXT NOT NULL,
+  "projectId"    TEXT NOT NULL,
+  "name"         TEXT NOT NULL,
+  "description"  TEXT,
+  "visualPrompt" TEXT,
+  "imageUrl"     TEXT,
+  "imageExtra"   TEXT,
+  "createdAt"    TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt"    TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "Artifact_pkey" PRIMARY KEY ("id")
+);
+CREATE INDEX IF NOT EXISTS "Artifact_projectId_idx" ON "Artifact"("projectId");
+DO $$ BEGIN
+  ALTER TABLE "Artifact" ADD CONSTRAINT "Artifact_projectId_fkey" FOREIGN KEY ("projectId") REFERENCES "Project"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+CREATE TABLE IF NOT EXISTS "EpisodeArtifact" (
+  "id"         TEXT NOT NULL,
+  "episodeId"  TEXT NOT NULL,
+  "artifactId" TEXT NOT NULL,
+  "createdAt"  TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "EpisodeArtifact_pkey" PRIMARY KEY ("id")
+);
+CREATE UNIQUE INDEX IF NOT EXISTS "EpisodeArtifact_episodeId_artifactId_key" ON "EpisodeArtifact"("episodeId", "artifactId");
+CREATE INDEX IF NOT EXISTS "EpisodeArtifact_artifactId_idx" ON "EpisodeArtifact"("artifactId");
+DO $$ BEGIN
+  ALTER TABLE "EpisodeArtifact" ADD CONSTRAINT "EpisodeArtifact_episodeId_fkey" FOREIGN KEY ("episodeId") REFERENCES "Episode"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER TABLE "EpisodeArtifact" ADD CONSTRAINT "EpisodeArtifact_artifactId_fkey" FOREIGN KEY ("artifactId") REFERENCES "Artifact"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;

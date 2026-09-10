@@ -37,6 +37,41 @@ export function characterImagePrompt(appearance: string, shot: "front" | "profil
   return `${VISUAL_STYLE}\nCharacter: ${sanitizeVideoPrompt(appearance, { keep: [name] }).prompt}. ${framing} Neutral unobtrusive background. No text or logos.`;
 }
 
+/**
+ * Stage 14 (E): extra character angles (beyond front/profile/full) → 5 photos total.
+ * Generated with the front portrait as image_input so face/hair/wardrobe stay identical —
+ * only the pose/framing changes. Cycled by index so repeated requests keep varying.
+ */
+export const CHARACTER_EXTRA_VARIANTS = [
+  "Three-quarter angle portrait (body turned ~45° to camera), same face, hair, wardrobe and lighting as the reference, natural relaxed pose.",
+  "Full-body action pose in a natural stance (mid-gesture, walking or reaching), same face, hair and wardrobe as the reference, dynamic but clear silhouette.",
+  "Medium shot from a slightly high angle, same face, hair and wardrobe as the reference, candid expression, no eye contact.",
+  "Full-body back/over-the-shoulder view showing hairstyle and outfit from behind, same wardrobe and colours as the reference.",
+] as const;
+
+export function characterExtraAnglePrompt(appearance: string, name = "", index = 0): string {
+  const who = sanitizeVideoPrompt(appearance, { keep: [name] }).prompt;
+  const variant = CHARACTER_EXTRA_VARIANTS[((index % CHARACTER_EXTRA_VARIANTS.length) + CHARACTER_EXTRA_VARIANTS.length) % CHARACTER_EXTRA_VARIANTS.length];
+  return `${VISUAL_STYLE}\nThe SAME person as the reference image: ${who}. ${variant} Neutral unobtrusive background. No text or logos.`;
+}
+
+/**
+ * Stage 14 (E): reference frames for an important object / artifact (2 per artifact).
+ * Object only — no people. Frame 0 is a clean isolated reference; frame 1 shows it in context
+ * with realistic scale and wear, generated with frame 0 as image_input so it stays identical.
+ */
+export const ARTIFACT_VARIANTS = [
+  "Clean isolated product-style reference on a neutral surface, the whole object in frame, sharp focus, showing its true shape, materials, colour and defining details.",
+  "The SAME object as the reference image, shown in a realistic in-story context at true scale (held or resting where it belongs), same shape, materials, colour, wear and markings as the reference — only the setting and framing changed.",
+] as const;
+
+export function artifactImagePrompt(visualPrompt: string, name = "", index = 0): string {
+  const thing = sanitizeVideoPrompt(visualPrompt, { keep: [name] }).prompt;
+  const variant = ARTIFACT_VARIANTS[((index % ARTIFACT_VARIANTS.length) + ARTIFACT_VARIANTS.length) % ARTIFACT_VARIANTS.length];
+  const noPeople = "No people, no faces, no text, no readable labels, no brand logos. Real physical object with authentic materials and detail.";
+  return `${VISUAL_STYLE}\nImportant story object: ${thing}. ${variant} ${noPeople}`;
+}
+
 /** Photoreal 9:16 location reference (no people) — used by Seedance as an environment reference. */
 export function locationImagePrompt(visualPrompt: string, name = ""): string {
   return locationAnglePrompt(visualPrompt, name, "wide");

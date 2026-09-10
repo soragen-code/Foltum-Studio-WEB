@@ -44,16 +44,27 @@ export function locationScale(loc: { name?: string | null; description?: string 
 }
 
 /**
- * How many EXTRA reference frames (beyond the base 3 angles) an episode should have
- * for this location. Small interior → 0 (the base 3 already give "2+"); big place → 3;
- * huge open space → 6. Scaled by the location's size so large spaces get more coverage.
+ * Stage 14 (E): every episode location must have MANY angles — ~15 frames, within a 10–20
+ * range scaled by size. The base 3 angles (imageUrl/imageReverse/imageDetail) are always
+ * generated, so the EXTRA count below tops the total up to: compact → 15, крупная → 18,
+ * очень крупная → 20. This gives Seedance dense spatial coverage of each place.
  */
-export function desiredExtraFrames(loc: { name?: string | null; description?: string | null; visualPrompt?: string | null }): number {
+export const LOCATION_TOTAL_MIN = 10
+export const LOCATION_TOTAL_TARGET = 15
+export const LOCATION_TOTAL_MAX = 20
+/** Base angles always generated on the Location row (imageUrl + imageReverse + imageDetail). */
+export const LOCATION_BASE_FRAMES = 3
+
+export function desiredTotalFrames(loc: { name?: string | null; description?: string | null; visualPrompt?: string | null }): number {
   switch (locationScale(loc)) {
-    case 'huge': return 6
-    case 'big': return 3
-    default: return 0
+    case 'huge': return LOCATION_TOTAL_MAX // 20
+    case 'big': return 18
+    default: return LOCATION_TOTAL_TARGET // 15
   }
+}
+
+export function desiredExtraFrames(loc: { name?: string | null; description?: string | null; visualPrompt?: string | null }): number {
+  return Math.max(0, desiredTotalFrames(loc) - LOCATION_BASE_FRAMES)
 }
 
 /** Human label for the scale (RU UI). */

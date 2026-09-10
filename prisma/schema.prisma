@@ -87,6 +87,7 @@ model Project {
   user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   characters  Character[]
   locations   Location[]
+  artifacts   Artifact[]
   seasons     Season[]
 
   @@index([userId])
@@ -106,6 +107,7 @@ model Character {
   imageFront  String?  // cloud_storage_path or placeholder url
   imageProfile String? // cloud_storage_path or placeholder url
   imageFull   String?  // cloud_storage_path or placeholder url
+  imageExtra  String?  @db.Text // Stage 14 (E): JSON array of extra character angles (3/4 view, action pose) → 5 photos total
   imageFrontIsPublic  Boolean @default(true)
   imageProfileIsPublic Boolean @default(true)
   imageFullIsPublic   Boolean @default(true)
@@ -164,6 +166,7 @@ model Episode {
   location      Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
   scenes        Scene[]
   characters    EpisodeCharacter[]
+  artifacts     EpisodeArtifact[]
 
   @@index([seasonId])
 }
@@ -200,6 +203,40 @@ model EpisodeCharacter {
 
   @@unique([episodeId, characterId])
   @@index([characterId])
+}
+
+/// Stage 14 (E): important objects / props used in the story — photoreal reference frames
+/// (2 per artifact) that Seedance keeps consistent across shots. Project-scoped, bound to
+/// the episodes that use them via EpisodeArtifact.
+model Artifact {
+  id           String   @id @default(cuid())
+  projectId    String
+  name         String
+  description  String?  @db.Text // project-language description shown in UI
+  visualPrompt String?  @db.Text // English visual prompt for the reference frames (object only)
+  imageUrl     String?  // primary frame
+  imageExtra   String?  @db.Text // JSON array of the remaining frame URLs (→ 2 frames total with imageUrl)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  episodes     EpisodeArtifact[]
+
+  @@index([projectId])
+}
+
+/// Stage 14 (E): which artifacts appear in an episode (additive join table).
+model EpisodeArtifact {
+  id          String   @id @default(cuid())
+  episodeId   String
+  artifactId  String
+  createdAt   DateTime @default(now())
+
+  episode     Episode  @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  artifact    Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+
+  @@unique([episodeId, artifactId])
+  @@index([artifactId])
 }
 
 model Scene {

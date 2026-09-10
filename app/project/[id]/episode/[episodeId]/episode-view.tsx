@@ -3,26 +3,33 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Header } from '@/components/header'
-import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, Play, RefreshCw, Clapperboard, Images, Ban, X, Maximize2, Users, ImageOff } from 'lucide-react'
+import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, Play, RefreshCw, Clapperboard, Images, Ban, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight } from 'lucide-react'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
 import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
 import { CancelButton } from '../../_components/cancel-button'
 import { desiredExtraFrames, locationScale, locationScaleLabel, episodeLocations } from '@/lib/location-scale'
+import { CHARACTER_PHOTO_COUNT, ARTIFACT_FRAME_COUNT } from '@/lib/reference-counts'
 import { EpisodeNavGrid } from './episode-nav-grid'
 
 type EpisodePhase = 'script' | 'references' | 'scenes'
 
 const VIDEO_EXPECTED_SEC = 600
 const REF_POLL_MS = 3500
-const SHOT_LABELS = ['Портрет', 'Профиль', 'В полный рост']
+const SHOT_LABELS = ['Портрет', 'Профиль', 'В полный рост', 'Ракурс 3/4', 'В действии']
+const CHAR_EXTRA_MIN = Math.max(0, CHARACTER_PHOTO_COUNT - 3) // extra angles required beyond the 3 base shots → 5 photos
 const validUrl = (u?: string | null) => typeof u === 'string' && u.startsWith('http') && u.length > 10
-const hasAllImages = (c: any) => validUrl(c?.imageFront) && validUrl(c?.imageProfile) && validUrl(c?.imageFull)
 function parseExtra(imageExtra?: string | null): string[] {
   if (!imageExtra) return []
   try { const a = JSON.parse(imageExtra); return Array.isArray(a) ? a.filter((u): u is string => typeof u === 'string' && u.startsWith('http')) : [] } catch { return [] }
 }
+// Stage 14 (E): a character reference is complete only with all 5 photos (3 base + 2 extra angles).
+const charPhotos = (c: any): string[] => [c?.imageFront, c?.imageProfile, c?.imageFull, ...parseExtra(c?.imageExtra)].filter(validUrl)
+const hasAllImages = (c: any) => validUrl(c?.imageFront) && validUrl(c?.imageProfile) && validUrl(c?.imageFull) && parseExtra(c?.imageExtra).length >= CHAR_EXTRA_MIN
+// Stage 14 (E): an artifact reference is complete with ARTIFACT_FRAME_COUNT frames.
+const artifactPhotos = (a: any): string[] => [a?.imageUrl, ...parseExtra(a?.imageExtra)].filter(validUrl)
+const artifactReady = (a: any) => artifactPhotos(a).length >= ARTIFACT_FRAME_COUNT
 
 type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; status: string; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Plan = { sceneCount: number; pendingCount: number; duration: number; costPerScene: number; total: number; credits: number; tier: string; resolution: string }
@@ -66,14 +73,27 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [refLocs, setRefLocs] = useState<any[]>(episodeLocations(initial, project.locations ?? []))
   const [refSession, setRefSession] = useState(false) // polling active while refs are generating
   const [refStarting, setRefStarting] = useState(false)
-  const refJobs = useRef<{ char?: string; loc: Record<string, string>; extra: Record<string, string> }>({ loc: {}, extra: {} })
+  const refJobs = useRef<{ char?: string; artifact?: string; loc: Record<string, string>; extra: Record<string, string> }>({ loc: {}, extra: {} })
   const refCanceled = useRef(false)
   const [charBusy, setCharBusy] = useState<Record<string, boolean>>({}) // per-character prompt-revise spinner
   const [locBusy, setLocBusy] = useState<Record<string, boolean>>({})   // per-location prompt-revise spinner
+  const [artBusy, setArtBusy] = useState<Record<string, boolean>>({})   // per-artifact prompt-revise spinner
   const [charEdit, setCharEdit] = useState<Record<string, string>>({})
   const [locEdit, setLocEdit] = useState<Record<string, string>>({})
-  // Fullscreen lightbox for any reference image (mobile-safe: object-contain, tap/Esc to close).
-  const [lightbox, setLightbox] = useState<{ url: string; alt: string } | null>(null)
+  const [artEdit, setArtEdit] = useState<Record<string, string>>({})
+  // Stage 14 (E): important objects / artifacts of this episode (2 reference frames each).
+  const [refArtifacts, setRefArtifacts] = useState<any[]>(((initial.artifacts ?? []) as any[]).map((ea) => ea.artifact ?? ea).filter(Boolean))
+  const [artifactsLoaded, setArtifactsLoaded] = useState(false)
+  // Fullscreen carousel over ALL photos of one reference (mobile-safe: object-contain, arrows/keys/wheel/swipe, tap/Esc to close).
+  const [lightbox, setLightbox] = useState<{ images: string[]; index: number; title?: string } | null>(null)
+  const openLightbox = (images: (string | null | undefined)[], index = 0, title?: string) => {
+    const imgs = images.filter(validUrl) as string[]
+    if (imgs.length === 0) return
+    setLightbox({ images: imgs, index: Math.max(0, Math.min(index, imgs.length - 1)), title })
+  }
+  const lightboxTouchX = useRef<number | null>(null)
+  const lightboxStep = (dir: number) =>
+    setLightbox((lb) => (lb ? { ...lb, index: (lb.index + dir + lb.images.length) % lb.images.length } : lb))
   // Sequential draft playlist.
   const [draftOpen, setDraftOpen] = useState(false)
 
@@ -96,17 +116,33 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // ---- Reference readiness ----
   const locBaseReady = (l: any) => validUrl(l?.imageUrl)
   const locExtraReady = (l: any) => parseExtra(l?.imageExtra).length >= desiredExtraFrames(l)
-  const refsReady = refChars.every(hasAllImages) && refLocs.every((l) => locBaseReady(l) && locExtraReady(l))
+  // Existing artifacts must all be ready; artifacts are auto-detected, so an episode with none
+  // does not block progress (scenes unlock on characters + locations once no artifact is pending).
+  const refsReady = refChars.every(hasAllImages) && refLocs.every((l) => locBaseReady(l) && locExtraReady(l)) && refArtifacts.every(artifactReady)
   const refsCharsDone = refChars.filter(hasAllImages).length
   const refsLocsDone = refLocs.filter(locBaseReady).length
+  const refsArtsDone = refArtifacts.filter(artifactReady).length
 
-  // Escape closes the lightbox.
+  // Fullscreen carousel keyboard nav: Esc closes, ←/→ move between a reference's photos.
   useEffect(() => {
     if (!lightbox) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setLightbox(null) }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLightbox(null)
+      else if (e.key === 'ArrowRight') setLightbox((lb) => (lb ? { ...lb, index: (lb.index + 1) % lb.images.length } : lb))
+      else if (e.key === 'ArrowLeft') setLightbox((lb) => (lb ? { ...lb, index: (lb.index - 1 + lb.images.length) % lb.images.length } : lb))
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [lightbox])
+
+  // Load this episode's artifacts (important objects) once on mount so they show up in the references step.
+  useEffect(() => {
+    fetch(`/api/ai/episodes/${episode.id}/artifacts`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (Array.isArray(d?.artifacts)) setRefArtifacts(d.artifacts) })
+      .catch(() => {})
+      .finally(() => setArtifactsLoaded(true))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Same stable-spinner logic as ScenesStage: poll one scene's job until terminal. */
   const pollVideoJob = (sceneId: string, jobId: string) => {
@@ -153,9 +189,15 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       setRefChars((prev) => prev.map((c) => pchars.find((x) => x.id === c.id) ?? c))
       // recompute episode locations from fresh project locations, preserving order/membership
       setRefLocs((prev) => prev.map((l) => plocs.find((x) => x.id === l.id) ?? l))
+      // refresh this episode's artifacts (important objects) + their reference frames
+      try {
+        const ra = await fetch(`/api/ai/episodes/${episode.id}/artifacts`, { cache: 'no-store' })
+        if (ra.ok) { const da = await ra.json(); if (Array.isArray(da?.artifacts)) setRefArtifacts(da.artifacts) }
+      } catch {}
+      setArtifactsLoaded(true)
       return { pchars, plocs }
     } catch { return }
-  }, [project.id])
+  }, [project.id, episode.id])
 
   // Poll while a reference session is active: refresh data, kick extra angles for big locations, stop when ready.
   useEffect(() => {
@@ -211,13 +253,22 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           else if (!res.ok && d?.error) setError(d.error)
         }
       }
+      // Detect this episode's important objects and generate their reference frames (idempotent).
+      if (!refArtifacts.every(artifactReady)) {
+        try {
+          const res = await fetch(`/api/ai/episodes/${episode.id}/artifacts`, { method: 'POST' })
+          const d = await res.json().catch(() => ({}))
+          if (res.ok && d?.jobId) refJobs.current.artifact = d.jobId
+          else if (!res.ok && d?.error) setError(d.error)
+        } catch {}
+      }
       setRefSession(true)
     } catch { setError('Ошибка сети') } finally { setRefStarting(false) }
   }
 
   const cancelRefs = async () => {
     refCanceled.current = true
-    const ids = [refJobs.current.char, ...Object.values(refJobs.current.loc), ...Object.values(refJobs.current.extra)].filter(Boolean) as string[]
+    const ids = [refJobs.current.char, refJobs.current.artifact, ...Object.values(refJobs.current.loc), ...Object.values(refJobs.current.extra)].filter(Boolean) as string[]
     for (const id of ids) { try { await fetch(`/api/ai/jobs/${id}/cancel`, { method: 'POST' }) } catch {} }
     setRefSession(false); refJobs.current = { loc: {}, extra: {} }
     void refreshRefs(); void refreshCredits()
@@ -249,6 +300,20 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       setLocEdit((t) => ({ ...t, [locationId]: '' }))
       setRefSession(true)
     } catch { setError('Ошибка сети') } finally { setLocBusy((b) => { const n = { ...b }; delete n[locationId]; return n }) }
+  }
+
+  /** Prompt-edit an important object (regenerates both reference frames; C2PA preserved). */
+  const reviseArtifact = async (artifactId: string) => {
+    const instruction = artEdit[artifactId]?.trim(); if (!instruction) return
+    setArtBusy((b) => ({ ...b, [artifactId]: true })); setError('')
+    try {
+      const res = await fetch(`/api/ai/artifacts/${artifactId}/revise`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instruction }) })
+      const d = await res.json()
+      if (!res.ok) { setError(d?.error ?? 'Не удалось изменить объект'); return }
+      if (d?.artifact) setRefArtifacts((prev) => prev.map((a) => (a.id === artifactId ? { ...a, ...d.artifact } : a)))
+      setArtEdit((t) => ({ ...t, [artifactId]: '' }))
+      setRefSession(true) // poll until the new frames land
+    } catch { setError('Ошибка сети') } finally { setArtBusy((b) => { const n = { ...b }; delete n[artifactId]; return n }) }
   }
 
   // Stage 8: one continue "kick". Idempotent server-side; safe to call every few seconds.
@@ -506,7 +571,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             <h2 className="inline-flex items-center gap-2 font-display text-xl font-bold"><Images className="h-5 w-5 text-primary" /> Референсы эпизода</h2>
             {refSession ? (
               <span className="inline-flex items-center gap-2 text-xs text-muted-foreground" data-testid="refs-progress">
-                <Loader2 className="h-4 w-4 animate-spin text-primary" /> Генерирую референсы: персонажи {refsCharsDone}/{refChars.length}, локации {refsLocsDone}/{refLocs.length}
+                <Loader2 className="h-4 w-4 animate-spin text-primary" /> Генерирую референсы: персонажи {refsCharsDone}/{refChars.length}, локации {refsLocsDone}/{refLocs.length}{refArtifacts.length > 0 ? `, важные объекты ${refsArtsDone}/${refArtifacts.length}` : ''}
                 <CancelButton onCancel={cancelRefs} testId="refs-cancel" label="Отменить" pendingLabel="Останавливаю…" />
               </span>
             ) : refsReady ? (
@@ -524,16 +589,19 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {refChars.map((c) => {
               const busy = !!charBusy[c.id] || (refSession && !hasAllImages(c))
-              const imgs = [c.imageFront, c.imageProfile, c.imageFull]
+              // 5 photo slots: 3 base shots + 2 extra angles. Clicking any opens the carousel over all of them.
+              const slots = [c.imageFront, c.imageProfile, c.imageFull, ...parseExtra(c.imageExtra)].slice(0, CHARACTER_PHOTO_COUNT)
+              while (slots.length < CHARACTER_PHOTO_COUNT) slots.push(null)
+              const photos = charPhotos(c)
               return (
                 <div key={c.id} className="rounded-lg border border-border/60 p-3" data-testid="ref-character">
                   <div className="grid grid-cols-3 gap-2">
-                    {imgs.map((img, i) => (
-                      <button key={i} type="button" onClick={() => validUrl(img) && setLightbox({ url: img as string, alt: `${c.name} — ${SHOT_LABELS[i]}` })} className="group relative aspect-[3/4] overflow-hidden rounded bg-muted" title={SHOT_LABELS[i]} data-testid="ref-image">
+                    {slots.map((img, i) => (
+                      <button key={i} type="button" onClick={() => validUrl(img) && openLightbox(photos, photos.indexOf(img as string), `${c.name} — ${SHOT_LABELS[i] ?? 'фото'}`)} className="group relative aspect-[3/4] overflow-hidden rounded bg-muted" title={SHOT_LABELS[i]} data-testid="ref-image">
                         {validUrl(img) ? (
                           <>
                             {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={img as string} alt={`${c.name} — ${SHOT_LABELS[i]}`} className="h-full w-full object-cover" />
+                            <img src={img as string} alt={`${c.name} — ${SHOT_LABELS[i] ?? 'фото'}`} className="h-full w-full object-cover" />
                             <span className="absolute right-1 top-1 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
                           </>
                         ) : busy ? (
@@ -544,7 +612,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       </button>
                     ))}
                   </div>
-                  <div className="mt-2 truncate text-sm font-medium">{c.name}</div>
+                  <div className="mt-2 truncate text-sm font-medium">{c.name} <span className="font-normal text-muted-foreground">· {photos.length}/{CHARACTER_PHOTO_COUNT} фото</span></div>
                   {c.role && <div className="truncate text-xs text-muted-foreground">{c.role}</div>}
                   <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
                     <input value={charEdit[c.id] ?? ''} onChange={(e) => setCharEdit((t) => ({ ...t, [c.id]: e.target.value }))} placeholder="Изменить по промпту…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-character-input" disabled={busy} />
@@ -574,8 +642,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                     <span className="rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground" title={`Больше кадров для крупных мест`}>{locationScaleLabel(scale)}{want > 0 ? ` · +${want} кадров` : ''}</span>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {base.length > 0 ? [...base.map((a) => ({ url: a.url as string, label: a.label })), ...extras.map((u, i) => ({ url: u, label: `Доп. кадр ${i + 1}` }))].map((a, i) => (
-                      <button key={a.url + i} type="button" onClick={() => setLightbox({ url: a.url, alt: `${l.name} — ${a.label}` })} className="group relative h-24 w-16 overflow-hidden rounded bg-muted" title={a.label} data-testid="ref-image">
+                    {(() => { const all = [...base.map((a) => ({ url: a.url as string, label: a.label })), ...extras.map((u, i) => ({ url: u, label: `Доп. кадр ${i + 1}` }))]; const urls = all.map((a) => a.url); return base.length > 0 ? all.map((a, i) => (
+                      <button key={a.url + i} type="button" onClick={() => openLightbox(urls, i, `${l.name} — ${a.label}`)} className="group relative h-24 w-16 overflow-hidden rounded bg-muted" title={a.label} data-testid="ref-image">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={a.url} alt={`${l.name} — ${a.label}`} className="h-full w-full object-cover" />
                         <span className="absolute right-0.5 top-0.5 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
@@ -584,7 +652,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       <div className="flex h-24 w-16 items-center justify-center rounded bg-muted"><Loader2 className="h-4 w-4 animate-spin text-primary" /></div>
                     ) : (
                       <div className="flex h-24 w-16 items-center justify-center rounded bg-muted"><ImageOff className="h-4 w-4 text-muted-foreground/40" /></div>
-                    )}
+                    ) })()}
                   </div>
                   <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
                     <input value={locEdit[l.id] ?? ''} onChange={(e) => setLocEdit((t) => ({ ...t, [l.id]: e.target.value }))} placeholder="Изменить локацию по промпту…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-location-input" disabled={busy} />
@@ -597,6 +665,51 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             })}
             {refLocs.length === 0 && <p className="text-sm text-muted-foreground">У эпизода нет привязанных локаций.</p>}
           </div>
+
+          {/* Artifacts / important objects (Stage 14 E): 2 reference frames each, auto-detected from the script */}
+          {(refArtifacts.length > 0 || refSession) && (
+            <>
+              <h3 className="mt-6 flex items-center gap-2 text-sm font-semibold"><Film className="h-4 w-4" /> Важные объекты ({refArtifacts.length})</h3>
+              <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {refArtifacts.map((a) => {
+                  const photos = artifactPhotos(a)
+                  const busy = !!artBusy[a.id] || (refSession && !artifactReady(a))
+                  const slots = [...photos]
+                  while (slots.length < ARTIFACT_FRAME_COUNT) slots.push(null as any)
+                  return (
+                    <div key={a.id} className="rounded-lg border border-border/60 p-3" data-testid="ref-artifact">
+                      <div className="grid grid-cols-2 gap-2">
+                        {slots.slice(0, ARTIFACT_FRAME_COUNT).map((img, i) => (
+                          <button key={i} type="button" onClick={() => validUrl(img) && openLightbox(photos, photos.indexOf(img as string), `${a.name} — кадр ${i + 1}`)} className="group relative aspect-square overflow-hidden rounded bg-muted" title={`Кадр ${i + 1}`} data-testid="ref-image">
+                            {validUrl(img) ? (
+                              <>
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img src={img as string} alt={`${a.name} — кадр ${i + 1}`} className="h-full w-full object-cover" />
+                                <span className="absolute right-1 top-1 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
+                              </>
+                            ) : busy ? (
+                              <div className="flex h-full w-full items-center justify-center"><Loader2 className="h-4 w-4 animate-spin text-primary" /></div>
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center"><ImageOff className="h-4 w-4 text-muted-foreground/40" /></div>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="mt-2 truncate text-sm font-medium">{a.name} <span className="font-normal text-muted-foreground">· {photos.length}/{ARTIFACT_FRAME_COUNT} кадра</span></div>
+                      {a.description && <div className="line-clamp-2 text-xs text-muted-foreground">{a.description}</div>}
+                      <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
+                        <input value={artEdit[a.id] ?? ''} onChange={(e) => setArtEdit((t) => ({ ...t, [a.id]: e.target.value }))} placeholder="Изменить объект по промпту…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-artifact-input" disabled={busy} />
+                        <button onClick={() => reviseArtifact(a.id)} disabled={busy || !(artEdit[a.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-artifact-submit">
+                          {artBusy[a.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+                        </button>
+                      </div>
+                    </div>
+                  )
+                })}
+                {refArtifacts.length === 0 && artifactsLoaded && <p className="text-sm text-muted-foreground">Важные объекты определяются автоматически по сценарию во время генерации референсов.</p>}
+              </div>
+            </>
+          )}
 
           {/* Step-2 navigation (D4): back to script · to scenes (enabled only when all refs are ready) */}
           <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
@@ -800,13 +913,34 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         </div>
       )}
 
-      {/* Fullscreen reference lightbox */}
+      {/* Fullscreen reference carousel: swipe/arrows/wheel across ALL photos of one reference. */}
       {lightbox && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/95 p-2" data-testid="lightbox" onClick={() => setLightbox(null)}>
+        <div
+          className="fixed inset-0 z-[60] flex touch-none select-none items-center justify-center overflow-hidden bg-black/95 p-2"
+          data-testid="lightbox"
+          onClick={() => setLightbox(null)}
+          onWheel={(e) => { if (lightbox.images.length > 1) lightboxStep(e.deltaY > 0 || e.deltaX > 0 ? 1 : -1) }}
+          onTouchStart={(e) => { lightboxTouchX.current = e.touches[0]?.clientX ?? null }}
+          onTouchEnd={(e) => {
+            const start = lightboxTouchX.current
+            lightboxTouchX.current = null
+            if (start == null || lightbox.images.length < 2) return
+            const dx = (e.changedTouches[0]?.clientX ?? start) - start
+            if (Math.abs(dx) > 40) lightboxStep(dx < 0 ? 1 : -1)
+          }}
+        >
           <button className="absolute right-3 top-3 rounded-full bg-white/10 p-2 text-white" data-testid="lightbox-close" onClick={(e) => { e.stopPropagation(); setLightbox(null) }}><X className="h-5 w-5" /></button>
+          {lightbox.images.length > 1 && (
+            <button className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-white/10 p-2 text-white hover:bg-white/20 sm:left-4" data-testid="lightbox-prev" onClick={(e) => { e.stopPropagation(); lightboxStep(-1) }}><ChevronLeft className="h-6 w-6" /></button>
+          )}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={lightbox.url} alt={lightbox.alt} className="max-h-full max-w-full object-contain" onClick={(e) => e.stopPropagation()} />
-          <div className="absolute bottom-3 left-0 right-0 text-center text-xs text-white/80">{lightbox.alt}</div>
+          <img src={lightbox.images[lightbox.index]} alt={lightbox.title ?? ''} className="max-h-full max-w-full object-contain" onClick={(e) => e.stopPropagation()} />
+          {lightbox.images.length > 1 && (
+            <button className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-white/10 p-2 text-white hover:bg-white/20 sm:right-4" data-testid="lightbox-next" onClick={(e) => { e.stopPropagation(); lightboxStep(1) }}><ChevronRight className="h-6 w-6" /></button>
+          )}
+          <div className="absolute bottom-3 left-0 right-0 text-center text-xs text-white/80">
+            {lightbox.title ? `${lightbox.title} · ` : ''}{lightbox.index + 1}/{lightbox.images.length}
+          </div>
         </div>
       )}
 
