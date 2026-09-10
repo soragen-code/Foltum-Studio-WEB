@@ -13,8 +13,13 @@ export const SEASON_MAX_EPISODES = 12;
 export const SEASON_DEFAULT_EPISODES = 8;
 export const EPISODE_MIN_SCENES = 6;
 export const EPISODE_MAX_SCENES = 15;
-/** Brisk English speech with overlapping replies ≈ 2.7 words/s; a clip must be filled with speech (≥ 2 words/s). */
+/** Legacy "brisk" reference (kept for compatibility); clip planning now uses NATURAL_WORDS_PER_SEC. */
 export const SPEECH_WORDS_PER_SEC = 2.7;
+/**
+ * Stage 27a — plan clips at a NATURAL conversational pace (~2.1 words/s, clearly slower than the old
+ * brisk 2.7) so lines are never crammed / sped up: a clip is made long enough for relaxed real delivery.
+ */
+export const NATURAL_WORDS_PER_SEC = 2.1;
 export const MIN_WORDS_PER_SEC = 2;
 export const SCENE_MIN_SECONDS = 15;
 /** Seedance 2.5 real maximum (30 s) — every dialogue scene is planned at the maximum the model allows. */
@@ -113,14 +118,13 @@ export function estimateDurationSec(dialogue: string, action = ""): number {
   const words = spokenWordCount(dialogue);
   if (!words) return SCENE_MIN_SECONDS;
   const actionBeat = Math.min(4, Math.ceil(action.trim().split(/\s+/).filter(Boolean).length / 12));
-  const sec = Math.ceil(words / SPEECH_WORDS_PER_SEC) + 1 + actionBeat;
+  const sec = Math.ceil(words / NATURAL_WORDS_PER_SEC) + 1 + actionBeat;
   return Math.min(SCENE_MAX_SECONDS, Math.max(SCENE_MIN_SECONDS, sec));
 }
 
 /** Pace / camera / performance directions shared by the script prompts and the final Seedance prompt. */
 export const PACE_DIRECTION =
-  "PACE: fast, tight rhythm — lines follow each other with NO pauses, the listener answers instantly, interrupts, overlaps with reactions; nobody waits for a turn. " +
-  "No long silent beats, no slow-motion, no empty establishing seconds at the start: the first line is spoken within the first second. " +
+  "PACE: natural conversational rhythm — characters speak at a relaxed, realistic tempo, clearly and unhurried, with the normal small pauses of real speech; nobody rushes, races or crams words, and each reply lands naturally without dead air. " +
   "CAMERA: 2–4 cuts inside the clip, all on WIDE and MEDIUM scales — wide two-shot showing both characters full-figure in the location → medium two-shot / over-the-shoulder that still shows the environment and the space between the characters → medium reaction shot with the setting visible; hard cuts, no slow pans, no lingering. " +
   "FRAMING: characters SPEAK on wide and medium shots — the frame keeps the full or half figures, hands and the surrounding location visible at all times. DO NOT push in to a full-screen face close-up; the face never fills the screen. The tightest allowed framing is a medium close-up (head and shoulders WITH clear environment behind), used only briefly and rarely — most of every talking clip stays on wide / medium two-shots. " +
   "STAGING: never two people simply standing face to face talking. Place the characters NATURALLY in the space according to what the location is — at different distances and heights, one seated one standing, side by side at a counter/window/rail, one crossing the room while the other stays, angled to the environment rather than squared off to each other — and let them shift position and use the location's objects as they talk. " +
@@ -180,7 +184,11 @@ export const hardProblems = (problems: string[]) => problems.filter((p) => !isSo
 export function validateEpisodeScript(script: EpisodeScript): string[] {
   const problems: string[] = [];
   const n = script.scenes.length;
-  if (n < EPISODE_MIN_SCENES || n > EPISODE_MAX_SCENES) problems.push(`scene count ${n} not in ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES}`);
+  // Too FEW scenes is a hard failure. Too MANY is only "soft" here: the RAW LLM output is already
+  // hard-capped at EPISODE_MAX_SCENES by episodeScriptSchema (zod, before normalize), and the
+  // auto-split pass in normalizeEpisodeScript may legitimately push a long episode above the cap.
+  if (n < EPISODE_MIN_SCENES) problems.push(`scene count ${n} below ${EPISODE_MIN_SCENES}`);
+  else if (n > EPISODE_MAX_SCENES) problems.push(`soft: scene count ${n} above ${EPISODE_MAX_SCENES} (auto-split expanded the episode)`);
   // A narration scene (off-screen voice-over) carries an English narration track, so it is NOT a "silent" scene
   // and must never count against the silent budget — only truly empty on-camera scenes do.
   const isNarration = (s: SceneScript) => s.sceneKind === "narration" && !!(s.voiceover ?? "").trim();
@@ -226,6 +234,101 @@ export function matchCharacter<T extends { name: string }>(characters: T[], raw:
   return partial.length === 1 ? partial[0] : undefined;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Stage 27a — auto-split a scene whose speech does not fit ONE clip at the natural pace.
+// A dialogue/narration scene is only as long as SCENE_MAX_SECONDS (Seedance's 30 s ceiling). If the
+// spoken text needs more than that at NATURAL_WORDS_PER_SEC, we split it into 2+ consecutive scenes
+// in the SAME location (instead of cramming / speeding up the delivery). The second half continues
+// seamlessly from the first half's last frame, so frame-chaining keeps working and the place never
+// changes. Runs in normalizeEpisodeScript (AFTER the raw LLM output is schema-validated & count-capped).
+// ---------------------------------------------------------------------------------------------
+
+/** Plain word count of a block of prose (used for narration). */
+const plainWordCount = (t: string) => (t ?? "").trim().split(/\s+/).filter(Boolean).length;
+
+/** Unpadded seconds a block of speech needs at the natural conversational pace. */
+const speechSeconds = (words: number) => (words <= 0 ? 0 : Math.ceil(words / NATURAL_WORDS_PER_SEC));
+
+/** Split dialogue into speaker turns (one per line); each turn is an atomic unit (never split mid-turn). */
+const dialogueLines = (dialogue: string) => (dialogue ?? "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+
+/** Split prose into sentences, keeping the terminal punctuation with each sentence. */
+const proseSentences = (text: string): string[] => {
+  const m = (text ?? "").trim().match(/[^.!?…]+[.!?…]+["»)]*|\S[^.!?…]*$/g);
+  return (m ? m.map((s) => s.trim()).filter(Boolean) : []);
+};
+
+/** Index (1..units.length-1) at which to split `units` so the two halves are closest to equal by word count. */
+function balancedSplitIndex(units: string[], wordsOf: (u: string) => number): number {
+  const total = units.reduce((a, u) => a + wordsOf(u), 0);
+  let acc = 0, best = 1, bestDiff = Infinity;
+  for (let i = 1; i < units.length; i++) {
+    acc += wordsOf(units[i - 1]);
+    const diff = Math.abs(acc - total / 2);
+    if (diff < bestDiff) { bestDiff = diff; best = i; }
+  }
+  return best;
+}
+
+/** Build the two halves of a split, copying every field and fixing the SECOND half's continuity. */
+function splitHalves(scene: SceneScript, firstFields: Partial<SceneScript>, secondFields: Partial<SceneScript>): [SceneScript, SceneScript] {
+  const first: SceneScript = { ...scene, ...firstFields };
+  const second: SceneScript = {
+    ...scene,
+    ...secondFields,
+    // The second half opens exactly where the first ended: same location, same people already in place,
+    // nobody enters — so canChainFrame() links it to the first half's last frame and the place is stable.
+    continuesFrom: "same-location-continuation",
+    presence: (scene.presence ?? "").trim() || `${(scene.characters ?? []).join(", ")} continue in place from the previous shot`.trim(),
+    entrances: "none",
+  };
+  return [first, second];
+}
+
+/** Recursively split ONE scene until each piece fits SCENE_MAX_SECONDS (bounded depth avoids runaway). */
+const MAX_SPLIT_DEPTH = 3; // up to 8 pieces from a single scene — far more than any real exchange needs
+function splitScene(scene: SceneScript, depth: number): SceneScript[] {
+  const isNarr = scene.sceneKind === "narration" && !!(scene.voiceover ?? "").trim();
+  if (isNarr) {
+    if (depth >= MAX_SPLIT_DEPTH || speechSeconds(plainWordCount(scene.voiceover ?? "")) <= SCENE_MAX_SECONDS) return [scene];
+    const sentences = proseSentences(scene.voiceover ?? "");
+    if (sentences.length < 2) return [scene]; // a single unsplittable sentence — leave as-is
+    const at = balancedSplitIndex(sentences, plainWordCount);
+    const localSents = scene.voiceoverLocal ? proseSentences(scene.voiceoverLocal) : [];
+    const mirror = localSents.length === sentences.length; // only mirror the local split when it lines up 1:1
+    const [a, b] = splitHalves(
+      scene,
+      { voiceover: sentences.slice(0, at).join(" "), voiceoverLocal: mirror ? localSents.slice(0, at).join(" ") : scene.voiceoverLocal },
+      { voiceover: sentences.slice(at).join(" "), voiceoverLocal: mirror ? localSents.slice(at).join(" ") : undefined },
+    );
+    return [...splitScene(a, depth + 1), ...splitScene(b, depth + 1)];
+  }
+  // Dialogue scene.
+  if (isSilent(scene.dialogue)) return [scene];
+  if (depth >= MAX_SPLIT_DEPTH || speechSeconds(spokenWordCount(scene.dialogue)) <= SCENE_MAX_SECONDS) return [scene];
+  const lines = dialogueLines(scene.dialogue);
+  if (lines.length < 2) return [scene]; // a single speaker turn can't be split without breaking the turn
+  const at = balancedSplitIndex(lines, spokenWordCount);
+  const localLines = scene.dialogueLocal ? dialogueLines(scene.dialogueLocal) : [];
+  const mirror = localLines.length === lines.length; // mirror local dialogue at the SAME line boundary when it lines up
+  const [a, b] = splitHalves(
+    scene,
+    { dialogue: lines.slice(0, at).join("\n"), dialogueLocal: mirror ? localLines.slice(0, at).join("\n") : scene.dialogueLocal },
+    { dialogue: lines.slice(at).join("\n"), dialogueLocal: mirror ? localLines.slice(at).join("\n") : undefined },
+  );
+  return [...splitScene(a, depth + 1), ...splitScene(b, depth + 1)];
+}
+
+/**
+ * Expand any scene whose speech overflows one clip (> SCENE_MAX_SECONDS at the natural pace) into
+ * multiple consecutive same-location scenes. Pure; the caller renumbers the flat result.
+ */
+export function splitOverlongScenes(scenes: SceneScript[]): SceneScript[] {
+  const out: SceneScript[] = [];
+  for (const scene of scenes) out.push(...splitScene(scene, 0));
+  return out;
+}
+
 /** Fix what can be fixed mechanically (numbering, [VISUAL STYLE] / [CHARACTER] lines, duration clamp). */
 export function normalizeEpisodeScript(script: EpisodeScript, characters?: CharacterCard[]): EpisodeScript {
   const repairPrompt = (s: SceneScript) => {
@@ -244,7 +347,9 @@ export function normalizeEpisodeScript(script: EpisodeScript, characters?: Chara
   };
   return {
     ...script,
-    scenes: script.scenes.map((s, i) => {
+    // Stage 27a: auto-split any over-long scene FIRST, then renumber the flat result contiguously (1..N)
+    // and derive each piece's durationSec from its own (now-fitting) speech.
+    scenes: splitOverlongScenes(script.scenes).map((s, i) => {
       const narrationText = (s.voiceover ?? "").trim();
       const isNarr = s.sceneKind === "narration" && !!narrationText;
       return {
@@ -401,7 +506,7 @@ export function episodeScriptSystemPrompt(language: IdeaLanguage, episodeNumber 
 Return STRICT JSON: {"visualIdentity": string, "scenes": [{"number": int, "shotType": string, "durationSec": int, "locationDesc": string, "characters": [names], "action": string, "sceneKind": "dialogue"|"narration", "dialogue": string${local ? ', "dialogueLocal": string' : ""}, "voiceover": string, ${local ? '"voiceoverLocal": string, ' : ""}"videoPrompt": string, "presence": string, "entrances": string, "continuesFrom": string}]}. ("voiceover"${local ? '/"voiceoverLocal"' : ""} is used ONLY for narration scenes; leave it "" for normal scenes.)
 
 HARD RULES (the script is REJECTED automatically if any is broken):
-R1. The NUMBER OF SCENES follows the drama of this episode's logline (min ${EPISODE_MIN_SCENES}, max ${EPISODE_MAX_SCENES}) — no padding, no filler. Nobody sets a running time: each scene lasts exactly as long as its dialogue needs (15–${SCENE_MAX_SECONDS} s at a brisk ~2.7 words/s; "durationSec" = round(words / 2.7) + 2, clamped to 15–${SCENE_MAX_SECONDS}). All scenes happen in/around the episode's key location; scene 1 may open on a wide shot but someone is ALREADY talking in it (UNLESS R7 makes scene 1 an off-screen narration scene).
+R1. The NUMBER OF SCENES follows the drama of this episode's logline (min ${EPISODE_MIN_SCENES}, max ${EPISODE_MAX_SCENES}) — no padding, no filler. Nobody sets a running time: each scene lasts exactly as long as its dialogue needs (15–${SCENE_MAX_SECONDS} s at a natural conversational pace ~2.1 words/s; "durationSec" = round(words / 2.1) + 2, clamped to 15–${SCENE_MAX_SECONDS}). If the dialogue is too long to be spoken naturally within ${SCENE_MAX_SECONDS} s, break it into two consecutive scenes in the same location rather than cramming it into one clip. All scenes happen in/around the episode's key location; scene 1 may open on a wide shot but someone is ALREADY talking in it (UNLESS R7 makes scene 1 an off-screen narration scene).
 R2. AT MOST ${MAX_SILENT_SCENES} scenes in the whole episode may be silent ("[NO DIALOGUE]"). ALL OTHER SCENES contain a real spoken exchange. (A narration scene from R7 does NOT count as silent — it carries an English narration track, not on-camera dialogue.)
 R8. ${ONE_LOCATION_RULE}${narrationRule}
 R3. A talking scene = a SUBSTANTIVE exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences in total, spread over 3–6 lines where characters answer each other IMMEDIATELY (the story is told THROUGH the dialogue: decisions, accusations, confessions, information, subtext). Replies are quick, people interrupt and overlap; every second of the clip is filled with speech — at least ~35 words per talking scene (≥ 2 words per second of durationSec). Monologue or voice-over does NOT replace dialogue — when two people are in the shot they talk to each other; a lone character may talk on the phone or to someone off-screen. Short one-liners like "I have to know the truth." alone are REJECTED. One line per row, format: NAME (tone cue): "line". Tone cues like (sharply), (whispering), (holding back tears).
@@ -545,7 +650,7 @@ export function sceneReviseSystemPrompt(language: IdeaLanguage): string {
   const local = language !== "en";
   return `You are a film director rewriting ONE shot ("scene", ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS}s, vertical 9:16, AI video model with native speech) of an episode by the author's instruction.
 Return STRICT JSON: {"shotType": string, "durationSec": int, "locationDesc": "INT/EXT — place — time" (${L}), "action": string (${L}), "dialogue": string${local ? ', "dialogueLocal": string' : ""}, "videoPrompt": string, "presence": string, "entrances": string, "continuesFrom": string}.
-RULES: "dialogue" is ALWAYS in ENGLISH (it is what the model voices), one line per row NAME (tone cue): "line"; a talking scene has a substantive exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences (3–6 quick lines, characters answer each other instantly; the story is told through the dialogue), or exactly "[NO DIALOGUE]" for a rare purely visual beat.${local ? ` "dialogueLocal" = the same lines translated into ${L}, same structure and cues.` : ""} durationSec = round(words / 2.7) + 2 clamped to ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS} (≥ 2 words per second — no timing is set by anyone else). Talking scenes stay on wide / medium two-shots / over-the-shoulder with the speaker's face visible for lip-sync but NEVER filling the screen — NO full-screen face close-ups (tightest is a brief medium close-up with environment behind); the two characters are placed naturally in the location, never squared off face to face. ${PACE_DIRECTION} ${MODERATION_SAFE_RULE} ${CREATIVE_RULE} ${LOCATION_PRESENCE_RULE} ${SCALE_DEPTH_RULE} ${EVERYDAY_BEHAVIOR_RULE} videoPrompt is ENGLISH, exactly 9 lines [SHOT TYPE] (cut list, 2–4 hard cuts with time ranges)/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL] (expressive acting)/[ACTION]/[CHARACTER]/[TRANSITION] (hard cut); keep [VISUAL STYLE] and [CHARACTER] descriptions identical to the given scene unless the instruction requires otherwise; no spoken text in videoPrompt; never "slowly", "slow motion", "lingering", "long pause". ${CONTINUITY_RULE} This shot must still begin from the PREVIOUS shot's ending and hand off cleanly into the NEXT shot (both are given below): keep the same people in place unless the instruction changes that, and if the revision adds or removes someone or moves the action, SHOW that entrance/exit/move. Fill "presence" (who is where at the start, following the previous shot), "entrances" (who enters/leaves during the shot and how, or "none") and "continuesFrom" (same-location-continuation | character-moves | location-change | new-sequence) to match the neighbouring shots. Original content only; Western names, Latin letters, exactly as given.`;
+RULES: "dialogue" is ALWAYS in ENGLISH (it is what the model voices), one line per row NAME (tone cue): "line"; a talking scene has a substantive exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences (3–6 quick lines, characters answer each other instantly; the story is told through the dialogue), or exactly "[NO DIALOGUE]" for a rare purely visual beat.${local ? ` "dialogueLocal" = the same lines translated into ${L}, same structure and cues.` : ""} durationSec = round(words / 2.1) + 2 clamped to ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS} (≥ 2 words per second — no timing is set by anyone else). Talking scenes stay on wide / medium two-shots / over-the-shoulder with the speaker's face visible for lip-sync but NEVER filling the screen — NO full-screen face close-ups (tightest is a brief medium close-up with environment behind); the two characters are placed naturally in the location, never squared off face to face. ${PACE_DIRECTION} ${MODERATION_SAFE_RULE} ${CREATIVE_RULE} ${LOCATION_PRESENCE_RULE} ${SCALE_DEPTH_RULE} ${EVERYDAY_BEHAVIOR_RULE} videoPrompt is ENGLISH, exactly 9 lines [SHOT TYPE] (cut list, 2–4 hard cuts with time ranges)/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL] (expressive acting)/[ACTION]/[CHARACTER]/[TRANSITION] (hard cut); keep [VISUAL STYLE] and [CHARACTER] descriptions identical to the given scene unless the instruction requires otherwise; no spoken text in videoPrompt; never "slowly", "slow motion", "lingering", "long pause". ${CONTINUITY_RULE} This shot must still begin from the PREVIOUS shot's ending and hand off cleanly into the NEXT shot (both are given below): keep the same people in place unless the instruction changes that, and if the revision adds or removes someone or moves the action, SHOW that entrance/exit/move. Fill "presence" (who is where at the start, following the previous shot), "entrances" (who enters/leaves during the shot and how, or "none") and "continuesFrom" (same-location-continuation | character-moves | location-change | new-sequence) to match the neighbouring shots. Original content only; Western names, Latin letters, exactly as given.`;
 }
 
 /* ───────────── Stage 13 — episode-level continuity audit («Ассембл» final polish) ───────────── */

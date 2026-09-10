@@ -269,6 +269,15 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       if (!startImage) throw new Error("Kling requires a start image but none was produced");
       // Kling has NO audio track — feed the clean VISUAL prompt (no spoken-dialogue
       // instructions). Real schema caps duration at 5 or 10 s; there is no 15s.
+      //
+      // Stage 27a LIMITATION (Kling only): the lipsync audio below is generated at
+      // audioDuration = klingDuration = min(10, planned). Seedance is the DEFAULT model and gets the
+      // full natural-pace + auto-split treatment (a scene planned > 30 s is split into multiple
+      // scenes upstream in normalizeEpisodeScript). Kling's clip is hard-capped at 10 s by the model
+      // and the chosen video model is NOT known at script-normalize time, so we cannot pre-split
+      // dialogue to the 10 s Kling budget. Therefore a scene with > ~21 words of dialogue (10 s at the
+      // natural ~2.1 words/s) still gets its speech compressed to fit 10 s on the Kling path. This is
+      // no worse than before Stage 27a; the natural-pace win applies fully to the Seedance default.
       const klingDuration = Math.min(10, Number(params.duration ?? 10));
       // If the scene has spoken lines, run the realistic lipsync pipeline: after the
       // silent Kling video we harvest native speech from a moderation-passing Seedance
@@ -356,15 +365,15 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
   }
 }
 
-/** Stage 4 pace: drop slow/lingering camera words that would stretch the rhythm of the clip. */
+/**
+ * Stage 27a: only strip the literal "slow motion" visual effect (a model artifact request that
+ * warps the footage). Natural conversational pacing — unhurried delivery, the normal small pauses of
+ * real speech and gentle camera moves — is now intentionally KEPT (we no longer rewrite "slowly" →
+ * "briskly" or "long pause" → "no pause"), so speech is never artificially sped up or crammed.
+ */
 function stripSlowDirections(prompt: string): string {
   return prompt
     .replace(/\b(in )?slow[- ]?motion\b/gi, "")
-    .replace(/\bslowly\b/gi, "briskly")
-    .replace(/\blingering\b/gi, "brief")
-    .replace(/\blingers?\b/gi, "cuts")
-    .replace(/\blong (pause|silence)\b/gi, "no pause")
-    .replace(/\bslow (pan|push|zoom|dolly)\b/gi, "quick $1")
     .replace(/ {2,}/g, " ");
 }
 
