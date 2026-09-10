@@ -102,7 +102,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // Old episodes that already have generated scenes open straight on the scenes step.
   const [phase, setPhase] = useState<EpisodePhase>(() => {
     const anyScene = ((initial.scenes ?? []) as Scene[]).some((s) => validUrl(s.videoUrl))
-    return anyScene || validUrl(initial.videoUrl) ? 'scenes' : 'script'
+    // Open on «Референсы» by default; only jump straight to «Сцены» when the episode already has generated video.
+    return anyScene || validUrl(initial.videoUrl) ? 'scenes' : 'references'
   })
   const goPhase = (p: EpisodePhase) => { setPhase(p); if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' }) }
 

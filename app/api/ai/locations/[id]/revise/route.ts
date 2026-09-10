@@ -43,8 +43,10 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     }
     if (!card) return NextResponse.json({ error: "AI returned an invalid result: " + lastError }, { status: 502 });
 
-    // Stage 22: a single prompt edit also finalizes the reference (refLocked) — no further edits allowed.
-    const updated = await prisma.location.update({ where: { id }, data: { name: card.name, description: card.description, visualPrompt: card.visualPrompt, refLocked: true } });
+    // A prompt edit no longer auto-locks the reference: the user may revise as many times as
+    // needed and the location stays editable until they explicitly press «Сохранить навсегда»
+    // (POST /api/ai/locations/[id]/lock), which is the only place refLocked is set to true.
+    const updated = await prisma.location.update({ where: { id }, data: { name: card.name, description: card.description, visualPrompt: card.visualPrompt } });
     // Keep bound episodes' display fields in sync (they still carry locationName/locationDesc for legacy views).
     await prisma.episode.updateMany({ where: { locationId: id }, data: { locationName: card.name, locationDesc: card.description } });
 

@@ -95,7 +95,9 @@ export async function POST(request: Request) {
     // (a) the idempotent character worker regenerates all 3 shots (front → profile/full),
     // (b) the frontend's completeness check flips to false → reference polling resumes and
     //     the spinner holds until the new photos land.
-    // A single prompt edit also finalizes the reference (refLocked), matching the UI contract.
+    // A prompt edit no longer auto-locks the reference: the user may revise as many times as
+    // needed and the character stays editable until they explicitly press «Сохранить навсегда»
+    // (POST /api/ai/characters/lock), which is the only place refLocked is set to true.
     const updated = await prisma.character.update({
       where: { id: characterId },
       data: {
@@ -105,7 +107,6 @@ export async function POST(request: Request) {
         imageProfile: null,
         imageFull: null,
         imageExtra: null,
-        refLocked: true,
       },
     });
 
