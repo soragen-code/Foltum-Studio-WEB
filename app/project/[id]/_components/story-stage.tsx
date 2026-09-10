@@ -71,7 +71,6 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
   const total = season?.episodes.length ?? 0
   const scriptsDone = season?.episodes.filter((e) => e.script).length ?? 0
   const episodeCount = total
-  const ep1 = season?.episodes.find((e) => e.number === 1) ?? null
 
   useEffect(() => { load() }, [load])
   useEffect(() => {
@@ -254,11 +253,6 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
               )
             })}
           </div>
-          {ep1?.script && (
-            <Link href={`/project/${project.id}/episode/${ep1.id}`} className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground sm:w-auto" data-testid="go-to-episode-1">
-              Перейти к эпизоду 1 <ArrowRight className="h-4 w-4" />
-            </Link>
-          )}
           {scriptsDone === total && total > 0 && <p className="mt-3 inline-flex items-center gap-1 text-sm text-primary"><Check className="h-4 w-4" /> Все {total} сценариев готовы</p>}
         </div>
       )}
