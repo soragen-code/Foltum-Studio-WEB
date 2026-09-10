@@ -100,3 +100,7 @@ ALTER TABLE "Season" ADD COLUMN IF NOT EXISTS "fullStory" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "sceneKind" TEXT DEFAULT 'dialogue';
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "voiceover" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "voiceoverLocal" TEXT;
+
+
+-- Stage 14 (B): producer-chosen number of episodes for the season (additive, nullable — old projects keep AI-chosen count).
+ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "episodeCount" INTEGER;

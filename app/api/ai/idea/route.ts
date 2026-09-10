@@ -26,7 +26,10 @@ export async function POST(request: Request) {
 
     const parsed = await parseBody(request, ideaSchema);
     if (!parsed.ok) return parsed.response;
-    const { projectId, idea, auto, genres, extras, fromStory, story } = parsed.data;
+    const { projectId, idea, auto, genres, extras, fromStory, story, episodeCount } = parsed.data;
+    // Stage 14 (B): the producer sets how many episodes the season has (manual/auto). Story-upload
+    // mode lets the story dictate, so we only persist the count when it was actually chosen.
+    const episodeCountToStore = !fromStory && typeof episodeCount === "number" ? episodeCount : undefined;
 
     // STORY mode: the producer uploaded a finished story (parsed to text on the server). Language is
     // auto-detected from the story. AUTO mode: the AI invents the story from the chosen genre(s).
@@ -112,7 +115,7 @@ export async function POST(request: Request) {
       }
       await tx.project.update({
         where: { id: projectId },
-        data: { idea: ideaForStore, synopsis: result!.synopsis, language: result!.language, synopsisApproved: false },
+        data: { idea: ideaForStore, synopsis: result!.synopsis, language: result!.language, synopsisApproved: false, ...(episodeCountToStore !== undefined ? { episodeCount: episodeCountToStore } : {}) },
       });
     }, { timeout: 30_000 });
 

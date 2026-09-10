@@ -195,6 +195,9 @@ export async function runSeasonScriptJob(jobId: string, projectId: string, episo
       const structure = await generateWithRetry(jobId, 2, async () => {
         const raw = await chatJSON(seasonStructureSystemPrompt(language, episodeCount), seasonStructureUserPrompt(project.synopsis!, cards, project.locations), { temperature: 0.7, maxTokens: 6000 });
         const parsed = seasonStructureSchema.parse(raw);
+        // Stage 14 (B2): the producer sets the episode count — enforce it exactly (retry if the model drifts).
+        if (parsed.episodes.length !== episodeCount)
+          throw new Error(`structure returned ${parsed.episodes.length} episodes, expected exactly ${episodeCount}`);
         return { ...parsed, episodes: parsed.episodes.map((e, i) => ({ ...e, number: i + 1 })) };
       });
       const byName = new Map(project.characters.map((c) => [c.name.toLowerCase(), c.id]));

@@ -400,6 +400,10 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   // 'upload' = the producer uploads a finished story file (Stage 12).
   const [mode, setMode] = useState<'manual' | 'auto' | 'upload'>('manual')
   const [genres, setGenres] = useState<string[]>([])
+  // Stage 14 (B): producer-chosen number of episodes (manual/auto). Default = 8; range 3..12.
+  const [episodeCount, setEpisodeCount] = useState<number>(
+    typeof project?.episodeCount === 'number' && project.episodeCount >= 3 ? project.episodeCount : 8
+  )
   const [extras, setExtras] = useState('')
   // Stage 12 — uploaded story file state.
   const [storyText, setStoryText] = useState('')
@@ -438,7 +442,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
       const a = await fetch(`/api/projects/${project.id}/approve-idea`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ next: 'structure' }) })
       const ad = await a.json().catch(() => ({}))
       if (!a.ok) throw new Error(ad?.error ?? 'Не удалось подтвердить синопсис')
-      const s = await fetch('/api/ai/season', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id }) })
+      const s = await fetch('/api/ai/season', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, ...(mode !== 'upload' ? { episodeCount } : {}) }) })
       const sd = await s.json().catch(() => ({}))
       if (!s.ok) throw new Error(sd?.error ?? 'Не удалось запустить сценарий сезона')
       onRefresh()
@@ -462,10 +466,10 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
     ideaAbort.current = controller
     try {
       const body = mode === 'auto'
-        ? { projectId: project.id, auto: true, genres, extras: extras.trim() }
+        ? { projectId: project.id, auto: true, genres, extras: extras.trim(), episodeCount }
         : mode === 'upload'
         ? { projectId: project.id, fromStory: true, story: storyText }
-        : { projectId: project.id, idea: idea.trim() }
+        : { projectId: project.id, idea: idea.trim(), episodeCount }
       const res = await fetch('/api/ai/idea', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -614,6 +618,48 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
               className="w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
               data-testid="idea-extras"
             />
+          </div>
+        )}
+        {mode !== 'upload' && (
+          <div className="mt-4 flex flex-wrap items-center gap-3" data-testid="episode-count-field">
+            <label htmlFor="episode-count" className="text-sm font-medium text-foreground">Количество эпизодов</label>
+            <div className="inline-flex items-center overflow-hidden rounded-lg border border-border">
+              <button
+                type="button"
+                onClick={() => setEpisodeCount((n) => Math.max(3, n - 1))}
+                disabled={busy || episodeCount <= 3}
+                className="px-3 py-2 text-sm font-bold text-muted-foreground transition hover:bg-muted disabled:opacity-40"
+                data-testid="episode-count-minus"
+                aria-label="Меньше эпизодов"
+              >
+                −
+              </button>
+              <input
+                id="episode-count"
+                type="number"
+                min={3}
+                max={12}
+                value={episodeCount}
+                onChange={(e) => {
+                  const v = Math.round(Number(e.target.value))
+                  if (Number.isFinite(v)) setEpisodeCount(Math.min(12, Math.max(3, v)))
+                }}
+                disabled={busy}
+                className="w-14 border-x border-border bg-background py-2 text-center text-sm outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                data-testid="episode-count-input"
+              />
+              <button
+                type="button"
+                onClick={() => setEpisodeCount((n) => Math.min(12, n + 1))}
+                disabled={busy || episodeCount >= 12}
+                className="px-3 py-2 text-sm font-bold text-muted-foreground transition hover:bg-muted disabled:opacity-40"
+                data-testid="episode-count-plus"
+                aria-label="Больше эпизодов"
+              >
+                +
+              </button>
+            </div>
+            <span className="text-xs text-muted-foreground">ИИ построит драматургию (вступление → завязка → кульминация → развязка) ровно на {episodeCount} эпизодов (3–12).</span>
           </div>
         )}
         <button

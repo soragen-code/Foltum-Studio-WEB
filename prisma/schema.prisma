@@ -74,6 +74,8 @@ model Project {
   // Auto-detected language of the idea/synopsis (ISO 639-1, e.g. "ru", "en").
   language    String   @default("en")
   idea        String?  @db.Text
+  // New flow (Stage 14 B): producer-chosen number of episodes for the season. Null = let the AI decide.
+  episodeCount Int?
   synopsis    String?  @db.Text
   synopsisApproved Boolean @default(false)
   charactersApproved Boolean @default(false)

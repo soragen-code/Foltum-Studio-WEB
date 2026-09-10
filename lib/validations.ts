@@ -85,6 +85,8 @@ export const ideaSchema = z
     // Stage 12 — story mode: a finished story uploaded as a file and parsed to text on the server.
     fromStory: z.boolean().optional().default(false),
     story: z.string().trim().max(60_000).optional(),
+    // Stage 14 (B) — producer-chosen episode count (manual/auto modes). 3..12; omitted = AI decides.
+    episodeCount: z.coerce.number().int().min(3).max(12).optional(),
   })
   .superRefine((val, ctx) => {
     if (val.fromStory) {

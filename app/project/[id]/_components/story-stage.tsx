@@ -83,7 +83,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
   const start = async () => {
     setStarting(true); setError(null)
     try {
-      const res = await fetch('/api/ai/season', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id }) })
+      const res = await fetch('/api/ai/season', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, ...(typeof project.episodeCount === 'number' ? { episodeCount: project.episodeCount } : {}) }) })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error ?? 'Не удалось запустить генерацию')
       setJob({ id: data.jobId, status: 'processing', progress: 1, message: 'Запуск...' })
