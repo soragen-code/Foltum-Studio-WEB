@@ -115,9 +115,10 @@ ok(cleanStoryText("x".repeat(STORY_MAX_CHARS + 500)).length === STORY_MAX_CHARS,
   ok(locationScale({ name: "Ночной город", description: "огни небоскрёбов" }) === "huge", "locationScale: city → huge");
   ok(locationScale({ name: "Морской порт", description: "причалы и краны" }) === "big", "locationScale: harbour → big");
   ok(locationScale({ name: "Тесная кухня", description: "маленькая комната" }) === "small", "locationScale: small room → small");
-  ok(desiredExtraFrames({ name: "Лес" }) === 6, "desiredExtraFrames: huge → 6 extra frames");
-  ok(desiredExtraFrames({ name: "Склад" }) === 3, "desiredExtraFrames: big → 3 extra frames");
-  ok(desiredExtraFrames({ name: "Кабинет" }) === 0, "desiredExtraFrames: small → base angles only (0 extra)");
+  // Stage 14 (E): richer location coverage — 15–20 angles total (base 3 + extra), 10–20 scale.
+  ok(desiredExtraFrames({ name: "Лес" }) === 17, "desiredExtraFrames: huge → 17 extra (20 total)");
+  ok(desiredExtraFrames({ name: "Склад" }) === 15, "desiredExtraFrames: big → 15 extra (18 total)");
+  ok(desiredExtraFrames({ name: "Кабинет" }) === 12, "desiredExtraFrames: small → 12 extra (15 total)");
   const locList = [{ id: "l1", name: "Маяк" }, { id: "l2", name: "Пирс" }, { id: "l3", name: "Чердак" }];
   const epLocs = episodeLocations({ locationId: "l1", locationName: "Маяк", scenes: [{ locationDesc: "разговор на пирсе" }] }, locList);
   ok(epLocs.some((l: any) => l.id === "l1") && epLocs.some((l: any) => l.id === "l2"), "episodeLocations: bound location + scene-mentioned location");
