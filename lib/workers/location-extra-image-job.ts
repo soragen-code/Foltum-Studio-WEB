@@ -13,7 +13,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * place, light, weather and materials stay identical — only the framing changes. The new URLs are
  * APPENDED to Location.imageExtra (JSON array). Job type "location_extra_image".
  */
-export async function runLocationExtraImagesJob({ jobId, projectId, locationId, count }: { jobId: string; projectId: string; locationId: string; count: number }): Promise<void> {
+export async function runLocationExtraImagesJob({ jobId, projectId, locationId, count, imageModel }: { jobId: string; projectId: string; locationId: string; count: number; imageModel?: string }): Promise<void> {
   try {
     const loc = await prisma.location.findFirst({ where: { id: locationId, projectId } });
     if (!loc) { await failJob(jobId, "Локация не найдена"); return; }
@@ -46,7 +46,7 @@ export async function runLocationExtraImagesJob({ jobId, projectId, locationId, 
           aspect_ratio: "9:16",
         };
         if (withBaseImage) input.image_input = [loc.imageUrl];
-        const remote = await generateImage(input, { jobId });
+        const remote = await generateImage(input, { jobId, imageModel });
         const url = await uploadRemoteToS3(remote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-extra-${Date.now()}-${startIndex + i}.png`, "image/png");
         added.push(url);
         // Persist incrementally so a partial failure still keeps finished shots.

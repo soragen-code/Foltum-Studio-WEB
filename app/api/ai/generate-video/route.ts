@@ -10,6 +10,7 @@ import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runVideoJob } from "@/lib/workers/video-job";
 import { sceneClipSeconds } from "@/lib/season";
 import { resolvePowerTier } from "@/lib/power-tier";
+import { normalizeVideoModel } from "@/lib/ai-models";
 
 /** Tier (power) determines credit cost AND video quality — single config in lib/power-tier.ts. */
 function videoTierFor(project: { powerTier?: string | null; tier?: string | null }) {
@@ -48,10 +49,6 @@ export async function POST(request: Request) {
     const { projectId, sceneId } = parsed.data;
     // Stage 4: speech is always English (client-side language selector removed); the story-language text is shown in the UI only.
     const spokenLang = "en";
-    // Video provider: default Seedance (native audio, up to 15s). Kling is a
-    // silent image-to-video alternative capped at 10s by its real schema.
-    const provider = parsed.data.provider === "kling" ? "kling" : "seedance";
-
     const project = await prisma.project.findFirst({ where: { id: projectId } });
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
@@ -59,6 +56,9 @@ export async function POST(request: Request) {
 
     const sceneData = await prisma.scene.findUnique({ where: { id: sceneId } });
     if (!sceneData) return NextResponse.json({ error: "Scene not found" }, { status: 404 });
+    // Video provider: explicit request wins, else the model picked for this scene at batch time,
+    // else Seedance (native audio). Kling is a silent image-to-video alt capped at 10s.
+    const provider = normalizeVideoModel(parsed.data.provider ?? sceneData.videoModel);
     if (!sceneData.videoPrompt)
       return NextResponse.json({ error: "Scene has no video prompt" }, { status: 400 });
 
@@ -112,6 +112,13 @@ export async function POST(request: Request) {
       await prisma.scene.update({ where: { id: sceneId }, data: { language: spokenLang } });
     } catch (e) {
       console.warn("Could not persist scene.language (column missing?):", (e as any)?.message);
+    }
+    // Remember the video model chosen for this scene so a later background resume
+    // (or single-scene regen) reuses the same one.
+    try {
+      await prisma.scene.update({ where: { id: sceneId }, data: { videoModel: provider } });
+    } catch (e) {
+      console.warn("Could not persist scene.videoModel (column missing?):", (e as any)?.message);
     }
     await prisma.scene.update({ where: { id: sceneId }, data: { status: "generating" } });
 

@@ -25,6 +25,8 @@ export interface CharacterImagesJobParams {
   jobId: string;
   projectId: string;
   characterIds: string[];
+  /** Producer-picked image model (currently only "seedream-5-lite"); passed to the image model. */
+  imageModel?: string;
 }
 
 type C2paCheck = { characterId: string; shot: string; ok: boolean; signatures: string[]; bytes: number };
@@ -36,7 +38,7 @@ type C2paCheck = { characterId: string; shot: string; ok: boolean; signatures: s
  * Every stored photo's C2PA / content-credentials metadata is verified. Idempotent: shots
  * that already exist are skipped, so a resumed/retried job only fills the gaps.
  */
-export async function runCharacterImagesJob({ jobId, projectId, characterIds }: CharacterImagesJobParams): Promise<void> {
+export async function runCharacterImagesJob({ jobId, projectId, characterIds, imageModel }: CharacterImagesJobParams): Promise<void> {
   try {
     const characters = await prisma.character.findMany({
       where: { id: { in: characterIds }, projectId },
@@ -78,7 +80,7 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds }: 
             aspect_ratio: ASPECT_RATIOS[shot],
             ...(chained ? { image_input: [refFront!] } : {}),
           },
-          { jobId, characterId: char.id }
+          { jobId, characterId: char.id, imageModel }
         );
         const s3Key = `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/${shot}-${Date.now()}.png`;
         const url = await uploadRemoteToS3(replicateUrl, s3Key, "image/png");
@@ -127,7 +129,7 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds }: 
         try {
           const remote = await generateImage(
             { prompt: characterExtraAnglePrompt(char.appearance ?? "", char.name, index), aspect_ratio: index % 2 === 0 ? "3:4" : "9:16", image_input: [front] },
-            { jobId, characterId: char.id }
+            { jobId, characterId: char.id, imageModel }
           );
           const url = await uploadRemoteToS3(remote, `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/extra-${Date.now()}-${index}.png`, "image/png");
           const arr = extraByChar.get(char.id) ?? [];

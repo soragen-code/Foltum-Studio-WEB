@@ -6,6 +6,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { startLocationImageJob } from "@/lib/location-refs";
+import { normalizeImageModel } from "@/lib/ai-models";
 
 /**
  * POST /api/ai/locations/[id]/image — (re)generate the photoreal reference of one location.
@@ -22,7 +23,9 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
     const location = await prisma.location.findFirst({ where: { id, project: { userId: user.id } } });
     if (!location) return NextResponse.json({ error: "Location not found" }, { status: 404 });
-    const started = await startLocationImageJob({ user, projectId: location.projectId, locationIds: [id] });
+    const body = await request.json().catch(() => ({}));
+    const imageModel = normalizeImageModel(body?.imageModel);
+    const started = await startLocationImageJob({ user, projectId: location.projectId, locationIds: [id], imageModel });
     if ("error" in started) return NextResponse.json(started, { status: started.status });
     return NextResponse.json(started);
   } catch (err: any) {

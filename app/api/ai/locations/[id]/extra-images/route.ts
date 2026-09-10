@@ -6,6 +6,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { startLocationExtraImageJob, EXTRA_ANGLES_PER_REQUEST } from "@/lib/location-refs";
+import { normalizeImageModel } from "@/lib/ai-models";
 
 /**
  * POST /api/ai/locations/[id]/extra-images — generate N EXTRA angle shots of one location
@@ -20,15 +21,17 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     if (limited) return limited;
     const { id } = await ctx.params;
     let count = EXTRA_ANGLES_PER_REQUEST;
+    let imageModel: string | undefined;
     try {
       const body = await request.json();
       if (body && typeof body.count === "number") count = body.count;
+      imageModel = normalizeImageModel(body?.imageModel);
     } catch { /* no body → default count */ }
     const user = await prisma.user.findUnique({ where: { email: session.user.email } });
     if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
     const location = await prisma.location.findFirst({ where: { id, project: { userId: user.id } } });
     if (!location) return NextResponse.json({ error: "Location not found" }, { status: 404 });
-    const started = await startLocationExtraImageJob({ user, projectId: location.projectId, locationId: id, count });
+    const started = await startLocationExtraImageJob({ user, projectId: location.projectId, locationId: id, count, imageModel });
     if ("error" in started) return NextResponse.json(started, { status: started.status });
     return NextResponse.json(started);
   } catch (err: any) {

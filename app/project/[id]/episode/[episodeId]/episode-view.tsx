@@ -3,14 +3,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Header } from '@/components/header'
-import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, Play, RefreshCw, Clapperboard, Images, Ban, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Lock } from 'lucide-react'
+import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, Play, RefreshCw, Images, Ban, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Lock } from 'lucide-react'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
-import { useJobPolling, JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
+import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
 import { CancelButton } from '../../_components/cancel-button'
 import { desiredExtraFrames, desiredTotalFrames, locationScale, locationScaleLabel, episodeLocations } from '@/lib/location-scale'
 import { CHARACTER_PHOTO_COUNT } from '@/lib/reference-counts'
+import { IMAGE_MODELS, VIDEO_MODELS, DEFAULT_IMAGE_MODEL, DEFAULT_VIDEO_MODEL, type ImageModelId, type VideoModelId } from '@/lib/ai-models'
 import { EpisodeNavGrid } from './episode-nav-grid'
 
 type EpisodePhase = 'script' | 'references' | 'scenes'
@@ -52,16 +53,16 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [modal, setModal] = useState(false)
   const [startingAll, setStartingAll] = useState(false)
   const [openingModal, setOpeningModal] = useState(false) // spinner while the plan loads before the modal opens
-  const [assembling, setAssembling] = useState(false)
-  // Stage 19 — «Ассембл» final polish now runs as a SERVER-DRIVEN background job (episode_assemble):
-  // the route returns a jobId immediately and the whole orchestration (audit → re-gen only the flagged
-  // scenes → stitch) runs on the server, surviving navigation. The client just polls the job and mirrors
-  // its resultData (phase/issues/done/total/failed) into this `polish` panel state.
-  const [polish, setPolish] = useState<{ phase: 'analyzing' | 'regen' | 'stitching'; issues: { number: number; issue: string }[]; done: number; failed: number } | null>(null)
-  const [notice, setNotice] = useState<string | null>(null)
-  const [assembleJobId, setAssembleJobId] = useState<string | null>(null)
-  const assembleJobIdRef = useRef<string | null>(null)
-  assembleJobIdRef.current = assembleJobId
+  // «Собрать» — pure concatenation of the ready scene clips into one episode (no audit / no polish / no re-gen).
+  const [stitching, setStitching] = useState(false)
+  // AI video model chosen in the plan modal for the whole-episode generation (EDIT 2).
+  const [videoModel, setVideoModel] = useState<VideoModelId>(DEFAULT_VIDEO_MODEL)
+  // AI image model chosen for reference generation (EDIT 1). `refModalOpen` gates the picker
+  // shown before «Сгенерировать всё»; the ref keeps the choice available to the resume poll loop.
+  const [imageModel, setImageModel] = useState<ImageModelId>(DEFAULT_IMAGE_MODEL)
+  const [refModalOpen, setRefModalOpen] = useState(false)
+  const imageModelRef = useRef<ImageModelId>(DEFAULT_IMAGE_MODEL)
+  imageModelRef.current = imageModel
   const [activeGen, setActiveGen] = useState<Record<string, boolean>>({})
   const [videoJobs, setVideoJobs] = useState<Record<string, JobInfo>>({})
   const pollTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
@@ -95,8 +96,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const lightboxTouchX = useRef<number | null>(null)
   const lightboxStep = (dir: number) =>
     setLightbox((lb) => (lb ? { ...lb, index: (lb.index + dir + lb.images.length) % lb.images.length } : lb))
-  // Sequential draft playlist.
-  const [draftOpen, setDraftOpen] = useState(false)
 
   // Stage 14 (D4): the episode is a guided flow — script → (confirm) → references → (ready) → scenes.
   // Old episodes that already have generated scenes open straight on the scenes step.
@@ -231,7 +230,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       const incompleteChars = refChars.filter((c) => !hasAllImages(fresh.pchars.find((x: any) => x.id === c.id) ?? c))
       if (incompleteChars.length > 0 && !activeCharJob) {
         try {
-          const res = await fetch('/api/ai/characters/references', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, characterIds: incompleteChars.map((c) => c.id) }) })
+          const res = await fetch('/api/ai/characters/references', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, characterIds: incompleteChars.map((c) => c.id), imageModel: imageModelRef.current }) })
           const d = await res.json().catch(() => ({}))
           if (res.ok && d?.jobId) refJobs.current.char = d.jobId
           else if (!res.ok && d?.error) setError(d.error)
@@ -248,7 +247,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         if (want > 0 && validUrl(loc.imageUrl) && have < want && !activeExtraLocs.has(loc.id)) {
           const chunk = Math.min(LOCATION_EXTRA_CHUNK, want - have)
           try {
-            const res = await fetch(`/api/ai/locations/${loc.id}/extra-images`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ count: chunk }) })
+            const res = await fetch(`/api/ai/locations/${loc.id}/extra-images`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ count: chunk, imageModel: imageModelRef.current }) })
             const dd = await res.json().catch(() => ({}))
             if (res.ok && dd?.jobId) refJobs.current.extra[loc.id] = dd.jobId
             else if (!res.ok && dd?.error) setError(dd.error)
@@ -278,13 +277,16 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     if (initiated) { autoResumedRef.current = true; refCanceled.current = false; setRefSession(true) }
   }, [refSession, refStarting, refsReady, refChars, refLocs])
 
-  /** Single button: generate every missing reference for this episode's characters and locations. */
+  /** Single button: generate every missing reference for this episode's characters and locations.
+   *  The AI image model chosen in the picker (EDIT 1) is threaded into every refs request. */
   const generateAllRefs = async () => {
+    setRefModalOpen(false)
     setError(''); setRefStarting(true); refCanceled.current = false
+    const model = imageModelRef.current
     try {
       const missingChars = refChars.filter((c) => !hasAllImages(c))
       if (missingChars.length > 0) {
-        const res = await fetch('/api/ai/characters/references', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, characterIds: missingChars.map((c) => c.id) }) })
+        const res = await fetch('/api/ai/characters/references', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, characterIds: missingChars.map((c) => c.id), imageModel: model }) })
         const d = await res.json()
         if (!res.ok) { setError(d?.error ?? 'Не удалось запустить генерацию персонажей'); setRefStarting(false); return }
         if (d?.jobId) refJobs.current.char = d.jobId
@@ -292,7 +294,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       }
       for (const l of refLocs) {
         if (!locBaseReady(l) && !refJobs.current.loc[l.id]) {
-          const res = await fetch(`/api/ai/locations/${l.id}/image`, { method: 'POST' })
+          const res = await fetch(`/api/ai/locations/${l.id}/image`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageModel: model }) })
           const d = await res.json().catch(() => ({}))
           if (res.ok && d?.jobId) refJobs.current.loc[l.id] = d.jobId
           else if (!res.ok && d?.error) setError(d.error)
@@ -430,7 +432,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     setModal(false) // close the plan modal immediately on «ОК»; generation continues in the background
     setStartingAll(true); setError(null); canceledRef.current = false; setBatchCanceled(false)
     try {
-      const res = await postJobStart(`/api/ai/episodes/${episode.id}/generate-all`, {})
+      const res = await postJobStart(`/api/ai/episodes/${episode.id}/generate-all`, { provider: videoModel })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error ?? 'Не удалось запустить генерацию')
       for (const j of data.jobs ?? []) { setActiveGen((p) => ({ ...p, [j.sceneId]: true })); patchScene(j.sceneId, { status: 'generating' }); pollVideoJob(j.sceneId, j.jobId) }
@@ -468,91 +470,19 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   }
 
   const allReady = scenes.length > 0 && scenes.every((s) => validUrl(s.videoUrl) && !activeGen[s.id])
-  const anyClip = scenes.some((s) => validUrl(s.videoUrl))
 
-  // Stage 19 — mirror the background episode_assemble job's resultData into the local `polish` panel.
-  const applyAssembleJob = (job?: JobInfo | null) => {
-    if (!job) return
-    const rd = job.result ?? {}
-    const phase = rd.phase as 'analyzing' | 'regen' | 'stitching' | 'done' | undefined
-    if (!phase || phase === 'done') return // terminal state is handled by finishAssembleJob
-    setPolish({
-      phase,
-      issues: Array.isArray(rd.issues) ? rd.issues : [],
-      done: typeof rd.done === 'number' ? rd.done : 0,
-      failed: typeof rd.failed === 'number' ? rd.failed : 0,
-    })
-  }
-
-  // The job reached a terminal state (completed / failed / canceled) — settle the UI.
-  const finishAssembleJob = (job?: JobInfo | null) => {
-    setPolish(null)
-    setAssembling(false)
-    setAssembleJobId(null)
-    void refreshCredits()
-    if (!job) return
-    if (job.status === 'completed') {
-      const rd = job.result ?? {}
-      const fixed: number = typeof rd.fixedCount === 'number' ? rd.fixedCount : 0
-      if (validUrl(rd.videoUrl)) setEpisode((p: any) => ({ ...p, videoUrl: rd.videoUrl, status: 'assembled' }))
-      setNotice(fixed > 0
-        ? `Финальная полировка завершена: исправлены логические нестыковки и переходы (${fixed} ${fixed === 1 ? 'сцена' : 'сцен'}), эпизод собран.`
-        : 'Логических нестыковок не найдено — эпизод собран без перегенерации (кредиты не списаны).')
-      // The flagged scenes were re-generated on the server — refresh so the cards show the new clips.
-      void reloadEpisode()
-    } else if (job.status === 'canceled') {
-      setNotice('Полировка отменена. Уже готовые сцены сохранены; незавершённые можно достроить кнопкой «Продолжить / повторить незавершённые».')
-      void reloadEpisode()
-    } else if (job.status === 'failed') {
-      setError(job.error ?? 'Финальная полировка не удалась')
-      void reloadEpisode()
-    }
-  }
-
-  const assemblePoll = useJobPolling({
-    onUpdate: (res: JobPollResponse) => applyAssembleJob(res.job),
-    onFinish: (res: JobPollResponse) => finishAssembleJob(res.job),
-  })
-
-  // «Ассембл» → kick off the server-driven final-polish job and poll it.
-  const assemble = async () => {
-    setAssembling(true); setError(null); setNotice(null)
-    setPolish({ phase: 'analyzing', issues: [], done: 0, failed: 0 })
+  // «Собрать» — pure concatenation of the ready scene clips into a single episode video.
+  // No audit, no polish, no re-generation: just stitches the existing clips together and
+  // stores the result on the episode. The button is enabled only when every scene is ready.
+  const stitch = async () => {
+    setStitching(true); setError(null)
     try {
-      const res = await fetch('/api/ai/assemble-episode/polish', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ episodeId: episode.id }) })
+      const res = await fetch('/api/ai/assemble-episode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ episodeId: episode.id }) })
       const data = await res.json()
-      if (!res.ok) throw new Error(data?.error ?? 'Финальная полировка не удалась')
-      if (!data?.jobId) throw new Error('Не удалось запустить финальную полировку')
-      setAssembleJobId(data.jobId)
-      assemblePoll.start(data.jobId)
-    } catch (e: any) { setError(e?.message ?? 'Ошибка'); setPolish(null); setAssembling(false); setAssembleJobId(null) }
+      if (!res.ok) throw new Error(data?.error ?? 'Не удалось собрать эпизод')
+      if (validUrl(data?.videoUrl)) setEpisode((p: any) => ({ ...p, videoUrl: data.videoUrl, status: 'assembled' }))
+    } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setStitching(false) }
   }
-
-  const cancelAssemble = async () => {
-    const id = assembleJobIdRef.current
-    if (!id) return
-    try { await fetch(`/api/ai/jobs/${id}/cancel`, { method: 'POST' }) } catch {}
-    // The poll's onFinish will settle the UI once the job flips to canceled.
-  }
-
-  // Auto-resume: if a background assemble job is still running for this episode (e.g. after a reload
-  // or navigating back), pick it up and keep showing live progress.
-  useEffect(() => {
-    let stale = false
-    ;(async () => {
-      try {
-        const r = await fetch(`/api/ai/assemble-episode/status?episodeId=${episode.id}`, { cache: 'no-store' })
-        if (!r.ok) return
-        const d = await r.json()
-        if (stale || !d?.activeJobId) return
-        setAssembleJobId(d.activeJobId)
-        setAssembling(true)
-        setPolish((p) => p ?? { phase: 'analyzing', issues: [], done: 0, failed: 0 })
-        assemblePoll.start(d.activeJobId)
-      } catch {}
-    })()
-    return () => { stale = true }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const perScene = plan?.costPerScene
   const isAssembled = episode.status === 'assembled' || validUrl(episode.videoUrl)
@@ -627,7 +557,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             ) : refsReady ? (
               <span className="text-xs font-medium text-emerald-500" data-testid="refs-status">Все референсы готовы</span>
             ) : (
-              <button onClick={generateAllRefs} disabled={refStarting} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all-refs">
+              <button onClick={() => setRefModalOpen(true)} disabled={refStarting} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all-refs">
                 {refStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Сгенерировать всё
               </button>
             )}
@@ -748,7 +678,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         </section>
         )}
 
-        {/* Step 3 — scenes: generate all / draft / assemble */}
+        {/* Step 3 — scenes: generate all / собрать */}
         {phase === 'scenes' && (
         <>
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
@@ -758,14 +688,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <button onClick={openModal} disabled={openingModal || startingAll || scenes.length === 0 || !refsReady} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all" title={refsReady ? '' : 'Сначала сгенерируйте все референсы эпизода'}>
             {openingModal ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Сгенерировать все сцены
           </button>
-          <button onClick={() => setDraftOpen(true)} disabled={!anyClip} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="show-draft" title={anyClip ? '' : 'Появится, когда будет хотя бы один готовый ролик'}>
-            <Film className="h-4 w-4" /> Показать черновик
+          <button onClick={stitch} disabled={!allReady || stitching} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? 'Склеить готовые сцены в один эпизод' : 'Доступно, когда все сцены готовы'}>
+            {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Собрать
           </button>
-          <button onClick={assemble} disabled={!allReady || assembling || !!polish || !!assembleJobId} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? 'Ассембл — финальная полировка: Seedance пересматривает весь эпизод и исправляет логические нестыковки и переходы' : 'Доступно, когда все сцены готовы'}>
-            {assembling || polish || assembleJobId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />} Ассембл (финальная полировка)
-          </button>
-          {/* Stage 23 — the assembled clip is shown only in the dedicated «Собранный эпизод» frame
-              below; the duplicate inline preview next to the «Ассембл» button was removed. */}
           {batchActive ? (
             <span className="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground" data-testid="batch-status">
               <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
@@ -787,31 +712,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               {retrying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Продолжить / повторить незавершённые
             </button>
           )}
-          {/* Stage 13 — what «Ассембл» now does + live polish status */}
           <p className="w-full text-xs text-muted-foreground" data-testid="assemble-hint">
-            <b>Ассембл — финальная полировка:</b> Seedance пересматривает весь эпизод и исправляет логические нестыковки и переходы (телепортация/исчезновение персонажей, несогласованные позиции и действия на стыках сцен). Перегенерируются только проблемные сцены — согласованные не трогаются, кредиты на них не тратятся.
+            <b>Собрать:</b> склеивает готовые ролики всех сцен в один эпизод без перегенерации. Доступно, когда все сцены готовы.
           </p>
-          {polish && (
-            <div className="w-full rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm" data-testid="polish-status">
-              <div className="flex flex-wrap items-center gap-2">
-                <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                <span className="font-medium">
-                  {polish.phase === 'analyzing' && 'Финальная полировка: анализ логики эпизода…'}
-                  {polish.phase === 'regen' && `Финальная полировка: перегенерация ${polish.done}/${polish.issues.length} проблемных сцен${polish.failed > 0 ? ` · не удалось ${polish.failed}` : ''}`}
-                  {polish.phase === 'stitching' && 'Финальная полировка: сборка эпизода…'}
-                </span>
-                {(polish.phase === 'analyzing' || polish.phase === 'regen') && (
-                  <CancelButton onCancel={cancelAssemble} testId="polish-cancel" label="Отменить" pendingLabel="Останавливаю…" />
-                )}
-              </div>
-              {polish.issues.length > 0 && (
-                <ul className="mt-2 space-y-0.5 text-xs text-muted-foreground" data-testid="polish-issues">
-                  {polish.issues.map((it) => (<li key={it.number}>Сцена {it.number}: {it.issue}</li>))}
-                </ul>
-              )}
-            </div>
-          )}
-          {notice && !polish && <p className="w-full text-sm text-emerald-500" data-testid="polish-notice">{notice}</p>}
           {error && <p className="w-full text-sm text-destructive" data-testid="error">{error}</p>}
         </div>
 
@@ -917,6 +820,17 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               <li>Стоимость: <b>{plan.total} кр.</b> за {plan.pendingCount} сцен (до {plan.costPerScene} кр. за сцену)</li>
               <li>Остаток кредитов: <b>{plan.credits}</b>{plan.credits < plan.total && <span className="text-destructive"> — недостаточно</span>}</li>
             </ul>
+            {/* EDIT 2 — pick the AI video model for the whole-episode generation. */}
+            <label className="mt-4 block text-sm font-medium" htmlFor="video-model-select">Модель ИИ (видео)</label>
+            <select
+              id="video-model-select"
+              data-testid="video-model-select"
+              value={videoModel}
+              onChange={(e) => setVideoModel(e.target.value as VideoModelId)}
+              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+            >
+              {VIDEO_MODELS.map((m) => (<option key={m.id} value={m.id}>{m.label}</option>))}
+            </select>
             <div className="mt-4 flex justify-end gap-2">
               <button onClick={() => setModal(false)} className="rounded-lg border border-border px-3 py-1.5 text-sm">Отмена</button>
               <button onClick={generateAll} disabled={plan.pendingCount === 0 || plan.credits < plan.total} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="generate-ok">
@@ -958,42 +872,31 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         </div>
       )}
 
-      {/* Draft sequential playlist */}
-      {draftOpen && <DraftPlayer scenes={scenes.filter((s) => validUrl(s.videoUrl))} onClose={() => setDraftOpen(false)} />}
-    </div>
-  )
-}
-
-/** Plays the episode's generated clips back-to-back as a rough draft (no re-encode). */
-function DraftPlayer({ scenes, onClose }: { scenes: Scene[]; onClose: () => void }) {
-  const [idx, setIdx] = useState(0)
-  const videoRef = useRef<HTMLVideoElement>(null)
-  useEffect(() => { videoRef.current?.play().catch(() => {}) }, [idx])
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
-  const cur = scenes[idx]
-  return (
-    <div className="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-black/95 p-3" data-testid="draft-player">
-      <button className="absolute right-3 top-3 rounded-full bg-white/10 p-2 text-white" onClick={onClose} data-testid="draft-close"><X className="h-5 w-5" /></button>
-      <div className="mb-2 text-sm text-white/80">Черновик · сцена {cur?.number ?? idx + 1} ({idx + 1} из {scenes.length})</div>
-      {cur && (
-        <video
-          ref={videoRef}
-          src={cur.videoUrl as string}
-          controls
-          autoPlay
-          playsInline
-          className="max-h-[80vh] w-full max-w-sm rounded-lg bg-black"
-          onEnded={() => setIdx((i) => (i + 1 < scenes.length ? i + 1 : i))}
-        />
+      {/* EDIT 1 — AI image model picker shown before generating all references. */}
+      {refModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" data-testid="ref-model-modal">
+          <div className="w-full max-w-md rounded-xl border border-border bg-card p-5">
+            <h3 className="font-display text-lg font-bold">Выберите модель ИИ</h3>
+            <p className="mt-1 text-sm text-muted-foreground">Модель, которой будут сгенерированы все референсы персонажей и локаций эпизода.</p>
+            <label className="mt-4 block text-sm font-medium" htmlFor="image-model-select">Модель ИИ (изображения)</label>
+            <select
+              id="image-model-select"
+              data-testid="image-model-select"
+              value={imageModel}
+              onChange={(e) => setImageModel(e.target.value as ImageModelId)}
+              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+            >
+              {IMAGE_MODELS.map((m) => (<option key={m.id} value={m.id}>{m.label}</option>))}
+            </select>
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => setRefModalOpen(false)} className="rounded-lg border border-border px-3 py-1.5 text-sm">Отмена</button>
+              <button onClick={generateAllRefs} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="ref-model-ok">
+                <Wand2 className="h-4 w-4" /> Сгенерировать
+              </button>
+            </div>
+          </div>
+        </div>
       )}
-      <div className="mt-3 flex items-center gap-3">
-        <button onClick={() => setIdx((i) => Math.max(0, i - 1))} disabled={idx === 0} className="rounded-lg border border-white/20 px-3 py-1.5 text-sm text-white disabled:opacity-40">Назад</button>
-        <button onClick={() => setIdx((i) => Math.min(scenes.length - 1, i + 1))} disabled={idx >= scenes.length - 1} className="rounded-lg border border-white/20 px-3 py-1.5 text-sm text-white disabled:opacity-40">Дальше</button>
-      </div>
     </div>
   )
 }

@@ -9,6 +9,7 @@ import { runInBackground, failStaleJobs, heartbeatJob, updateJob } from "@/lib/j
 import { runVideoJob } from "@/lib/workers/video-job";
 import { resolvePowerTier } from "@/lib/power-tier";
 import { sceneClipPlan, sceneClipSeconds, sceneClipCost } from "@/lib/season";
+import { normalizeVideoModel } from "@/lib/ai-models";
 
 /**
  * Scenes are generated STRICTLY ONE AT A TIME (no parallelism). Each scene starts only after the
@@ -62,6 +63,8 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   // Stage 4: speech is always English (client-side language selector removed); the story-language text is shown in the UI only.
   const spokenLang = "en";
   const force = Boolean(body?.force);
+  // Producer-picked video model (see lib/ai-models.ts) → the worker `provider`. Default Seedance.
+  const provider = normalizeVideoModel(body?.provider ?? body?.videoModel);
 
   const episode = await loadEpisode(id, session.user.id);
   if (!episode) return NextResponse.json({ error: "Episode not found" }, { status: 404 });
@@ -92,7 +95,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     const cost = sceneClipCost(tier.id, sceneClipSeconds(tier.id, scene.durationSec));
     await prisma.user.update({ where: { id: user.id }, data: { credits: { decrement: cost } } });
     await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Эпизод ${episode.number}, сцена ${scene.number} — генерация видео (${tier.id})` } });
-    await prisma.scene.update({ where: { id: scene.id }, data: { status: "generating", language: spokenLang } });
+    await prisma.scene.update({ where: { id: scene.id }, data: { status: "generating", language: spokenLang, videoModel: provider } });
     const job = await prisma.generationJob.create({ data: { type: "video", status: "pending", progress: 1, message: "В очереди…", projectId: project.id, sceneId: scene.id } });
     queued.push({ jobId: job.id, sceneId: scene.id, cost, duration: sceneClipSeconds(tier.id, scene.durationSec) });
     jobs.push({ sceneId: scene.id, sceneNumber: scene.number, jobId: job.id });
@@ -111,7 +114,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
           waiting.delete(item.jobId);
           await updateJob(item.jobId, { status: "processing", progress: 2, message: "Старт видеомодели…" });
           try {
-            await runVideoJob({ jobId: item.jobId, sceneId: item.sceneId, projectId: project.id, userId: user.id, cost: item.cost, duration: item.duration, resolution: tier.resolution });
+            await runVideoJob({ jobId: item.jobId, sceneId: item.sceneId, projectId: project.id, userId: user.id, cost: item.cost, duration: item.duration, resolution: tier.resolution, provider });
           } catch (err) {
             console.error("[generate-all] scene job failed:", err);
           }

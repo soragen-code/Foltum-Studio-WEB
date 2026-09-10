@@ -147,3 +147,8 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 -- Stage 22: reference finalize/lock flag on Character and Location
 ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "refLocked" BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "refLocked" BOOLEAN NOT NULL DEFAULT false;
+
+
+-- Model picker: persist the chosen video model / provider per scene so batch continuation
+-- and single-scene regeneration reuse the producer's choice ("seedance" default, or "kling").
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "videoModel" TEXT;

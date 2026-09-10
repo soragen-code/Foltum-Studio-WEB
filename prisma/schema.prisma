@@ -265,6 +265,7 @@ model Scene {
   voiceover     String?  @db.Text // stage 12: ENGLISH off-screen narration voiced by the model (backstory/catch-up), used only for narration scenes
   voiceoverLocal String? @db.Text // stage 12: the same narration translated into the story language for the UI
   status        String   @default("pending") // pending, generating, generated, accepted
+  videoModel    String?  // chosen video model / provider for this scene: "seedance" (default) or "kling" — persisted so batch continuation and single-scene regen reuse the producer's choice
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

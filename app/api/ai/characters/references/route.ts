@@ -10,6 +10,7 @@ import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runCharacterImagesJob } from "@/lib/workers/character-images-job";
 import { CHARACTER_REFERENCE_COST } from "@/lib/power-tier";
 import { CHARACTER_PHOTO_COUNT, parseImageArray } from "@/lib/reference-counts";
+import { normalizeImageModel } from "@/lib/ai-models";
 
 /** Extra angles required beyond the 3 base shots — 0 in Stage 18 (character = 3 photos). */
 const CHARACTER_EXTRA_COUNT = Math.max(0, CHARACTER_PHOTO_COUNT - 3);
@@ -32,7 +33,7 @@ export async function POST(request: Request) {
 
     const parsed = await parseBody(request, charactersReferencesSchema);
     if (!parsed.ok) return parsed.response;
-    const { projectId, tiers, characterIds } = parsed.data;
+    const { projectId, tiers, characterIds, imageModel } = parsed.data;
 
     const user = await prisma.user.findUnique({ where: { email: session.user.email } });
     if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
@@ -74,7 +75,7 @@ export async function POST(request: Request) {
       data: { type: "characters", status: "processing", progress: 5, message: `Генерация референсов для ${jobCharacterIds.length} персонажей…`, projectId },
     });
     runInBackground(async () => {
-      await runCharacterImagesJob({ jobId: job.id, projectId, characterIds: jobCharacterIds });
+      await runCharacterImagesJob({ jobId: job.id, projectId, characterIds: jobCharacterIds, imageModel: normalizeImageModel(imageModel) });
       try {
         // Refund only the CHARGED characters that got nothing at all.
         const after = await prisma.character.findMany({ where: { id: { in: needBase.map((c) => c.id) } }, select: { id: true, name: true, imageFront: true, imageProfile: true, imageFull: true } });

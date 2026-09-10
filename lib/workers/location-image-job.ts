@@ -12,7 +12,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * wide establishing shot + reverse angle + medium angle of the same place with identical light,
  * uploaded to S3 and written to Location.imageUrl / imageReverse / imageDetail. Job type "location_image".
  */
-export async function runLocationImagesJob({ jobId, projectId, locationIds }: { jobId: string; projectId: string; locationIds: string[] }): Promise<void> {
+export async function runLocationImagesJob({ jobId, projectId, locationIds, imageModel }: { jobId: string; projectId: string; locationIds: string[]; imageModel?: string }): Promise<void> {
   try {
     const locations = await prisma.location.findMany({ where: { id: { in: locationIds }, projectId }, orderBy: { createdAt: "asc" } });
     const total = locations.length;
@@ -41,7 +41,7 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds }: { 
       try {
         const visual = loc.visualPrompt ?? loc.description ?? loc.name;
         // 1) wide establishing angle — the anchor for the light and the place
-        const wideRemote = await generateImage({ prompt: locationAnglePrompt(visual, loc.name, "wide"), aspect_ratio: "9:16" }, { jobId });
+        const wideRemote = await generateImage({ prompt: locationAnglePrompt(visual, loc.name, "wide"), aspect_ratio: "9:16" }, { jobId, imageModel });
         const stamp = Date.now();
         const wideUrl = await uploadRemoteToS3(wideRemote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${stamp}-wide.png`, "image/png");
         await prisma.location.update({ where: { id: loc.id }, data: { imageUrl: wideUrl, imageReverse: null, imageDetail: null } });
@@ -50,7 +50,7 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds }: { 
         for (const a of LOCATION_ANGLES.filter((x) => x.angle !== "wide")) {
           await updateJob(jobId, { progress: pct(), message: `Референс локации «${loc.name}» — ${a.label.toLowerCase()} (${done + 1}/${total})...` });
           try {
-            const remote = await generateImage({ prompt: locationAnglePrompt(visual, loc.name, a.angle), aspect_ratio: "9:16", image_input: [wideRemote] }, { jobId });
+            const remote = await generateImage({ prompt: locationAnglePrompt(visual, loc.name, a.angle), aspect_ratio: "9:16", image_input: [wideRemote] }, { jobId, imageModel });
             const url = await uploadRemoteToS3(remote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${stamp}-${a.angle}.png`, "image/png");
             await prisma.location.update({ where: { id: loc.id }, data: { [a.key]: url } });
             await checkC2pa(loc.id, a.angle, url);

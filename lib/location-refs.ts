@@ -18,8 +18,8 @@ export const EXTRA_ANGLES_PER_REQUEST = 3;
  * Charge + start a background job that renders reference PNGs for the given locations.
  * Same price as a character reference (CHARACTER_REFERENCE_COST per location); refunds the ones that failed.
  */
-export async function startLocationImageJob(opts: { user: { id: string; credits: number | null }; projectId: string; locationIds: string[] }) {
-  const { user, projectId } = opts;
+export async function startLocationImageJob(opts: { user: { id: string; credits: number | null }; projectId: string; locationIds: string[]; imageModel?: string }) {
+  const { user, projectId, imageModel } = opts;
   await failStaleJobs({ projectId, type: LOCATION_JOB_TYPE });
   const active = await prisma.generationJob.findFirst({ where: { projectId, type: LOCATION_JOB_TYPE, status: { in: ["pending", "processing"] } }, orderBy: { createdAt: "desc" } });
   if (active) {
@@ -39,7 +39,7 @@ export async function startLocationImageJob(opts: { user: { id: string; credits:
     data: { type: LOCATION_JOB_TYPE, status: "processing", progress: 5, message: `Генерация референсов локаций (${locationIds.length})…`, projectId, resultData: JSON.stringify({ locationIds }) },
   });
   runInBackground(async () => {
-    await runLocationImagesJob({ jobId: job.id, projectId, locationIds });
+    await runLocationImagesJob({ jobId: job.id, projectId, locationIds, imageModel });
     try {
       const after = await prisma.location.findMany({ where: { id: { in: locationIds } }, select: { id: true, name: true, imageUrl: true } });
       const failed = after.filter((l) => !l.imageUrl || l.imageUrl === before.get(l.id));
@@ -57,8 +57,8 @@ export async function startLocationImageJob(opts: { user: { id: string; credits:
  * Charge + start a background job that renders N EXTRA angle shots for ONE location (beyond the base 3).
  * Price: CHARACTER_REFERENCE_COST per extra shot; refunds any shots that failed to generate.
  */
-export async function startLocationExtraImageJob(opts: { user: { id: string; credits: number | null }; projectId: string; locationId: string; count?: number }) {
-  const { user, projectId, locationId } = opts;
+export async function startLocationExtraImageJob(opts: { user: { id: string; credits: number | null }; projectId: string; locationId: string; count?: number; imageModel?: string }) {
+  const { user, projectId, locationId, imageModel } = opts;
   const count = Math.max(1, Math.min(opts.count ?? EXTRA_ANGLES_PER_REQUEST, MAX_EXTRA_PER_REQUEST));
   await failStaleJobs({ projectId, type: LOCATION_EXTRA_JOB_TYPE });
 
@@ -85,7 +85,7 @@ export async function startLocationExtraImageJob(opts: { user: { id: string; cre
     data: { type: LOCATION_EXTRA_JOB_TYPE, status: "processing", progress: 5, message: `Дополнительные ракурсы локации «${loc.name}» (${count})…`, projectId, resultData: JSON.stringify({ locationId, count }) },
   });
   runInBackground(async () => {
-    await runLocationExtraImagesJob({ jobId: job.id, projectId, locationId, count });
+    await runLocationExtraImagesJob({ jobId: job.id, projectId, locationId, count, imageModel });
     try {
       const after = await prisma.location.findFirst({ where: { id: locationId }, select: { imageExtra: true } });
       const added = Math.max(0, parseLocationExtra(after?.imageExtra).length - beforeCount);

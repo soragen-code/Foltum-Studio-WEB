@@ -235,7 +235,11 @@ const SEEDREAM_VERSION_ID =
  * video model's moderation accept it. Output is uploaded as-is (image/png).
  * Note: Seedream's only image output format is png/jpeg (no webp) and it has no seed input.
  */
-export async function startImagePrediction(input: FluxInput): Promise<string> {
+export async function startImagePrediction(input: FluxInput, model?: string): Promise<string> {
+  // Only Seedream 5.0 Lite is wired for image generation. `model` is accepted so the whole
+  // reference pipeline (routes → workers → here) carries the producer's picked image model;
+  // any other/unknown id resolves to Seedream. Add a branch here to support more models.
+  void model;
   const prediction = await getReplicate().predictions.create({
     version: SEEDREAM_VERSION_ID,
     input: {
@@ -290,15 +294,16 @@ export interface FluxInput {
  * Generate a photorealistic reference image (Seedream 5.0 Lite) via Replicate.
  * Returns the URL of the generated image. Logs each prediction; no paid automatic retries.
  */
-export async function generateImage(input: FluxInput, context: { jobId?: string; characterId?: string } = {}): Promise<string> {
+export async function generateImage(input: FluxInput, context: { jobId?: string; characterId?: string; imageModel?: string } = {}): Promise<string> {
+  const { imageModel, ...logContext } = context;
   const attempt: GenerationAttempt = {
-    ...context, attempt: 1, phase: "reference", model: SEEDREAM_MODEL,
+    ...logContext, attempt: 1, phase: "reference", model: SEEDREAM_MODEL,
     status: "submitting", style: VISUAL_STYLE_ID,
     input: safeDiagnosticInput({ prompt: input.prompt, aspect_ratio: input.aspect_ratio ?? "9:16", size: "2K" }),
   };
   logAttempt(attempt);
   try {
-    attempt.predictionId = await startImagePrediction(input);
+    attempt.predictionId = await startImagePrediction(input, imageModel);
     attempt.status = "processing"; logAttempt(attempt);
     const started = Date.now();
     while (true) {
