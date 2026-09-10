@@ -4,8 +4,9 @@
  * `buildScenePrompt` is a PURE function (no network, no LLM, no DB): given the scene, its
  * characters, the episode location and the previous scene, it assembles EXACTLY the prompt the
  * video worker submits to Seedance — the styled visual prompt, the native-audio / narration
- * speech block, the pace direction, the moderation-safe level-1 rewrite and the ordered
- * `[Image1]…[ImageN]` reference notes.
+ * speech block, the pace direction and the ordered `[Image1]…[ImageN]` reference notes. The
+ * assembled prompt is submitted VERBATIM (no moderation softening) so the physical/dramatic action
+ * the script wrote survives; a manual per-scene override, when present, replaces the text.
  *
  * It is used by two callers so a preview can never drift from what is actually generated:
  *   1. lib/workers/video-job.ts — the real generation path.
@@ -18,7 +19,6 @@
  */
 import { buildNativeAudioPrompt, buildNarrationAudioPrompt } from "@/lib/voiceover";
 import { PACE_DIRECTION } from "@/lib/season";
-import { softenForModeration } from "@/lib/sanitize-prompt";
 import { styledVisualPrompt, isStyledAsset, canChainFrame, locationAngleImages } from "@/lib/visual-style";
 import { normalizeVideoModel, videoModelSlug, type VideoModelId } from "@/lib/ai-models";
 
@@ -155,18 +155,16 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   let prompt = isNarration
     ? `${buildNarrationAudioPrompt(stripSlowDirections(visualPrompt), scene.voiceover)}\n\n${PACE_DIRECTION}`
     : `${buildNativeAudioPrompt(stripSlowDirections(visualPrompt), dialogue, characters.map(c => ({ name: c.name })), targetLanguage)}\n\n${PACE_DIRECTION}`;
-  // Stage 31: a manual override replaces the auto-assembled TEXT verbatim — no moderation
-  // softening (the producer is responsible for the wording) and no `[ImageN]` notes appended below.
-  // Image/reference chaining is still computed as usual, so the override changes only the text.
+  // Stage 32: the assembled prompt is submitted VERBATIM — no moderation softening. The season
+  // script now writes the real physical/dramatic action on purpose, so auto-softening here would
+  // undo it. If the provider rejects an individual shot (E005) the job fails fast and the producer
+  // fixes that scene by hand via a manual per-scene override (Stage 30/31).
+  // A manual override replaces the auto-assembled TEXT verbatim and suppresses the `[ImageN]` notes
+  // appended below; image/reference chaining is still computed as usual either way.
   const override = (scene.promptOverride ?? "").trim();
   const hasOverride = override.length > 0;
   if (hasOverride) {
     prompt = override;
-  } else {
-    // Seedance moderation (E005): neutralize explicit wording in BOTH the visual prompt and the
-    // English dialogue before submitting.
-    const softened = softenForModeration(prompt, 1);
-    prompt = softened.text;
   }
   const basePrompt = prompt;
 

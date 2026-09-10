@@ -30,7 +30,7 @@ assert(/Nobody sets a running time/.test(episodeScriptSystemPrompt("ru")) && /We
 assert(/natural conversational rhythm/.test(PACE_DIRECTION) && !/NO pauses/.test(PACE_DIRECTION) && /2–4 cuts/.test(PACE_DIRECTION) && episodeScriptSystemPrompt("ru").includes(PACE_DIRECTION), "pace/camera/expression direction in prompt (natural tempo, no speed-forcing)");
 // stage7: масштаб/объём сцен + бытовые действия персонажей в промптах эпизода и трейлера
 assert(/SCALE & DEPTH/.test(SCALE_DEPTH_RULE) && /SPACIOUS/.test(SCALE_DEPTH_RULE) && /WIDE or ESTABLISHING/.test(SCALE_DEPTH_RULE) && /foreground/.test(SCALE_DEPTH_RULE), "SCALE_DEPTH_RULE: spacious, wide/establishing, depth");
-assert(/CHARACTERS ACT/.test(EVERYDAY_BEHAVIOR_RULE) && /talking heads/.test(EVERYDAY_BEHAVIOR_RULE) && /lip-sync-safe/.test(EVERYDAY_BEHAVIOR_RULE) && /moderation-safe/.test(EVERYDAY_BEHAVIOR_RULE), "EVERYDAY_BEHAVIOR_RULE: physical business, lip-sync & moderation safe");
+assert(/CHARACTERS ACT/.test(EVERYDAY_BEHAVIOR_RULE) && /talking heads/.test(EVERYDAY_BEHAVIOR_RULE) && /lip-sync-safe/.test(EVERYDAY_BEHAVIOR_RULE) && /PHYSICAL DRAMA/.test(EVERYDAY_BEHAVIOR_RULE), "EVERYDAY_BEHAVIOR_RULE: physical business, lip-sync-safe & dramatic physical beats");
 assert(/ALIVE/.test(LOCATION_PRESENCE_RULE) && /background life/.test(LOCATION_PRESENCE_RULE), "LOCATION_PRESENCE_RULE: living background");
 assert(episodeScriptSystemPrompt("ru").includes(SCALE_DEPTH_RULE) && episodeScriptSystemPrompt("ru").includes(EVERYDAY_BEHAVIOR_RULE) && episodeScriptSystemPrompt("ru").includes(LOCATION_PRESENCE_RULE), "episode prompt embeds scale/depth + everyday behavior + location presence");
 // stage7b: диалоги на общих планах (без крупного лица во весь экран) + естественная расстановка, не «лицом к лицу»
