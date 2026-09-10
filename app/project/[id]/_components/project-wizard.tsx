@@ -12,24 +12,8 @@ import { IdeaStage } from './idea-stage'
 import { ReferencesStage } from './references-stage'
 import { StoryStage } from './story-stage'
 import { resolvePowerTier } from '@/lib/power-tier'
-import { FileText, Users, GitBranch, Video, Check, Lightbulb, Gauge, ArrowLeft } from 'lucide-react'
+import { Gauge, ArrowLeft } from 'lucide-react'
 import { motion } from 'framer-motion'
-
-// Legacy flow (projects created before the new flow) keeps its stage ids.
-const legacyStages = [
-  { id: 'synopsis', label: 'Synopsis', icon: FileText },
-  { id: 'characters', label: 'Characters', icon: Users },
-  { id: 'structure', label: 'Structure', icon: GitBranch },
-  { id: 'scenes', label: 'Scenes & Video', icon: Video },
-]
-
-// New flow (stage 5): idea → season script → scenes. References (characters/locations/trailer)
-// are an optional tab (`?tab=references`), not a mandatory step.
-const newFlowStages = [
-  { id: 'idea', label: 'Идея', icon: Lightbulb },
-  { id: 'structure', label: 'Сюжет', icon: GitBranch },
-  { id: 'scenes', label: 'Сцены и видео', icon: Video },
-]
 
 function isNewFlow(project: any): boolean {
   if (!project) return false
@@ -40,10 +24,7 @@ function isNewFlow(project: any): boolean {
 
 export function ProjectWizard({ project: initialProject }: { project: any }) {
   const [project, setProject] = useState(initialProject)
-  const stages = isNewFlow(project) ? newFlowStages : legacyStages
   const currentStage = project?.stage ?? 'synopsis'
-  // Projects that were left on the old mandatory "references" step sit between Идея and Сценарий.
-  const stageIdx = currentStage === 'references' ? 1 : stages.findIndex((s) => s.id === currentStage)
   const power = resolvePowerTier(project ?? {})
   // Optional «Референсы» tab (stage 5), opened via ?tab=references from the season/episode screens.
   const searchParams = useSearchParams()
@@ -76,44 +57,6 @@ export function ProjectWizard({ project: initialProject }: { project: any }) {
             </span>
             <span className="hidden sm:inline">качество {power.resolution}</span>
           </div>
-        </div>
-
-        {/* Progress Bar */}
-        <div className="mb-8 flex items-center gap-2">
-          {stages.map((s, i) => {
-            const Icon = s.icon
-            const done = i < stageIdx
-            const active = i === stageIdx
-            return (
-              <div key={s.id} className="flex flex-1 items-center gap-2">
-                <div
-                  className={`flex h-9 w-9 items-center justify-center rounded-full border-2 transition ${
-                    done
-                      ? 'border-primary bg-primary text-primary-foreground'
-                      : active
-                      ? 'border-primary text-primary'
-                      : 'border-border text-muted-foreground'
-                  }`}
-                >
-                  {done ? <Check className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
-                </div>
-                <span
-                  className={`hidden text-xs font-medium sm:block ${
-                    active ? 'text-foreground' : 'text-muted-foreground'
-                  }`}
-                >
-                  {s.label}
-                </span>
-                {i < stages.length - 1 && (
-                  <div
-                    className={`mx-2 h-0.5 flex-1 rounded ${
-                      done ? 'bg-primary' : 'bg-border'
-                    }`}
-                  />
-                )}
-              </div>
-            )
-          })}
         </div>
 
         <motion.div

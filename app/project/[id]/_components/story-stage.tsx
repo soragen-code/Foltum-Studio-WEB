@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, Wand2, ArrowRight, Check, Images, RefreshCw, BookOpen } from 'lucide-react'
+import { Loader2, Wand2, ArrowRight, Check, BookOpen } from 'lucide-react'
 import { JOB_POLL_INTERVAL_MS } from './use-job-polling'
 import { CancelButton } from './cancel-button'
-import { IdeaEditor } from './idea-stage'
+import { StickyReviseBar } from './sticky-revise-bar'
 import { episodeStatusLabel, CharacterAvatars, type SeasonEpisode } from './season-stage'
 
 // Fixed episode-boundary bars written by the LLM (see lib/season.ts fullStoryFormatRules).
@@ -32,16 +32,10 @@ function FullStoryView({ text }: { text: string }) {
             </div>
           )
         }
-        if (t.startsWith(END_MARK)) {
-          const label = t.replace(/─+/g, '').trim()
-          return (
-            <div key={i} className="mb-2 flex items-center gap-2" data-testid="full-story-episode-end">
-              <span className="h-px flex-1 bg-border" />
-              <span className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</span>
-              <span className="h-px flex-1 bg-border" />
-            </div>
-          )
-        }
+        // Stage 14 (A3): the "end of episode N" markers are no longer shown — a new episode header
+        // already implies the previous one ended. Old stories still contain the ─── bars, so we skip
+        // them silently here (both legacy and new content render cleanly).
+        if (t.startsWith(END_MARK)) return null
         if (!t) return <div key={i} className="h-2" />
         return <p key={i} className="text-sm leading-relaxed">{line}</p>
       })}
@@ -58,7 +52,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
   const [storyText, setStoryText] = useState('')
   const [storyBusy, setStoryBusy] = useState(false)
   const [storyNotice, setStoryNotice] = useState('')
-  const [ideaChanged, setIdeaChanged] = useState<string[]>([])
+  const abortRef = useRef<AbortController | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -123,14 +117,17 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
 
   /** Story-screen edit-by-prompt (also used to sync the story after idea edits). Regenerates the prose
    *  + keeps the structure in sync; only changed episodes are rewritten (existing assets are otherwise kept). */
-  const reviseStory = async (opts: { instruction: string; force?: boolean; sync?: boolean }) => {
+  const reviseStory = async (opts: { instruction: string; force?: boolean }) => {
     const instruction = opts.instruction.trim()
     if (instruction.length < 3) return
     setStoryBusy(true); setError(null); setStoryNotice('')
+    const ctrl = new AbortController()
+    abortRef.current = ctrl
     try {
       const res = await fetch('/api/ai/season/full-story/revise', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projectId: project.id, instruction, force: !!opts.force }),
+        signal: ctrl.signal,
       })
       const data = await res.json()
       if (res.status === 409 && data?.needsForce) {
@@ -138,8 +135,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
         return
       }
       if (!res.ok) throw new Error(data?.error ?? 'Не удалось изменить сюжет')
-      if (!opts.sync) setStoryText('')
-      if (opts.sync) setIdeaChanged([])
+      setStoryText('')
       const affected: number[] = Array.isArray(data?.affected) ? data.affected : []
       setStoryNotice(affected.length
         ? `Сюжет обновлён. Переписываю эпизоды: ${affected.join(', ')} — остальные не тронуты.`
@@ -147,53 +143,25 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
       if (typeof data?.fullStory === 'string') setSeason((s) => (s ? { ...s, fullStory: data.fullStory } : s))
       if (data?.jobId) setJob({ id: data.jobId, status: 'processing', progress: 1, message: 'Запуск...' })
       await load()
-    } catch (e: any) { setError(e?.message ?? 'Ошибка') }
-    finally { setStoryBusy(false) }
+    } catch (e: any) {
+      if (e?.name === 'AbortError') { setStoryNotice('Изменение отменено.') }
+      else setError(e?.message ?? 'Ошибка')
+    }
+    finally { setStoryBusy(false); abortRef.current = null }
   }
+  const cancelRevise = () => { abortRef.current?.abort() }
 
   if (loading) return <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
 
-  const locked = jobActive || starting || storyBusy
-
   return (
-    <div className="space-y-6" data-testid="story-stage">
-      {project?.synopsis && (
-        <div className="rounded-xl border border-border bg-card p-4 sm:p-6" data-testid="story-idea-block">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="font-display text-xl font-bold">Идея сезона</h2>
-            <Link href={`/project/${project.id}?tab=references`} className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted" data-testid="open-references">
-              <Images className="h-4 w-4" /> Референсы
-            </Link>
-          </div>
-          <p className="mt-1 mb-3 text-sm text-muted-foreground">Синопсис, локации и персонажи — редактируются промптами. Раскройте блок, чтобы изменить.</p>
-          <IdeaEditor
-            project={project}
-            synopsis={project.synopsis}
-            language={project.language}
-            characters={project.characters ?? []}
-            locations={project.locations ?? []}
-            collapsible
-            disabled={locked}
-            onChanged={(what) => setIdeaChanged((c) => (c.includes(what) ? c : [...c, what]))}
-          />
-          {ideaChanged.length > 0 && season && !jobActive && (
-            <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm" data-testid="story-sync-hint">
-              <span>Идея изменилась — сюжет сезона пока не синхронизирован.</span>
-              <button onClick={() => reviseStory({ sync: true, instruction: 'Синхронизируй сюжет и структуру сезона с обновлённым синопсисом, списком персонажей и локаций: учти новые/изменённые элементы, убери отсутствующие, сохрани всё остальное без изменений.' })} disabled={storyBusy} className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="story-sync">
-                {storyBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Применить изменения к сюжету
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
+    <div className="space-y-6 pb-40" data-testid="story-stage">
       <div className="rounded-xl border border-border bg-card p-4 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="font-display text-xl font-bold">Сюжет сезона</h2>
           {episodeCount > 0 && <span className="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-sm" data-testid="episode-count"><BookOpen className="h-4 w-4" /> {episodeCount} эпизодов</span>}
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          Полная история сезона одним текстом, с чёткими метками начала и конца каждого эпизода. Локации и персонажи описаны прямо в тексте. Количество эпизодов выбирает ИИ по объёму истории — изменить можно промптом ниже. Правки здесь не ломают уже сгенерированные эпизоды и ассеты.
+          Полная история сезона одним текстом. Каждый эпизод начинается со своей метки-заголовка; локации и персонажи описаны прямо в тексте, а их референсы генерируются на экране эпизода. Правку сюжета вносите в панели внизу — она не ломает уже сгенерированные эпизоды и ассеты.
         </p>
         {season?.title && (
           <div className="mt-3">
@@ -254,22 +222,6 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
           <p className="mt-4 text-sm text-muted-foreground">Сюжет ещё не написан. Изменение ниже сгенерирует его.</p>
         )}
 
-        {season && (
-          <div className="mt-4 space-y-2" data-testid="story-revise">
-            <label className="text-xs font-semibold text-muted-foreground">Что изменить в сюжете</label>
-            <div className="flex flex-col gap-2 sm:flex-row">
-              <textarea value={storyText} onChange={(e) => setStoryText(e.target.value)} rows={2} disabled={storyBusy}
-                placeholder="Например: сделай 6 эпизодов вместо 8; добавь линию с сестрой героя; перенеси финал в порт..."
-                className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm" data-testid="story-revise-input" />
-              <button onClick={() => reviseStory({ instruction: storyText })} disabled={storyBusy || storyText.trim().length < 3}
-                className="inline-flex items-center justify-center gap-1 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50" data-testid="story-revise-submit">
-                {storyBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Изменить сюжет
-              </button>
-            </div>
-            <p className="text-xs text-muted-foreground">ИИ перепишет историю и синхронизирует структуру сезона (в т.ч. число эпизодов). Переписываются только затронутые эпизоды; если в них уже есть видео — спросит подтверждение.</p>
-            {storyBusy && <p className="text-xs text-muted-foreground">Переписываю сюжет (около минуты)...</p>}
-          </div>
-        )}
         {storyNotice && <p className="mt-3 text-sm text-primary" data-testid="story-notice">{storyNotice}</p>}
         {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
       </div>
@@ -309,6 +261,21 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
           )}
           {scriptsDone === total && total > 0 && <p className="mt-3 inline-flex items-center gap-1 text-sm text-primary"><Check className="h-4 w-4" /> Все {total} сценариев готовы</p>}
         </div>
+      )}
+
+      {season && (
+        <StickyReviseBar
+          value={storyText}
+          onChange={setStoryText}
+          onSubmit={() => reviseStory({ instruction: storyText })}
+          busy={storyBusy}
+          onCancel={cancelRevise}
+          label="Что изменить в сюжете"
+          placeholder="Например: сделай 6 эпизодов вместо 8; измени эпизод 2 — добавь сцену погони; добавь линию с сестрой героя"
+          submitLabel="Изменить сюжет"
+          hint="ИИ перепишет историю и синхронизирует структуру (в т.ч. число эпизодов). Переписываются только затронутые эпизоды — остальные и их ассеты не тронуты."
+          testId="story-revise"
+        />
       )}
     </div>
   )
