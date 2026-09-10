@@ -435,6 +435,46 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [genAllAsk, setGenAllAsk] = useState<{ pendingCount: number; total: number; costPerScene: number; credits: number } | null>(null)
   const [genAllStarting, setGenAllStarting] = useState(false)
   const generatingCount = Object.values(activeGen).filter(Boolean).length
+  // Stage 40 — generation order of the episode: parallel (all scenes at once, joined by the scripted
+  // «Финал кадра») or chain (one after another, joined by the ACTUAL last-frame description).
+  const [chainMode, setChainMode] = useState<'parallel' | 'chain'>(initial.chainMode === 'chain' ? 'chain' : 'parallel')
+  const [chainRunActive, setChainRunActive] = useState<boolean>(!!initial.chainRunActive)
+  const [chainRunNote, setChainRunNote] = useState<string | null>(initial.chainRunNote ?? null)
+  const [chainSaving, setChainSaving] = useState(false)
+  const setChain = async (mode: 'parallel' | 'chain') => {
+    if (mode === chainMode || chainSaving) return
+    setChainSaving(true); setError(null)
+    try {
+      const res = await fetch(`/api/ai/episodes/${episode.id}/chain-mode`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chainMode: mode }) })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d?.error ?? 'Не удалось сменить режим')
+      setChainMode(d.chainMode === 'chain' ? 'chain' : 'parallel'); setChainRunActive(!!d.chainRunActive); setChainRunNote(d.chainRunNote ?? null)
+    } catch (e: any) { setError(e?.message ?? 'Ошибка') }
+    finally { setChainSaving(false) }
+  }
+  // While a chain run is active the server starts the next scene itself (after the previous one is
+  // published) — pick up every newly started job so its card shows progress, and read the run status.
+  useEffect(() => {
+    if (!chainRunActive) return
+    let stopped = false
+    const tick = async () => {
+      try {
+        const [jr, sr] = await Promise.all([
+          fetch(`/api/jobs?projectId=${project.id}&type=video&active=1`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)),
+          fetch(`/api/ai/episodes/${episode.id}/generate-all`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)),
+        ])
+        if (stopped) return
+        const ids = new Set(scenes.map((s) => s.id))
+        for (const j of jr?.jobs ?? []) if (j?.sceneId && ids.has(j.sceneId) && !pollTimers.current[j.sceneId]) { setActiveGen((p) => ({ ...p, [j.sceneId]: true })); setVideoJobs((p) => ({ ...p, [j.sceneId]: j })); patchScene(j.sceneId, { status: 'generating' }); pollVideoJob(j.sceneId, j.id) }
+        if (sr && typeof sr.chainRunActive === 'boolean') {
+          setChainRunNote(sr.chainRunNote ?? null)
+          if (!sr.chainRunActive && !(jr?.jobs ?? []).some((j: any) => j?.sceneId && ids.has(j.sceneId))) { setChainRunActive(false); void refreshCredits() }
+        }
+      } catch {}
+    }
+    const t = setInterval(tick, 6000)
+    return () => { stopped = true; clearInterval(t) }
+  }, [chainRunActive]) // eslint-disable-line react-hooks/exhaustive-deps
   const openGenerateAll = async () => {
     setError(null); setGenAllStarting(true)
     try {
@@ -442,6 +482,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       const d = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(d?.error ?? 'Не удалось получить оценку стоимости')
       if (!d.pendingCount) { setError('Все сцены уже готовы или генерируются'); return }
+      if (d.chainMode === 'chain' || d.chainMode === 'parallel') setChainMode(d.chainMode)
       setGenAllAsk({ pendingCount: d.pendingCount, total: d.total ?? 0, costPerScene: d.costPerScene ?? 0, credits: d.credits ?? credits })
     } catch (e: any) { setError(e?.message ?? 'Ошибка') }
     finally { setGenAllStarting(false) }
@@ -452,6 +493,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       const res = await postJobStart(`/api/ai/episodes/${episode.id}/generate-all`, {})
       const d = await res.json().catch(() => ({}))
       if (!res.ok || !Array.isArray(d?.jobs)) throw new Error(d?.error ?? 'Не удалось запустить генерацию')
+      if (d.chain) { setChainRunActive(true); setChainRunNote(null) }
       for (const j of d.jobs as Array<{ sceneId: string; jobId: string }>) {
         setActiveGen((p) => ({ ...p, [j.sceneId]: true }))
         setSceneError((prev) => { const n = { ...prev }; delete n[j.sceneId]; return n })
@@ -784,7 +826,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           </span>
           {/* Stage 39 — «Сгенерировать все сцены»: every pending / failed scene is started at once (parallel). */}
           {!allReady && (
-            <button onClick={openGenerateAll} disabled={genAllStarting || genAllAsk !== null} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all-scenes" title="Запустить генерацию всех ещё не готовых сцен одновременно">
+            <button onClick={openGenerateAll} disabled={genAllStarting || genAllAsk !== null || chainRunActive} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all-scenes" title={chainMode === 'chain' ? 'Запустить генерацию всех ещё не готовых сцен по очереди' : 'Запустить генерацию всех ещё не готовых сцен одновременно'}>
               {genAllStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Сгенерировать все сцены
             </button>
           )}
@@ -792,9 +834,22 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Собрать
           </button>
           <span className="text-xs text-muted-foreground" data-testid="batch-status">{scenes.filter((s) => validUrl(s.videoUrl)).length} из {scenes.length} сцен готово{generatingCount > 0 ? ` · генерируется: ${generatingCount}` : ''}{isAssembled ? ' · эпизод собран' : ''}</span>
+          {/* Stage 40 — generation order toggle: parallel vs chain. */}
+          <div className="flex w-full flex-wrap items-center gap-2" data-testid="chain-mode">
+            <span className="text-xs text-muted-foreground">Порядок генерации:</span>
+            <div className="inline-flex overflow-hidden rounded-lg border border-border text-xs">
+              <button type="button" onClick={() => setChain('parallel')} disabled={chainSaving || chainRunActive} className={`px-3 py-1.5 ${chainMode === 'parallel' ? 'bg-primary text-primary-foreground' : 'bg-transparent text-muted-foreground hover:bg-muted'} disabled:opacity-60`} data-testid="chain-mode-parallel" aria-pressed={chainMode === 'parallel'}>Параллельно</button>
+              <button type="button" onClick={() => setChain('chain')} disabled={chainSaving || chainRunActive} className={`px-3 py-1.5 ${chainMode === 'chain' ? 'bg-primary text-primary-foreground' : 'bg-transparent text-muted-foreground hover:bg-muted'} disabled:opacity-60`} data-testid="chain-mode-chain" aria-pressed={chainMode === 'chain'}>По цепочке</button>
+            </div>
+            {chainRunActive && <span className="inline-flex items-center gap-1 text-xs text-primary" data-testid="chain-run-active"><Loader2 className="h-3 w-3 animate-spin" /> Цепочка идёт: сцены генерируются по очереди</span>}
+          </div>
           <p className="w-full text-xs text-muted-foreground" data-testid="scenes-hint">
-            Сцены независимы: любую можно сгенерировать в любом порядке, несколько сцен могут генерироваться одновременно. <b>Сгенерировать все сцены:</b> запускает все ещё не готовые сцены сразу, параллельно (кредиты списываются за каждую сцену). <b>Собрать:</b> склеивает готовые ролики всех сцен в один эпизод без перегенерации — доступно, когда все сцены готовы.
+            {chainMode === 'chain'
+              ? <>По цепочке: сцены идут строго по очереди. После каждой готовой сцены её последний кадр описывается моделью, и это описание попадает в начало промпта следующей сцены. <b>Сгенерировать все сцены:</b> запускает первую сцену, остальные стартуют автоматически одна за другой (кредиты списываются за каждую сцену при её старте; при ошибке цепочка останавливается). </>
+              : <>Параллельно: все сцены стартуют сразу, стыковка между сценами — по сценарному описанию финального кадра предыдущей сцены («Финал кадра»). <b>Сгенерировать все сцены:</b> запускает все ещё не готовые сцены сразу (кредиты списываются за каждую сцену). </>}
+            <b>Собрать:</b> склеивает готовые ролики всех сцен в один эпизод без перегенерации — доступно, когда все сцены готовы.
           </p>
+          {chainRunNote && !chainRunActive && <p className="w-full text-sm text-destructive" data-testid="chain-run-note">{chainRunNote}</p>}
           {error && <p className="w-full text-sm text-destructive" data-testid="error">{error}</p>}
         </div>
 
@@ -979,8 +1034,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-5">
             <h3 className="font-display text-lg font-bold">Сгенерировать все сцены</h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              Будет запущено сразу <b>{genAllAsk.pendingCount}</b> сцен параллельно — примерно <b>{genAllAsk.total}</b> кр. ({genAllAsk.costPerScene} кр. за сцену). На балансе: {genAllAsk.credits} кр.
-              {genAllAsk.credits < genAllAsk.total && <span className="mt-1 block text-destructive">Кредитов хватит не на все сцены: запустятся только те, которые можно оплатить, остальные будут отмечены «Недостаточно кредитов».</span>}
+              {chainMode === 'chain'
+                ? <>Сцены будут сгенерированы <b>по очереди</b> ({genAllAsk.pendingCount} сцен) — всего примерно <b>{genAllAsk.total}</b> кр. ({genAllAsk.costPerScene} кр. за сцену). Кредиты списываются за каждую сцену при её старте. На балансе: {genAllAsk.credits} кр.</>
+                : <>Будет запущено сразу <b>{genAllAsk.pendingCount}</b> сцен параллельно — примерно <b>{genAllAsk.total}</b> кр. ({genAllAsk.costPerScene} кр. за сцену). На балансе: {genAllAsk.credits} кр.</>}
+              {genAllAsk.credits < genAllAsk.total && <span className="mt-1 block text-destructive">{chainMode === 'chain' ? 'Кредитов хватит не на все сцены: цепочка остановится, когда баланса не хватит на следующую сцену.' : 'Кредитов хватит не на все сцены: запустятся только те, которые можно оплатить, остальные будут отмечены «Недостаточно кредитов».'}</span>}
             </p>
             <div className="mt-4 flex justify-end gap-2">
               <button onClick={() => setGenAllAsk(null)} className="rounded-lg border border-border px-3 py-1.5 text-sm">Отмена</button>

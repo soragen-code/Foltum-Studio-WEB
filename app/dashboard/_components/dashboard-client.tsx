@@ -11,6 +11,7 @@ interface Project {
   name: string
   tier: string
   stage: string
+  isTest?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -110,6 +111,11 @@ export function DashboardClient() {
                         <h3 className="font-display font-semibold tracking-tight">
                           {project?.name ?? 'Untitled'}
                         </h3>
+                        {project?.isTest && (
+                          <span data-testid="project-test-badge" className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-400">
+                            Тест
+                          </span>
+                        )}
                       </div>
                       <ChevronRight className="h-4 w-4 text-muted-foreground transition group-hover:text-primary" />
                     </div>

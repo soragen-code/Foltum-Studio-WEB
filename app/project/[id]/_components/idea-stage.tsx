@@ -1,7 +1,8 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { Loader2, Wand2, Check, Pencil, User, X, Lightbulb, MessageSquareText, UserPlus, ChevronRight, Upload, FileText } from 'lucide-react'
+import { useRouter } from 'next/navigation'
+import { Loader2, Wand2, Check, Pencil, User, X, Lightbulb, MessageSquareText, UserPlus, ChevronRight, Upload, FileText, FlaskConical } from 'lucide-react'
 import { LocationCard, AddLocationForm, TierBadge, TIER_LABELS, groupByTier, type LocationCardData } from './cast-and-locations'
 import { CancelButton } from './cancel-button'
 
@@ -398,7 +399,16 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   const ideaAbort = useRef<AbortController | null>(null)
   // Idea source: 'manual' = producer writes the idea; 'auto' = the AI invents it from a genre;
   // 'upload' = the producer uploads a finished story file (Stage 12).
-  const [mode, setMode] = useState<'manual' | 'auto' | 'upload'>('manual')
+  // 'test' (Stage 40) = «Тестовая серия»: one hand-written scene prompt → one-scene episode, no story pipeline.
+  const [mode, setMode] = useState<'manual' | 'auto' | 'upload' | 'test'>('manual')
+  const router = useRouter()
+  const [testPrompt, setTestPrompt] = useState('')
+  const [testIdea, setTestIdea] = useState('')
+  const [testDialogue, setTestDialogue] = useState('')
+  const [testDuration, setTestDuration] = useState<number | 'auto'>('auto')
+  const [testMeta, setTestMeta] = useState<{ projectTitle?: string | null; title?: string; locationDesc?: string; action?: string; sceneKind?: string; endState?: string } | null>(null)
+  const [inventing, setInventing] = useState(false)
+  const [creatingTest, setCreatingTest] = useState(false)
   const [genres, setGenres] = useState<string[]>([])
   // Stage 14 (B): producer-chosen number of episodes (manual/auto). Default = 8; range 3..12.
   const [episodeCount, setEpisodeCount] = useState<number>(
@@ -412,10 +422,56 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   const fileInput = useRef<HTMLInputElement | null>(null)
 
   const hasResult = !!result
-  const busy = generating || approving || chaining || parsing
+  const busy = generating || approving || chaining || parsing || inventing || creatingTest
   const toggleGenre = (id: string) =>
     setGenres((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]))
   const canGenerate = mode === 'auto' ? genres.length > 0 : mode === 'upload' ? storyText.trim().length >= 20 : idea.trim().length >= 10
+  const canCreateTest = testPrompt.trim().length >= 20
+
+  // Stage 40 — let the LLM invent a complete test scene from a one-line idea (fills the form, nothing persisted).
+  const inventTestScene = async () => {
+    setError(''); setNotice(''); setInventing(true)
+    try {
+      const res = await fetch('/api/ai/test-scene', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idea: testIdea, durationSec: testDuration === 'auto' ? undefined : testDuration }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d?.error || 'Не удалось придумать сцену')
+      setTestPrompt(d.videoPrompt ?? '')
+      setTestDialogue(d.dialogue ?? '')
+      if (typeof d.durationSec === 'number') setTestDuration(d.durationSec)
+      setTestMeta({ projectTitle: d.projectTitle, title: d.title, locationDesc: d.locationDesc, action: d.action, sceneKind: d.sceneKind, endState: d.endState })
+      setNotice('Сцена придумана — проверьте промпт и реплики, при желании отредактируйте и создайте тестовую серию.')
+    } catch (e: any) {
+      setError(e?.message || 'Не удалось придумать сцену')
+    } finally {
+      setInventing(false)
+    }
+  }
+
+  // Stage 40 — create the one-scene test episode and jump straight to the episode page.
+  const createTestEpisode = async () => {
+    setError(''); setNotice(''); setCreatingTest(true)
+    try {
+      const res = await fetch(`/api/projects/${project.id}/test-episode`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: testPrompt,
+          dialogue: testDialogue.trim() || undefined,
+          durationSec: testDuration === 'auto' ? undefined : testDuration,
+          projectTitle: testMeta?.projectTitle ?? undefined,
+          title: testMeta?.title, locationDesc: testMeta?.locationDesc, action: testMeta?.action, sceneKind: testMeta?.sceneKind, endState: testMeta?.endState,
+        }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d?.error || 'Не удалось создать тестовую серию')
+      router.push(`/project/${project.id}/episode/${d.episodeId}`)
+    } catch (e: any) {
+      setError(e?.message || 'Не удалось создать тестовую серию')
+      setCreatingTest(false)
+    }
+  }
 
   // Stage 12 — parse the chosen story file into text on the server (no LLM here).
   const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -536,6 +592,15 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
           >
             Загрузить свой сюжет файлом
           </button>
+          <button
+            type="button"
+            onClick={() => setMode('test')}
+            disabled={busy}
+            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${mode === 'test' ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}
+            data-testid="idea-mode-test"
+          >
+            Тестовая серия
+          </button>
         </div>
 
         {error && <div className="mt-4 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
@@ -551,6 +616,75 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
             className="mt-4 w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
             data-testid="idea-input"
           />
+        ) : mode === 'test' ? (
+          <div className="mt-4 space-y-3" data-testid="idea-test-panel">
+            <p className="text-xs text-muted-foreground">
+              Одна сцена вместо целого сезона: вставьте готовый промпт для видеомодели (9 строк с тегами) или опишите идею в одну фразу — ИИ придумает сцену сам. Референсы персонажей не нужны: модель работает только по тексту. Название проекта подберётся автоматически по сюжету сцены. После создания вы попадёте на страницу серии, где можно посмотреть промпт и сгенерировать ролик.
+            </p>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input
+                value={testIdea}
+                onChange={(e) => setTestIdea(e.target.value)}
+                placeholder="Идея сцены, например: двое рыбаков спорят на пирсе о пропавшей лодке"
+                disabled={busy}
+                className="flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
+                data-testid="test-scene-idea"
+              />
+              <button
+                type="button"
+                onClick={inventTestScene}
+                disabled={busy || testIdea.trim().length < 5}
+                className="flex items-center justify-center gap-2 rounded-lg border border-border bg-muted/40 px-4 py-2 text-sm font-semibold transition hover:bg-muted disabled:opacity-50"
+                data-testid="test-scene-invent"
+              >
+                {inventing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+                Придумать сцену
+              </button>
+            </div>
+            <textarea
+              value={testPrompt}
+              onChange={(e) => setTestPrompt(e.target.value)}
+              placeholder={'Промпт сцены (английский, 9 строк):\n[SHOT TYPE] 0–5s wide … / 5–12s medium …\n[VISUAL STYLE] …\n[LIGHTING] …\n[BLOCKING] …\n[GAZE] …\n[NON-VERBAL] …\n[ACTION] …\n[CHARACTER] полное описание каждого человека в кадре\n[TRANSITION] hard cut'}
+              rows={11}
+              disabled={busy}
+              className="w-full resize-y rounded-lg border border-input bg-background px-4 py-3 font-mono text-xs outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
+              data-testid="test-scene-prompt"
+            />
+            <textarea
+              value={testDialogue}
+              onChange={(e) => setTestDialogue(e.target.value)}
+              placeholder={'Реплики (английский), по одной в строке: NAME (tone): "line" — или оставьте пустым для сцены без слов'}
+              rows={3}
+              disabled={busy}
+              className="w-full resize-y rounded-lg border border-input bg-background px-4 py-2 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
+              data-testid="test-scene-dialogue"
+            />
+            <div className="flex flex-wrap items-center gap-3">
+              <label htmlFor="test-scene-duration" className="text-sm font-medium text-foreground">Длительность</label>
+              <select
+                id="test-scene-duration"
+                value={testDuration}
+                onChange={(e) => setTestDuration(e.target.value === 'auto' ? 'auto' : Number(e.target.value))}
+                disabled={busy}
+                className="rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none"
+                data-testid="test-scene-duration"
+              >
+                <option value="auto">авто</option>
+                {[5, 10, 15, 20, 25, 30].map((n) => <option key={n} value={n}>{n} с</option>)}
+              </select>
+              <span className="text-xs text-muted-foreground">Списывается стоимость одного клипа выбранной длины.</span>
+            </div>
+            <button
+              type="button"
+              onClick={createTestEpisode}
+              disabled={busy || !canCreateTest}
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50 sm:w-auto"
+              data-testid="test-episode-create"
+            >
+              {creatingTest ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
+              Создать тестовую серию
+            </button>
+          </div>
         ) : mode === 'upload' ? (
           <div className="mt-4 space-y-3" data-testid="idea-upload-panel">
             <p className="text-xs text-muted-foreground">
@@ -620,7 +754,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
             />
           </div>
         )}
-        {mode !== 'upload' && (
+        {mode !== 'upload' && mode !== 'test' && (
           <div className="mt-4 flex flex-wrap items-center gap-3" data-testid="episode-count-field">
             <label htmlFor="episode-count" className="text-sm font-medium text-foreground">Количество эпизодов</label>
             <div className="inline-flex items-center overflow-hidden rounded-lg border border-border">
@@ -662,7 +796,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
             <span className="text-xs text-muted-foreground">ИИ построит драматургию (вступление → завязка → кульминация → развязка) ровно на {episodeCount} эпизодов (3–12).</span>
           </div>
         )}
-        <button
+        {mode !== 'test' && <button
           onClick={generate}
           disabled={busy || !canGenerate}
           className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50 sm:w-auto"
@@ -670,7 +804,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
         >
           {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
           {hasResult ? 'Сгенерировать заново' : mode === 'auto' ? 'Придумать историю и написать сезон' : mode === 'upload' ? 'Структурировать сюжет и написать сезон' : 'Написать сценарий сезона'}
-        </button>
+        </button>}
         {generating && !chaining && (
           <div className="mt-2 flex items-center justify-between gap-2" data-testid="idea-progress">
             <p className="min-w-0 text-xs text-muted-foreground">Шаг 1 из 2 · обычно 40–90 секунд: синопсис, локации и полный каст (главные, семья и окружение, эпизодические, массовка)...</p>

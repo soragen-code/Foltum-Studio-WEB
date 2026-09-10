@@ -50,7 +50,7 @@ const longRu = [
 const longWords = spokenWordCount(longEn);
 assert(Math.ceil(longWords / NATURAL_WORDS_PER_SEC) > SCENE_MAX_SECONDS, `long dialogue (${longWords} words) overflows one clip at natural pace`);
 
-const longScene: SceneScript = sceneScriptSchema.parse({ number: 1, shotType: "Medium two-shot", durationSec: 30, locationDesc: "INT — Lighthouse — night", characters: ["Anna", "Mark"], action: "Anna and Mark stand apart by the window.", dialogue: longEn, dialogueLocal: longRu, videoPrompt: prompt, presence: "Anna by the window, Mark by the stairs", entrances: "none", continuesFrom: "new-sequence" });
+const longScene: SceneScript = sceneScriptSchema.parse({ number: 1, shotType: "Medium two-shot", durationSec: 30, locationDesc: "INT — Lighthouse — night", characters: ["Anna", "Mark"], action: "Anna and Mark stand apart by the window.", dialogue: longEn, dialogueLocal: longRu, videoPrompt: prompt, endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway.", presence: "Anna by the window, Mark by the stairs", entrances: "none", continuesFrom: "new-sequence" });
 
 const pieces = splitOverlongScenes([longScene]);
 assert(pieces.length >= 2, `over-long dialogue split into ${pieces.length} scenes`);
@@ -66,9 +66,9 @@ assert(pieces.every((p) => p.locationDesc === longScene.locationDesc && p.videoP
 assert(pieces.every((p) => !!p.dialogueLocal && p.dialogueLocal.split(/\n/).length === p.dialogue.split(/\n/).length), "dialogueLocal mirrors the dialogue split line-for-line");
 
 // --- End-to-end through normalizeEpisodeScript: contiguous numbering + fitting durations, above the 15 cap ok ---
-const mkFit = (n: number) => Array.from({ length: n }, (_, i) => ({ number: i + 1, shotType: "Medium two-shot", durationSec: 30, locationDesc: "INT — Lighthouse — night", characters: ["Anna", "Mark"], action: "They talk.", dialogue: medium, videoPrompt: prompt }));
+const mkFit = (n: number) => Array.from({ length: n }, (_, i) => ({ number: i + 1, shotType: "Medium two-shot", durationSec: 30, locationDesc: "INT — Lighthouse — night", characters: ["Anna", "Mark"], action: "They talk.", dialogue: medium, videoPrompt: prompt, endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway." }));
 // 5 normal scenes + 1 over-long scene → over-long expands, others stay; result renumbered 1..N.
-const raw = episodeScriptSchema.parse({ visualIdentity: "photoreal cinematic", scenes: [...mkFit(5), { number: 6, shotType: "Medium two-shot", durationSec: 30, locationDesc: "INT — Lighthouse — night", characters: ["Anna", "Mark"], action: "They face off.", dialogue: longEn, dialogueLocal: longRu, videoPrompt: prompt }] });
+const raw = episodeScriptSchema.parse({ visualIdentity: "photoreal cinematic", scenes: [...mkFit(5), { number: 6, shotType: "Medium two-shot", durationSec: 30, locationDesc: "INT — Lighthouse — night", characters: ["Anna", "Mark"], action: "They face off.", dialogue: longEn, dialogueLocal: longRu, videoPrompt: prompt, endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway." }] });
 const norm = normalizeEpisodeScript(raw);
 assert(norm.scenes.length > 6, `episode expanded from 6 to ${norm.scenes.length} scenes by the split`);
 assert(norm.scenes.every((s, i) => s.number === i + 1), "scenes renumbered contiguously 1..N after split");
@@ -77,14 +77,14 @@ assert(hardProblems(validateEpisodeScript(norm)).length === 0, `an auto-split ep
 
 // --- Narration scenes split at sentence boundaries ---
 const longNarr = "For thirty long years the light on the cape never once failed, guiding the fishing boats safely home through every storm. The keeper climbed the iron stairs each dusk and each dawn without complaint. But on the night the fog rolled in thick and grey, something changed in the old tower forever. No one who was there that night ever spoke of what they saw above the waves.";
-const narrScene: SceneScript = sceneScriptSchema.parse({ number: 1, shotType: "Wide b-roll", durationSec: 30, locationDesc: "EXT — Cape — dusk", characters: [], action: "Waves crash under the tower.", dialogue: "[NO DIALOGUE]", sceneKind: "narration", voiceover: longNarr, voiceoverLocal: "Тридцать лет маяк не гас. Смотритель поднимался каждый вечер. Но в ночь тумана всё изменилось. Никто не рассказал, что видел.", videoPrompt: prompt });
+const narrScene: SceneScript = sceneScriptSchema.parse({ number: 1, shotType: "Wide b-roll", durationSec: 30, locationDesc: "EXT — Cape — dusk", characters: [], action: "Waves crash under the tower.", dialogue: "[NO DIALOGUE]", sceneKind: "narration", voiceover: longNarr, voiceoverLocal: "Тридцать лет маяк не гас. Смотритель поднимался каждый вечер. Но в ночь тумана всё изменилось. Никто не рассказал, что видел.", videoPrompt: prompt, endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway." });
 const narrPieces = splitOverlongScenes([narrScene]);
 assert(narrPieces.length >= 2, `over-long narration split into ${narrPieces.length} scenes`);
 assert(narrPieces.every((p) => p.sceneKind === "narration" && !!p.voiceover), "narration halves stay narration with voiceover");
 assert(narrPieces.slice(1).every((p) => p.continuesFrom === "same-location-continuation" && p.entrances === "none"), "later narration halves continue same-location");
 
 // --- A scene that already fits is NOT split ---
-const fits = splitOverlongScenes([sceneScriptSchema.parse({ number: 1, shotType: "Medium", durationSec: 30, locationDesc: "INT — room", characters: ["Anna"], action: "She speaks.", dialogue: medium, videoPrompt: prompt })]);
+const fits = splitOverlongScenes([sceneScriptSchema.parse({ number: 1, shotType: "Medium", durationSec: 30, locationDesc: "INT — room", characters: ["Anna"], action: "She speaks.", dialogue: medium, videoPrompt: prompt, endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway." })]);
 assert(fits.length === 1, "a scene that fits one clip is left untouched");
 
 console.log("ALL STAGE27 UNIT CHECKS PASSED");

@@ -4,6 +4,7 @@ import { auth } from '@/auth'
 import { prisma } from '@/lib/db'
 import { parseBody, createProjectSchema } from '@/lib/validations'
 import { legacyTierToPower, powerToLegacyTier, DEFAULT_POWER_TIER } from '@/lib/power-tier'
+import { PLACEHOLDER_PROJECT_NAME } from '@/lib/project-name'
 
 export async function GET() {
   try {
@@ -44,7 +45,8 @@ export async function POST(request: Request) {
     const project = await prisma.project.create({
       data: {
         userId: user.id,
-        name,
+        // Stage 40: the name is never asked — a placeholder until the story gives the project its title.
+        name: (name ?? '').trim() || PLACEHOLDER_PROJECT_NAME,
         tier: powerToLegacyTier(power),
         powerTier: power,
         // New projects start at the "idea" step of the new flow; legacy projects keep their old stages.

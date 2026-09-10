@@ -3,7 +3,7 @@ import { episodeScriptSchema, validateEpisodeScript, normalizeEpisodeScript, spo
 const assert = (c: unknown, m: string) => { if (!c) { console.error("FAIL:", m); process.exit(1); } console.log("ok:", m); };
 const prompt = "[SHOT TYPE]: Medium close-up\n[VISUAL STYLE]: x\n[LIGHTING]: y\n[BLOCKING]: z\n[GAZE]: a\n[NON-VERBAL]: b\n[ACTION]: c\n[CHARACTER]: d\n[TRANSITION]: e";
 const talk = 'АННА (тихо): "Ты знал об этом с самого начала и молчал всё это время? Каждый вечер ты смотрел мне в глаза и ничего не говорил."\nМАРК (резко): "Я молчал, потому что иначе ты бы ушла ещё тогда, той зимой. Ты бы собрала вещи и уехала в город, а маяк остался бы пустым."\nАННА: "Может, так было бы честнее. Но теперь мы оба заперты здесь с этой ложью."';
-const mk = (n: number) => Array.from({ length: n }, (_, i) => ({ number: i + 1, shotType: "Medium shot", durationSec: 30, locationDesc: "INT — Маяк — ночь", characters: ["Анна"], action: "Анна входит.", dialogue: i % 6 === 0 ? "[NO DIALOGUE]" : talk, videoPrompt: prompt }));
+const mk = (n: number) => Array.from({ length: n }, (_, i) => ({ number: i + 1, shotType: "Medium shot", durationSec: 30, locationDesc: "INT — Маяк — ночь", characters: ["Анна"], action: "Анна входит.", dialogue: i % 6 === 0 ? "[NO DIALOGUE]" : talk, videoPrompt: prompt, endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway." }));
 assert(spokenWordCount(talk) > 40, `spoken words = ${spokenWordCount(talk)} (no upper limit anymore)`);
 assert(dialogueSentenceCount(talk) >= 5 && dialogueSentenceCount(talk) <= 7, `dialogue sentences = ${dialogueSentenceCount(talk)}`);
 assert(dialogueSentenceCount("[NO DIALOGUE]") === 0, "silent scene has 0 sentences");
@@ -78,8 +78,8 @@ assert(failed.scenes.length === 6 && failed.scenes[0].dialogue === ru, "translat
 
 import { sceneReviseSchema, locationReviseSchema, renderScriptFromScenes } from "../lib/season";
 import { GENERATE_ALL_CONCURRENCY } from "../lib/generate-all-fanout";
-assert(sceneReviseSchema.safeParse({ shotType: "Close-up", durationSec: 30, locationDesc: "INT — Маяк — ночь", action: "Анна молчит.", dialogue: talk, videoPrompt: prompt }).success, "scene revise schema ok");
-assert(!sceneReviseSchema.safeParse({ shotType: "Close-up", durationSec: 40, locationDesc: "x", action: "y", dialogue: talk, videoPrompt: prompt }).success, "scene revise rejects 40s");
+assert(sceneReviseSchema.safeParse({ shotType: "Close-up", durationSec: 30, locationDesc: "INT — Маяк — ночь", action: "Анна молчит.", dialogue: talk, videoPrompt: prompt, endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway." }).success, "scene revise schema ok");
+assert(!sceneReviseSchema.safeParse({ shotType: "Close-up", durationSec: 40, locationDesc: "x", action: "y", dialogue: talk, videoPrompt: prompt, endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway." }).success, "scene revise rejects 40s");
 assert(locationReviseSchema.safeParse({ locationName: "Порт", locationDesc: "A foggy fishing port with rusted trawlers and sodium lamps.", scenes: [{ number: 1, locationDesc: "EXT — Порт — ночь", videoPrompt: prompt }] }).success, "location revise schema ok");
 assert(renderScriptFromScenes({ number: 1, title: "T", logline: "L", locationName: "Маяк", cliffhanger: "C" }, ["Анна"], ok.scenes).includes("СЦЕНА 12"), "script text renders 12 scenes");
 assert(GENERATE_ALL_CONCURRENCY === Number.POSITIVE_INFINITY, `Stage 39: parallel generation — no concurrency cap (was ${GENERATE_ALL_CONCURRENCY})`);

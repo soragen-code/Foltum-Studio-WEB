@@ -35,20 +35,26 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     where: { id, episode: { season: { project: { userId: session.user.id } } } },
     include: {
       characters: { include: { character: true } },
-      episode: { select: { id: true, location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true } } } },
+      episode: { select: { id: true, location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true } }, season: { select: { project: { select: { isTest: true } } } } } },
     },
   });
   if (!scene) return NextResponse.json({ error: "Сцена не найдена" }, { status: 404 });
   if (!scene.videoPrompt) return NextResponse.json({ error: "У сцены ещё нет видео-промпта" }, { status: 400 });
 
-  // Stage 38: the previous scene's frame is never sent as a reference any more — no lookup needed.
+  // Stage 38: the previous scene's frame is never sent as a reference. Stage 40: its END STATE
+  // (actual last-frame description in chain mode, otherwise the scripted «Финал кадра») opens the prompt.
+  const previous = scene.number > 1 ? await prisma.scene.findFirst({
+    where: { episodeId: scene.episode.id, number: scene.number - 1 },
+    select: { id: true, number: true, locationDesc: true, lastFrameUrl: true, endState: true, endStateActual: true },
+  }) : null;
   const built = buildScenePrompt({
     scene,
     characters: scene.characters.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront })),
     location: scene.episode.location ?? null,
-    previous: null,
+    previous,
     // Stage 33: always Seedance 2.5 (legacy stored ids are normalized the same way in the worker).
     provider: scene.videoModel,
+    textOnlyWhenNoReferences: Boolean(scene.episode.season?.project?.isTest),
   });
 
   return NextResponse.json({
@@ -58,6 +64,8 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     // Stage 33: the per-scene "no reference images" toggle and the resolved reference strategy.
     skipReferences: !!scene.skipReferences,
     referenceKind: built.referenceKind,
+    // Stage 40: the end-state hand-off actually used (null for scene 1 / location change / new sequence).
+    openingState: built.openingState,
   });
 }
 

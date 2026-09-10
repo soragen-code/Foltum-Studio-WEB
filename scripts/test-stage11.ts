@@ -17,7 +17,7 @@ const assert = (c: unknown, m: string) => { if (!c) { console.error("FAIL:", m);
 
 const prompt = "[SHOT TYPE]: Medium\n[VISUAL STYLE]: x\n[LIGHTING]: y\n[BLOCKING]: z\n[GAZE]: a\n[NON-VERBAL]: b\n[ACTION]: c\n[CHARACTER]: d\n[TRANSITION]: e";
 const talk = 'ANNA (softly): "You knew from the very start and stayed silent all this time? Every night you looked me in the eye and said nothing at all."\nMARK (sharply): "I stayed silent because otherwise you would have left back then, that winter."';
-const baseScene = { number: 1, shotType: "Medium shot", durationSec: 30, locationDesc: "INT — Office — day", characters: ["Anna"], action: "Anna enters the room.", dialogue: talk, videoPrompt: prompt };
+const baseScene = { number: 1, shotType: "Medium shot", durationSec: 30, locationDesc: "INT — Office — day", characters: ["Anna"], action: "Anna enters the room.", dialogue: talk, videoPrompt: prompt, endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway." };
 
 // ---------------------------------------------------------------------------------------------
 // TASK 2 — continuity: schemas stay backward compatible, prompts carry the rule, normalize keeps fields
@@ -49,8 +49,8 @@ assert(episodeScriptSystemPrompt("en").includes(CONTINUITY_RULE), "episode promp
 assert(sceneReviseSystemPrompt("ru").includes(CONTINUITY_RULE) && /PREVIOUS shot/.test(sceneReviseSystemPrompt("ru")) && /NEXT shot/.test(sceneReviseSystemPrompt("ru")), "scene-revise prompt embeds CONTINUITY_RULE + prev/next hand-off");
 
 // (d) scene-revise schema accepts continuity fields (and still accepts old payloads).
-assert(sceneReviseSchema.safeParse({ shotType: "Close-up", durationSec: 30, locationDesc: "INT — Office — day", action: "Anna waits.", dialogue: talk, videoPrompt: prompt }).success, "scene revise accepts payload without continuity fields");
-assert(sceneReviseSchema.safeParse({ shotType: "Close-up", durationSec: 30, locationDesc: "INT — Office — day", action: "Anna waits.", dialogue: talk, videoPrompt: prompt, presence: "Anna alone", entrances: "Mark exits through the door", continuesFrom: "character-moves" }).success, "scene revise accepts continuity fields");
+assert(sceneReviseSchema.safeParse({ shotType: "Close-up", durationSec: 30, locationDesc: "INT — Office — day", action: "Anna waits.", dialogue: talk, videoPrompt: prompt, endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway." }).success, "scene revise accepts payload without continuity fields");
+assert(sceneReviseSchema.safeParse({ shotType: "Close-up", durationSec: 30, locationDesc: "INT — Office — day", action: "Anna waits.", dialogue: talk, videoPrompt: prompt, endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway.", presence: "Anna alone", entrances: "Mark exits through the door", continuesFrom: "character-moves" }).success, "scene revise accepts continuity fields");
 
 console.log("ALL STAGE11 CONTINUITY CHECKS PASSED");
 

@@ -12,6 +12,10 @@ import { GenerationAttempt, safeProviderError, classifyProviderError, logAttempt
 import { updateJob, heartbeatJob, runInBackground, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { moderationHints } from "@/lib/sanitize-prompt";
 import { downscaleReferences, REFERENCE_WIDTH } from "@/lib/reference-downscale";
+import { describeLastFrame } from "@/lib/frame-state";
+import { nextChainScene, chainStopMessage, CHAIN_INSUFFICIENT_CREDITS } from "@/lib/chain-run";
+import { resolvePowerTier } from "@/lib/power-tier";
+import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
 
 export interface VideoJobParams {
   jobId: string;
@@ -147,12 +151,19 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       return;
     }
     await updateJob(jobId, { status: "processing", progress: 5, message: "Preparing photorealistic visual references..." });
+    // Stage 40: a (re)generation invalidates the previously described actual end-state of this scene.
+    if (scene.endStateActual) await prisma.scene.update({ where: { id: sceneId }, data: { endStateActual: null } }).catch(() => {});
     const links = await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true } });
+    // Stage 40: the previous scene's end-state (actual description of its last frame in chain mode,
+    // otherwise the scripted «Финал кадра») opens this scene's prompt. Its image is never sent.
     const previous = scene.number > 1 ? await prisma.scene.findFirst({
       where: { episodeId: scene.episodeId, number: scene.number - 1 },
-      select: { id: true, number: true, locationDesc: true, lastFrameUrl: true },
+      select: { id: true, number: true, locationDesc: true, lastFrameUrl: true, endState: true, endStateActual: true },
     }) : null;
-    const episodeLoc = await prisma.episode.findUnique({ where: { id: scene.episodeId }, select: { location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true } } } });
+    const episodeLoc = await prisma.episode.findUnique({ where: { id: scene.episodeId }, select: {
+      location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true } },
+      season: { select: { project: { select: { isTest: true } } } },
+    } });
 
     // Stage 4: speech is ALWAYS English. `dialogueEn` holds the voiced lines; legacy scenes written in
     // another language are translated once HERE (worker-only, network) and the translation is saved.
@@ -174,6 +185,8 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       previous,
       provider: params.provider,
       resolvedDialogueEn: dialogueEn,
+      // Stage 40: a test episode has no linked characters/location → plain text-to-video, no Flux still.
+      textOnlyWhenNoReferences: Boolean(episodeLoc?.season?.project?.isTest),
     });
     let prompt = built.prompt;
     const basePrompt = built.basePrompt;
@@ -266,7 +279,8 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       style: VISUAL_STYLE_ID, language: scene.language || "en", input: safeDiagnosticInput({ ...input, reference, ...submission }),
     };
     diagnostics.push(attempt); await persist(); logAttempt(attempt);
-    predictionId = await startVideoPrediction({ ...input, reference_images: referenceImages });
+    // Stage 40: `reference_images` is omitted entirely for text-only submissions (never sent as []).
+    predictionId = await startVideoPrediction({ ...input, ...(referenceImages.length ? { reference_images: referenceImages } : {}) });
     submitMessage = "Submitted to Seedance; checking the same prediction...";
     // Retry plan is still persisted for diagnostics, but moderation is now fail-fast:
     // no automatic rewrite/resubmit happens (see resumeVideoJob). The user edits the prompt manually.
@@ -335,19 +349,71 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, source: str
     const frame = await extractLastFrameBuffer(videoUrl);
     lastFrameUrl = await uploadBufferToS3(frame, `${key}-lastframe.jpg`, "image/jpeg");
   } catch (error) { console.warn("[video-job] frame:", safeProviderError(error)); }
+  // Stage 40 — chain mode: describe the ACTUAL last frame (vision) for the next scene's OPENING STATE.
+  const episode = await prisma.episode.findUnique({ where: { id: scene.episodeId }, select: { id: true, chainMode: true, chainRunActive: true } }).catch(() => null);
+  let endStateActual: string | null = null;
+  if (episode?.chainMode === "chain" && lastFrameUrl) {
+    const links = await prisma.sceneCharacter.findMany({ where: { sceneId: scene.id }, select: { character: { select: { name: true } } } }).catch(() => []);
+    endStateActual = await describeLastFrame(lastFrameUrl, scene, links.map(l => ({ name: l.character.name })));
+  }
   // Publish scene and completed job together. A stale lease holder cannot publish or refund.
-  await prisma.$transaction(async tx => {
+  const published = await prisma.$transaction(async tx => {
     const result = await tx.generationJob.updateMany({ where: owned(jobId, state), data: {
       status: "completed", progress: 100, message: "Video ready", error: null,
       resultData: JSON.stringify({ ...state, leaseUntil: 0, finalizing: false, videoUrl }),
     } });
-    if (!result.count) return;
+    if (!result.count) return false;
     await tx.scene.update({ where: { id: state.sceneId }, data: {
-      videoUrl, audioUrl: null, status: "generated", lastFrameUrl, subtitled: false,
+      videoUrl, audioUrl: null, status: "generated", lastFrameUrl, subtitled: false, endStateActual,
       // Persist the model that actually succeeded (set only when the auto-fallback switched models).
       ...(state.videoModel ? { videoModel: state.videoModel } : {}),
     } });
+    return true;
   });
+  // Stage 40 — chain run: this scene is done, start the next pending scene (charged now).
+  if (published && episode?.chainMode === "chain" && episode.chainRunActive) {
+    await continueChainRun(episode.id, scene.number).catch(err => console.error("[chain-run] continue failed:", safeProviderError(err)));
+  }
+}
+
+/**
+ * Stage 40 — chain mode. After a scene of an active chain run is published, charge and start the
+ * next scene (lowest number without a video). When no scene is left the run ends; when the balance
+ * cannot cover the next scene the run stops with a note on the episode.
+ */
+async function continueChainRun(episodeId: string, finishedSceneNumber: number): Promise<void> {
+  const episode = await prisma.episode.findUnique({
+    where: { id: episodeId },
+    include: { season: { include: { project: true } }, scenes: { orderBy: { number: "asc" } } },
+  });
+  if (!episode || episode.chainMode !== "chain" || !episode.chainRunActive) return;
+  const project = episode.season.project;
+  const next = nextChainScene(episode.scenes, finishedSceneNumber);
+  if (!next) {
+    await prisma.episode.update({ where: { id: episodeId }, data: { chainRunActive: false } });
+    return;
+  }
+  const active = await prisma.generationJob.findFirst({ where: { sceneId: next.id, type: "video", status: { in: ["pending", "processing"] } } });
+  if (active) return; // already running (e.g. started manually) — its own finalize continues the chain
+  const tier = resolvePowerTier(project);
+  const duration = sceneClipSeconds(tier.id, next.durationSec);
+  const cost = sceneClipCost(tier.id, duration);
+  const charged = await prisma.user.updateMany({ where: { id: project.userId, credits: { gte: cost } }, data: { credits: { decrement: cost } } });
+  if (charged.count !== 1) {
+    await prisma.episode.update({ where: { id: episodeId }, data: { chainRunActive: false, chainRunNote: chainStopMessage(next.number, CHAIN_INSUFFICIENT_CREDITS) } });
+    return;
+  }
+  await prisma.creditTransaction.create({ data: { userId: project.userId, amount: -cost, description: `Эпизод ${episode.number}, сцена ${next.number} — генерация видео по цепочке (${tier.id})` } });
+  await prisma.scene.update({ where: { id: next.id }, data: { status: "generating", language: "en", videoModel: normalizeVideoModel(null) } });
+  const job = await prisma.generationJob.create({ data: { type: "video", status: "processing", progress: 2, message: "Цепочка: старт следующей сцены...", projectId: project.id, sceneId: next.id } });
+  runInBackground(() => runVideoJob({ jobId: job.id, sceneId: next.id, projectId: project.id, userId: project.userId, cost, duration, resolution: tier.resolution }));
+}
+
+/** Stage 40 — chain mode: a failed/canceled scene stops the active chain run with a Russian note. */
+async function stopChainRun(sceneId: string, error: string): Promise<void> {
+  const scene = await prisma.scene.findUnique({ where: { id: sceneId }, select: { number: true, episode: { select: { id: true, chainRunActive: true } } } }).catch(() => null);
+  if (!scene?.episode?.chainRunActive) return;
+  await prisma.episode.update({ where: { id: scene.episode.id }, data: { chainRunActive: false, chainRunNote: chainStopMessage(scene.number, error) } }).catch(() => {});
 }
 
 /**
@@ -392,18 +458,21 @@ async function handleFailure(jobId: string, ctx: { sceneId: string; userId?: str
     message = await moderationMessage(ctx.sceneId, error, state);
   }
   console.error("[video-job] failed:", { jobId, sceneId: ctx.sceneId, error: message });
-  await prisma.$transaction(async tx => {
+  const applied = await prisma.$transaction(async tx => {
     const result = await tx.generationJob.updateMany({
       where: state ? owned(jobId, state) : { id: jobId, status: { in: ["pending", "processing"] } },
       data: { status: "failed", error: message, message: "Failed", ...(state ? { resultData: JSON.stringify({ ...state, leaseUntil: 0 }) } : {}) },
     });
-    if (!result.count) return;
+    if (!result.count) return false;
     await tx.scene.update({ where: { id: ctx.sceneId }, data: { status: "pending" } });
     if (ctx.userId && Number(ctx.cost) > 0) {
       await tx.user.update({ where: { id: ctx.userId }, data: { credits: { increment: Number(ctx.cost) } } });
       await tx.creditTransaction.create({ data: { userId: ctx.userId, amount: Number(ctx.cost), description: `Refund: video generation failed (${jobId})` } });
     }
+    return true;
   });
+  // Stage 40: in chain mode a failed scene stops the run (later scenes are not charged or started).
+  if (applied) await stopChainRun(ctx.sceneId, `[${kind}] ${safeProviderError(error)}`);
 }
 
 /** One short provider check per poll, no sleeping invocation and no new prediction. */

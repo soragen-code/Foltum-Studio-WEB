@@ -168,3 +168,17 @@ ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "skipReferences" BOOLEAN NOT NULL D
 -- When true the previous scene's last frame is NOT sent as a reference image; character portraits,
 -- location angles and crowds are still sent as usual.
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "skipPreviousFrame" BOOLEAN NOT NULL DEFAULT false;
+
+-- Stage 40: scripted / actual end-state hand-off between scenes (additive, nullable).
+-- endState = screenwriter's description of the final frame; endStateActual = vision-model description of the
+-- real last frame (chain mode). The next scene's prompt opens with OPENING STATE = endStateActual ?? endState.
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "endState" TEXT;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "endStateActual" TEXT;
+
+-- Stage 40: per-episode generation order ("parallel" | "chain") + chain-run bookkeeping.
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "chainMode" TEXT NOT NULL DEFAULT 'parallel';
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "chainRunActive" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "chainRunNote" TEXT;
+
+-- Stage 40: «Тестовая серия» — one-scene sandbox projects.
+ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "isTest" BOOLEAN NOT NULL DEFAULT false;

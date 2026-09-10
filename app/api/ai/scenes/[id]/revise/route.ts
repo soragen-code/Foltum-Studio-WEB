@@ -35,9 +35,9 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   const next = scene.episode.scenes.find((s) => s.number === scene.number + 1);
   // Stage 11 — give the model the neighbours' continuity so the rewritten shot still starts from the
   // previous shot's ending and hands off cleanly into the next (no teleporting / vanishing characters).
-  const prevCont = prev ? `\n  presence(end): ${prev.presence ?? "—"} | entrances: ${prev.entrances ?? "—"} | link: ${prev.continuesFrom ?? "—"}` : "";
+  const prevCont = prev ? `\n  presence(end): ${prev.presence ?? "—"} | entrances: ${prev.entrances ?? "—"} | link: ${prev.continuesFrom ?? "—"}\n  endState (this shot must OPEN from it): ${(prev.endStateActual ?? prev.endState) ?? "—"}` : "";
   const nextCont = next ? `\n  presence(start): ${next.presence ?? "—"} | link: ${next.continuesFrom ?? "—"}` : "";
-  const user = `EPISODE ${scene.episode.number} «${scene.episode.title}»: ${scene.episode.logline}\nLOCATION: ${scene.episode.locationName} — ${scene.episode.locationDesc}\nCHARACTERS IN SCENE: ${scene.characters.map((c) => `${c.character.name}: ${c.character.appearance ?? ""}`).join("; ")}\n\nPREVIOUS SHOT: ${prev ? `${prev.action}\n${prev.dialogue}${prevCont}` : "(none)"}\nNEXT SHOT: ${next ? `${next.action}\n${next.dialogue}${nextCont}` : "(none)"}\n\nCURRENT SCENE #${scene.number}\nshotType: ${scene.shotType}\ndurationSec: ${scene.durationSec ?? 15}\nlocationDesc: ${scene.locationDesc}\naction: ${scene.action}\npresence: ${scene.presence ?? "—"}\nentrances: ${scene.entrances ?? "—"}\ncontinuesFrom: ${scene.continuesFrom ?? "—"}\ndialogue:\n${scene.dialogue}\nvideoPrompt:\n${scene.videoPrompt}\n\nINSTRUCTION: ${instruction}`;
+  const user = `EPISODE ${scene.episode.number} «${scene.episode.title}»: ${scene.episode.logline}\nLOCATION: ${scene.episode.locationName} — ${scene.episode.locationDesc}\nCHARACTERS IN SCENE: ${scene.characters.map((c) => `${c.character.name}: ${c.character.appearance ?? ""}`).join("; ")}\n\nPREVIOUS SHOT: ${prev ? `${prev.action}\n${prev.dialogue}${prevCont}` : "(none)"}\nNEXT SHOT: ${next ? `${next.action}\n${next.dialogue}${nextCont}` : "(none)"}\n\nCURRENT SCENE #${scene.number}\nshotType: ${scene.shotType}\ndurationSec: ${scene.durationSec ?? 15}\nlocationDesc: ${scene.locationDesc}\naction: ${scene.action}\npresence: ${scene.presence ?? "—"}\nentrances: ${scene.entrances ?? "—"}\ncontinuesFrom: ${scene.continuesFrom ?? "—"}\nendState: ${scene.endState ?? "—"}\ndialogue:\n${scene.dialogue}\nvideoPrompt:\n${scene.videoPrompt}\n\nINSTRUCTION: ${instruction}`;
   try {
     const raw0 = sceneReviseSchema.parse(await chatJSON(sceneReviseSystemPrompt(language), user, { temperature: 0.6, maxTokens: 3000 }));
     // Seedance voices `dialogue` → guarantee English (swap swapped fields / translate).
@@ -57,6 +57,9 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       language: "en",
       subtitled: false,
       videoUrl: null,
+      // Stage 40 — the revised scene has a new scripted end state; any vision-described actual state is stale.
+      endState: raw.endState.trim(),
+      endStateActual: null,
     };
     const updated = await prisma.scene.update({ where: { id: scene.id }, data: { ...parsed, status: "pending" } });
     const scenes = scene.episode.scenes.map((s) => (s.id === scene.id ? { ...s, ...parsed } : s));

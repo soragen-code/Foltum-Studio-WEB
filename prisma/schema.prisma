@@ -81,6 +81,7 @@ model Project {
   charactersApproved Boolean @default(false)
   charactersLocked Boolean @default(false)
   structureApproved Boolean @default(false)
+  isTest      Boolean  @default(false) // stage 40: «Тестовая серия» — a one-scene sandbox project (no season structure, references optional)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -160,6 +161,9 @@ model Episode {
   status        String   @default("draft") // draft, script_ready, scenes_ready, approved, assembled
   videoUrl      String?  // assembled episode video URL
   videoIsPublic Boolean  @default(false)
+  chainMode     String   @default("parallel") // stage 40: scene generation order — "parallel" (all at once, scripted end-state hand-off) | "chain" (one after another, the actual last frame is described and fed to the next scene)
+  chainRunActive Boolean @default(false) // stage 40: a «Сгенерировать все» chain run is in progress — the worker starts the next pending scene after each finished one
+  chainRunNote  String?  @db.Text // stage 40: why the last chain run stopped («Цепочка остановлена на сцене N: …»), null while running / after a clean finish
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -269,6 +273,8 @@ model Scene {
   promptOverride String? @db.Text // stage 31: manual per-scene final-prompt override — when non-empty it replaces the auto-assembled prompt TEXT verbatim (image/reference chaining is unaffected); null = use auto prompt
   skipReferences Boolean @default(false) // stage 33/36: submit this scene WITHOUT any reference images (text-only), previous-scene frame included
   skipPreviousFrame Boolean @default(false) // stage 37: keep character/location references but do NOT send the previous scene's last frame (moderation trigger)
+  endState      String?  @db.Text // stage 40: SCRIPTED end state of the scene's final frame (English, from the screenwriter) — the next scene's OPENING STATE in parallel mode
+  endStateActual String? @db.Text // stage 40: ACTUAL end state described by a vision model from the generated last frame (chain mode) — wins over endState for the next scene
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

@@ -79,12 +79,41 @@ export interface ScenePromptLocation {
   imageDetail?: string | null;
 }
 
-/** The adjacent previous scene. Stage 38: informational only — its last frame is no longer sent. */
+/**
+ * The adjacent previous scene. Stage 38: its last frame IMAGE is never sent. Stage 40: its END STATE
+ * text is — `endStateActual` (vision description of the real last frame, chain mode) wins over the
+ * scripted `endState`; the winner opens the next scene's prompt as OPENING STATE.
+ */
 export interface ScenePromptPrevious {
   id: string;
   number: number;
   locationDesc?: string | null;
   lastFrameUrl?: string | null;
+  endState?: string | null;
+  endStateActual?: string | null;
+}
+
+/** Stage 40 — `continuesFrom` values that START a new visual sequence (no opening-state hand-off). */
+export const SEQUENCE_BREAK_LINKS = ["location-change", "new-sequence"] as const;
+export function breaksSequence(continuesFrom?: string | null): boolean {
+  const k = (continuesFrom ?? "").trim().toLowerCase();
+  return (SEQUENCE_BREAK_LINKS as readonly string[]).includes(k);
+}
+
+/** Stage 40 — prefix of the OPENING STATE block inserted before the 9-line visual prompt. */
+export const OPENING_STATE_PREFIX = "OPENING STATE (frame 1 — continue exactly from here): ";
+
+/**
+ * Stage 40 — the end state the scene must open from: the previous scene's actual (vision-described)
+ * last frame when available, else its scripted end state; null for scene 1, for a sequence break
+ * (location-change / new-sequence) or when the previous scene has neither.
+ */
+export function resolveOpeningState(scene: { continuesFrom?: string | null }, previous: ScenePromptPrevious | null | undefined): string | null {
+  if (!previous || breaksSequence(scene.continuesFrom)) return null;
+  const actual = (previous.endStateActual ?? "").trim();
+  const scripted = (previous.endState ?? "").trim();
+  const text = (actual || scripted).replace(/\s+/g, " ").trim();
+  return text || null;
 }
 
 export interface BuildScenePromptInput {
@@ -103,6 +132,11 @@ export interface BuildScenePromptInput {
    * what the preview does, so it never triggers a translation.
    */
   resolvedDialogueEn?: string | null;
+  /**
+   * Stage 40 — when the scene has NO styled character / location / crowd references, submit it
+   * text-only instead of generating a new-scene Flux still (test episodes, reference-less projects).
+   */
+  textOnlyWhenNoReferences?: boolean;
 }
 
 /**
@@ -134,6 +168,8 @@ export interface BuildScenePromptResult {
   referenceKind: ScenePromptReferenceKind;
   /** true when the submitted text is the producer's manual override (Stage 31). */
   hasOverride: boolean;
+  /** Stage 40 — the OPENING STATE text inserted before the visual prompt (null when none applies). */
+  openingState: string | null;
   /** Reference descriptor persisted with the prediction (referencePredictionId is added later for new_scene_reference). */
   reference: Record<string, unknown>;
   /** Reference image URLs for character_references; empty for text_only and (until the worker generates it) new_scene_reference. */
@@ -195,10 +231,17 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     : isAction
       ? ACTION_PACE_DIRECTION
       : `${PACE_DIRECTION} ${CONFRONTATION_STAGING_SENTENCE}`;
+  // Stage 40 — scripted / actual end-state hand-off: when this scene continues the previous one
+  // (not a location-change / new-sequence), the previous scene's end state opens the prompt so the
+  // model starts frame 1 exactly where the last clip ended. The previous frame IMAGE is still never sent.
+  const openingState = resolveOpeningState(scene, previous);
+  const visualWithOpening = openingState
+    ? `${OPENING_STATE_PREFIX}${openingState}\n\n${stripSlowDirections(visualPrompt)}`
+    : stripSlowDirections(visualPrompt);
   // Sanitize visual descriptions BEFORE adding speech: never rewrite scripted dialogue / narration.
   let prompt = isNarration
-    ? `${buildNarrationAudioPrompt(stripSlowDirections(visualPrompt), scene.voiceover)}\n\n${direction}`
-    : `${buildNativeAudioPrompt(stripSlowDirections(visualPrompt), dialogue, characters.map(c => ({ name: c.name })), targetLanguage, { action: isAction })}\n\n${direction}`;
+    ? `${buildNarrationAudioPrompt(visualWithOpening, scene.voiceover)}\n\n${direction}`
+    : `${buildNativeAudioPrompt(visualWithOpening, dialogue, characters.map(c => ({ name: c.name })), targetLanguage, { action: isAction })}\n\n${direction}`;
   // Stage 32: the assembled prompt is submitted VERBATIM — no moderation softening. The season
   // script now writes the real physical/dramatic action on purpose, so auto-softening here would
   // undo it. If the provider rejects an individual shot (E005) the job fails fast and the producer
@@ -253,7 +296,6 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const characterRefs: Ref[] = individuals.map(c => ({ url: c.imageFront!, kind: "character", id: c.characterId, note: `defines ${c.name}'s photorealistic appearance and identity; use the scene's staging and camera.` }));
   const locationRefs: Ref[] = locationAngles.map(a => ({ url: a.url, kind: "location", id: effectiveLocation!.id, note: `the location "${effectiveLocation!.name}" — ${a.angle} angle. Same place, same time of day, same light and palette in every shot. Keep the camera inside this location and match this lighting exactly.` }));
   const crowdRefs: Ref[] = crowds.map(c => ({ url: c.imageFront!, kind: "crowd", id: c.characterId, note: `defines the look of the group "${c.name}" (extras): who they are and how they are dressed.` }));
-  void previous; // Stage 38: accepted for compatibility, never used as a reference.
   // Reduced set (individual characters + the wide location angle) kept for diagnostics.
   const fallbackRefs: SceneReference[] = [...characterRefs, ...locationRefs.slice(0, 1)].slice(0, REFERENCE_IMAGE_CAP).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
   const skipReferences = !!scene.skipReferences;
@@ -287,6 +329,11 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
       prompt += "\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
       if (keptLocation.length) prompt += "\nCamera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location references. Only the camera angle changes between shots. The characters are physically present in this place and interact with its objects and surfaces; the cuts show the same location from different angles with real depth (foreground, characters, background) — never a flat backdrop.";
     }
+  } else if (input.textOnlyWhenNoReferences) {
+    // Stage 40 — «Тестовая серия» / scenes with no linked characters or location: submit text-only
+    // instead of generating a Flux still first (no reference_images key at all).
+    reference = { mode: "text_only", sceneId: scene.id, reason: "no_references" };
+    referenceKind = "text_only";
   } else {
     // One new scene composition, never overwrite the user's old portraits or frames. This is
     // original text-to-image design, not a way to bypass a provider refusal. The worker generates
@@ -308,6 +355,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     modelSlug,
     referenceKind,
     hasOverride,
+    openingState,
     reference,
     referenceImages,
     retryRefs,

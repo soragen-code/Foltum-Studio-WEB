@@ -75,7 +75,8 @@ export async function generateVideo(input: SeedanceInput): Promise<string> {
           generate_audio: true,
           watermark: input.watermark ?? false,
           output_format: "mp4",
-          reference_images: input.reference_images ?? [],
+          // Stage 40: omitted entirely for text-only submissions (an empty array is never sent).
+          ...(input.reference_images?.length ? { reference_images: input.reference_images } : {}),
           ...(input.seed !== undefined ? { seed: input.seed } : {}),
         },
       });
@@ -104,7 +105,8 @@ function seedanceInput(input: SeedanceInput) {
     generate_audio: true,
     watermark: input.watermark ?? false,
     output_format: "mp4",
-    reference_images: input.reference_images ?? [],
+    // Stage 40: omitted entirely for text-only submissions (an empty array is never sent).
+    ...(input.reference_images?.length ? { reference_images: input.reference_images } : {}),
     ...(input.seed !== undefined ? { seed: input.seed } : {}),
   };
 }

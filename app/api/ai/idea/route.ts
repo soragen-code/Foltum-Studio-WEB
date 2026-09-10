@@ -8,6 +8,7 @@ import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, ideaSchema } from "@/lib/validations";
 import { chatJSON } from "@/lib/ai";
 import { ideaSystemPrompt, ideaUserPrompt, ideaAutoSystemPrompt, ideaAutoUserPrompt, ideaFromStorySystemPrompt, ideaFromStoryUserPrompt, genresToEnglish, normalizeIdeaResult, castExpansionSystemPrompt, castExpansionUserPrompt, normalizeCastExpansion, characterCardToData, locationsFromSynopsisSystemPrompt, locationsResultSchema, dedupeCast, sanitizeLocationCard, detectLanguage, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
+import { resolveProjectName } from "@/lib/project-name";
 
 /**
  * POST /api/ai/idea  { projectId, idea }
@@ -115,13 +116,19 @@ export async function POST(request: Request) {
       }
       await tx.project.update({
         where: { id: projectId },
-        data: { idea: ideaForStore, synopsis: result!.synopsis, language: result!.language, synopsisApproved: false, ...(episodeCountToStore !== undefined ? { episodeCount: episodeCountToStore } : {}) },
+        data: {
+          idea: ideaForStore, synopsis: result!.synopsis, language: result!.language, synopsisApproved: false,
+          // Stage 40: the project is named automatically from the plot (model title → first words of the idea/synopsis).
+          name: resolveProjectName(result!.title, fromStory ? storyText : (idea && idea.trim()) ? idea : result!.synopsis),
+          ...(episodeCountToStore !== undefined ? { episodeCount: episodeCountToStore } : {}),
+        },
       });
     }, { timeout: 30_000 });
 
     const characters = await prisma.character.findMany({ where: { projectId }, orderBy: { createdAt: "asc" } });
     const locations = await prisma.location.findMany({ where: { projectId }, orderBy: { createdAt: "asc" } });
-    return NextResponse.json({ synopsis: result.synopsis, language: result.language, characters, locations, castWarning: extra.length ? "" : castWarning });
+    const renamed = await prisma.project.findUnique({ where: { id: projectId }, select: { name: true } });
+    return NextResponse.json({ synopsis: result.synopsis, language: result.language, projectName: renamed?.name ?? null, characters, locations, castWarning: extra.length ? "" : castWarning });
   } catch (err: any) {
     console.error("Idea generation error:", err);
     return NextResponse.json({ error: "Generation failed: " + (err?.message ?? "Unknown error") }, { status: 500 });

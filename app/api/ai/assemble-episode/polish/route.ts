@@ -131,6 +131,7 @@ export async function POST(request: Request) {
         entrances: s.entrances,
         continuesFrom: s.continuesFrom,
         videoPrompt: s.videoPrompt,
+        endState: s.endState,
       }));
 
       let audit;
@@ -228,7 +229,8 @@ export async function POST(request: Request) {
         const cost = sceneClipCost(tier.id, duration);
         await prisma.scene.update({
           where: { id: scene.id },
-          data: { videoPrompt: sel.correctedVideoPrompt, videoUrl: null, status: "generating", language: "en" },
+          // Stage 40 — the corrected scene gets its corrected scripted end state; the vision-described actual state is stale.
+          data: { videoPrompt: sel.correctedVideoPrompt, videoUrl: null, status: "generating", language: "en", ...(sel.correctedEndState ? { endState: sel.correctedEndState } : {}), endStateActual: null },
         });
         await prisma.user.update({ where: { id: user.id }, data: { credits: { decrement: cost } } });
         await prisma.creditTransaction.create({
