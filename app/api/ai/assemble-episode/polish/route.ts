@@ -38,8 +38,9 @@ import {
   type AssembleResultData,
 } from "@/lib/assemble-plan";
 
-/** Mirror of GENERATE_ALL_CONCURRENCY — how many re-gen scenes run at once. */
-const POLISH_CONCURRENCY = 3;
+// Stage 23 (frame-sync): the polish regen runs SEQUENTIALLY in ascending scene order (see the
+// regen loop below), so the previous per-scene concurrency pool was removed — the last-frame →
+// first-frame chain requires a scene's predecessor to be committed before the scene starts.
 const QUEUE_HEARTBEAT_MS = 45_000;
 
 const validUrl = (u?: string | null) => typeof u === "string" && u.startsWith("http") && u.length > 10;
@@ -158,7 +159,10 @@ export async function POST(request: Request) {
         });
         sceneInputs.push({ id: s.id, number: s.number, videoPrompt: s.videoPrompt, hasActiveJob: !!active });
       }
-      const selection = selectPolishScenes(audit.scenes, sceneInputs);
+      // Stage 23 (frame-sync): regenerate flagged scenes in ASCENDING scene order so the
+      // last-frame(N-1) → first-frame(N) chain is built in order (a scene reads the freshly
+      // committed last frame of its — possibly just-regenerated — predecessor).
+      const selection = selectPolishScenes(audit.scenes, sceneInputs).sort((a, b) => a.number - b.number);
       const issues = selection.map((x) => ({ number: x.number, issue: x.issue }));
 
       // Write the found issues into the job so the client can render them, move to the regen phase.
@@ -234,27 +238,25 @@ export async function POST(request: Request) {
         queued.push({ jobId: vjob.id, sceneId: scene.id, cost, duration });
       }
 
-      // ── Run the re-gen jobs with bounded concurrency, honouring cancel between scenes ───────
+      // ── Run the re-gen jobs SEQUENTIALLY in ascending scene order, honouring cancel between scenes ──
+      // Stage 23 (frame-sync): the flagged scenes MUST be regenerated one-by-one in scene order so the
+      // last-frame → first-frame chain is respected: when scene N runs, runVideoJob reads its previous
+      // scene's freshly committed `lastFrameUrl` (via canChainFrame) and uses it as the start frame.
+      // `queued` is already ascending because `selection` was sorted above. Parallel regen would let an
+      // adjacent successor read a stale predecessor frame and break the chain.
       let completed = 0;
       const refreshProgress = () => writeRegen(completed, 0);
-      if (queued.length) {
-        let idx = 0;
-        const worker = async () => {
-          while (idx < queued.length) {
-            if (await canceled()) return;
-            const item = queued[idx++];
-            await updateJob(item.jobId, { status: "processing", progress: 2, message: "Полировка: старт видеомодели…" });
-            try {
-              await runVideoJob({ jobId: item.jobId, sceneId: item.sceneId, projectId: project.id, userId: user.id, cost: item.cost, duration: item.duration, resolution: tier.resolution });
-            } catch (err) {
-              console.error("[assemble-polish] scene regen failed:", err);
-            }
-            completed += 1;
-            await refreshProgress();
-            await new Promise((r) => setTimeout(r, 1200));
-          }
-        };
-        await Promise.all(Array.from({ length: Math.min(POLISH_CONCURRENCY, queued.length) }, worker));
+      for (const item of queued) {
+        if (await canceled()) break;
+        await updateJob(item.jobId, { status: "processing", progress: 2, message: "Полировка: старт видеомодели…" });
+        try {
+          await runVideoJob({ jobId: item.jobId, sceneId: item.sceneId, projectId: project.id, userId: user.id, cost: item.cost, duration: item.duration, resolution: tier.resolution });
+        } catch (err) {
+          console.error("[assemble-polish] scene regen failed:", err);
+        }
+        completed += 1;
+        await refreshProgress();
+        await new Promise((r) => setTimeout(r, 1200));
       }
 
       if (await canceled()) { await markCanceled(jobId, "Полировка отменена."); return; }

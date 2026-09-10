@@ -762,13 +762,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <button onClick={assemble} disabled={!allReady || assembling || !!polish || !!assembleJobId} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? 'Ассембл — финальная полировка: Seedance пересматривает весь эпизод и исправляет логические нестыковки и переходы' : 'Доступно, когда все сцены готовы'}>
             {assembling || polish || assembleJobId ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clapperboard className="h-4 w-4" />} Ассембл (финальная полировка)
           </button>
-          {/* Stage 19 (TASK 2) — compact inline result player + download, right by the «Ассембл» button. */}
-          {validUrl(episode.videoUrl) && (
-            <div className="w-full max-w-xs" data-testid="assemble-inline-video">
-              <video src={episode.videoUrl} controls playsInline className="w-full rounded-lg bg-black" />
-              <a href={episode.videoUrl} download className="mt-1 inline-flex items-center gap-1 text-sm text-primary" data-testid="assemble-inline-download"><Download className="h-4 w-4" /> Скачать mp4</a>
-            </div>
-          )}
+          {/* Stage 23 — the assembled clip is shown only in the dedicated «Собранный эпизод» frame
+              below; the duplicate inline preview next to the «Ассембл» button was removed. */}
           {batchActive ? (
             <span className="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground" data-testid="batch-status">
               <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
