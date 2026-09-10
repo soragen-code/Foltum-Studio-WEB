@@ -7,11 +7,11 @@ import { extractLastFrameBuffer } from "@/lib/ffmpeg";
 import { normalizeVideoModel, videoModelSlug } from "@/lib/ai-models";
 import { getBucketConfig } from "@/lib/aws-config";
 import { VISUAL_STYLE_ID } from "@/lib/visual-style";
-import { buildScenePrompt } from "@/lib/scene-prompt";
+import { buildScenePrompt, type SceneReference } from "@/lib/scene-prompt";
 import { GenerationAttempt, safeProviderError, classifyProviderError, logAttempt, safeDiagnosticInput } from "@/lib/generation-diagnostics";
 import { updateJob, heartbeatJob, runInBackground, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { moderationHints } from "@/lib/sanitize-prompt";
-import { downscaleReference, downscaleReferences, REFERENCE_WIDTH } from "@/lib/reference-downscale";
+import { downscaleReferences, REFERENCE_WIDTH } from "@/lib/reference-downscale";
 
 export interface VideoJobParams {
   jobId: string;
@@ -49,17 +49,21 @@ export interface VideoJobState {
   videoModel?: string;
   /** Everything needed to resubmit the same scene with a softer prompt. */
   retry?: ModerationRetryInput;
-  /* --- Stage 33: what was ACTUALLY submitted, for honest moderation diagnostics --- */
+  /* --- Stage 33/36: what was ACTUALLY submitted, for honest moderation diagnostics --- */
   /** Exact prompt text sent to the provider. */
   submittedPrompt?: string;
   /** true when submittedPrompt is the producer's manual override (Stage 31). */
   hasOverride?: boolean;
-  /** adjacent_frame | character_references | new_scene_reference | text_only */
+  /** character_references | new_scene_reference | text_only */
   referenceKind?: string;
-  /** Counts of the reference images actually sent. */
+  /** Counts of the reference images actually sent (`chained` = the previous scene's last frame was included). */
   refCounts?: { characters: number; location: number; crowd: number; scene: number; chained: boolean };
   /** Width the references were downscaled to before submission. */
   referenceWidth?: number;
+  /** Stage 36: the exact ordered list of reference images sent (768px URLs), for UI previews. */
+  submittedReferences?: { url: string; kind: string }[];
+  /** Stage 36: id of the previous scene whose last frame was sent as a reference, if any. */
+  previousFrameSceneId?: string | null;
 }
 
 export interface ModerationRetryInput {
@@ -69,9 +73,7 @@ export interface ModerationRetryInput {
   model: string;
   duration: number;
   resolution: string;
-  /** Adjacent last frame (image-to-video), if the first attempt used one. */
-  image?: string;
-  /** Reference set of the first attempt. */
+  /** Reference set of the first attempt (Stage 36: includes the previous frame as kind "previous_frame"). */
   refs: { url: string; kind: string; note: string }[];
   /** Reduced set for the last retry: speaking characters + one location angle. */
   fallbackRefs: { url: string; kind: string; note: string }[];
@@ -86,7 +88,7 @@ const EXPECTED_VIDEO_MS = Number(process.env.SEEDANCE_EXPECTED_MS ?? 10 * 60 * 1
 // End-to-end budget, not an invocation timer. Check provider terminal state BEFORE enforcing it.
 export const VIDEO_DEADLINE_MS = 30 * 60 * 1000;
 const CHECK_LEASE_MS = 60_000;
-/** Stage 33: lean reference set — at most REFERENCE_IMAGE_CAP images ([Image1]..[ImageN] in the prompt). */
+/** Stage 36: reference mode for every scene — at most REFERENCE_IMAGE_CAP images ([Image1]..[ImageN] in the prompt). */
 export { MAX_REFERENCE_IMAGES, REFERENCE_IMAGE_CAP } from "@/lib/scene-prompt";
 const FINALIZE_LEASE_MS = 12 * 60 * 1000;
 
@@ -176,9 +178,8 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     let prompt = built.prompt;
     const basePrompt = built.basePrompt;
     const fallbackRefs = built.fallbackRefs;
-    let image = built.image;
     let referenceImages = built.referenceImages;
-    let retryRefs = built.retryRefs;
+    let retryRefs: SceneReference[] = built.retryRefs;
     let reference = built.reference;
 
     if (built.newSceneReference) {
@@ -212,8 +213,8 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       // Seedream reference is PNG (keeps its C2PA content-credentials watermark on purpose).
       const key = `${folderPrefix}public/references/${projectId}/${VISUAL_STYLE_ID}/${sceneId}-${jobId}.png`;
       const stored = await uploadRemoteToS3(referenceUrl, key, "image/png");
-      // Stage 33: the still is sent to Seedance as a lean 768px JPEG too (PNG master stays in S3).
-      referenceImages = [await downscaleReference(stored, projectId)];
+      // The still is downscaled to 768px together with the rest of the list below (PNG master stays in S3).
+      referenceImages = [stored];
       reference = { ...reference, referencePredictionId: attempt.predictionId };
       retryRefs = [{ url: stored, kind: "scene", note: built.newSceneReferenceNote! }];
     }
@@ -231,42 +232,46 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     // The planned duration is already ≤30 s upstream (Seedance 2.5 limit); no per-model cap.
     const clipDuration = Number(params.duration ?? 5);
 
-    // Stage 33: lean references — every image actually sent (portraits, location angle, crowds,
-    // the chained last frame, the new-scene still) is a 768px-wide JPEG. Fail-safe: originals on error.
+    // Stage 36: every scene is submitted in reference mode (or text-only). Every image actually sent
+    // (portraits, all location angles, crowds, the previous scene's last frame, the new-scene still)
+    // is a 768px-wide JPEG — the whole ordered list goes through one downscale pass. Fail-safe:
+    // originals on error. The first-frame `image` path no longer exists.
     if (built.referenceKind === "text_only") {
       // Producer asked for text-only submission: no images at all, plain text-to-video.
       referenceImages = [];
       retryRefs = [];
-    } else {
-      if (image) image = await downscaleReference(image, projectId);
-      if (referenceImages.length) referenceImages = await downscaleReferences(referenceImages, projectId);
+    } else if (referenceImages.length) {
+      referenceImages = await downscaleReferences(referenceImages, projectId);
     }
     const refCounts = {
       characters: retryRefs.filter(r => r.kind === "character").length,
       location: retryRefs.filter(r => r.kind === "location").length,
       crowd: retryRefs.filter(r => r.kind === "crowd").length,
       scene: retryRefs.filter(r => r.kind === "scene").length,
-      chained: !!image,
+      chained: retryRefs.some(r => r.kind === "previous_frame"),
     };
+    // Exact submitted list (downscaled URLs, same order as [ImageN]) for the scene-card previews.
+    const submittedReferences = referenceImages.map((url, i) => ({ url, kind: retryRefs[i]?.kind ?? "reference" }));
     const submission = {
       hasOverride: built.hasOverride, referenceKind: built.referenceKind, refCounts,
-      referenceWidth: REFERENCE_WIDTH, referenceImageCount: image ? 1 : referenceImages.length,
+      referenceWidth: REFERENCE_WIDTH, referenceImageCount: referenceImages.length,
+      previousFrameSceneId: built.previousFrameSceneId,
     };
     const input = {
       prompt, model: modelSlug, duration: clipDuration, resolution: String(params.resolution ?? "480p"),
-      aspect_ratio: image ? "adaptive" : "9:16", generate_audio: true, watermark: false,
+      aspect_ratio: "9:16", generate_audio: true, watermark: false,
     };
     attempt = {
       jobId, sceneId, attempt: 1, model: modelSlug, phase: "video", status: "submitting",
       style: VISUAL_STYLE_ID, language: scene.language || "en", input: safeDiagnosticInput({ ...input, reference, ...submission }),
     };
     diagnostics.push(attempt); await persist(); logAttempt(attempt);
-    predictionId = await startVideoPrediction({ ...input, ...(image ? { image } : { reference_images: referenceImages }) });
+    predictionId = await startVideoPrediction({ ...input, reference_images: referenceImages });
     submitMessage = "Submitted to Seedance; checking the same prediction...";
     // Retry plan is still persisted for diagnostics, but moderation is now fail-fast:
     // no automatic rewrite/resubmit happens (see resumeVideoJob). The user edits the prompt manually.
     pipelineExtra.retry = {
-      basePrompt, model: modelSlug, duration: input.duration, resolution: input.resolution, image, refs: retryRefs, fallbackRefs,
+      basePrompt, model: modelSlug, duration: input.duration, resolution: input.resolution, refs: retryRefs, fallbackRefs,
     };
     pipelineExtra.moderationRetries = 0;
     // What was ACTUALLY submitted — handleFailure builds its moderation message from this, never
@@ -276,6 +281,8 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     pipelineExtra.referenceKind = built.referenceKind;
     pipelineExtra.refCounts = refCounts;
     pipelineExtra.referenceWidth = REFERENCE_WIDTH;
+    pipelineExtra.submittedReferences = submittedReferences;
+    pipelineExtra.previousFrameSceneId = built.previousFrameSceneId;
     attempt.predictionId = predictionId; attempt.status = "processing";
     state = { predictionId, sceneId, projectId, userId, cost, startedAt: Date.now(), diagnostics, ...pipelineExtra };
     // This checkpoint MUST succeed: never swallow the prediction ID write.
@@ -344,11 +351,12 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, source: str
 }
 
 /**
- * Stage 33 — honest moderation diagnostics. Shown verbatim in the UI (job.error).
+ * Stage 33/36 — honest moderation diagnostics. Shown verbatim in the UI (job.error).
  * The hints are computed from the prompt that was ACTUALLY submitted (persisted in the job state at
- * submit time), not from the scene's stored text. When the text is a manual override and carries no
- * textual trigger, the images are the likely cause — say so, with the exact counts that were sent,
- * and point to the text-only toggle. Fail-fast: no automatic rewrite or resubmission.
+ * submit time), not from the scene's stored text. The message lists exactly what was sent — portraits,
+ * location angles, crowd groups and whether the previous scene's last frame was included — and, when
+ * the text is a manual override without textual triggers, names the images as the likely cause and
+ * points to the text-only toggle. Fail-fast: no automatic rewrite or resubmission.
  */
 async function moderationMessage(sceneId: string, error: unknown, state?: VideoJobState): Promise<string> {
   let submitted = state?.submittedPrompt ?? "";
@@ -358,21 +366,21 @@ async function moderationMessage(sceneId: string, error: unknown, state?: VideoJ
     submitted = (scene?.promptOverride ?? "").trim() || [scene?.videoPrompt, scene?.action, scene?.dialogueEn, scene?.dialogue].filter(Boolean).join("\n");
   }
   const hints = moderationHints(submitted);
-  const chained = state?.referenceKind === "adjacent_frame" || !!state?.refCounts?.chained;
   const counts = state?.refCounts;
+  const withPreviousFrame = !!counts?.chained;
   const imagesSent = counts ? counts.characters + counts.location + counts.crowd + counts.scene + (counts.chained ? 1 : 0) : null;
   const countsText = counts
-    ? ` Отправлено изображений: ${imagesSent} (портреты: ${counts.characters}, локация: ${counts.location}, массовка: ${counts.crowd}${counts.scene ? `, кадр сцены: ${counts.scene}` : ""}${counts.chained ? ", кадр предыдущей сцены" : ""}).`
+    ? ` Отправлено изображений: ${imagesSent} — портретов: ${counts.characters}, ракурсов локации: ${counts.location}, массовки: ${counts.crowd}${counts.scene ? `, кадр сцены: ${counts.scene}` : ""}, кадр предыдущей сцены: ${withPreviousFrame ? "да" : "нет"}.`
     : "";
   let message: string;
   if (state?.hasOverride && !hints.length && state.referenceKind !== "text_only") {
-    message = `[moderation] Сцена не прошла модерацию провайдера. Текст промпта — ручной (override), текстовые триггеры не найдены; вероятная причина — референс‑изображения (лица персонажей/локация).${countsText} Попробуйте вариант «Отправить без референс‑изображений» в окне «Смотреть промпт».`;
+    message = `[moderation] Сцена не прошла модерацию провайдера. Текст промпта — ручной (override), текстовые триггеры не найдены; вероятная причина — референс‑изображения (лица персонажей, локация${withPreviousFrame ? ", кадр предыдущей сцены" : ""}).${countsText} Попробуйте вариант «Отправить без референс‑изображений» в окне «Смотреть промпт».`;
   } else {
     message = `[moderation] Сцена не прошла модерацию провайдера. Отредактируйте промпт вручную: откройте его кнопкой «Смотреть промпт», исправьте, сохраните свой вариант и запустите генерацию заново.` +
       (hints.length ? ` Вероятные триггеры: ${hints.map(h => `«${h}»`).join(", ")}.` : "") +
       (state?.referenceKind === "text_only" ? " Референс‑изображения не отправлялись (только текст)." : countsText);
   }
-  if (chained) message += " Первый кадр берётся из предыдущей сцены; если блокируется он — перегенерируйте предыдущую сцену.";
+  if (withPreviousFrame) message += " Если блокируется кадр предыдущей сцены — включите «Отправить без референс‑изображений» или перегенерируйте предыдущую сцену.";
   message += ` Код провайдера: ${safeProviderError(error)}`;
   return message;
 }

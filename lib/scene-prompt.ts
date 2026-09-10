@@ -23,16 +23,16 @@ import { styledVisualPrompt, isStyledAsset, canChainFrame, locationAngleImages }
 import { normalizeVideoModel, videoModelSlug, type VideoModelId } from "@/lib/ai-models";
 
 /**
- * Stage 33: hard cap on reference images per submission. Seedance 2.5 technically accepts up to 30,
- * but a lean set (a few faces + ONE location angle) keeps the composition cinematic instead of
- * flattening every character into the frame, and fewer photoreal faces = fewer moderation false
- * positives on the input images.
+ * Stage 36: hard cap on reference images per submission — the provider maximum for Seedance 2.5
+ * `reference_images` (30). Every scene is now submitted in reference mode with its whole cast, every
+ * styled location angle, the linked crowd groups and (when the chain conditions hold) the previous
+ * scene's last frame as the LAST reference. If the set exceeds the cap, crowds are trimmed first,
+ * then extra location angles (the wide angle stays) — characters and the previous frame are never
+ * dropped. See buildScenePrompt for the ordering.
  */
-export const REFERENCE_IMAGE_CAP = 6;
+export const REFERENCE_IMAGE_CAP = 30;
 /** @deprecated alias kept for older imports — use REFERENCE_IMAGE_CAP. */
 export const MAX_REFERENCE_IMAGES = REFERENCE_IMAGE_CAP;
-/** Max individual (non-crowd) character portraits per submission. */
-export const REFERENCE_CHARACTER_CAP = 4;
 
 export interface ScenePromptScene {
   id: string;
@@ -47,14 +47,13 @@ export interface ScenePromptScene {
   continuesFrom?: string | null;
   /**
    * Stage 31: manual final-prompt override. When non-empty it REPLACES the auto-assembled prompt
-   * TEXT verbatim (no moderation softening, no `[ImageN]` notes appended); image/reference chaining
-   * is still computed as usual. null/empty = use the auto prompt.
+   * TEXT verbatim (no moderation softening, no `[ImageN]` notes appended); the reference image set
+   * is still computed and SENT as usual. null/empty = use the auto prompt.
    */
   promptOverride?: string | null;
   /**
-   * Stage 33: when true and the scene is NOT frame-chained, the video is submitted text-only —
-   * no character / location reference images, no `[ImageN]` notes, no Flux still. A chained scene
-   * ignores it (the previous scene's last frame is always the first frame).
+   * Stage 36: when true the video is submitted text-only for ANY scene — no character / location
+   * references, no crowd groups, no previous-scene frame, no `[ImageN]` notes, no Flux still.
    */
   skipReferences?: boolean | null;
 }
@@ -99,7 +98,19 @@ export interface BuildScenePromptInput {
   resolvedDialogueEn?: string | null;
 }
 
-export type ScenePromptReferenceKind = "adjacent_frame" | "character_references" | "new_scene_reference" | "text_only";
+/**
+ * Stage 36: the first-frame (`image`) path — formerly "adjacent_frame" — is gone. A scene that
+ * continues the previous one now carries that frame as its LAST reference image ("previous_frame").
+ */
+export type ScenePromptReferenceKind = "character_references" | "new_scene_reference" | "text_only";
+
+/** One reference image as submitted to the provider (order preserved). */
+export interface SceneReference {
+  url: string;
+  /** character | location | crowd | previous_frame | scene */
+  kind: string;
+  note: string;
+}
 
 export interface BuildScenePromptResult {
   /** The FINAL prompt submitted to Seedance (with the `[ImageN]` notes already appended). */
@@ -118,14 +129,14 @@ export interface BuildScenePromptResult {
   hasOverride: boolean;
   /** Reference descriptor persisted with the prediction (referencePredictionId is added later for new_scene_reference). */
   reference: Record<string, unknown>;
-  /** Reference image URLs for character_references; empty for adjacent_frame, text_only and (until the worker generates it) new_scene_reference. */
+  /** Reference image URLs for character_references; empty for text_only and (until the worker generates it) new_scene_reference. */
   referenceImages: string[];
-  /** Full reference set for moderation resubmission (empty until the worker fills it for new_scene_reference). */
-  retryRefs: { url: string; kind: string; note: string }[];
-  /** Reduced reference set used by the last moderation retry: speaking characters + one location angle. */
-  fallbackRefs: { url: string; kind: string; note: string }[];
-  /** Adjacent last frame (image-to-video) when chaining, else undefined. */
-  image?: string;
+  /** Full ordered reference set with kinds/notes (empty until the worker fills it for new_scene_reference). */
+  retryRefs: SceneReference[];
+  /** Reduced reference set kept for diagnostics: individual characters + the wide location angle. */
+  fallbackRefs: SceneReference[];
+  /** Id of the previous scene whose last frame was appended as the "previous_frame" reference, else null. */
+  previousFrameSceneId: string | null;
   /** true when the worker must generate a fresh Flux still (no chain, no references). */
   newSceneReference: boolean;
   /** Flux text-to-image prompt for the new-scene reference still (only when newSceneReference). */
@@ -177,7 +188,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // undo it. If the provider rejects an individual shot (E005) the job fails fast and the producer
   // fixes that scene by hand via a manual per-scene override (Stage 30/31).
   // A manual override replaces the auto-assembled TEXT verbatim and suppresses the `[ImageN]` notes
-  // appended below; image/reference chaining is still computed as usual either way.
+  // appended below; the reference image set is still computed (and sent) as usual either way.
   const override = (scene.promptOverride ?? "").trim();
   const hasOverride = override.length > 0;
   if (hasOverride) {
@@ -188,22 +199,28 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const model = normalizeVideoModel(input.provider);
   const modelSlug = videoModelSlug(model);
 
-  let image: string | undefined;
   let referenceImages: string[] = [];
-  let retryRefs: BuildScenePromptResult["retryRefs"] = [];
+  let retryRefs: SceneReference[] = [];
   let reference: Record<string, unknown>;
   let referenceKind: ScenePromptReferenceKind;
   let newSceneReference = false;
   let referencePrompt: string | undefined;
   let newSceneReferenceNote: string | undefined;
+  let previousFrameSceneId: string | null = null;
 
-  // Stage 33 — LEAN reference set (non-chained scenes only). Priority order:
-  //   1. up to REFERENCE_CHARACTER_CAP individual characters that are actually IN THIS SCENE — the
-  //      SceneCharacter links are already scene-specific (written per scene by the season worker);
-  //      characters named in this scene's dialogue / videoPrompt are ranked first, then the rest of
-  //      the linked list in its original order (deterministic);
-  //   2. exactly ONE location angle — the wide `imageUrl` when present, else the first styled angle;
-  //   3. crowd groups only while room remains under REFERENCE_IMAGE_CAP.
+  // Stage 36 — reference mode for EVERY scene. Ordered set:
+  //   1. ALL individual (non-CROWD) characters linked to THIS scene (SceneCharacter is written per
+  //      scene by the season worker) that have a styled front portrait — no character cap. Characters
+  //      named in this scene's dialogue / videoPrompt are ranked first, then the rest of the linked
+  //      list in its original order (deterministic);
+  //   2. ALL styled location angles (wide first — locationAngleImages' own order), each with its own note;
+  //   3. crowd groups linked to the scene;
+  //   4. when canChainFrame(scene, previous) holds, the previous scene's last frame as the LAST
+  //      reference ("previous_frame") with a continuity note — it is no longer sent as the first-frame
+  //      `image` (the provider forbids combining that with reference images, which is exactly what
+  //      made characters drift between chained scenes).
+  // Trim order when the set exceeds REFERENCE_IMAGE_CAP: crowds first, then extra location angles
+  // (the wide angle is kept), never the characters or the previous frame.
   const styled = characters.filter(c => isStyledAsset(c.imageFront));
   const individualsAll = styled.filter(c => c.tier !== "CROWD");
   const crowds = styled.filter(c => c.tier === "CROWD");
@@ -214,42 +231,50 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   };
   const mentioned = individualsAll.filter(c => isMentioned(c.name));
   const unmentioned = individualsAll.filter(c => !isMentioned(c.name));
-  const individuals = [...mentioned, ...unmentioned].slice(0, REFERENCE_CHARACTER_CAP);
+  const individuals = [...mentioned, ...unmentioned];
   const locationAngles = location ? locationAngleImages(location) : [];
   const effectiveLocation = locationAngles.length ? location : null;
-  // The wide establishing angle carries the place best; the builder's own ordering already puts it
-  // first when available, so "first styled angle" == wide-when-present.
-  const wideAngle = locationAngles.find(a => a.url === (location?.imageUrl ?? "")) ?? locationAngles[0];
-  const characterRefs = individuals.map(c => ({ url: c.imageFront!, kind: "character", id: c.characterId, note: `defines ${c.name}'s photorealistic appearance and identity; use the scene's staging and camera.` }));
-  const locationRefs = wideAngle ? [{ url: wideAngle.url, kind: "location", id: effectiveLocation!.id, note: `the location "${effectiveLocation!.name}" — ${wideAngle.angle} angle. Same place, same time of day, same light and palette in every shot. Keep the camera inside this location and match this lighting exactly.` }] : [];
-  // Reduced set (speaking characters + one location angle) kept for diagnostics.
-  const fallbackRefs = [...characterRefs, ...locationRefs].slice(0, REFERENCE_IMAGE_CAP).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
+  type Ref = SceneReference & { id: string };
+  const characterRefs: Ref[] = individuals.map(c => ({ url: c.imageFront!, kind: "character", id: c.characterId, note: `defines ${c.name}'s photorealistic appearance and identity; use the scene's staging and camera.` }));
+  const locationRefs: Ref[] = locationAngles.map(a => ({ url: a.url, kind: "location", id: effectiveLocation!.id, note: `the location "${effectiveLocation!.name}" — ${a.angle} angle. Same place, same time of day, same light and palette in every shot. Keep the camera inside this location and match this lighting exactly.` }));
+  const crowdRefs: Ref[] = crowds.map(c => ({ url: c.imageFront!, kind: "crowd", id: c.characterId, note: `defines the look of the group "${c.name}" (extras): who they are and how they are dressed.` }));
+  const chained = canChainFrame(scene, previous);
+  const previousFrameRefs: Ref[] = chained
+    ? [{ url: previous!.lastFrameUrl!, kind: "previous_frame", id: previous!.id, note: "the final frame of the previous scene: start this scene from the same camera position, character placement, lighting and time of day; continue the action from here." }]
+    : [];
+  // Reduced set (individual characters + the wide location angle) kept for diagnostics.
+  const fallbackRefs: SceneReference[] = [...characterRefs, ...locationRefs.slice(0, 1)].slice(0, REFERENCE_IMAGE_CAP).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
   const skipReferences = !!scene.skipReferences;
 
-  if (canChainFrame(scene, previous)) {
-    image = previous!.lastFrameUrl!;
-    reference = { mode: "adjacent_frame", sceneId: previous!.id };
-    referenceKind = "adjacent_frame";
-  } else if (skipReferences) {
-    // Stage 33: producer asked for text-only submission (no reference images at all) — typically
-    // after a provider block that the text alone cannot explain. Plain text-to-video.
+  if (skipReferences) {
+    // Stage 33/36: producer asked for text-only submission (no reference images at all, not even the
+    // previous scene's frame) — typically after a provider block that the text alone cannot explain.
     reference = { mode: "text_only", sceneId: scene.id };
     referenceKind = "text_only";
-  } else if (individuals.length || effectiveLocation || crowds.length) {
-    const room = Math.max(0, REFERENCE_IMAGE_CAP - characterRefs.length - locationRefs.length);
-    const refs: { url: string; note: string; kind: string; id: string }[] = [
-      ...characterRefs,
-      ...locationRefs,
-      ...crowds.slice(0, room).map(c => ({ url: c.imageFront!, kind: "crowd", id: c.characterId, note: `defines the look of the group "${c.name}" (extras): who they are and how they are dressed.` })),
-    ].slice(0, REFERENCE_IMAGE_CAP);
+  } else if (characterRefs.length || locationRefs.length || crowdRefs.length || previousFrameRefs.length) {
+    // Mandatory part first (never trimmed), then fill the remaining room: wide angle → extra angles → crowds.
+    const mandatory = characterRefs.length + previousFrameRefs.length;
+    let room = Math.max(0, REFERENCE_IMAGE_CAP - mandatory);
+    const keptLocation = locationRefs.slice(0, room);
+    room -= keptLocation.length;
+    const keptCrowds = crowdRefs.slice(0, room);
+    const refs: Ref[] = [...characterRefs, ...keptLocation, ...keptCrowds, ...previousFrameRefs].slice(0, REFERENCE_IMAGE_CAP);
     referenceImages = refs.map(r => r.url);
     retryRefs = refs.map(r => ({ url: r.url, kind: r.kind, note: r.note }));
-    reference = { mode: "character_references", characterIds: refs.filter(r => r.kind !== "location").map(r => r.id), locationId: effectiveLocation?.id ?? null, kinds: refs.map(r => r.kind) };
+    previousFrameSceneId = previousFrameRefs.length && refs.some(r => r.kind === "previous_frame") ? previous!.id : null;
+    reference = {
+      mode: "character_references",
+      characterIds: refs.filter(r => r.kind === "character" || r.kind === "crowd").map(r => r.id),
+      locationId: keptLocation.length ? effectiveLocation!.id : null,
+      kinds: refs.map(r => r.kind),
+      ...(previousFrameSceneId ? { previousFrameSceneId } : {}),
+    };
     referenceKind = "character_references";
-    // With a manual override the producer owns the full text — never append the reference notes.
+    // With a manual override the producer owns the full text — never append the reference notes
+    // (the images are still sent).
     if (!hasOverride) {
       prompt += "\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
-      if (effectiveLocation) prompt += "\nCamera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location reference. Only the camera angle changes between shots. The characters are physically present in this place and interact with its objects and surfaces; the cuts show the same location from different angles with real depth (foreground, characters, background) — never a flat backdrop.";
+      if (keptLocation.length) prompt += "\nCamera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location references. Only the camera angle changes between shots. The characters are physically present in this place and interact with its objects and surfaces; the cuts show the same location from different angles with real depth (foreground, characters, background) — never a flat backdrop.";
     }
   } else {
     // One new scene composition, never overwrite the user's old portraits or frames. This is
@@ -276,7 +301,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     referenceImages,
     retryRefs,
     fallbackRefs,
-    image,
+    previousFrameSceneId,
     newSceneReference,
     referencePrompt,
     newSceneReferenceNote,

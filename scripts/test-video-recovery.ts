@@ -148,6 +148,12 @@ test("submission (legacy provider seedance-2.0): игнорируется — Se
   const st = JSON.parse(row.resultData);
   assert.equal(st.submittedPrompt, lastVideoInput.prompt); // exact submitted text persisted for diagnostics
   assert.equal(st.referenceWidth, 768);
+  // Stage 36: reference mode only — never a first-frame `image`, always the explicit 9:16 ratio.
+  assert.equal(lastVideoInput.image, undefined);
+  assert.ok(Array.isArray(lastVideoInput.reference_images) && lastVideoInput.reference_images.length === 1);
+  assert.equal(lastVideoInput.aspect_ratio, "9:16");
+  assert.deepEqual(st.submittedReferences.map((r: any) => r.kind), ["character"]);
+  assert.equal(st.refCounts.chained, false);
   assert.equal(row.status, "processing");
   assert.equal(JSON.parse(row.resultData).predictionId, "existing");
 });
@@ -165,7 +171,7 @@ test("moderation (fail-fast): a refusal fails the job immediately — no resubmi
   try {
     reset();
     // A retry plan IS present (chained scene) — before Stage 30 this would have triggered a rewrite/resubmit.
-    row.resultData = moderationState({ image: chainFrame, refs: [], fallbackRefs: [{ url: "https:" + "//x/portrait.jpg", kind: "character", note: "face" }] });
+    row.resultData = moderationState({ refs: [{ url: chainFrame, kind: "previous_frame", note: "previous frame" }], fallbackRefs: [{ url: "https:" + "//x/portrait.jpg", kind: "character", note: "face" }] });
     provider = { status: "failed", error: "flagged as sensitive E005" };
     await check();
     assert.equal(submissions, 0);                 // NO new prediction was submitted
@@ -191,27 +197,31 @@ test("moderation (Stage 33): override without textual triggers → blames the re
     assert.equal(refunds, 1);
     assert.match(row.error, /^\[moderation\]/);
     assert.match(row.error, /ручной \(override\)/);
-    assert.match(row.error, /Отправлено изображений: 3 \(портреты: 2, локация: 1, массовка: 0\)/);
+    assert.match(row.error, /Отправлено изображений: 3 — портретов: 2, ракурсов локации: 1, массовки: 0, кадр предыдущей сцены: нет/);
     assert.match(row.error, /Отправить без референс‑изображений/);
     assert.match(row.error, /Код провайдера: /);
-    assert.doesNotMatch(row.error, /Первый кадр берётся из предыдущей сцены/);
+    assert.doesNotMatch(row.error, /Если блокируется кадр предыдущей сцены/);
   } finally { Date.now = originalNow; }
 });
 
-test("moderation (Stage 33): chained scene adds the previous-frame note", async () => {
+test("moderation (Stage 36): previous frame among the references → explicit hint, counts list it as «да»", async () => {
   Date.now = () => clock;
   try {
     reset();
     row.resultData = JSON.stringify({
       ...base(), submittedPrompt: "[ACTION]: Theo stands.", hasOverride: false,
-      referenceKind: "adjacent_frame", refCounts: { characters: 0, location: 0, crowd: 0, scene: 0, chained: true }, referenceWidth: 768,
+      referenceKind: "character_references", refCounts: { characters: 1, location: 2, crowd: 0, scene: 0, chained: true }, referenceWidth: 768,
+      submittedReferences: [{ url: "https:" + "//x/theo.jpg", kind: "character" }, { url: chainFrame, kind: "previous_frame" }],
     });
     provider = { status: "failed", error: "flagged as sensitive E005" };
     await check();
     assert.equal(row.status, "failed");
-    assert.match(row.error, /Первый кадр берётся из предыдущей сцены/);
-    assert.match(row.error, /кадр предыдущей сцены/);
+    assert.match(row.error, /Отправлено изображений: 4 — портретов: 1, ракурсов локации: 2, массовки: 0, кадр предыдущей сцены: да/);
+    assert.match(row.error, /Если блокируется кадр предыдущей сцены — включите «Отправить без референс‑изображений» или перегенерируйте предыдущую сцену/);
+    assert.doesNotMatch(row.error, /Первый кадр берётся/);
     assert.match(row.error, /Код провайдера: /);
+    // The exact submitted list survives in the persisted state for the UI previews.
+    assert.equal(JSON.parse(row.resultData).submittedReferences.length, 2);
   } finally { Date.now = originalNow; }
 });
 
@@ -219,7 +229,7 @@ test("moderation (fail-fast): repeated poll of the same refusal refunds only onc
   Date.now = () => clock;
   try {
     reset();
-    row.resultData = moderationState({ image: undefined, refs: [{ url: "https:" + "//x/full.jpg", kind: "character", note: "full" }], fallbackRefs: [] });
+    row.resultData = moderationState({ refs: [{ url: "https:" + "//x/full.jpg", kind: "character", note: "full" }], fallbackRefs: [] });
     provider = { status: "failed", error: "flagged as sensitive E005" };
     const old = { ...row };
     await Promise.all([resumeVideoJob(old), resumeVideoJob(old)]); await resumeVideoJob(old);

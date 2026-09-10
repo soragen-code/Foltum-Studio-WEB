@@ -20,6 +20,16 @@ const VIDEO_EXPECTED_SEC = 600
 const REF_POLL_MS = 3500
 // Stage 18: fixed 3-angle set, in stored order (face, left profile, full front).
 const SHOT_LABELS = ['Портрет (лицо)', 'Левый профиль', 'В полный рост (спереди)']
+// Stage 36 — a reference image the video job actually submitted (job.result.submittedReferences).
+type SubmittedReference = { url: string; kind: string }
+const REFERENCE_KIND_LABELS: Record<string, string> = {
+  character: 'Портрет',
+  location: 'Локация',
+  crowd: 'Массовка',
+  previous_frame: 'Кадр предыдущей сцены',
+  scene: 'Кадр сцены',
+}
+const referenceKindLabel = (kind: string) => REFERENCE_KIND_LABELS[kind] ?? 'Референс'
 const CHAR_EXTRA_MIN = Math.max(0, CHARACTER_PHOTO_COUNT - 3) // extra angles beyond the 3 base shots → 0 (3 photos)
 const validUrl = (u?: string | null) => typeof u === 'string' && u.startsWith('http') && u.length > 10
 function parseExtra(imageExtra?: string | null): string[] {
@@ -49,6 +59,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [sceneBusy, setSceneBusy] = useState<Record<string, boolean>>({})
   const [regenAsk, setRegenAsk] = useState<string | null>(null) // sceneId awaiting paid regen confirmation
   const [sceneError, setSceneError] = useState<Record<string, string>>({}) // per-scene generation error shown on the card
+  // Stage 36 — the reference images the failed job actually submitted (from job.result.submittedReferences), for previews under the error.
+  const [sceneErrorRefs, setSceneErrorRefs] = useState<Record<string, SubmittedReference[]>>({})
   // Stage 31 — "Смотреть промпт" modal: view / copy / manually override the scene's final prompt.
   const [promptModal, setPromptModal] = useState<{ sceneId: string; number: number } | null>(null)
   const [promptText, setPromptText] = useState('')          // editable textarea content
@@ -61,7 +73,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // Stage 33 — per-scene «Отправить без референс-изображений» toggle (persisted on Scene.skipReferences).
   const [promptSkipRefs, setPromptSkipRefs] = useState(false)
   const [promptSkipSaving, setPromptSkipSaving] = useState(false)
-  // Reference strategy the builder resolved for this scene ("adjacent_frame" = chained to the previous scene).
+  // Reference strategy the builder resolved for this scene (character_references | new_scene_reference | text_only).
   const [promptRefKind, setPromptRefKind] = useState<string | null>(null)
   // «Собрать» — pure concatenation of the ready scene clips into one episode (no audit / no polish / no re-gen).
   const [stitching, setStitching] = useState(false)
@@ -149,7 +161,12 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           setVideoJobs((prev) => ({ ...prev, [sceneId]: data.job }))
           if (data.job.status === 'completed' || data.job.status === 'failed') {
             stopPolling(sceneId); clearGen(sceneId)
-            if (data.job.status === 'failed') setSceneError((prev) => ({ ...prev, [sceneId]: data.job.error ?? 'Генерация не удалась' }))
+            if (data.job.status === 'failed') {
+              setSceneError((prev) => ({ ...prev, [sceneId]: data.job.error ?? 'Генерация не удалась' }))
+              // Stage 36: show which reference images were actually sent with the failed submission.
+              const refs = Array.isArray(data.job.result?.submittedReferences) ? (data.job.result.submittedReferences as SubmittedReference[]).filter((r) => r && typeof r.url === 'string') : []
+              setSceneErrorRefs((prev) => ({ ...prev, [sceneId]: refs }))
+            }
             const updated = data.scene ?? data.job.result?.scene
             if (updated) patchScene(sceneId, updated)
             void refreshCredits()
@@ -402,6 +419,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const generateScene = async (sceneId: string, _withModel: boolean) => {
     setRegenAsk(null); setActiveGen((p) => ({ ...p, [sceneId]: true })); setError(null)
     setSceneError((prev) => { const n = { ...prev }; delete n[sceneId]; return n })
+    setSceneErrorRefs((prev) => { const n = { ...prev }; delete n[sceneId]; return n })
     try {
       const body: Record<string, unknown> = { projectId: project.id, sceneId }
       const res = await postJobStart('/api/ai/generate-video', body)
@@ -484,8 +502,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || 'Не удалось сохранить')
       setPromptHasOverride(!!data.hasOverride)
+      // Stage 36: the server normalizes the override (fences / preamble stripped) — reflect what was actually saved.
+      const savedPrompt: string | null = reset ? null : (typeof data.prompt === 'string' && data.prompt.trim() ? data.prompt : null)
+      if (!reset && savedPrompt) setPromptText(savedPrompt)
       // Reflect the override flag on the scene card without an extra fetch.
-      setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, promptOverride: reset ? null : (promptText.trim() || null) } : s)))
+      setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, promptOverride: savedPrompt } : s)))
       if (reset) {
         // Reload the freshly-auto-assembled prompt into the textarea.
         const g = await fetch(`/api/ai/scenes/${sceneId}/prompt`)
@@ -789,7 +810,19 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                 </div>
                 </div>
 
-                {sceneError[scene.id] && <p className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive" data-testid="scene-error">{sceneError[scene.id]}</p>}
+                {sceneError[scene.id] && (
+                  <div className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                    <p data-testid="scene-error">{sceneError[scene.id]}</p>
+                    {/* Stage 36 — thumbnails of the reference images that were actually submitted with the failed job. */}
+                    {(sceneErrorRefs[scene.id]?.length ?? 0) > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5" data-testid="scene-error-refs">
+                        {sceneErrorRefs[scene.id].map((r, i) => (
+                          <img key={`${r.url}-${i}`} src={r.url} alt={referenceKindLabel(r.kind)} title={`${i + 1}. ${referenceKindLabel(r.kind)}`} className="h-12 w-auto rounded object-cover" />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 <div className="mt-3 space-y-2">
                   {/* Stage 35 — one row, two half-width buttons under the preview: the primary action
@@ -972,8 +1005,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       <span className="font-medium">Отправить без референс‑изображений (только текст)</span>
                       {promptSkipSaving && <Loader2 className="ml-1 inline h-3 w-3 animate-spin" />}
                       <span className="mt-0.5 block text-[11px] text-muted-foreground">
-                        Персонажи и локация не будут переданы картинками. Кадр из предыдущей сцены всё равно используется.
-                        {promptRefKind === 'adjacent_frame' && ' Эта сцена продолжает предыдущую: первый кадр берётся из неё, референсы и так не отправляются.'}
+                        Провайдеру уйдёт только текст промпта — без портретов персонажей, без ракурсов локации и без кадра предыдущей сцены.
+                        Визуальная стыковка с предыдущей сценой будет жёсткой склейкой.
                       </span>
                     </span>
                   </label>

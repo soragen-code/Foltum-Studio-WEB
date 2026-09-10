@@ -45,9 +45,11 @@ export interface SeedanceInput {
   aspect_ratio?: string;
   /** Generate synchronized audio. Default true. */
   generate_audio?: boolean;
-  /** First-frame image URL (image-to-video). */
-  image?: string;
-  /** Character/style references; mutually exclusive with first-frame image. */
+  /**
+   * Character / location / style references (up to 30), referenced in the prompt as [Image1]…[ImageN].
+   * Stage 36: the only image input the app uses — the first-frame `image` mode was removed because
+   * the provider forbids combining it with reference images.
+   */
   reference_images?: string[];
   /** Add watermark. Default false. */
   watermark?: boolean;
@@ -55,7 +57,7 @@ export interface SeedanceInput {
 }
 
 /**
- * Generate a video using Seedance (2.5 default, or 2.0 via `input.model`) on Replicate.
+ * Generate a video using Seedance 2.5 on Replicate (reference-image mode).
  * Returns the URL of the generated mp4 video.
  */
 export async function generateVideo(input: SeedanceInput): Promise<string> {
@@ -73,7 +75,7 @@ export async function generateVideo(input: SeedanceInput): Promise<string> {
           generate_audio: true,
           watermark: input.watermark ?? false,
           output_format: "mp4",
-          ...(input.image ? { image: input.image } : { reference_images: input.reference_images ?? [] }),
+          reference_images: input.reference_images ?? [],
           ...(input.seed !== undefined ? { seed: input.seed } : {}),
         },
       });
@@ -102,7 +104,7 @@ function seedanceInput(input: SeedanceInput) {
     generate_audio: true,
     watermark: input.watermark ?? false,
     output_format: "mp4",
-    ...(input.image ? { image: input.image } : { reference_images: input.reference_images ?? [] }),
+    reference_images: input.reference_images ?? [],
     ...(input.seed !== undefined ? { seed: input.seed } : {}),
   };
 }
