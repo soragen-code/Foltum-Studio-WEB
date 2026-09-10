@@ -348,8 +348,10 @@ async function handleFailure(jobId: string, ctx: { sceneId: string; userId?: str
  * then applied on top as a safety net. Two escalating passes:
  *   pass 1 — LLM strictness 1 + rule level 2 (aggression / physical contact / delivery cues);
  *   pass 2 — LLM strictness 2 + rule level 3 (staging lines rewritten to neutral blocking,
- *            delivery cues stripped, reference set reduced to speaking characters + one location
- *            angle, no start-frame chaining).
+ *            delivery cues stripped; for UNCHAINED scenes the reference set is reduced to speaking
+ *            characters + one location angle). An adjacent-frame chain is PRESERVED on every pass —
+ *            moderation is tripped by the prompt text, not by the previous scene's approved frame,
+ *            so the chain is never broken (that would restart the scene from a fresh frame).
  *
  * The LLM call + resubmission can take a while, so we take a long finalize-length lease first and
  * do the work in the background, so a second poll never claims the job and submits a duplicate
@@ -371,9 +373,15 @@ async function retryAfterModeration(jobId: string, state: VideoJobState, reason:
       const softened = softenForModeration(llm.prompt, level);
       let image = retry.image;
       let refs = retry.refs;
-      if (level === 3) {
-        if (retry.fallbackRefs.length) { refs = retry.fallbackRefs; image = undefined; }
-        else if (!refs.length && !image) { refs = retry.refs; }
+      // Keep the adjacent-frame chain through every moderation retry: the scene starts from the
+      // PREVIOUS scene's already-approved last frame, so the frame is never what tripped moderation
+      // (the prompt text is — and it is escalatingly sanitized above). Dropping the frame here would
+      // restart the scene from a fresh composition and break the strict scene-to-scene continuity.
+      // The fallback trim (speaking-character portraits + one location angle) is a safety net for
+      // scenes that had NO chain to begin with — so only apply it when there is no adjacent frame.
+      if (level === 3 && !image) {
+        if (retry.fallbackRefs.length) { refs = retry.fallbackRefs; }
+        else if (!refs.length) { refs = retry.refs; }
       }
       let prompt = softened.text;
       if (!image && refs.length) {
