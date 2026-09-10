@@ -45,3 +45,17 @@ export const DEFAULT_VIDEO_MODEL: VideoModelId = "seedance";
 export function normalizeVideoModel(v: unknown): VideoModelId {
   return VIDEO_MODELS.some((m) => m.id === v) ? (v as VideoModelId) : DEFAULT_VIDEO_MODEL;
 }
+
+/**
+ * Replicate slug for each video model id. Single source of truth shared by the video worker and
+ * the prompt-preview builder so both submit / display the exact same model.
+ */
+export const VIDEO_MODEL_SLUGS: Record<VideoModelId, string> = {
+  "seedance": "bytedance/seedance-2.5",
+  "seedance-2.0": "bytedance/seedance-2.0",
+};
+
+/** Replicate slug for a (normalized) video model id. */
+export function videoModelSlug(id: VideoModelId): string {
+  return VIDEO_MODEL_SLUGS[id];
+}

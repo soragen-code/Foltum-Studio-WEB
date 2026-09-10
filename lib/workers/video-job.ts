@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db";
-import { startVideoPrediction, startImagePrediction, getPredictionState, cancelVideoPrediction, SEEDANCE_MODEL } from "@/lib/replicate";
-import { buildNativeAudioPrompt, buildNarrationAudioPrompt, translateDialogue, detectSpokenLanguage } from "@/lib/voiceover";
+import { startVideoPrediction, startImagePrediction, getPredictionState, cancelVideoPrediction } from "@/lib/replicate";
+import { translateDialogue, detectSpokenLanguage } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
 import { extractLastFrameBuffer } from "@/lib/ffmpeg";
-import { normalizeVideoModel } from "@/lib/ai-models";
-import { PACE_DIRECTION } from "@/lib/season";
+import { normalizeVideoModel, videoModelSlug } from "@/lib/ai-models";
 import { getBucketConfig } from "@/lib/aws-config";
-import { VISUAL_STYLE_ID, styledVisualPrompt, isStyledAsset, canChainFrame, locationAngleImages } from "@/lib/visual-style";
+import { VISUAL_STYLE_ID } from "@/lib/visual-style";
+import { buildScenePrompt } from "@/lib/scene-prompt";
 import { GenerationAttempt, safeProviderError, classifyProviderError, logAttempt, safeDiagnosticInput } from "@/lib/generation-diagnostics";
 import { updateJob, heartbeatJob, runInBackground, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { softenForModeration, moderationHints, type SoftenLevel } from "@/lib/sanitize-prompt";
@@ -76,7 +76,7 @@ const EXPECTED_VIDEO_MS = Number(process.env.SEEDANCE_EXPECTED_MS ?? 10 * 60 * 1
 export const VIDEO_DEADLINE_MS = 30 * 60 * 1000;
 const CHECK_LEASE_MS = 60_000;
 /** Seedance 2.5 accepts up to 30 reference images ([Image1]..[ImageN] in the prompt). */
-export const MAX_REFERENCE_IMAGES = 30;
+export { MAX_REFERENCE_IMAGES } from "@/lib/scene-prompt";
 const FINALIZE_LEASE_MS = 12 * 60 * 1000;
 
 function sleep(ms: number) {
@@ -135,110 +135,82 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     }
     await updateJob(jobId, { status: "processing", progress: 5, message: "Preparing photorealistic visual references..." });
     const links = await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true } });
-    const visualPrompt = styledVisualPrompt(scene.videoPrompt, links.map(l => l.character.name));
-    // Stage 4: speech is ALWAYS English. `dialogueEn` holds the voiced lines; legacy scenes written in
-    // another language are translated once and the translation is saved.
-    const targetLanguage = "English";
-    // Stage 12 (Commit D): narration scenes carry an off-screen English narrator (b-roll under narration),
-    // NOT on-camera dialogue — so they never go through the lip-sync/dialogue prompt path.
-    const isNarration = scene.sceneKind === "narration" && !!(scene.voiceover ?? "").trim();
-    let dialogue = isNarration ? "" : ((scene.dialogueEn ?? "").trim() || scene.dialogue);
-    if (!isNarration && dialogue && detectSpokenLanguage(dialogue) !== targetLanguage) {
-      dialogue = await translateDialogue(dialogue, targetLanguage);
-      await prisma.scene.update({ where: { id: sceneId }, data: { dialogueEn: dialogue, language: "en" } }).catch(() => {});
-    }
-    // Sanitize visual descriptions BEFORE adding speech: never rewrite scripted dialogue / narration.
-    let prompt = isNarration
-      ? `${buildNarrationAudioPrompt(stripSlowDirections(visualPrompt), scene.voiceover)}\n\n${PACE_DIRECTION}`
-      : `${buildNativeAudioPrompt(stripSlowDirections(visualPrompt), dialogue, links.map(l => l.character), targetLanguage)}\n\n${PACE_DIRECTION}`;
-    // Seedance moderation (E005): neutralize explicit wording (weapons, blood, violence, children in
-    // danger, intimacy...) in BOTH the visual prompt and the English dialogue before submitting.
-    const softened = softenForModeration(prompt, 1);
-    if (softened.changed) console.log("[video-job] moderation-safe rewrite (level 1):", { jobId, sceneId, hits: softened.hits });
-    prompt = softened.text;
-    const basePrompt = prompt;
-    let retryRefs: ModerationRetryInput["refs"] = [];
-    let fallbackRefs: ModerationRetryInput["fallbackRefs"] = [];
-
     const previous = scene.number > 1 ? await prisma.scene.findFirst({
       where: { episodeId: scene.episodeId, number: scene.number - 1 },
       select: { id: true, number: true, locationDesc: true, lastFrameUrl: true },
     }) : null;
-    let image: string | undefined;
-    let referenceImages: string[] = [];
-    let reference: Record<string, unknown>;
-    // Stage 3 reference set, in priority order: speaking/visible individual characters → the
-    // episode's location reference → crowd groups. Seedance accepts up to MAX_REFERENCE_IMAGES.
-    const styled = links.filter(l => isStyledAsset(l.character.imageFront));
-    const individuals = styled.filter(l => l.character.tier !== "CROWD");
-    const crowds = styled.filter(l => l.character.tier === "CROWD");
     const episodeLoc = await prisma.episode.findUnique({ where: { id: scene.episodeId }, select: { location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true } } } });
-    // Stage 3b: every generated angle of the SAME location goes in as a reference, so the place,
-    // the time of day and the light stay identical between shots — only the camera angle changes.
-    const locationAngles = episodeLoc?.location ? locationAngleImages(episodeLoc.location) : [];
-    const location = locationAngles.length ? episodeLoc!.location! : null;
-    const characterRefs = individuals.map(l => ({ url: l.character.imageFront!, kind: "character", id: l.characterId, note: `defines ${l.character.name}'s photorealistic appearance and identity; use the scene's staging and camera.` }));
-    const locationRefs = locationAngles.map(a => ({ url: a.url, kind: "location", id: location!.id, note: `the location "${location!.name}" — ${a.angle} angle. Same place, same time of day, same light and palette as the other location references. Keep the camera inside this location and match this lighting exactly.` }));
-    // Reduced set used by the last moderation retry: speaking characters + one location angle.
-    fallbackRefs = [...characterRefs, ...locationRefs.slice(0, 1)].slice(0, MAX_REFERENCE_IMAGES).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
-    if (canChainFrame(scene, previous)) {
-      image = previous!.lastFrameUrl!;
-      reference = { mode: "adjacent_frame", sceneId: previous!.id };
-    } else {
-      if (individuals.length || location || crowds.length) {
-        const refs: { url: string; note: string; kind: string; id: string }[] = [
-          ...characterRefs,
-          ...locationRefs,
-          ...crowds.map(l => ({ url: l.character.imageFront!, kind: "crowd", id: l.characterId, note: `defines the look of the group "${l.character.name}" (extras): who they are and how they are dressed.` })),
-        ].slice(0, MAX_REFERENCE_IMAGES);
-        referenceImages = refs.map(r => r.url);
-        retryRefs = refs.map(r => ({ url: r.url, kind: r.kind, note: r.note }));
-        reference = { mode: "character_references", characterIds: refs.filter(r => r.kind !== "location").map(r => r.id), locationId: location?.id ?? null, kinds: refs.map(r => r.kind) };
-        prompt += "\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
-        if (location) prompt += "\nCamera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location references. Only the camera angle changes between shots. The characters are physically present in this place and interact with its objects and surfaces; the cuts show the same location from different angles with real depth (foreground, characters, background) — never a flat backdrop.";
-      } else {
-        // One new scene composition, never overwrite the user's old portraits or frames.
-        // This is original text-to-image design, not a way to bypass a provider refusal.
-        const referencePrompt = `${visualPrompt}\nSingle still establishing the described scene with the same characters, clothing and setting. No text or subtitles.`;
-        const attempt: GenerationAttempt = {
-          jobId, sceneId, attempt: 1, model: "black-forest-labs/flux-1.1-pro", phase: "reference",
-          status: "submitting", style: VISUAL_STYLE_ID,
-          input: safeDiagnosticInput({ prompt: referencePrompt, aspect_ratio: "9:16", safety_tolerance: 2, source: "original_scene_description" }),
-        };
-        diagnostics.push(attempt); await persist(); logAttempt(attempt);
-        attempt.predictionId = await startImagePrediction({ prompt: referencePrompt, aspect_ratio: "9:16" });
-        attempt.status = "processing"; await persist(); logAttempt(attempt);
-        const started = Date.now();
-        let referenceUrl = "";
-        while (!referenceUrl) {
-          const prediction = await getPredictionState(attempt.predictionId);
-          if (prediction.status === "succeeded" && prediction.url) {
-            referenceUrl = prediction.url; attempt.status = "succeeded"; await persist(); logAttempt(attempt); break;
-          }
-          if (prediction.status === "failed" || prediction.status === "canceled") {
-            attempt.status = prediction.status;
-            throw new Error(prediction.error || "Reference model failed");
-          }
-          if (Date.now() - started > 180_000) throw new Error("Reference model timed out; no automatic resubmission");
-          await heartbeatJob(jobId); await sleep(POLL_INTERVAL_MS);
+
+    // Stage 4: speech is ALWAYS English. `dialogueEn` holds the voiced lines; legacy scenes written in
+    // another language are translated once HERE (worker-only, network) and the translation is saved.
+    // This is the only step the prompt PREVIEW skips — everything else comes from the shared builder.
+    const isNarration = scene.sceneKind === "narration" && !!(scene.voiceover ?? "").trim();
+    let dialogueEn = isNarration ? "" : ((scene.dialogueEn ?? "").trim() || scene.dialogue || "");
+    if (!isNarration && dialogueEn && detectSpokenLanguage(dialogueEn) !== "English") {
+      dialogueEn = await translateDialogue(dialogueEn, "English");
+      await prisma.scene.update({ where: { id: sceneId }, data: { dialogueEn, language: "en" } }).catch(() => {});
+    }
+
+    // Stage 27c: single source of truth — the exact final prompt + reference plan is assembled by the
+    // pure buildScenePrompt (lib/scene-prompt.ts), shared with the "show full prompt" preview so the
+    // preview can never drift from what is actually submitted.
+    const built = buildScenePrompt({
+      scene,
+      characters: links.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront })),
+      location: episodeLoc?.location ?? null,
+      previous,
+      provider: params.provider,
+      resolvedDialogueEn: dialogueEn,
+    });
+    let prompt = built.prompt;
+    const basePrompt = built.basePrompt;
+    const fallbackRefs = built.fallbackRefs;
+    const image = built.image;
+    let referenceImages = built.referenceImages;
+    let retryRefs = built.retryRefs;
+    let reference = built.reference;
+
+    if (built.newSceneReference) {
+      // One new scene composition (no chain, no references): generate an original still (Flux) and
+      // substitute its real URL. The prompt text — including the [Image1] note — already comes from
+      // the pure builder, so the submitted prompt stays byte-identical to the preview.
+      const referencePrompt = built.referencePrompt!;
+      const attempt: GenerationAttempt = {
+        jobId, sceneId, attempt: 1, model: "black-forest-labs/flux-1.1-pro", phase: "reference",
+        status: "submitting", style: VISUAL_STYLE_ID,
+        input: safeDiagnosticInput({ prompt: referencePrompt, aspect_ratio: "9:16", safety_tolerance: 2, source: "original_scene_description" }),
+      };
+      diagnostics.push(attempt); await persist(); logAttempt(attempt);
+      attempt.predictionId = await startImagePrediction({ prompt: referencePrompt, aspect_ratio: "9:16" });
+      attempt.status = "processing"; await persist(); logAttempt(attempt);
+      const started = Date.now();
+      let referenceUrl = "";
+      while (!referenceUrl) {
+        const prediction = await getPredictionState(attempt.predictionId);
+        if (prediction.status === "succeeded" && prediction.url) {
+          referenceUrl = prediction.url; attempt.status = "succeeded"; await persist(); logAttempt(attempt); break;
         }
-        const { folderPrefix } = getBucketConfig();
-        // Seedream reference is PNG (keeps its C2PA content-credentials watermark on purpose).
-        const key = `${folderPrefix}public/references/${projectId}/${VISUAL_STYLE_ID}/${sceneId}-${jobId}.png`;
-        const stored = await uploadRemoteToS3(referenceUrl, key, "image/png");
-        referenceImages = [stored];
-        reference = { mode: "new_scene_reference", sceneId, referencePredictionId: attempt.predictionId };
-        const note = "defines the scene's original photorealistic character designs, clothing and environment. Preserve those designs while performing the scripted action.";
-        prompt += `\n[Image1] ${note}`;
-        retryRefs = [{ url: stored, kind: "scene", note }];
+        if (prediction.status === "failed" || prediction.status === "canceled") {
+          attempt.status = prediction.status;
+          throw new Error(prediction.error || "Reference model failed");
+        }
+        if (Date.now() - started > 180_000) throw new Error("Reference model timed out; no automatic resubmission");
+        await heartbeatJob(jobId); await sleep(POLL_INTERVAL_MS);
       }
+      const { folderPrefix } = getBucketConfig();
+      // Seedream reference is PNG (keeps its C2PA content-credentials watermark on purpose).
+      const key = `${folderPrefix}public/references/${projectId}/${VISUAL_STYLE_ID}/${sceneId}-${jobId}.png`;
+      const stored = await uploadRemoteToS3(referenceUrl, key, "image/png");
+      referenceImages = [stored];
+      reference = { ...reference, referencePredictionId: attempt.predictionId };
+      retryRefs = [{ url: stored, kind: "scene", note: built.newSceneReferenceNote! }];
     }
     // One paid video attempt. Copyright, general moderation, E003 and timeout remain distinct;
     // none silently trigger another generation or switch the audio off.
     // Both providers are Seedance (native audio); Seedance 2.0 is a different Replicate slug
     // and renders at most 15 s per clip (2.5 goes up to 30 s).
     const provider = normalizeVideoModel(params.provider);
-    const modelSlug = provider === "seedance-2.0" ? "bytedance/seedance-2.0" : SEEDANCE_MODEL;
+    const modelSlug = videoModelSlug(provider);
     let predictionId: string;
     let attempt: GenerationAttempt;
     let submitMessage: string;
@@ -292,18 +264,6 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     }
     await handleFailure(jobId, { sceneId, userId, cost }, err);
   }
-}
-
-/**
- * Stage 27a: only strip the literal "slow motion" visual effect (a model artifact request that
- * warps the footage). Natural conversational pacing — unhurried delivery, the normal small pauses of
- * real speech and gentle camera moves — is now intentionally KEPT (we no longer rewrite "slowly" →
- * "briskly" or "long pause" → "no pause"), so speech is never artificially sped up or crammed.
- */
-function stripSlowDirections(prompt: string): string {
-  return prompt
-    .replace(/\b(in )?slow[- ]?motion\b/gi, "")
-    .replace(/ {2,}/g, " ");
 }
 
 /** Guard all recovery writes with an expiring compare-and-swap lease. */

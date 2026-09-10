@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Header } from '@/components/header'
-import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Lock } from 'lucide-react'
+import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Lock, FileText, Copy, Check } from 'lucide-react'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
@@ -48,6 +48,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [sceneEdit, setSceneEdit] = useState<Record<string, string>>({})
   const [sceneBusy, setSceneBusy] = useState<Record<string, boolean>>({})
   const [regenAsk, setRegenAsk] = useState<string | null>(null) // sceneId awaiting paid regen confirmation
+  // Stage 27c — per-scene "show full prompt" modal + "copy" feedback.
+  const [promptModal, setPromptModal] = useState<{ sceneId: string; sceneNumber: number; text: string; model: string; loading: boolean; error: string | null } | null>(null)
+  const [promptCopied, setPromptCopied] = useState<string | null>(null) // sceneId that just showed «Скопировано»
+  const [copyBusy, setCopyBusy] = useState<Record<string, boolean>>({}) // per-scene copy spinner while the prompt loads
   // «Собрать» — pure concatenation of the ready scene clips into one episode (no audit / no polish / no re-gen).
   const [stitching, setStitching] = useState(false)
   // AI video model chosen in the always-visible global selector next to the scenes (EDIT 5);
@@ -403,6 +407,42 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // Regen keeps the model already stored on the scene (no provider override).
   const regenScene = (sceneId: string) => generateScene(sceneId, false)
 
+  // Stage 27c — load the FINAL Seedance prompt for a scene (exactly what the worker submits, but
+  // with [ImageN] placeholders instead of real reference URLs and no LLM translation) and show it.
+  const showScenePrompt = async (scene: Scene) => {
+    setPromptModal({ sceneId: scene.id, sceneNumber: scene.number, text: '', model: '', loading: true, error: null })
+    try {
+      const res = await fetch(`/api/ai/scenes/${scene.id}/prompt`)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || 'Не удалось загрузить промпт')
+      setPromptModal({ sceneId: scene.id, sceneNumber: scene.number, text: String(data.prompt ?? ''), model: String(data.model ?? ''), loading: false, error: null })
+    } catch (e: any) {
+      setPromptModal({ sceneId: scene.id, sceneNumber: scene.number, text: '', model: '', loading: false, error: e?.message ?? 'Ошибка' })
+    }
+  }
+
+  // Stage 27c — copy the scene's full prompt to the clipboard and flash «Скопировано» for ~2s.
+  // Reuses the already-open modal text when it is for this scene, else fetches the prompt on demand.
+  const copyScenePrompt = async (scene: Scene) => {
+    setCopyBusy((b) => ({ ...b, [scene.id]: true })); setError(null)
+    try {
+      let text = promptModal && promptModal.sceneId === scene.id && promptModal.text ? promptModal.text : ''
+      if (!text) {
+        const res = await fetch(`/api/ai/scenes/${scene.id}/prompt`)
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(data?.error || 'Не удалось загрузить промпт')
+        text = String(data.prompt ?? '')
+      }
+      await navigator.clipboard.writeText(text)
+      setPromptCopied(scene.id)
+      setTimeout(() => setPromptCopied((cur) => (cur === scene.id ? null : cur)), 2000)
+    } catch (e: any) {
+      setError(e?.message ?? 'Не удалось скопировать — попробуйте ещё раз')
+    } finally {
+      setCopyBusy((b) => { const n = { ...b }; delete n[scene.id]; return n })
+    }
+  }
+
   const allReady = scenes.length > 0 && scenes.every((s) => validUrl(s.videoUrl) && !activeGen[s.id])
 
   // «Собрать» — pure concatenation of the ready scene clips into a single episode video.
@@ -721,6 +761,29 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       {sceneBusy[scene.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Изменить
                     </button>
                   </div>
+                  {/* Stage 27c — inspect / copy the exact final Seedance prompt for this scene. */}
+                  {scene.videoPrompt ? (
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <button
+                        onClick={() => showScenePrompt(scene)}
+                        className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
+                        data-testid="scene-show-prompt"
+                        title="Показать полный промпт, который отправляется в модель"
+                      >
+                        <FileText className="h-4 w-4" /> Показать полный промпт
+                      </button>
+                      <button
+                        onClick={() => copyScenePrompt(scene)}
+                        disabled={!!copyBusy[scene.id]}
+                        className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+                        data-testid="scene-copy-prompt"
+                        title="Скопировать полный промпт в буфер обмена"
+                      >
+                        {copyBusy[scene.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : promptCopied === scene.id ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                        {promptCopied === scene.id ? 'Скопировано' : 'Копировать'}
+                      </button>
+                    </div>
+                  ) : null}
                   {regenAsk === scene.id && (
                     <div className="rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm" data-testid="regen-confirm">
                       Сцена переписана. Перегенерировать ролик?
@@ -809,6 +872,50 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               <button onClick={generateAllRefs} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="ref-model-ok">
                 <Wand2 className="h-4 w-4" /> Сгенерировать
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stage 27c — full prompt preview: exactly what the worker submits to Seedance (references
+          shown as [ImageN] placeholders, no real URLs, no LLM translation). */}
+      {promptModal && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4" data-testid="scene-prompt-modal" onClick={() => setPromptModal(null)}>
+          <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-xl border border-border bg-card p-5" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <h3 className="font-display text-lg font-bold">Полный промпт · Сцена {promptModal.sceneNumber}</h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Итоговый текст, который отправляется в видеомодель. Референсы показаны как заглушки <code className="rounded bg-muted px-1">[Image1]</code>…<code className="rounded bg-muted px-1">[ImageN]</code> без реальных ссылок.
+                  {promptModal.model ? <> Модель: <span className="font-medium text-foreground">{VIDEO_MODELS.find((m) => m.id === promptModal.model)?.label ?? promptModal.model}</span>.</> : null}
+                </p>
+              </div>
+              <button onClick={() => setPromptModal(null)} className="rounded-lg border border-border p-1.5 hover:bg-muted" title="Закрыть" data-testid="scene-prompt-close">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="mt-4 min-h-0 flex-1 overflow-auto rounded-lg border border-border bg-background p-3">
+              {promptModal.loading ? (
+                <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /> Загружаю промпт…</div>
+              ) : promptModal.error ? (
+                <div className="py-6 text-center text-sm text-destructive" data-testid="scene-prompt-error">{promptModal.error}</div>
+              ) : (
+                <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed" data-testid="scene-prompt-text">{promptModal.text}</pre>
+              )}
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => setPromptModal(null)} className="rounded-lg border border-border px-3 py-1.5 text-sm">Закрыть</button>
+              {!promptModal.loading && !promptModal.error && promptModal.text ? (
+                <button
+                  onClick={() => copyScenePrompt({ id: promptModal.sceneId, number: promptModal.sceneNumber } as Scene)}
+                  disabled={!!copyBusy[promptModal.sceneId]}
+                  className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50"
+                  data-testid="scene-prompt-copy"
+                >
+                  {copyBusy[promptModal.sceneId] ? <Loader2 className="h-4 w-4 animate-spin" /> : promptCopied === promptModal.sceneId ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                  {promptCopied === promptModal.sceneId ? 'Скопировано' : 'Копировать'}
+                </button>
+              ) : null}
             </div>
           </div>
         </div>
