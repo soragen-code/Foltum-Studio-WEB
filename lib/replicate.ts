@@ -124,6 +124,64 @@ export async function startVideoPrediction(input: SeedanceInput): Promise<string
 }
 
 /* ------------------------------------------------------------------ */
+/*  FILM — frame interpolation (seamless scene-seam bridging)          */
+/*  Google FILM synthesizes REAL intermediate frames between the last   */
+/*  frame of scene N and the first frame of scene N+1, so every seam    */
+/*  in an assembled episode reads as one continuous motion instead of   */
+/*  a hard cut. Output is a short mp4 of (2^t + 1) frames @ 30fps.      */
+/* ------------------------------------------------------------------ */
+
+/** Real Replicate slug + pinned version for Google FILM (verified via API). */
+export const FILM_INTERPOLATION_MODEL = "google-research/frame-interpolation";
+const FILM_INTERPOLATION_VERSION =
+  (process.env.REPLICATE_FILM_VERSION as string | undefined) ??
+  "4f88a16a13673a8b589c18866e540556170a5bcb2ccdc12de556e800e9456d3d";
+
+/** Encode a frame (raw Buffer, or an already-usable URL/data-URI string) for Replicate. */
+function toDataUri(frame: string | Buffer, mime = "image/jpeg"): string {
+  if (typeof frame === "string") return frame;
+  return `data:${mime};base64,${frame.toString("base64")}`;
+}
+
+export interface FrameInterpolationInput {
+  /** First (source) frame — the LAST frame of scene N. */
+  frame1: string | Buffer;
+  /** Second (target) frame — the FIRST frame of scene N+1. */
+  frame2: string | Buffer;
+  /**
+   * Interpolation depth. FILM emits 2^t + 1 frames @ 30fps.
+   * Default 3 → 9 frames ≈ 0.3s bridge (7 synthesized intermediate frames).
+   */
+  timesToInterpolate?: number;
+}
+
+/**
+ * Run Google FILM frame interpolation between two frames and return the URL of the
+ * resulting short bridge mp4. Polls exactly like generateImage; ONE submission per
+ * call (no paid automatic retries), 180s timeout. Callers treat any thrown error as
+ * "no bridge for this seam" and fall back to a plain cut/crossfade.
+ */
+export async function runFrameInterpolation(input: FrameInterpolationInput): Promise<string> {
+  const times = Math.max(1, Math.min(8, Math.round(input.timesToInterpolate ?? 3)));
+  const prediction = await getReplicate().predictions.create({
+    version: FILM_INTERPOLATION_VERSION,
+    input: {
+      frame1: toDataUri(input.frame1),
+      frame2: toDataUri(input.frame2),
+      times_to_interpolate: times,
+    },
+  });
+  const started = Date.now();
+  while (true) {
+    const p = await getPredictionState(prediction.id);
+    if (p.status === "succeeded" && p.url) return p.url;
+    if (p.status === "failed" || p.status === "canceled") throw new Error(p.error || "FILM interpolation failed");
+    if (Date.now() - started > 180_000) throw new Error("FILM interpolation timed out; no automatic resubmission");
+    await sleep(2_000);
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Seedream 5.0 Lite — photorealistic reference image generation     */
 /* ------------------------------------------------------------------ */
 
