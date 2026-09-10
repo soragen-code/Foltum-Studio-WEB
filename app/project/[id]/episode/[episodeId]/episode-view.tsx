@@ -208,6 +208,14 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     } catch { return }
   }, [project.id, episode.id])
 
+  // Stage 17: mirror the current character/location lists into refs so the poll effect below can read
+  // them WITHOUT listing them in its dependency array. refreshRefs() replaces these arrays on every
+  // tick (new object references), so if the effect depended on them it would tear down and restart on
+  // every refresh — and the `if (stopped) return` right after refreshRefs would bail before firing any
+  // job, leaving the loop stuck refreshing forever without ever generating the missing frames.
+  const refCharsRef = useRef(refChars); refCharsRef.current = refChars
+  const refLocsRef = useRef(refLocs); refLocsRef.current = refLocs
+
   // Poll while a reference session is active: refresh data, DURABLY resume any incomplete references,
   // stop when the mandatory set is ready.
   // Stage 17: the previous loop fired each location's extra-angle job at most ONCE per session and
@@ -223,6 +231,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       const fresh = await refreshRefs()
       if (stopped || refCanceled.current) return
       if (!fresh) { void refreshCredits(); return }
+      const refChars = refCharsRef.current
+      const refLocs = refLocsRef.current
 
       // Which reference jobs are currently running? (avoids duplicate starts across ticks / reloads)
       let activeCharJob = false
@@ -272,7 +282,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     void loop()
     const id = setInterval(loop, REF_POLL_MS)
     return () => { stopped = true; clearInterval(id) }
-  }, [refSession, refreshRefs, refreshCredits, refLocs, refChars, project.id])
+  }, [refSession, refreshRefs, refreshCredits, project.id])
 
   // Stop the reference session once everything is ready.
   useEffect(() => { if (refSession && refsReady) { setRefSession(false); refJobs.current = { loc: {}, extra: {} } } }, [refSession, refsReady])
