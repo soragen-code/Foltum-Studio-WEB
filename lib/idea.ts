@@ -96,8 +96,6 @@ export const MAX_CAST = 60;
 
 export const ideaResultSchema = z.object({
   language: z.string().optional(),
-  /** Stage 40: short series title (≤ 4 words, story language) — becomes the project name automatically. */
-  title: z.string().max(120).optional().nullable(),
   synopsis: z.string().trim().min(80).max(12_000),
   characters: z.array(characterCardSchema).min(2).max(MAX_CAST),
   locations: z.array(locationCardSchema).max(16).optional().default([]),
@@ -166,15 +164,14 @@ export function dedupeCast<T extends { name: string }>(cards: T[], existing: str
   return out;
 }
 
-export function normalizeIdeaResult(raw: unknown, ideaText: string): { language: IdeaLanguage; title: string; synopsis: string; characters: CharacterCard[]; locations: LocationCard[] } {
+export function normalizeIdeaResult(raw: unknown, ideaText: string): { language: IdeaLanguage; synopsis: string; characters: CharacterCard[]; locations: LocationCard[] } {
   const parsed = ideaResultSchema.parse(raw);
   const synopsis = stripMarkup(parsed.synopsis);
-  const title = stripMarkup(parsed.title ?? "").replace(/\s+/g, " ").trim();
   const language = normalizeLanguage(parsed.language, ideaText || synopsis);
   const names = parsed.characters.map((c) => c.name);
   const characters = dedupeCast(parsed.characters).map((c) => sanitizeCharacterCard(c, names));
   const locations = dedupeCast(parsed.locations).map(sanitizeLocationCard);
-  return { language, title, synopsis, characters, locations };
+  return { language, synopsis, characters, locations };
 }
 
 export function normalizeCastExpansion(raw: unknown, existingNames: string[]): CharacterCard[] {
@@ -218,7 +215,6 @@ export function ideaSystemPrompt(): string {
 From the user's idea produce a season synopsis and the main characters. Return ONLY valid JSON:
 {
   "language": "<ISO 639-1 code of the language the idea is written in, e.g. \\"ru\\" or \\"en\\">",
-  "title": "<short catchy series title, 1-4 words, in the story language, no quotes>",
   "synopsis": "<plain text, 3-6 short paragraphs separated by blank lines>",
   "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
   "locations": [ { "name": "...", "description": "...", "visualPrompt": "..." } ]
@@ -345,7 +341,6 @@ export function ideaAutoSystemPrompt(language: IdeaLanguage): string {
   return `You are an award-winning head writer for a short-form vertical drama series. The producer has NOT written a story — your job is to INVENT one from scratch in the chosen genre(s), then produce the season synopsis, the main characters and the locations. Return ONLY valid JSON:
 {
   "language": "${language}",
-  "title": "<short catchy series title, 1-4 words, in the story language, no quotes>",
   "synopsis": "<plain text, 3-6 short paragraphs separated by blank lines>",
   "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
   "locations": [ { "name": "...", "description": "...", "visualPrompt": "..." } ]
@@ -385,7 +380,6 @@ export function ideaFromStorySystemPrompt(language: IdeaLanguage): string {
   return `You are an award-winning head writer for a short-form vertical drama series. The producer has UPLOADED a finished story. Your job is NOT to invent a new plot — treat the uploaded story as CANON. Preserve its premise, characters, events, tone and ending. Structure it into a season synopsis, the main characters and the locations, rewriting the essence as LITTLE as possible and only filling genuine gaps (unnamed places, thin descriptions) so it can be produced. Return ONLY valid JSON:
 {
   "language": "${language}",
-  "title": "<short catchy series title, 1-4 words, in the story language, no quotes>",
   "synopsis": "<plain text, 3-6 short paragraphs separated by blank lines>",
   "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
   "locations": [ { "name": "...", "description": "...", "visualPrompt": "..." } ]

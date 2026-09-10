@@ -152,13 +152,11 @@ export const assembleEpisodeSchema = z.object({
 /* ------------------------------------------------------------------ */
 
 export const createProjectSchema = z.object({
-  /** Stage 40: optional — the name is generated from the plot later (idea / test-scene step). */
   name: z
-    .string()
+    .string({ required_error: "Project name is required" })
     .trim()
-    .max(200, "Project name must be at most 200 characters")
-    .optional()
-    .nullable(),
+    .min(1, "Project name is required")
+    .max(200, "Project name must be at most 200 characters"),
   tier: z.enum(["minimum", "medium", "maximum"]).optional().nullable(),
   /** New flow: power tier. When present it wins over `tier`. */
   powerTier: z.enum(["LOW", "MEDIUM", "HIGH"]).optional().nullable(),

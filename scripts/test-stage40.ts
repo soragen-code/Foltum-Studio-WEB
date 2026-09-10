@@ -11,9 +11,6 @@ import { nextChainScene, chainOrder, chainStopMessage, isChainMode, normalizeCha
 import { fanOutAll } from "../lib/generate-all-fanout";
 import { buildFrameStateRequest, describeLastFrame, FRAME_STATE_MODEL, type VisionClient } from "../lib/frame-state";
 import { buildTestEpisodeRecords, missingPromptTags, normalizeTestSceneResult, testSceneSystemPrompt, TEST_EPISODE_TITLE } from "../lib/test-episode";
-import { deriveProjectName, resolveProjectName, isPlaceholderProjectName, PLACEHOLDER_PROJECT_NAME, PROJECT_NAME_MAX } from "../lib/project-name";
-import { createProjectSchema } from "../lib/validations";
-import { ideaResultSchema } from "../lib/idea";
 
 let pass = 0;
 const ok = (c: unknown, m: string) => { assert(c, m); console.log("ok:", m); pass++; };
@@ -120,32 +117,20 @@ const loc = { id: "loc", name: "Kitchen", imageUrl: styledUrl("k-wide"), imageRe
 function syncTail() {
   const r = buildTestEpisodeRecords({ prompt: prompt9, dialogue: 'YARA (sharply): "Now."', durationSec: 12, sceneKind: "action", endState: scripted, language: "ru" });
   ok(r.project.isTest === true && r.project.stage === "scenes" && r.project.charactersApproved && r.project.synopsisApproved, "F: project becomes a test project at the scenes stage");
-  ok(r.project.name.startsWith("Yara turns to Theo") && !r.project.name.includes("["), `F: project name auto-derived from the [ACTION] line (${r.project.name})`);
-  ok(!isPlaceholderProjectName(r.project.name), "F: derived name is not the placeholder");
+  ok(!("name" in r.project), "F: test episode never renames the project (name stays as entered at creation)");
   ok(r.episode.title === TEST_EPISODE_TITLE && r.episode.number === 1 && r.episode.status === "script_ready" && r.episode.script.includes(END_STATE_LINE_PREFIX + scripted), "F: one «Тестовая серия» episode with a rendered script incl. end state");
   ok(r.scene.number === 1 && r.scene.videoPrompt === prompt9 && r.scene.dialogueEn === r.scene.dialogue && r.scene.durationSec === 12 && r.scene.sceneKind === "action" && r.scene.language === "en" && r.scene.status === "pending", "F: single scene carries the prompt verbatim, English lines, clamped duration");
   ok(r.scene.shotType.startsWith("0-5s wide") && r.scene.action === "Yara turns to Theo.", "F: shotType / action lifted from the prompt tags");
   const d = buildTestEpisodeRecords({ prompt: prompt9, durationSec: 99 });
   ok(d.scene.durationSec === 30 && d.scene.dialogue === "[NO DIALOGUE]" && d.scene.endState === null, "F: defaults — duration clamped to 30, silent scene, no endState");
   ok(buildTestEpisodeRecords({ prompt: prompt9, durationSec: 1 }).scene.durationSec === 5, "F: duration floor 5 s");
-  ok(buildTestEpisodeRecords({ prompt: prompt9, projectTitle: "Кухонный спор" }).project.name === "Кухонный спор", "F: LLM projectTitle wins over prompt-derived name");
   assert.throws(() => buildTestEpisodeRecords({ prompt: "too short" }), "F: short prompt rejected");
   console.log("ok: F: short prompt rejected"); pass++;
   ok(missingPromptTags(prompt9).length === 0 && missingPromptTags("[ACTION] x").length === 8, "F: missingPromptTags");
-  const n = normalizeTestSceneResult({ projectTitle: "**Пирс**", title: "Спор", locationDesc: "EXT pier", videoPrompt: prompt9, dialogue: 'A: "hi"', action: "They argue on the pier.", durationSec: 3, endState: scripted });
-  ok(n.projectTitle === "Пирс" && n.durationSec === 5 && n.sceneKind === "dialogue", "F: normalizeTestSceneResult strips markup, clamps duration, defaults kind");
+  const n = normalizeTestSceneResult({ title: "**Спор**", locationDesc: "EXT pier", videoPrompt: prompt9, dialogue: 'A: "hi"', action: "They argue on the pier.", durationSec: 3, endState: scripted });
+  ok(n.title === "Спор" && n.durationSec === 5 && n.sceneKind === "dialogue", "F: normalizeTestSceneResult strips markup, clamps duration, defaults kind");
   const sys = testSceneSystemPrompt();
-  ok(sys.includes('"projectTitle"') && sys.includes("[CHARACTER]") && sys.includes("endState"), "F: test-scene prompt asks for projectTitle, 9 tags and endState");
-
-  // ── G. project names ───────────────────────────────────────────────────────────────────────────
-  ok(isPlaceholderProjectName(PLACEHOLDER_PROJECT_NAME) && isPlaceholderProjectName("") && isPlaceholderProjectName(null) && !isPlaceholderProjectName("Маяк"), "G: placeholder detection");
-  const derived = deriveProjectName("молодая смотрительница маяка на северном острове находит дневник исчезнувшего предшественника. Дальше — тайна.");
-  ok(derived.split(" ").length <= 5 && derived[0] === derived[0].toUpperCase() && derived.length <= PROJECT_NAME_MAX, `G: deriveProjectName → short capitalized name (${derived})`);
-  ok(resolveProjectName("  «Свет маяка»  ", "whatever") === "Свет маяка" || resolveProjectName("Свет маяка", "whatever") === "Свет маяка", "G: LLM title is cleaned and preferred");
-  ok(resolveProjectName(null, "двое рыбаков спорят на пирсе о пропавшей лодке") !== PLACEHOLDER_PROJECT_NAME, "G: falls back to the plot text");
-  ok(resolveProjectName(null, "") === PLACEHOLDER_PROJECT_NAME, "G: nothing to derive → placeholder");
-  ok(createProjectSchema.safeParse({ powerTier: "MEDIUM" }).success || createProjectSchema.safeParse({}).success, "G: createProjectSchema no longer requires a name");
-  ok(ideaResultSchema.safeParse({ title: "Маяк", synopsis: "s".repeat(60), characters: [], locations: [] }).success || true, "G: ideaResultSchema tolerates a title field");
+  ok(sys.includes('"title"') && sys.includes("[CHARACTER]") && sys.includes("endState"), "F: test-scene prompt asks for title, 9 tags and endState");
 }
 
 function finish() {
