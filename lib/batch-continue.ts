@@ -40,8 +40,9 @@ export interface ContinuationOptions {
   /** A never-submitted (no predictionId) pending/processing job older than this is orphaned → resubmit. */
   kickStaleMs: number;
   /**
-   * Max scenes to (re)submit in ONE continue invocation (mirrors GENERATE_ALL_CONCURRENCY = 1).
-   * Generation is strictly sequential, so this is 1: only the earliest not-done scene is ever kicked.
+   * Max scenes with a live prediction slot at once (mirrors GENERATE_ALL_CONCURRENCY). Stage 39: scenes
+   * are independent and generate in parallel, so callers pass Infinity (no cap) — every kickable scene
+   * is (re)started in the same pass, in ascending scene order.
    */
   concurrency: number;
   /** Hard cap on total attempts (jobs) per scene, so a broken scene never loops forever. */
@@ -82,11 +83,8 @@ export function planContinuation(snaps: SceneJobSnapshot[], opts: ContinuationOp
   let inFlight = 0; // scenes with a live Replicate prediction (occupy a real generation slot)
   let failed = 0; // terminal failures (surfaced, not acted on by this mode)
   let pending = 0; // scenes this mode WILL act on (kept in `remaining`)
-  // Strictly sequential generation: `snaps` is in ascending scene order and each scene must chain from
-  // the previous scene's last frame, so ONLY the earliest not-done scene (whose predecessors are all
-  // done) may be (re)started in a pass — never a later scene. `gateOpen` is true only up to that
-  // earliest not-done scene ("the frontier"); every scene after it is gated and left for a later pass.
-  let gateOpen = true;
+  // Stage 39: no sequential gate — a not-done scene is kickable regardless of the state of its
+  // predecessors (scenes no longer chain from each other's last frame).
 
   for (const s of snaps) {
     if (s.hasVideo) {
@@ -95,25 +93,13 @@ export function planContinuation(snaps: SceneJobSnapshot[], opts: ContinuationOp
       continue;
     }
     const job = s.latestJob;
-    // Genuinely submitted (live prediction) → poll recovery owns it. Never touched, counts as work,
-    // regardless of order. It also occupies the sequential frontier, so it closes the gate.
+    // Genuinely submitted (live prediction) → poll recovery owns it. Never touched, counts as work.
     if (job && (job.status === "pending" || job.status === "processing") && job.hasPrediction) {
       generating++;
       inFlight++;
-      gateOpen = false;
       scenes.push({ sceneId: s.sceneId, number: s.number, status: "generating" });
       continue;
     }
-    if (!gateOpen) {
-      // A not-done scene behind an unfinished predecessor: it must wait for the chain. Shown as pending
-      // but excluded from `remaining` — the frontier scene alone keeps the auto-continue loop alive while
-      // it is productive; if the frontier is stuck (terminal), the loop should stop, not poll forever.
-      scenes.push({ sceneId: s.sceneId, number: s.number, status: "pending" });
-      continue;
-    }
-    // === The sequential frontier: the earliest not-done scene (all predecessors done). Only this scene
-    // may be kicked; after it the gate closes so no later scene starts out of order. ===
-    gateOpen = false;
     if (job && (job.status === "pending" || job.status === "processing")) {
       if (opts.nowMs - job.updatedAtMs > opts.kickStaleMs) {
         // Never submitted and gone quiet → orphaned. Resubmit on the SAME (already-charged) job.
@@ -153,8 +139,8 @@ export function planContinuation(snaps: SceneJobSnapshot[], opts: ContinuationOp
     }
   }
 
-  // At most one scene is (re)started per pass (sequential): the gate yields a single frontier candidate,
-  // and it is kicked only when no scene holds a live prediction slot (capacity = concurrency − in-flight).
+  // Capacity = concurrency − in-flight. With concurrency = Infinity (Stage 39 default) every candidate is
+  // kicked in this pass; already-paid resubmits go before fresh-charge retries.
   const capacity = Math.max(0, opts.concurrency - inFlight);
   const resubmit = resubmitCandidates.slice(0, capacity);
   const retry = retryCandidates.slice(0, Math.max(0, capacity - resubmit.length));

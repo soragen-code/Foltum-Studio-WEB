@@ -429,6 +429,45 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   }
   const regenScene = (sceneId: string) => generateScene(sceneId, false)
 
+  // Stage 39 — «Сгенерировать все сцены»: POST /api/ai/episodes/[id]/generate-all starts EVERY pending /
+  // failed scene at once (server-side fan-out); the client polls all returned jobs simultaneously so each
+  // card shows its own progress / error. `genAllAsk` holds the cost estimate for the confirmation box.
+  const [genAllAsk, setGenAllAsk] = useState<{ pendingCount: number; total: number; costPerScene: number; credits: number } | null>(null)
+  const [genAllStarting, setGenAllStarting] = useState(false)
+  const generatingCount = Object.values(activeGen).filter(Boolean).length
+  const openGenerateAll = async () => {
+    setError(null); setGenAllStarting(true)
+    try {
+      const res = await fetch(`/api/ai/episodes/${episode.id}/generate-all`, { cache: 'no-store' })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d?.error ?? 'Не удалось получить оценку стоимости')
+      if (!d.pendingCount) { setError('Все сцены уже готовы или генерируются'); return }
+      setGenAllAsk({ pendingCount: d.pendingCount, total: d.total ?? 0, costPerScene: d.costPerScene ?? 0, credits: d.credits ?? credits })
+    } catch (e: any) { setError(e?.message ?? 'Ошибка') }
+    finally { setGenAllStarting(false) }
+  }
+  const generateAllScenes = async () => {
+    setGenAllAsk(null); setGenAllStarting(true); setError(null)
+    try {
+      const res = await postJobStart(`/api/ai/episodes/${episode.id}/generate-all`, {})
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok || !Array.isArray(d?.jobs)) throw new Error(d?.error ?? 'Не удалось запустить генерацию')
+      for (const j of d.jobs as Array<{ sceneId: string; jobId: string }>) {
+        setActiveGen((p) => ({ ...p, [j.sceneId]: true }))
+        setSceneError((prev) => { const n = { ...prev }; delete n[j.sceneId]; return n })
+        setSceneErrorRefs((prev) => { const n = { ...prev }; delete n[j.sceneId]; return n })
+        patchScene(j.sceneId, { status: 'generating' })
+        pollVideoJob(j.sceneId, j.jobId)
+      }
+      // Scenes the balance could not cover are reported per card as «Недостаточно кредитов».
+      for (const u of (d.insufficient ?? []) as Array<{ sceneId: string; error?: string }>) {
+        setSceneError((prev) => ({ ...prev, [u.sceneId]: u.error ?? 'Недостаточно кредитов' }))
+      }
+      if (typeof d?.creditsRemaining === 'number') setCredits(d.creditsRemaining); else void refreshCredits()
+    } catch (e: any) { setError(e?.message ?? 'Ошибка') }
+    finally { setGenAllStarting(false) }
+  }
+
   // Stage 31 — open the "Смотреть промпт" modal and load the scene's FINAL prompt (override if set,
   // else the auto-assembled prompt). The prompt is exactly what the worker submits (with [ImageN]
   // placeholders instead of real reference URLs and no LLM translation).
@@ -732,7 +771,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         </section>
         )}
 
-        {/* Step 3 — scenes: per-scene generation (sequential gate) + собрать */}
+        {/* Step 3 — scenes: per-scene generation + «Сгенерировать все сцены» (parallel, Stage 39) + собрать */}
         {phase === 'scenes' && (
         <>
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
@@ -743,12 +782,18 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <span className="inline-flex items-center gap-2 text-sm text-muted-foreground" data-testid="video-model-label">
             <Film className="h-4 w-4 text-primary" /> Модель видео: {VIDEO_MODEL_LABEL}
           </span>
+          {/* Stage 39 — «Сгенерировать все сцены»: every pending / failed scene is started at once (parallel). */}
+          {!allReady && (
+            <button onClick={openGenerateAll} disabled={genAllStarting || genAllAsk !== null} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all-scenes" title="Запустить генерацию всех ещё не готовых сцен одновременно">
+              {genAllStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Сгенерировать все сцены
+            </button>
+          )}
           <button onClick={stitch} disabled={!allReady || stitching} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? 'Склеить готовые сцены в один эпизод' : 'Доступно, когда все сцены готовы'}>
             {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Собрать
           </button>
-          <span className="text-xs text-muted-foreground" data-testid="batch-status">{scenes.filter((s) => validUrl(s.videoUrl)).length} из {scenes.length} сцен готово{isAssembled ? ' · эпизод собран' : ''}</span>
+          <span className="text-xs text-muted-foreground" data-testid="batch-status">{scenes.filter((s) => validUrl(s.videoUrl)).length} из {scenes.length} сцен готово{generatingCount > 0 ? ` · генерируется: ${generatingCount}` : ''}{isAssembled ? ' · эпизод собран' : ''}</span>
           <p className="w-full text-xs text-muted-foreground" data-testid="scenes-hint">
-            Каждая сцена генерируется отдельной кнопкой и строго по порядку: следующая сцена доступна только после того, как готова предыдущая (её последний кадр нужен как первый кадр следующей). <b>Собрать:</b> склеивает готовые ролики всех сцен в один эпизод без перегенерации — доступно, когда все сцены готовы.
+            Сцены независимы: любую можно сгенерировать в любом порядке, несколько сцен могут генерироваться одновременно. <b>Сгенерировать все сцены:</b> запускает все ещё не готовые сцены сразу, параллельно (кредиты списываются за каждую сцену). <b>Собрать:</b> склеивает готовые ролики всех сцен в один эпизод без перегенерации — доступно, когда все сцены готовы.
           </p>
           {error && <p className="w-full text-sm text-destructive" data-testid="error">{error}</p>}
         </div>
@@ -772,15 +817,12 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         {/* Scenes */}
         <h2 className="mt-8 font-display text-xl font-bold">Сцены ({scenes.length})</h2>
         <div className="mt-3 grid gap-4 md:grid-cols-2">
-          {scenes.map((scene, idx) => {
+          {scenes.map((scene) => {
             const gen = !!activeGen[scene.id]
             const job = videoJobs[scene.id]
             const ready = validUrl(scene.videoUrl)
-            // EDIT 5 — sequential gate: scene N can only start once scene N-1 is fully ready
-            // (has a video AND is not generating), because the previous scene's last frame is the
-            // first frame of the next one. The first scene is always available.
-            const prevScene = idx > 0 ? scenes[idx - 1] : null
-            const prevReady = !prevScene || (validUrl(prevScene.videoUrl) && !activeGen[prevScene.id])
+            // Stage 39: no sequential gate — any scene can start at any time (scenes are independent);
+            // the button is disabled only while THIS scene is generating.
             return (
               <div key={scene.id} className="rounded-xl border border-border bg-card p-4" data-testid="scene-card" data-scene-status={gen ? 'generating' : validUrl(scene.videoUrl) ? 'ready' : 'pending'}>
                 <div className="flex items-start justify-between gap-2">
@@ -827,15 +869,15 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
 
                 <div className="mt-3 space-y-2">
                   {/* Stage 35 — one row, two half-width buttons under the preview: the primary action
-                      (generate / regenerate, sequential gate kept) and «Смотреть промпт». */}
+                      (generate / regenerate — Stage 39: no sequential gate) and «Смотреть промпт». */}
                   <div className="grid grid-cols-2 gap-2">
                     {!ready ? (
                       <button
                         onClick={() => generateScene(scene.id, true)}
-                        disabled={gen || !prevReady}
+                        disabled={gen}
                         className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
                         data-testid="scene-generate"
-                        title={prevReady ? 'Сгенерировать эту сцену' : 'Сначала завершите предыдущую сцену'}
+                        title="Сгенерировать эту сцену"
                       >
                         {gen ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {gen ? 'Генерирую…' : 'Сгенерировать сцену'}
                       </button>
@@ -861,9 +903,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       {scene.promptOverride ? <span className="ml-1 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary" data-testid="scene-override-badge">изменён</span> : null}
                     </button>
                   </div>
-                  {!ready && !gen && !prevReady && (
-                    <p className="text-xs text-muted-foreground" data-testid="scene-gate-hint">Сначала завершите предыдущую сцену</p>
-                  )}
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <input value={sceneEdit[scene.id] ?? ''} onChange={(e) => setSceneEdit((t) => ({ ...t, [scene.id]: e.target.value }))} placeholder="Изменить сцену: что поправить…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-sm" data-testid="scene-revise-input" disabled={gen} />
                     <button onClick={() => reviseScene(scene)} disabled={gen || !!sceneBusy[scene.id] || !(sceneEdit[scene.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-50" data-testid="scene-revise-submit">
@@ -930,6 +969,25 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           )}
           <div className="absolute bottom-3 left-0 right-0 text-center text-xs text-white/80">
             {lightbox.title ? `${lightbox.title} · ` : ''}{lightbox.index + 1}/{lightbox.images.length}
+          </div>
+        </div>
+      )}
+
+      {/* Stage 39 — confirmation before starting every pending scene at once. */}
+      {genAllAsk && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" data-testid="generate-all-modal">
+          <div className="w-full max-w-md rounded-xl border border-border bg-card p-5">
+            <h3 className="font-display text-lg font-bold">Сгенерировать все сцены</h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Будет запущено сразу <b>{genAllAsk.pendingCount}</b> сцен параллельно — примерно <b>{genAllAsk.total}</b> кр. ({genAllAsk.costPerScene} кр. за сцену). На балансе: {genAllAsk.credits} кр.
+              {genAllAsk.credits < genAllAsk.total && <span className="mt-1 block text-destructive">Кредитов хватит не на все сцены: запустятся только те, которые можно оплатить, остальные будут отмечены «Недостаточно кредитов».</span>}
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => setGenAllAsk(null)} className="rounded-lg border border-border px-3 py-1.5 text-sm">Отмена</button>
+              <button onClick={generateAllScenes} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="generate-all-ok">
+                <Wand2 className="h-4 w-4" /> Запустить
+              </button>
+            </div>
           </div>
         </div>
       )}

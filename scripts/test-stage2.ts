@@ -77,12 +77,12 @@ assert(failed.scenes.length === 6 && failed.scenes[0].dialogue === ru, "translat
 })().catch((e) => { console.error(e); process.exit(1); });
 
 import { sceneReviseSchema, locationReviseSchema, renderScriptFromScenes } from "../lib/season";
-import { GENERATE_ALL_CONCURRENCY } from "../app/api/ai/episodes/[id]/generate-all/route";
+import { GENERATE_ALL_CONCURRENCY } from "../lib/generate-all-fanout";
 assert(sceneReviseSchema.safeParse({ shotType: "Close-up", durationSec: 30, locationDesc: "INT — Маяк — ночь", action: "Анна молчит.", dialogue: talk, videoPrompt: prompt }).success, "scene revise schema ok");
 assert(!sceneReviseSchema.safeParse({ shotType: "Close-up", durationSec: 40, locationDesc: "x", action: "y", dialogue: talk, videoPrompt: prompt }).success, "scene revise rejects 40s");
 assert(locationReviseSchema.safeParse({ locationName: "Порт", locationDesc: "A foggy fishing port with rusted trawlers and sodium lamps.", scenes: [{ number: 1, locationDesc: "EXT — Порт — ночь", videoPrompt: prompt }] }).success, "location revise schema ok");
 assert(renderScriptFromScenes({ number: 1, title: "T", logline: "L", locationName: "Маяк", cliffhanger: "C" }, ["Анна"], ok.scenes).includes("СЦЕНА 12"), "script text renders 12 scenes");
-assert(GENERATE_ALL_CONCURRENCY === 1, `sequential generation: concurrency must be 1 (was ${GENERATE_ALL_CONCURRENCY}) so each scene chains from the previous scene's last frame`);
+assert(GENERATE_ALL_CONCURRENCY === Number.POSITIVE_INFINITY, `Stage 39: parallel generation — no concurrency cap (was ${GENERATE_ALL_CONCURRENCY})`);
 console.log("ALL STAGE2 EXTENDED CHECKS PASSED");
 
 // matchCharacter: LLM short names resolve to full project names

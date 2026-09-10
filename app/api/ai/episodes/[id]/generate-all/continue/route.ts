@@ -11,10 +11,10 @@ import { normalizeVideoModel } from "@/lib/ai-models";
 import { resolvePowerTier } from "@/lib/power-tier";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
 import { planContinuation, type SceneJobSnapshot } from "@/lib/batch-continue";
+import { GENERATE_ALL_CONCURRENCY } from "@/lib/generate-all-fanout";
 
-/** Mirror of GENERATE_ALL_CONCURRENCY — generation is strictly sequential, so at most one scene
- *  (the earliest not-done one, whose predecessor is already finished) is (re)started per invocation. */
-const CONTINUE_CONCURRENCY = 1;
+/** Stage 39: mirrors GENERATE_ALL_CONCURRENCY (no cap) — every kickable scene is (re)started per invocation. */
+const CONTINUE_CONCURRENCY = GENERATE_ALL_CONCURRENCY;
 /** A pending/processing job with no predictionId untouched for this long is orphaned → resubmit. */
 const KICK_STALE_MS = 75_000;
 /** Auto-continue never creates more than this many jobs per scene (broken scene can't loop forever). */
