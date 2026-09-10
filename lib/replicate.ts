@@ -26,11 +26,20 @@ function extractUrl(output: unknown): string {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Seedance 2.5 — video generation                                  */
+/*  Seedance — video generation (native audio)                        */
+/*  Two real models share this same payload/schema:                    */
+/*    - "bytedance/seedance-2.5" (default) — up to 30s per clip;        */
+/*    - "bytedance/seedance-2.0"           — up to 15s per clip.        */
+/*  Both generate synchronized native audio. Pick via `model`.         */
 /* ------------------------------------------------------------------ */
+
+/** Default Seedance Replicate slug when a caller does not specify `model`. */
+export const SEEDANCE_MODEL = "bytedance/seedance-2.5";
 
 export interface SeedanceInput {
   prompt: string;
+  /** Replicate model slug: "bytedance/seedance-2.5" (default) or "bytedance/seedance-2.0". */
+  model?: string;
   /** Duration in seconds, 1-30 or -1 for auto. Default 5. */
   duration?: number;
   /** "480p" | "720p". Default "720p". */
@@ -49,7 +58,7 @@ export interface SeedanceInput {
 }
 
 /**
- * Generate a video using Seedance 2.5 via Replicate.
+ * Generate a video using Seedance (2.5 default, or 2.0 via `input.model`) on Replicate.
  * Returns the URL of the generated mp4 video.
  */
 export async function generateVideo(input: SeedanceInput): Promise<string> {
@@ -58,7 +67,7 @@ export async function generateVideo(input: SeedanceInput): Promise<string> {
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      const output = await replicate.run("bytedance/seedance-2.5", {
+      const output = await replicate.run((input.model ?? SEEDANCE_MODEL) as `${string}/${string}`, {
         input: {
           prompt: input.prompt,
           duration: input.duration ?? 5,
@@ -108,111 +117,8 @@ function seedanceInput(input: SeedanceInput) {
 export async function startVideoPrediction(input: SeedanceInput): Promise<string> {
   // One submission per job. Provider/moderation refusals require review, not paid blind retries.
   const prediction = await getReplicate().predictions.create({
-    model: "bytedance/seedance-2.5",
+    model: (input.model ?? SEEDANCE_MODEL) as `${string}/${string}`,
     input: seedanceInput(input),
-  });
-  return prediction.id;
-}
-
-/* ------------------------------------------------------------------ */
-/*  Kling v2.1 — alternative image-to-video provider                   */
-/*  Real schema (kwaivgi/kling-v2.1): required prompt + start_image;   */
-/*  duration enum [5,10] (NO 15s); mode 'standard'(720p)/'pro'(1080p); */
-/*  optional end_image, negative_prompt; NO native audio (silent).     */
-/* ------------------------------------------------------------------ */
-
-/** Pinned version id of kwaivgi/kling-v2.1 (image-to-video). */
-const KLING_MODEL_ID = "kwaivgi/kling-v2.1";
-const KLING_VERSION_ID =
-  process.env.REPLICATE_KLING_VERSION ??
-  "daad218feb714b03e2a1ac445986aebb9d05243cd00da2af17be2e4049f48f69";
-
-export interface KlingInput {
-  prompt: string;
-  /** REQUIRED first frame (image-to-video only). */
-  start_image: string;
-  /** Duration in seconds; Kling supports ONLY 5 or 10. Default 10. */
-  duration?: number;
-  /** 'standard' (720p) | 'pro' (1080p). Default 'standard'. */
-  mode?: "standard" | "pro";
-  /** Optional last frame for continuity (requires pro mode when set). */
-  end_image?: string;
-  negative_prompt?: string;
-}
-
-/** Model id string exported so callers/diagnostics can tag Kling attempts. */
-export const KLING_MODEL = KLING_MODEL_ID;
-
-/** Build the Kling input payload; clamps duration to the supported enum. */
-function klingInput(input: KlingInput) {
-  const dur = input.duration === 5 ? 5 : 10; // enum [5,10]
-  const mode = input.mode ?? "standard";
-  return {
-    prompt: input.prompt,
-    start_image: input.start_image,
-    duration: dur,
-    mode,
-    ...(input.end_image ? { end_image: input.end_image } : {}),
-    ...(input.negative_prompt ? { negative_prompt: input.negative_prompt } : {}),
-  };
-}
-
-/**
- * Start a Kling v2.1 prediction WITHOUT waiting. Returns the prediction id so the
- * caller reuses the SAME polling/finalize path as Seedance (standard Replicate
- * prediction id + mp4 output). Kling REQUIRES start_image and has NO audio.
- */
-export async function startKlingPrediction(input: KlingInput): Promise<string> {
-  if (!input.start_image) throw new Error("Kling requires a start_image (image-to-video only)");
-  const prediction = await getReplicate().predictions.create({
-    version: KLING_VERSION_ID,
-    input: klingInput(input),
-  });
-  return prediction.id;
-}
-
-/* ------------------------------------------------------------------ */
-/*  sync/lipsync-2 — overlay speech onto a video's lips                 */
-/*  Real schema: required video (.mp4) + audio (.wav); sync_mode        */
-/*  ['loop','bounce','cut_off','silence','remap'] handles a duration    */
-/*  mismatch between audio and video WITHOUT time-stretching speech;    */
-/*  temperature 0-1 (expressiveness); output = single video URL.        */
-/* ------------------------------------------------------------------ */
-
-const LIPSYNC_VERSION_ID =
-  process.env.REPLICATE_LIPSYNC_VERSION ??
-  "4f8dc3cfda4ff844a6158ac347d21fcd025210f6dad4b16265fc53074ee4f77f"; // sync/lipsync-2
-/** Model id string exported so callers/diagnostics can tag lipsync attempts. */
-export const LIPSYNC_MODEL = "sync/lipsync-2";
-
-export interface LipsyncInput {
-  /** Silent (or any) video whose lips will be re-synced. */
-  video: string;
-  /** Speech audio track to sync the lips to. */
-  audio: string;
-  /**
-   * How to reconcile a duration mismatch. "silence" keeps the FULL video length
-   * and pads shorter speech with silence — no pitch/speed distortion of the voice.
-   */
-  sync_mode?: "loop" | "bounce" | "cut_off" | "silence" | "remap";
-  /** Expressiveness 0-1. Default 0.5. */
-  temperature?: number;
-}
-
-/**
- * Start a sync/lipsync-2 prediction WITHOUT waiting. Returns the prediction id so the
- * caller reuses the SAME polling/finalize path (standard Replicate prediction id + mp4).
- */
-export async function startLipsyncPrediction(input: LipsyncInput): Promise<string> {
-  if (!input.video || !input.audio) throw new Error("Lipsync requires both a video and an audio URL");
-  const prediction = await getReplicate().predictions.create({
-    version: LIPSYNC_VERSION_ID,
-    input: {
-      video: input.video,
-      audio: input.audio,
-      sync_mode: input.sync_mode ?? "silence",
-      temperature: input.temperature ?? 0.5,
-    },
   });
   return prediction.id;
 }

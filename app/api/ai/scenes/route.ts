@@ -25,8 +25,8 @@ const MIN_SILENT_SCENES = 2;
 const MAX_SILENT_SCENES = Math.max(MIN_SILENT_SCENES, Math.floor(SCENES_PER_EPISODE / 4));
 
 /** A talking scene is NOT rendered as a ${SCENE_SECONDS}s clip — video generation
- *  stretches each spoken clip to ~10–15 s (Seedance native audio 15 s, Kling 10 s),
- *  which comfortably fits a real 2–3 line exchange. Size the dialogue to THIS. */
+ *  stretches each spoken clip to ~10–15 s (Seedance native audio), which comfortably
+ *  fits a real 2–3 line exchange. Size the dialogue to THIS. */
 const DIALOGUE_CLIP_SECONDS = 12;
 
 const SYSTEM = `You are a film director + cinematographer + editor working on a short-form VERTICAL drama series (9:16, TikTok/Reels format). Every episode must run AT LEAST ${EPISODE_MIN_SECONDS} seconds of screen time.

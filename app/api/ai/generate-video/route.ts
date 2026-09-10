@@ -57,7 +57,7 @@ export async function POST(request: Request) {
     const sceneData = await prisma.scene.findUnique({ where: { id: sceneId } });
     if (!sceneData) return NextResponse.json({ error: "Scene not found" }, { status: 404 });
     // Video provider: explicit request wins, else the model picked for this scene at batch time,
-    // else Seedance (native audio). Kling is a silent image-to-video alt capped at 10s.
+    // else Seedance 2.5. Both providers have native audio; Seedance 2.0 is capped at 15s per clip.
     const provider = normalizeVideoModel(parsed.data.provider ?? sceneData.videoModel);
     if (!sceneData.videoPrompt)
       return NextResponse.json({ error: "Scene has no video prompt" }, { status: 400 });
@@ -70,9 +70,9 @@ export async function POST(request: Request) {
     const duration = sceneData.durationSec
       ? sceneClipSeconds(tier.power, sceneData.durationSec)
       : Math.min(SCENE_MAX_SECONDS, Math.max(SCENE_MIN_SECONDS, tier.duration, Math.ceil(EPISODE_MIN_SECONDS / sceneCount)));
-    // Kling's real schema supports ONLY 5 or 10 s (no 15s). Cap honestly so the
-    // clip length AND the credit cost reflect what Kling actually produces.
-    const effectiveDuration = provider === "kling" ? Math.min(10, duration) : duration;
+    // Seedance 2.0 renders at most 15 s per clip (2.5 goes up to 30 s). Cap honestly so the
+    // clip length AND the credit cost reflect what the chosen model actually produces.
+    const effectiveDuration = provider === "seedance-2.0" ? Math.min(15, duration) : duration;
     const config = {
       resolution: tier.resolution,
       duration: effectiveDuration,

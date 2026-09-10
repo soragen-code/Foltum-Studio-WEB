@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db";
-import { startVideoPrediction, startKlingPrediction, startLipsyncPrediction, startImagePrediction, getPredictionState, cancelVideoPrediction, KLING_MODEL, LIPSYNC_MODEL } from "@/lib/replicate";
-import { buildNativeAudioPrompt, buildNarrationAudioPrompt, translateDialogue, detectSpokenLanguage, languageName, parseDialogue } from "@/lib/voiceover";
+import { startVideoPrediction, startImagePrediction, getPredictionState, cancelVideoPrediction, SEEDANCE_MODEL } from "@/lib/replicate";
+import { buildNativeAudioPrompt, buildNarrationAudioPrompt, translateDialogue, detectSpokenLanguage } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
-import { extractLastFrameBuffer, extractAudioBuffer } from "@/lib/ffmpeg";
+import { extractLastFrameBuffer } from "@/lib/ffmpeg";
+import { normalizeVideoModel } from "@/lib/ai-models";
 import { PACE_DIRECTION } from "@/lib/season";
 import { getBucketConfig } from "@/lib/aws-config";
 import { VISUAL_STYLE_ID, styledVisualPrompt, isStyledAsset, canChainFrame, locationAngleImages } from "@/lib/visual-style";
@@ -20,8 +21,8 @@ export interface VideoJobParams {
   cost?: number;
   duration?: number;
   resolution?: string;
-  /** "seedance" (default, native audio) or "kling" (silent image-to-video, max 10s). */
-  provider?: "seedance" | "kling";
+  /** "seedance" (2.5, default, native audio) or "seedance-2.0" (native audio, max 15s). */
+  provider?: "seedance" | "seedance-2.0";
 }
 
 /** Persisted in GenerationJob.resultData while the job is running, so it can be resumed. */
@@ -41,32 +42,20 @@ export interface VideoJobState {
   providerStatus?: string;
   providerStartedAt?: string | null;
   providerCompletedAt?: string | null;
-  /* --- Kling + lipsync pipeline (realistic path with native speech) --- */
-  /** When true, run the staged pipeline: Kling video -> Seedance speech -> lipsync. */
-  lipsync?: boolean;
-  /** Current pipeline stage. Absent/"video" = single-prediction (default behaviour). */
-  stage?: "video" | "audio" | "lipsync";
-  /** Silent Kling video URL, carried from the video stage into lipsync. */
-  klingVideoUrl?: string;
-  /** Extracted native-speech WAV URL, carried from the audio stage into lipsync. */
-  speechAudioUrl?: string;
-  /** Persisted so the audio stage can submit the Seedance speech run on its own. */
-  audioPrompt?: string;
-  audioDuration?: number;
   /* --- Seedance moderation (E005) auto-recovery, no extra credit charge --- */
   /** How many LLM-sanitized resubmissions were already made on Seedance (max MAX_MODERATION_RETRIES). */
   moderationRetries?: number;
-  /** True once the automatic fallback to the alternative model (Kling) has been submitted. */
-  moderationFallback?: boolean;
   /** Model that actually produced the final video, persisted to scene.videoModel on success. */
   videoModel?: string;
-  /** Everything needed to resubmit the same scene with a softer prompt or on another model. */
+  /** Everything needed to resubmit the same scene with a softer prompt. */
   retry?: ModerationRetryInput;
 }
 
 export interface ModerationRetryInput {
   /** Level-1 sanitized core prompt (visual + speech + pace), WITHOUT the [ImageN] notes. */
   basePrompt: string;
+  /** Replicate Seedance slug to resubmit on (2.5 default or 2.0). */
+  model: string;
   duration: number;
   resolution: string;
   /** Adjacent last frame (image-to-video), if the first attempt used one. */
@@ -75,17 +64,8 @@ export interface ModerationRetryInput {
   refs: { url: string; kind: string; note: string }[];
   /** Reduced set for the last retry: speaking characters + one location angle. */
   fallbackRefs: { url: string; kind: string; note: string }[];
-  /* --- extra state needed for the automatic fallback to Kling --- */
-  /** Clean styled VISUAL prompt (no spoken-dialogue instructions) — fed to silent Kling. */
-  visualPrompt?: string;
-  /** True when the scene has spoken lines (fallback then runs the Kling+lipsync pipeline). */
-  hasDialogue?: boolean;
-  /** Pre-built stylized native-speech prompt for the lipsync pipeline's audio stage. */
-  audioPrompt?: string;
-  /** Duration used for the Kling clip / lipsync audio (Kling caps at 10s). */
-  audioDuration?: number;
 }
-/** Up to 2 automatic LLM-sanitized resubmissions on Seedance before the model fallback (1 charge total). */
+/** Up to 2 automatic LLM-sanitized resubmissions on Seedance, all within the same charge. */
 export const MAX_MODERATION_RETRIES = 2;
 
 const POLL_INTERVAL_MS = 8_000;
@@ -255,88 +235,37 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     }
     // One paid video attempt. Copyright, general moderation, E003 and timeout remain distinct;
     // none silently trigger another generation or switch the audio off.
-    const provider = params.provider === "kling" ? "kling" : "seedance";
+    // Both providers are Seedance (native audio); Seedance 2.0 is a different Replicate slug
+    // and renders at most 15 s per clip (2.5 goes up to 30 s).
+    const provider = normalizeVideoModel(params.provider);
+    const modelSlug = provider === "seedance-2.0" ? "bytedance/seedance-2.0" : SEEDANCE_MODEL;
     let predictionId: string;
     let attempt: GenerationAttempt;
     let submitMessage: string;
-    // Extra state for the multi-stage Kling+lipsync pipeline (set below when applicable).
+    // Extra state persisted alongside the prediction (moderation auto-recovery).
     const pipelineExtra: Partial<VideoJobState> = {};
 
-    if (provider === "kling") {
-      // Kling v2.1 is image-to-video ONLY and needs a single start frame. Reuse the
-      // frame we already have: an adjacent last frame, or the first reference still.
-      const startImage = image ?? referenceImages[0];
-      if (!startImage) throw new Error("Kling requires a start image but none was produced");
-      // Kling has NO audio track — feed the clean VISUAL prompt (no spoken-dialogue
-      // instructions). Real schema caps duration at 5 or 10 s; there is no 15s.
-      //
-      // Stage 27a LIMITATION (Kling only): the lipsync audio below is generated at
-      // audioDuration = klingDuration = min(10, planned). Seedance is the DEFAULT model and gets the
-      // full natural-pace + auto-split treatment (a scene planned > 30 s is split into multiple
-      // scenes upstream in normalizeEpisodeScript). Kling's clip is hard-capped at 10 s by the model
-      // and the chosen video model is NOT known at script-normalize time, so we cannot pre-split
-      // dialogue to the 10 s Kling budget. Therefore a scene with > ~21 words of dialogue (10 s at the
-      // natural ~2.1 words/s) still gets its speech compressed to fit 10 s on the Kling path. This is
-      // no worse than before Stage 27a; the natural-pace win applies fully to the Seedance default.
-      const klingDuration = Math.min(10, Number(params.duration ?? 10));
-      // If the scene has spoken lines, run the realistic lipsync pipeline: after the
-      // silent Kling video we harvest native speech from a moderation-passing Seedance
-      // run and sync it onto the Kling character's lips. Silent scenes stay single-stage.
-      const spokenLines = parseDialogue(dialogue);
-      if (spokenLines.length) {
-        // Speech is generated by a Seedance run whose VISUAL is deliberately stylized
-        // (non-photorealistic) so it passes the moderation that blocks realistic Seedance.
-        // Only its audio track is used; the realistic visuals come from Kling.
-        const stylizedBase =
-          "Simple hand-drawn 2D animated cartoon, flat colours and soft outlines: an original " +
-          "stylized character speaking to camera in a plain setting. Non-photorealistic illustration.";
-        pipelineExtra.lipsync = true;
-        pipelineExtra.stage = "video";
-        pipelineExtra.audioDuration = klingDuration;
-        pipelineExtra.audioPrompt = buildNativeAudioPrompt(stylizedBase, dialogue, links.map(l => l.character), targetLanguage);
-      }
-      const klingInputForLog = {
-        prompt: visualPrompt, duration: klingDuration, mode: "standard", start_image: startImage,
-        audio: pipelineExtra.lipsync ? "lipsync pipeline (Seedance native speech -> sync/lipsync-2)" : "none (Kling has no native audio)",
-      };
-      attempt = {
-        jobId, sceneId, attempt: 1, model: KLING_MODEL, phase: "video", status: "submitting",
-        style: VISUAL_STYLE_ID, language: scene.language || "en",
-        input: safeDiagnosticInput({ ...klingInputForLog, reference }),
-      };
-      diagnostics.push(attempt); await persist(); logAttempt(attempt);
-      predictionId = await startKlingPrediction({
-        prompt: visualPrompt, start_image: startImage, duration: klingDuration, mode: "standard",
-      });
-      submitMessage = pipelineExtra.lipsync
-        ? "Submitted to Kling (realistic video); native speech + lipsync will follow..."
-        : "Submitted to Kling (silent, image-to-video); checking the same prediction...";
-    } else {
-      const input = {
-        prompt, duration: Number(params.duration ?? 5), resolution: String(params.resolution ?? "480p"),
-        aspect_ratio: image ? "adaptive" : "9:16", generate_audio: true, watermark: false,
-      };
-      attempt = {
-        jobId, sceneId, attempt: 1, model: "bytedance/seedance-2.5", phase: "video", status: "submitting",
-        style: VISUAL_STYLE_ID, language: scene.language || "en", input: safeDiagnosticInput({ ...input, reference }),
-      };
-      diagnostics.push(attempt); await persist(); logAttempt(attempt);
-      predictionId = await startVideoPrediction({ ...input, ...(image ? { image } : { reference_images: referenceImages }) });
-      submitMessage = "Submitted to Seedance; checking the same prediction...";
-      // Keep what is needed to auto-recover the SAME scene after a moderation refusal:
-      // (1) resubmit Seedance with an LLM-rewritten prompt, then (2) fall back to Kling.
-      const spokenLines = parseDialogue(dialogue);
-      const stylizedBase =
-        "Simple hand-drawn 2D animated cartoon, flat colours and soft outlines: an original " +
-        "stylized character speaking to camera in a plain setting. Non-photorealistic illustration.";
-      pipelineExtra.retry = {
-        basePrompt, duration: input.duration, resolution: input.resolution, image, refs: retryRefs, fallbackRefs,
-        visualPrompt, hasDialogue: spokenLines.length > 0,
-        audioPrompt: spokenLines.length ? buildNativeAudioPrompt(stylizedBase, dialogue, links.map(l => l.character), targetLanguage) : undefined,
-        audioDuration: Math.min(10, Number(params.duration ?? 10)),
-      };
-      pipelineExtra.moderationRetries = 0;
-    }
+    // Seedance 2.0 caps at 15 s per clip; 2.5 keeps the planned duration (already ≤30 s upstream).
+    const clipDuration = provider === "seedance-2.0"
+      ? Math.min(15, Number(params.duration ?? 5))
+      : Number(params.duration ?? 5);
+    const input = {
+      prompt, model: modelSlug, duration: clipDuration, resolution: String(params.resolution ?? "480p"),
+      aspect_ratio: image ? "adaptive" : "9:16", generate_audio: true, watermark: false,
+    };
+    attempt = {
+      jobId, sceneId, attempt: 1, model: modelSlug, phase: "video", status: "submitting",
+      style: VISUAL_STYLE_ID, language: scene.language || "en", input: safeDiagnosticInput({ ...input, reference }),
+    };
+    diagnostics.push(attempt); await persist(); logAttempt(attempt);
+    predictionId = await startVideoPrediction({ ...input, ...(image ? { image } : { reference_images: referenceImages }) });
+    submitMessage = "Submitted to Seedance; checking the same prediction...";
+    // Keep what is needed to auto-recover the SAME scene after a moderation refusal:
+    // resubmit Seedance (same model) with an LLM-rewritten, softened prompt. No extra charge.
+    pipelineExtra.retry = {
+      basePrompt, model: modelSlug, duration: input.duration, resolution: input.resolution, image, refs: retryRefs, fallbackRefs,
+    };
+    pipelineExtra.moderationRetries = 0;
     attempt.predictionId = predictionId; attempt.status = "processing";
     state = { predictionId, sceneId, projectId, userId, cost, startedAt: Date.now(), diagnostics, ...pipelineExtra };
     // This checkpoint MUST succeed: never swallow the prediction ID write.
@@ -426,11 +355,9 @@ async function handleFailure(jobId: string, ctx: { sceneId: string; userId?: str
     const hints = moderationHints([scene?.videoPrompt, scene?.action, scene?.dialogueEn, scene?.dialogue].filter(Boolean).join("\n"));
     // Tell the user what was already tried automatically before giving up.
     const rewrote = (state?.moderationRetries ?? 0) > 0;
-    const switched = !!state?.moderationFallback;
-    let autoNote = "";
-    if (rewrote && switched) autoNote = "Мы автоматически переписали и смягчили текст сцены, а затем переключились на другую модель (Kling), но модерация всё равно отклонила видео. ";
-    else if (switched) autoNote = "Мы автоматически попробовали другую модель (Kling), но модерация всё равно отклонила видео. ";
-    else if (rewrote) autoNote = "Мы автоматически переписали и смягчили текст сцены, но модерация всё равно отклонила видео. ";
+    const autoNote = rewrote
+      ? "Мы автоматически переписали и смягчили текст сцены, но модерация всё равно отклонила видео. "
+      : "";
     message = `[moderation] Сцена не прошла модерацию — измените текст сцены (кнопка «Изменить сцену»). ` +
       autoNote +
       (hints.length
@@ -454,93 +381,7 @@ async function handleFailure(jobId: string, ctx: { sceneId: string; userId?: str
 }
 
 /**
- * Realistic pipeline, stage video→audio: the silent Kling video succeeded. Submit the
- * Seedance native-speech run (deliberately STYLIZED visuals so it passes the moderation
- * that blocks realistic Seedance; only its audio track is used). No re-pay of Kling: the
- * successful Kling prediction is kept, so a failed submit simply retries on the next poll.
- */
-async function advanceToAudioStage(jobId: string, state: VideoJobState, klingVideoUrl: string): Promise<boolean> {
-  state.klingVideoUrl = klingVideoUrl;
-  state.leaseUntil = Date.now() + FINALIZE_LEASE_MS;
-  if (!await saveOwned(jobId, state, { progress: 62, message: "Kling video ready; generating native speech (Seedance)..." })) return false;
-  runInBackground(async () => {
-    try {
-      const input = {
-        prompt: state.audioPrompt ?? "",
-        duration: Number(state.audioDuration ?? 10),
-        resolution: "480p",
-        aspect_ratio: "9:16",
-        generate_audio: true,
-        watermark: false,
-      };
-      const attempt: GenerationAttempt = {
-        jobId, sceneId: state.sceneId, attempt: 1, model: "bytedance/seedance-2.5", phase: "audio",
-        status: "submitting", style: VISUAL_STYLE_ID,
-        input: safeDiagnosticInput({ ...input, source: "native_speech_for_lipsync" }),
-      };
-      const predictionId = await startVideoPrediction(input);
-      attempt.predictionId = predictionId; attempt.status = "processing"; logAttempt(attempt);
-      state.diagnostics = [...(state.diagnostics ?? []), attempt];
-      state.stage = "audio";
-      state.predictionId = predictionId;
-      state.startedAt = Date.now();
-      state.providerStatus = undefined;
-      state.providerStartedAt = null;
-      state.providerCompletedAt = null;
-      state.leaseUntil = 0;
-      await saveOwned(jobId, state, { progress: 65, message: "Generating native speech (Seedance)..." });
-    } catch (error) {
-      // Keep stage "video" + the successful Kling prediction; retry the submit next check.
-      state.leaseUntil = 0;
-      await saveOwned(jobId, state, { message: "Speech submission interrupted; retrying on the next check", error: safeProviderError(error) });
-    }
-  });
-  return true;
-}
-
-/**
- * Realistic pipeline, stage audio→lipsync: the Seedance speech clip succeeded. Extract its
- * native audio track (ffmpeg, no TTS), store it as a WAV, then submit sync/lipsync-2 to
- * lay that speech onto the silent Kling character's lips. A failed extraction/submit keeps
- * stage "audio" and the successful speech prediction, so it retries without re-paying.
- */
-async function advanceToLipsyncStage(jobId: string, state: VideoJobState, speechVideoUrl: string): Promise<boolean> {
-  state.leaseUntil = Date.now() + FINALIZE_LEASE_MS;
-  if (!await saveOwned(jobId, state, { progress: 82, message: "Native speech ready; syncing lips..." })) return false;
-  runInBackground(async () => {
-    try {
-      const buf = await extractAudioBuffer(speechVideoUrl);
-      const { folderPrefix } = getBucketConfig();
-      const key = `${folderPrefix}public/videos/${state.projectId}/${state.sceneId}-${jobId}-speech.wav`;
-      const wavUrl = await uploadBufferToS3(buf, key, "audio/wav");
-      const attempt: GenerationAttempt = {
-        jobId, sceneId: state.sceneId, attempt: 1, model: LIPSYNC_MODEL, phase: "lipsync",
-        status: "submitting", style: VISUAL_STYLE_ID,
-        input: safeDiagnosticInput({ video: "kling_silent_video", audio: "native_speech_wav", sync_mode: "silence" }),
-      };
-      const predictionId = await startLipsyncPrediction({ video: state.klingVideoUrl!, audio: wavUrl, sync_mode: "silence" });
-      attempt.predictionId = predictionId; attempt.status = "processing"; logAttempt(attempt);
-      state.diagnostics = [...(state.diagnostics ?? []), attempt];
-      state.speechAudioUrl = wavUrl;
-      state.stage = "lipsync";
-      state.predictionId = predictionId;
-      state.startedAt = Date.now();
-      state.providerStatus = undefined;
-      state.providerStartedAt = null;
-      state.providerCompletedAt = null;
-      state.leaseUntil = 0;
-      await saveOwned(jobId, state, { progress: 85, message: "Syncing native speech onto the character's lips..." });
-    } catch (error) {
-      // Keep stage "audio" + the successful speech prediction; retry extraction/submit next check.
-      state.leaseUntil = 0;
-      await saveOwned(jobId, state, { message: "Lipsync submission interrupted; retrying on the next check", error: safeProviderError(error) });
-    }
-  });
-  return true;
-}
-
-/**
- * Moderation auto-recovery, step 1 — automatic prompt rewrite on the SAME model (Seedance).
+ * Moderation auto-recovery — automatic prompt rewrite on the SAME model (Seedance).
  *
  * The prompt is rewritten by the LLM (Russian "sanitizer" instruction) so it passes moderation
  * while keeping plot, characters, spoken lines, emotions and staging; the rule-based softener is
@@ -551,8 +392,8 @@ async function advanceToLipsyncStage(jobId: string, state: VideoJobState, speech
  *            angle, no start-frame chaining).
  *
  * The LLM call + resubmission can take a while, so we take a long finalize-length lease first and
- * do the work in the background — exactly like the Kling+lipsync stage transitions — so a second
- * poll never claims the job and submits a duplicate prediction.
+ * do the work in the background, so a second poll never claims the job and submits a duplicate
+ * prediction. The scene's own model (Seedance 2.5 or 2.0) is reused via retry.model.
  */
 async function retryAfterModeration(jobId: string, state: VideoJobState, reason: string): Promise<boolean> {
   const retry = state.retry!;
@@ -580,11 +421,11 @@ async function retryAfterModeration(jobId: string, state: VideoJobState, reason:
         if (refs.some(r => r.kind === "location")) prompt += "\nCamera stays inside this location across the whole shot; lighting, time of day and palette identical to the location reference.";
       }
       const input = {
-        prompt, duration: retry.duration, resolution: retry.resolution,
+        prompt, model: retry.model, duration: retry.duration, resolution: retry.resolution,
         aspect_ratio: image ? "adaptive" : "9:16", generate_audio: true, watermark: false,
       };
       const attempt: GenerationAttempt = {
-        jobId, sceneId: state.sceneId, attempt: n + 1, model: "bytedance/seedance-2.5", phase: "video", status: "submitting",
+        jobId, sceneId: state.sceneId, attempt: n + 1, model: retry.model, phase: "video", status: "submitting",
         style: VISUAL_STYLE_ID,
         input: safeDiagnosticInput({ ...input, reference: { mode: "moderation_retry", level, llmRewritten: llm.changed, previousError: safeProviderError(reason), softenedPhrases: softened.hits, referenceCount: image ? 1 : refs.length } }),
       };
@@ -605,70 +446,6 @@ async function retryAfterModeration(jobId: string, state: VideoJobState, reason:
     } catch (error) {
       // Resubmission itself failed: report the original moderation refusal (refund happens once).
       state.moderationRetries = n;
-      await handleFailure(jobId, state, new Error(reason), state);
-    }
-  });
-  return true;
-}
-
-/**
- * Moderation auto-recovery, step 2 — automatic fallback to the alternative model (Kling v2.1),
- * whose moderation differs from Seedance. Runs only after both Seedance sanitizer passes still
- * failed. Kling is image-to-video (needs a start frame) and silent, capped at 10s:
- *   - silent scene → single-stage Kling;
- *   - scene with spoken lines → the existing Kling+lipsync pipeline (silent Kling video →
- *     stylized Seedance native speech → sync/lipsync-2), reusing advanceToAudioStage/Lipsync.
- * The winning model is saved to scene.videoModel on finalize. Same job, same charge.
- */
-async function fallbackToKling(jobId: string, state: VideoJobState, reason: string): Promise<boolean> {
-  const retry = state.retry!;
-  const startImage = retry.image ?? retry.refs[0]?.url ?? retry.fallbackRefs[0]?.url;
-  if (!startImage) {
-    // Kling is image-to-video only; without any usable start frame we cannot switch models.
-    state.moderationFallback = true;
-    await handleFailure(jobId, state, new Error(reason), state);
-    return true;
-  }
-  state.leaseUntil = Date.now() + FINALIZE_LEASE_MS;
-  if (!await saveOwned(jobId, state, { progress: 5, error: null, message: "Сцена не прошла модерацию — пробую другую модель (Kling)…" })) return false;
-  runInBackground(async () => {
-    try {
-      const klingDuration = Math.min(10, Number(retry.audioDuration ?? retry.duration ?? 10));
-      // Soften the clean visual once (level 1) before feeding it to Kling — cheap, and Kling
-      // rarely moderates, but the whole reason we are here is a moderation refusal.
-      const visual = softenForModeration(retry.visualPrompt ?? retry.basePrompt, 1).text;
-      // Mark the switch up front so any further failure fails for good (no re-cascade).
-      state.moderationFallback = true;
-      state.videoModel = "kling";
-      if (retry.hasDialogue && retry.audioPrompt) {
-        // Rebuild the realistic Kling+lipsync pipeline (same as a manual Kling scene with dialogue).
-        state.lipsync = true;
-        state.stage = "video";
-        state.audioDuration = klingDuration;
-        state.audioPrompt = retry.audioPrompt;
-      }
-      const attempt: GenerationAttempt = {
-        jobId, sceneId: state.sceneId, attempt: MAX_MODERATION_RETRIES + 2, model: KLING_MODEL, phase: "video", status: "submitting",
-        style: VISUAL_STYLE_ID,
-        input: safeDiagnosticInput({ prompt: visual, duration: klingDuration, mode: "standard", start_image: startImage, reference: { mode: "moderation_fallback", previousError: safeProviderError(reason), lipsync: !!state.lipsync } }),
-      };
-      logAttempt(attempt);
-      console.log("[video-job] moderation fallback to Kling:", { jobId, sceneId: state.sceneId, lipsync: !!state.lipsync, duration: klingDuration });
-      const predictionId = await startKlingPrediction({ prompt: visual, start_image: startImage, duration: klingDuration, mode: "standard" });
-      attempt.predictionId = predictionId; attempt.status = "processing"; logAttempt(attempt);
-      state.diagnostics = [...(state.diagnostics ?? []), attempt];
-      state.predictionId = predictionId;
-      state.startedAt = Date.now();
-      state.providerStatus = undefined; state.providerStartedAt = null; state.providerCompletedAt = null;
-      state.leaseUntil = 0;
-      await saveOwned(jobId, state, {
-        progress: 5, error: null,
-        message: state.lipsync
-          ? "Пробую другую модель (Kling): создаю видео, затем добавлю озвучку и синхронизацию губ…"
-          : "Пробую другую модель (Kling): создаю видео…",
-      });
-    } catch (error) {
-      // The Kling submit itself failed: give up (moderationFallback already set → no re-cascade).
       await handleFailure(jobId, state, new Error(reason), state);
     }
   });
@@ -714,33 +491,15 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
         await markCanceled(job.id);
         return true;
       }
-      // Seedance moderation (E005) auto-recovery cascade, all within this one scene, no extra charge:
-      //   1. rewrite the prompt with the LLM (2 escalating passes) and resubmit Seedance;
-      //   2. if still moderated, fall back to the alternative model (Kling), whose moderation differs.
-      // `!state.lipsync` gates this to the Seedance path — once we've switched to the Kling+lipsync
-      // pipeline (or the fallback set state.lipsync), a further failure fails for good.
-      if (classifyProviderError(reason) === "moderation" && state.retry && !state.lipsync) {
-        if ((state.moderationRetries ?? 0) < MAX_MODERATION_RETRIES) {
-          return await retryAfterModeration(job.id, state, reason);
-        }
-        if (!state.moderationFallback) {
-          return await fallbackToKling(job.id, state, reason);
-        }
+      // Seedance moderation (E005) auto-recovery, all within this one scene, no extra charge:
+      // rewrite the prompt with the LLM (2 escalating passes) and resubmit the same Seedance model.
+      if (classifyProviderError(reason) === "moderation" && state.retry && (state.moderationRetries ?? 0) < MAX_MODERATION_RETRIES) {
+        return await retryAfterModeration(job.id, state, reason);
       }
       await handleFailure(job.id, state, new Error(reason), state);
       return true;
     }
     if (prediction.status === "succeeded" && prediction.url) {
-      // Realistic Kling+lipsync pipeline: a succeeded prediction is NOT always the final
-      // output — it may be the silent Kling video (advance to native speech) or the
-      // Seedance speech clip (advance to lipsync). Only the final stage finalizes.
-      const stage = state.stage ?? "video";
-      if (state.lipsync && stage === "video") {
-        return await advanceToAudioStage(job.id, state, prediction.url);
-      }
-      if (state.lipsync && stage === "audio") {
-        return await advanceToLipsyncStage(job.id, state, prediction.url);
-      }
       state.finalizing = true;
       state.finalizeAttempts = (state.finalizeAttempts ?? 0) + 1;
       if (state.finalizeAttempts > 3) {
@@ -760,8 +519,7 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
       return true;
     }
     state.leaseUntil = 0;
-    const stageLabel = state.stage === "audio" ? "Seedance (native speech)" : state.stage === "lipsync" ? "Lipsync" : (state.lipsync ? "Kling (realistic video)" : "Seedance");
-    await saveOwned(job.id, state, { progress: waitingProgress(state.startedAt), message: prediction.status === "starting" ? `Queued at ${stageLabel}; checking the same prediction...` : `${stageLabel} is processing; waiting for the result...` });
+    await saveOwned(job.id, state, { progress: waitingProgress(state.startedAt), message: prediction.status === "starting" ? "Queued at Seedance; checking the same prediction..." : "Seedance is processing; waiting for the result..." });
     return true;
   } catch (error) {
     // A failed status GET is NOT a failed generation. Leave it recoverable, without a refund.

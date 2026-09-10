@@ -30,7 +30,7 @@ export interface GenerationAttempt {
   predictionId?: string;
   attempt: number;
   model: string;
-  phase: "reference" | "video" | "audio" | "lipsync";
+  phase: "reference" | "video";
   status: string;
   style: string;
   language?: string;
