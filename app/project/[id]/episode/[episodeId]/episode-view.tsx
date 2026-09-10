@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Header } from '@/components/header'
-import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, Play, RefreshCw, Images, Ban, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Lock } from 'lucide-react'
+import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Lock } from 'lucide-react'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
@@ -36,7 +36,6 @@ const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.ima
 const LOCATION_EXTRA_CHUNK = 6
 
 type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; status: string; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
-type Plan = { sceneCount: number; pendingCount: number; duration: number; costPerScene: number; total: number; credits: number; tier: string; resolution: string }
 type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null }
 
 export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits }: { episode: any; project: any; siblings?: Sibling[]; credits: number }) {
@@ -49,13 +48,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [sceneEdit, setSceneEdit] = useState<Record<string, string>>({})
   const [sceneBusy, setSceneBusy] = useState<Record<string, boolean>>({})
   const [regenAsk, setRegenAsk] = useState<string | null>(null) // sceneId awaiting paid regen confirmation
-  const [plan, setPlan] = useState<Plan | null>(null)
-  const [modal, setModal] = useState(false)
-  const [startingAll, setStartingAll] = useState(false)
-  const [openingModal, setOpeningModal] = useState(false) // spinner while the plan loads before the modal opens
   // «Собрать» — pure concatenation of the ready scene clips into one episode (no audit / no polish / no re-gen).
   const [stitching, setStitching] = useState(false)
-  // AI video model chosen in the plan modal for the whole-episode generation (EDIT 2).
+  // AI video model chosen in the always-visible global selector next to the scenes (EDIT 5);
+  // passed as `provider` into each single-scene generation.
   const [videoModel, setVideoModel] = useState<VideoModelId>(DEFAULT_VIDEO_MODEL)
   // AI image model chosen for reference generation (EDIT 1). `refModalOpen` gates the picker
   // shown before «Сгенерировать всё»; the ref keeps the choice available to the resume poll loop.
@@ -66,13 +62,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [activeGen, setActiveGen] = useState<Record<string, boolean>>({})
   const [videoJobs, setVideoJobs] = useState<Record<string, JobInfo>>({})
   const pollTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
-  // Stage 8: batch auto-continuation (client drives the continue endpoint until every scene is done).
-  const [batch, setBatch] = useState<{ active: boolean; total: number; done: number; generating: number; failed: number; pending: number; remaining: number } | null>(null)
-  const [retrying, setRetrying] = useState(false)
-  const [batchCanceled, setBatchCanceled] = useState(false)
-  const canceledRef = useRef(false) // suppress client auto-continue after a cancel
-  const continueBusy = useRef(false)
-  const continueRef = useRef<() => void>(() => {})
 
   // Stage 12: per-episode references (characters + locations) with a single "generate all" button.
   const initialChars: any[] = (initial.characters?.length ? initial.characters.map((ec: any) => ec.character) : (project.characters ?? []))
@@ -362,38 +351,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     } catch { setError('Ошибка сети') } finally { setLocBusy((b) => { const n = { ...b }; delete n[locationId]; return n }) }
   }
 
-  // Stage 8: one continue "kick". Idempotent server-side; safe to call every few seconds.
-  const continueBatch = async (retryFailed = false) => {
-    if (!retryFailed && canceledRef.current) return
-    if (retryFailed) { canceledRef.current = false; setBatchCanceled(false) }
-    if (continueBusy.current) return
-    continueBusy.current = true
-    try {
-      const res = await fetch(`/api/ai/episodes/${episode.id}/generate-all/continue`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ retryFailed }) })
-      if (!res.ok) { if (res.status === 429) return; const e = await res.json().catch(() => ({})); if (e?.error) setError(e.error); return }
-      const d = await res.json()
-      setBatch({ active: d.remaining > 0, total: d.total, done: d.done, generating: d.generating, failed: d.failed, pending: d.pending, remaining: d.remaining })
-      if (typeof d.creditsRemaining === 'number') setCredits(d.creditsRemaining)
-      if (d.creditsShort) setError('Недостаточно кредитов для повтора части сцен — пополните баланс и нажмите «Продолжить».')
-      for (const s of d.scenes ?? []) {
-        if (s.status === 'generating') {
-          setActiveGen((p) => (p[s.sceneId] ? p : { ...p, [s.sceneId]: true }))
-          if (s.jobId && !pollTimers.current[s.sceneId]) pollVideoJob(s.sceneId, s.jobId)
-        }
-      }
-    } catch {} finally { continueBusy.current = false }
-  }
-  continueRef.current = () => { void continueBatch(false) }
-  const batchActive = batch?.active ?? false
-  useEffect(() => {
-    if (!batchActive) return
-    const id = setInterval(() => continueRef.current(), JOB_POLL_INTERVAL_MS * 3)
-    return () => clearInterval(id)
-  }, [batchActive])
-  useEffect(() => {
-    if (scenes.some((s) => !validUrl(s.videoUrl))) void continueBatch(false)
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
-
   const reloadEpisode = async () => {
     try {
       const r = await fetch(`/api/ai/season?projectId=${project.id}`, { cache: 'no-store' })
@@ -418,39 +375,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setRevising(false) }
   }
 
-  const loadPlan = useCallback(async () => {
-    const r = await fetch(`/api/ai/episodes/${episode.id}/generate-all`, { cache: 'no-store' })
-    const d = await r.json(); if (!r.ok) throw new Error(d?.error ?? 'Ошибка')
-    setPlan(d); return d
-  }, [episode.id])
-  useEffect(() => { loadPlan().catch(() => {}) }, [loadPlan])
-  const openModal = async () => {
-    setError(null); setOpeningModal(true)
-    try { await loadPlan(); setModal(true) } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setOpeningModal(false) }
-  }
-  const generateAll = async () => {
-    setModal(false) // close the plan modal immediately on «ОК»; generation continues in the background
-    setStartingAll(true); setError(null); canceledRef.current = false; setBatchCanceled(false)
-    try {
-      const res = await postJobStart(`/api/ai/episodes/${episode.id}/generate-all`, { provider: videoModel })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data?.error ?? 'Не удалось запустить генерацию')
-      for (const j of data.jobs ?? []) { setActiveGen((p) => ({ ...p, [j.sceneId]: true })); patchScene(j.sceneId, { status: 'generating' }); pollVideoJob(j.sceneId, j.jobId) }
-      if (typeof data.creditsRemaining === 'number') setCredits(data.creditsRemaining)
-      setBatch({ active: true, total: scenes.length, done: scenes.filter((s) => validUrl(s.videoUrl)).length, generating: (data.jobs ?? []).length, failed: 0, pending: 0, remaining: scenes.length })
-      void continueBatch(false)
-    } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setStartingAll(false) }
-  }
-
-  const cancelBatch = async () => {
-    canceledRef.current = true
-    try { const res = await fetch(`/api/ai/episodes/${episode.id}/generate-all/cancel`, { method: 'POST' }); await res.json().catch(() => ({})) } catch {}
-    setBatch((b) => (b ? { ...b, active: false } : b))
-    setBatchCanceled(true)
-    setScenes((prev) => prev.map((s) => (activeGen[s.id] && !validUrl(s.videoUrl) ? { ...s, status: 'pending' } : s)))
-    void refreshCredits()
-  }
-
   const reviseScene = async (scene: Scene) => {
     const instruction = sceneEdit[scene.id]?.trim(); if (!instruction) return
     setSceneBusy((b) => ({ ...b, [scene.id]: true })); setError(null)
@@ -460,14 +384,24 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       patchScene(scene.id, data.scene); setSceneEdit((t) => ({ ...t, [scene.id]: '' })); setRegenAsk(scene.id)
     } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setSceneBusy((b) => { const n = { ...b }; delete n[scene.id]; return n }) }
   }
-  const regenScene = async (sceneId: string) => {
+
+  // EDIT 5 — single-scene background generation (POST /api/ai/generate-video → runVideoJob).
+  //   • withModel=true  (fresh generation): send the model chosen in the global selector as `provider`,
+  //     which the route persists to scene.videoModel.
+  //   • withModel=false (regen of an already-generated scene): omit `provider` so the route reuses the
+  //     model previously stored on the scene — same behaviour as before.
+  const generateScene = async (sceneId: string, withModel: boolean) => {
     setRegenAsk(null); setActiveGen((p) => ({ ...p, [sceneId]: true })); setError(null)
     try {
-      const res = await postJobStart('/api/ai/generate-video', { projectId: project.id, sceneId })
+      const body: Record<string, unknown> = { projectId: project.id, sceneId }
+      if (withModel) body.provider = videoModel
+      const res = await postJobStart('/api/ai/generate-video', body)
       const data = await res.json(); if (!res.ok) throw new Error(data?.error ?? 'Не удалось запустить генерацию')
       patchScene(sceneId, { status: 'generating' }); pollVideoJob(sceneId, data.jobId); void refreshCredits()
     } catch (e: any) { clearGen(sceneId); setError(e?.message ?? 'Ошибка') }
   }
+  // Regen keeps the model already stored on the scene (no provider override).
+  const regenScene = (sceneId: string) => generateScene(sceneId, false)
 
   const allReady = scenes.length > 0 && scenes.every((s) => validUrl(s.videoUrl) && !activeGen[s.id])
 
@@ -484,7 +418,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setStitching(false) }
   }
 
-  const perScene = plan?.costPerScene
   const isAssembled = episode.status === 'assembled' || validUrl(episode.videoUrl)
   const nextEpisode = siblings.filter((s) => s.number > episode.number).sort((a, b) => a.number - b.number)[0] ?? null
 
@@ -678,42 +611,33 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         </section>
         )}
 
-        {/* Step 3 — scenes: generate all / собрать */}
+        {/* Step 3 — scenes: per-scene generation (sequential gate) + собрать */}
         {phase === 'scenes' && (
         <>
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
           <button onClick={() => goPhase('script')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted" data-testid="back-to-script">
             <ArrowLeft className="h-4 w-4" /> Сценарий
           </button>
-          <button onClick={openModal} disabled={openingModal || startingAll || scenes.length === 0 || !refsReady} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all" title={refsReady ? '' : 'Сначала сгенерируйте все референсы эпизода'}>
-            {openingModal ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} Сгенерировать все сцены
-          </button>
+          {/* EDIT 5 — always-visible global video-model selector. The chosen model is passed as `provider`
+              into each single-scene generation and persisted on the scene. */}
+          <label className="inline-flex items-center gap-2 text-sm" htmlFor="video-model-select">
+            <Film className="h-4 w-4 text-primary" /> Модель ИИ (видео):
+            <select
+              id="video-model-select"
+              data-testid="video-model-select"
+              value={videoModel}
+              onChange={(e) => setVideoModel(e.target.value as VideoModelId)}
+              className="rounded-lg border border-border bg-background px-3 py-1.5 text-sm"
+            >
+              {VIDEO_MODELS.map((m) => (<option key={m.id} value={m.id}>{m.label}</option>))}
+            </select>
+          </label>
           <button onClick={stitch} disabled={!allReady || stitching} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? 'Склеить готовые сцены в один эпизод' : 'Доступно, когда все сцены готовы'}>
             {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Собрать
           </button>
-          {batchActive ? (
-            <span className="inline-flex flex-wrap items-center gap-2 text-xs text-muted-foreground" data-testid="batch-status">
-              <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-              Генерирую сцены: готово {batch?.done ?? 0} из {batch?.total ?? scenes.length}
-              {(batch?.generating ?? 0) > 0 && ` · в работе ${batch!.generating}`}
-              {(batch?.failed ?? 0) > 0 && <span className="text-destructive"> · не удалось {batch!.failed}</span>}
-              <CancelButton onCancel={cancelBatch} testId="batch-cancel" label="Отменить" pendingLabel="Останавливаю…" />
-            </span>
-          ) : batchCanceled ? (
-            <span className="inline-flex flex-wrap items-center gap-2 text-xs text-amber-500" data-testid="batch-status">
-              <Ban className="h-3.5 w-3.5" />
-              Генерация отменена · готово {scenes.filter((s) => validUrl(s.videoUrl)).length} из {scenes.length} сцен. Новые сцены не запускаются; уже готовые сохранены.
-            </span>
-          ) : (
-            <span className="text-xs text-muted-foreground" data-testid="batch-status">{scenes.filter((s) => validUrl(s.videoUrl)).length} из {scenes.length} сцен готово{isAssembled ? ' · эпизод собран' : ''}</span>
-          )}
-          {!batchActive && scenes.length > 0 && scenes.some((s) => !validUrl(s.videoUrl)) && refsReady && (
-            <button onClick={async () => { setError(null); setRetrying(true); try { await continueBatch(true) } finally { setRetrying(false) } }} disabled={retrying || startingAll} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium disabled:opacity-50" data-testid="continue-batch" title="Продолжить или повторить незавершённые сцены">
-              {retrying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Продолжить / повторить незавершённые
-            </button>
-          )}
-          <p className="w-full text-xs text-muted-foreground" data-testid="assemble-hint">
-            <b>Собрать:</b> склеивает готовые ролики всех сцен в один эпизод без перегенерации. Доступно, когда все сцены готовы.
+          <span className="text-xs text-muted-foreground" data-testid="batch-status">{scenes.filter((s) => validUrl(s.videoUrl)).length} из {scenes.length} сцен готово{isAssembled ? ' · эпизод собран' : ''}</span>
+          <p className="w-full text-xs text-muted-foreground" data-testid="scenes-hint">
+            Каждая сцена генерируется отдельной кнопкой и строго по порядку: следующая сцена доступна только после того, как готова предыдущая (её последний кадр нужен как первый кадр следующей). <b>Собрать:</b> склеивает готовые ролики всех сцен в один эпизод без перегенерации — доступно, когда все сцены готовы.
           </p>
           {error && <p className="w-full text-sm text-destructive" data-testid="error">{error}</p>}
         </div>
@@ -737,9 +661,15 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         {/* Scenes */}
         <h2 className="mt-8 font-display text-xl font-bold">Сцены ({scenes.length})</h2>
         <div className="mt-3 grid gap-4 md:grid-cols-2">
-          {scenes.map((scene) => {
+          {scenes.map((scene, idx) => {
             const gen = !!activeGen[scene.id]
             const job = videoJobs[scene.id]
+            const ready = validUrl(scene.videoUrl)
+            // EDIT 5 — sequential gate: scene N can only start once scene N-1 is fully ready
+            // (has a video AND is not generating), because the previous scene's last frame is the
+            // first frame of the next one. The first scene is always available.
+            const prevScene = idx > 0 ? scenes[idx - 1] : null
+            const prevReady = !prevScene || (validUrl(prevScene.videoUrl) && !activeGen[prevScene.id])
             return (
               <div key={scene.id} className="rounded-xl border border-border bg-card p-4" data-testid="scene-card" data-scene-status={gen ? 'generating' : validUrl(scene.videoUrl) ? 'ready' : 'pending'}>
                 <div className="flex items-start justify-between gap-2">
@@ -767,6 +697,24 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                 </div>
 
                 <div className="mt-3 space-y-2">
+                  {/* EDIT 5 — per-scene generate button with spinner + sequential gate.
+                      Shown for a not-yet-generated scene; disabled until the previous scene is ready. */}
+                  {!ready && (
+                    <>
+                      <button
+                        onClick={() => generateScene(scene.id, true)}
+                        disabled={gen || !prevReady}
+                        className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+                        data-testid="scene-generate"
+                        title={prevReady ? 'Сгенерировать эту сцену' : 'Сначала завершите предыдущую сцену'}
+                      >
+                        {gen ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {gen ? 'Генерирую…' : 'Сгенерировать сцену'}
+                      </button>
+                      {!gen && !prevReady && (
+                        <p className="text-xs text-muted-foreground" data-testid="scene-gate-hint">Сначала завершите предыдущую сцену</p>
+                      )}
+                    </>
+                  )}
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <input value={sceneEdit[scene.id] ?? ''} onChange={(e) => setSceneEdit((t) => ({ ...t, [scene.id]: e.target.value }))} placeholder="Изменить сцену: что поправить…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-sm" data-testid="scene-revise-input" disabled={gen} />
                     <button onClick={() => reviseScene(scene)} disabled={gen || !!sceneBusy[scene.id] || !(sceneEdit[scene.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-50" data-testid="scene-revise-submit">
@@ -775,14 +723,14 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   </div>
                   {regenAsk === scene.id && (
                     <div className="rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm" data-testid="regen-confirm">
-                      Сцена переписана. Перегенерировать ролик? Стоимость {perScene ?? '…'} кр. {perScene === undefined && <button className="inline-flex items-center gap-1 underline disabled:opacity-50" onClick={openModal} disabled={openingModal}>{openingModal && <Loader2 className="h-3.5 w-3.5 animate-spin" />}(рассчитать)</button>}
+                      Сцена переписана. Перегенерировать ролик?
                       <div className="mt-2 flex gap-2">
                         <button onClick={() => regenScene(scene.id)} disabled={gen} className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-primary-foreground disabled:opacity-50" data-testid="regen-ok">{gen ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Перегенерировать</button>
                         <button onClick={() => setRegenAsk(null)} className="rounded-lg border border-border px-3 py-1.5">Позже</button>
                       </div>
                     </div>
                   )}
-                  {!gen && validUrl(scene.videoUrl) && regenAsk !== scene.id && (
+                  {!gen && ready && regenAsk !== scene.id && (
                     <button onClick={() => setRegenAsk(scene.id)} className="text-xs text-muted-foreground underline">Перегенерировать ролик</button>
                   )}
                 </div>
@@ -807,38 +755,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           submitLabel="Переписать"
           hint="Правки применяются ко всему сценарию. Можно указать сцену по номеру. Ctrl/⌘+Enter — отправить."
         />
-      )}
-
-      {/* Generate-scenes cost modal */}
-      {modal && plan && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" data-testid="generate-modal">
-          <div className="w-full max-w-md rounded-xl border border-border bg-card p-5">
-            <h3 className="font-display text-lg font-bold">Генерировать все сцены эпизода?</h3>
-            <ul className="mt-3 space-y-1 text-sm">
-              <li>Сцен к генерации: <b>{plan.pendingCount}</b> из {plan.sceneCount}</li>
-              <li>Длительность клипа: <b>до {plan.duration}с</b> · {plan.resolution} ({plan.tier})</li>
-              <li>Стоимость: <b>{plan.total} кр.</b> за {plan.pendingCount} сцен (до {plan.costPerScene} кр. за сцену)</li>
-              <li>Остаток кредитов: <b>{plan.credits}</b>{plan.credits < plan.total && <span className="text-destructive"> — недостаточно</span>}</li>
-            </ul>
-            {/* EDIT 2 — pick the AI video model for the whole-episode generation. */}
-            <label className="mt-4 block text-sm font-medium" htmlFor="video-model-select">Модель ИИ (видео)</label>
-            <select
-              id="video-model-select"
-              data-testid="video-model-select"
-              value={videoModel}
-              onChange={(e) => setVideoModel(e.target.value as VideoModelId)}
-              className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
-            >
-              {VIDEO_MODELS.map((m) => (<option key={m.id} value={m.id}>{m.label}</option>))}
-            </select>
-            <div className="mt-4 flex justify-end gap-2">
-              <button onClick={() => setModal(false)} className="rounded-lg border border-border px-3 py-1.5 text-sm">Отмена</button>
-              <button onClick={generateAll} disabled={plan.pendingCount === 0 || plan.credits < plan.total} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="generate-ok">
-                <Play className="h-4 w-4" /> ОК
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
       {/* Fullscreen reference carousel: swipe/arrows/wheel across ALL photos of one reference. */}
