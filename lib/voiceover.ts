@@ -132,11 +132,20 @@ export async function translateDialogue(
   }
 }
 
+export interface NativeAudioOptions {
+  /**
+   * Stage 38: the scene is a fight / chase / physical struggle — the lines are short and delivered
+   * only in the pauses between impacts, never while striking, dodging or falling.
+   */
+  action?: boolean;
+}
+
 export function buildNativeAudioPrompt(
   basePrompt: string,
   dialogue: string | null | undefined,
   characters: VoiceCharacter[],
-  explicitLanguage?: string
+  explicitLanguage?: string,
+  options: NativeAudioOptions = {}
 ): string {
   const base = (basePrompt ?? "").trim();
   const lines = parseDialogue(dialogue);
@@ -145,7 +154,7 @@ export function buildNativeAudioPrompt(
   const AUDIO_DIRECTION =
     "AUDIO TRACK: dialogue and ambient sound only. " +
     "NO background music. NO score. NO instrumental track. NO soundtrack. NO musical theme. " +
-    "Only the characters' voices (lip-synced on camera) and the natural ambient sound of the location. " +
+    "Only the characters' voices (spoken on camera by the visible characters) and the natural ambient sound of the location. " +
     "No narration voiceover. No on-screen text or subtitles.";
 
   if (!lines.length) {
@@ -165,8 +174,9 @@ export function buildNativeAudioPrompt(
       // The tone cue (from the "(low, guarded)" parenthetical) tells the model HOW
       // to deliver the line; it is a performance direction, never spoken aloud.
       const manner = l.tone ? `, ${l.tone},` : "";
-      // Plain quoted dialogue; no undocumented bracket semantics.
-      return `${who} says in ${language}${manner} lips moving on camera: "${l.text}"`;
+      // Plain quoted dialogue; no undocumented bracket semantics. Stage 38: "on camera" only — whether
+      // the speaker's mouth is in frame is decided by the staging, not by the audio direction.
+      return `${who} says in ${language}${manner} on camera: "${l.text}"`;
     })
     .join("\n");
 
@@ -177,7 +187,13 @@ export function buildNativeAudioPrompt(
     `Do NOT read the character names or any text outside the quotation marks aloud. ` +
     `Delivery is natural and relaxed — a real, unhurried conversational tempo with the normal small pauses between lines, never rushed, sped up or crammed — while still speaking every line clearly and fully within the clip.`;
 
-  return `${base}\n\nThe characters speak the following lines out loud, on camera, in sync with their lip movements. ${LANGUAGE_DIRECTION}\n${spoken}\n\n${AUDIO_DIRECTION}`;
+  // Stage 38: the speaker's face / lips do NOT have to be in frame — the framing follows the staging
+  // (profile, over the shoulder, from behind, a wide shot are all fine); when the mouth IS visible the
+  // lip movements match the words. Action scenes: lines only in the pauses between impacts.
+  const SPEECH_STAGING = options.action
+    ? "The characters speak the following lines out loud, on camera. This is an ACTION scene: the lines are short and are delivered ONLY in the pauses between impacts — never while striking, dodging, blocking or falling. The speaker's face does not have to face the camera; whenever the speaker's mouth is visible its movements match the words exactly."
+    : "The characters speak the following lines out loud, on camera. Whether the speaker's face is in frame depends on the staging — a line may be delivered in profile, over the shoulder, from behind or in a wide shot; whenever the speaker's mouth IS visible, its movements match the words exactly.";
+  return `${base}\n\n${SPEECH_STAGING} ${LANGUAGE_DIRECTION}\n${spoken}\n\n${AUDIO_DIRECTION}`;
 }
 
 /**

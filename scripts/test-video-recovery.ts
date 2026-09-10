@@ -170,8 +170,8 @@ test("moderation (fail-fast): a refusal fails the job immediately — no resubmi
   Date.now = () => clock;
   try {
     reset();
-    // A retry plan IS present (chained scene) — before Stage 30 this would have triggered a rewrite/resubmit.
-    row.resultData = moderationState({ refs: [{ url: chainFrame, kind: "previous_frame", note: "previous frame" }], fallbackRefs: [{ url: "https:" + "//x/portrait.jpg", kind: "character", note: "face" }] });
+    // A retry plan IS present — before Stage 30 this would have triggered a rewrite/resubmit.
+    row.resultData = moderationState({ refs: [{ url: chainFrame, kind: "location", note: "location angle" }], fallbackRefs: [{ url: "https:" + "//x/portrait.jpg", kind: "character", note: "face" }] });
     provider = { status: "failed", error: "flagged as sensitive E005" };
     await check();
     assert.equal(submissions, 0);                 // NO new prediction was submitted
@@ -197,14 +197,15 @@ test("moderation (Stage 33): override without textual triggers → blames the re
     assert.equal(refunds, 1);
     assert.match(row.error, /^\[moderation\]/);
     assert.match(row.error, /ручной \(override\)/);
-    assert.match(row.error, /Отправлено изображений: 3 — портретов: 2, ракурсов локации: 1, массовки: 0, кадр предыдущей сцены: нет/);
-    assert.match(row.error, /Отправить без референс‑изображений/);
+    assert.match(row.error, /Отправлено изображений: 3 — портретов: 2, ракурсов локации: 1, массовки: 0\./);
+    assert.match(row.error, /портреты персонажей, ракурсы локации, массовка/);
+    assert.match(row.error, /Отправить без референс‑изображений \(только текст\)/);
     assert.match(row.error, /Код провайдера: /);
-    assert.doesNotMatch(row.error, /Если блокируется кадр предыдущей сцены/);
+    assert.doesNotMatch(row.error, /кадр предыдущей сцены/);
   } finally { Date.now = originalNow; }
 });
 
-test("moderation (Stage 36): previous frame among the references → explicit hint, counts list it as «да»", async () => {
+test("moderation (Stage 38): the previous frame is never mentioned; legacy chained flag is ignored, text-only hint given", async () => {
   Date.now = () => clock;
   try {
     reset();
@@ -216,8 +217,10 @@ test("moderation (Stage 36): previous frame among the references → explicit hi
     provider = { status: "failed", error: "flagged as sensitive E005" };
     await check();
     assert.equal(row.status, "failed");
-    assert.match(row.error, /Отправлено изображений: 4 — портретов: 1, ракурсов локации: 2, массовки: 0, кадр предыдущей сцены: да/);
-    assert.match(row.error, /Если блокируется кадр предыдущей сцены — включите «Не использовать кадр предыдущей сцены» в окне «Смотреть промпт» \(портреты и локация останутся\) или перегенерируйте предыдущую сцену/);
+    assert.match(row.error, /Отправлено изображений: 3 — портретов: 1, ракурсов локации: 2, массовки: 0\./);
+    assert.doesNotMatch(row.error, /кадр предыдущей сцены/);
+    assert.doesNotMatch(row.error, /Не использовать кадр предыдущей сцены/);
+    assert.match(row.error, /Отправить без референс‑изображений \(только текст\)/);
     assert.doesNotMatch(row.error, /Первый кадр берётся/);
     assert.match(row.error, /Код провайдера: /);
     // The exact submitted list survives in the persisted state for the UI previews.

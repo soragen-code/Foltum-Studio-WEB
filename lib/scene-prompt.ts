@@ -18,17 +18,18 @@
  * only ever emits `[ImageN]` placeholders, so no real reference URL is exposed to the client.
  */
 import { buildNativeAudioPrompt, buildNarrationAudioPrompt } from "@/lib/voiceover";
-import { PACE_DIRECTION } from "@/lib/season";
-import { styledVisualPrompt, isStyledAsset, canChainFrame, locationAngleImages } from "@/lib/visual-style";
+import { PACE_DIRECTION, ACTION_PACE_DIRECTION, CONFRONTATION_STAGING_SENTENCE } from "@/lib/season";
+import { styledVisualPrompt, isStyledAsset, locationAngleImages } from "@/lib/visual-style";
 import { normalizeVideoModel, videoModelSlug, type VideoModelId } from "@/lib/ai-models";
 
 /**
  * Stage 36: hard cap on reference images per submission — the provider maximum for Seedance 2.5
- * `reference_images` (30). Every scene is now submitted in reference mode with its whole cast, every
- * styled location angle, the linked crowd groups and (when the chain conditions hold) the previous
- * scene's last frame as the LAST reference. If the set exceeds the cap, crowds are trimmed first,
- * then extra location angles (the wide angle stays) — characters and the previous frame are never
- * dropped. See buildScenePrompt for the ordering.
+ * `reference_images` (30). Every scene is submitted in reference mode with its whole cast, every
+ * styled location angle and the linked crowd groups. Stage 38: the previous scene's last frame is
+ * NEVER sent any more (it was the recurring moderation trigger and made characters drift);
+ * continuity between scenes now rests on the script text alone (presence / entrances / continuesFrom).
+ * If the set exceeds the cap, crowds are trimmed first, then extra location angles (the wide angle
+ * stays) — characters are never dropped. See buildScenePrompt for the ordering.
  */
 export const REFERENCE_IMAGE_CAP = 30;
 /** @deprecated alias kept for older imports — use REFERENCE_IMAGE_CAP. */
@@ -53,13 +54,12 @@ export interface ScenePromptScene {
   promptOverride?: string | null;
   /**
    * Stage 36: when true the video is submitted text-only for ANY scene — no character / location
-   * references, no crowd groups, no previous-scene frame, no `[ImageN]` notes, no Flux still.
+   * references, no crowd groups, no `[ImageN]` notes, no Flux still.
    */
   skipReferences?: boolean | null;
   /**
-   * Stage 37: when true the previous scene's last frame is NOT appended as the "previous_frame"
-   * reference — character portraits, location angles and crowds are still sent as usual. This is the
-   * targeted fix when the provider blocks exactly that frame (skipReferences would drop everything).
+   * Stage 37 flag, OBSOLETE since Stage 38: the previous scene's frame is never sent any more, so this
+   * has no effect. Kept optional so older callers / stored rows still type-check.
    */
   skipPreviousFrame?: boolean | null;
 }
@@ -79,6 +79,7 @@ export interface ScenePromptLocation {
   imageDetail?: string | null;
 }
 
+/** The adjacent previous scene. Stage 38: informational only — its last frame is no longer sent. */
 export interface ScenePromptPrevious {
   id: string;
   number: number;
@@ -92,7 +93,7 @@ export interface BuildScenePromptInput {
   characters: ScenePromptCharacterLink[];
   /** The episode's location, or null when it has no styled reference angles. */
   location: ScenePromptLocation | null;
-  /** The adjacent previous scene, used to decide frame chaining. */
+  /** The adjacent previous scene (accepted for API compatibility; Stage 38 no longer chains its frame). */
   previous: ScenePromptPrevious | null;
   /** Legacy video model id / worker provider; always normalized to Seedance 2.5. */
   provider?: string | null;
@@ -105,15 +106,15 @@ export interface BuildScenePromptInput {
 }
 
 /**
- * Stage 36: the first-frame (`image`) path — formerly "adjacent_frame" — is gone. A scene that
- * continues the previous one now carries that frame as its LAST reference image ("previous_frame").
+ * Stage 36 removed the first-frame (`image`) path; Stage 38 removed the "previous_frame" reference
+ * as well — only character / location / crowd references (or a fresh scene still) are ever sent.
  */
 export type ScenePromptReferenceKind = "character_references" | "new_scene_reference" | "text_only";
 
 /** One reference image as submitted to the provider (order preserved). */
 export interface SceneReference {
   url: string;
-  /** character | location | crowd | previous_frame | scene */
+  /** character | location | crowd | scene */
   kind: string;
   note: string;
 }
@@ -141,7 +142,7 @@ export interface BuildScenePromptResult {
   retryRefs: SceneReference[];
   /** Reduced reference set kept for diagnostics: individual characters + the wide location angle. */
   fallbackRefs: SceneReference[];
-  /** Id of the previous scene whose last frame was appended as the "previous_frame" reference, else null. */
+  /** Stage 38: always null — the previous scene's frame is never sent as a reference any more (kept for diagnostics shape). */
   previousFrameSceneId: string | null;
   /** true when the worker must generate a fresh Flux still (no chain, no references). */
   newSceneReference: boolean;
@@ -185,10 +186,19 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     : ((scene.dialogueEn ?? "").trim() || scene.dialogue || "");
   const dialogue = isNarration ? "" : resolved;
 
+  // Stage 38: an "action" scene (fight / duel / chase / physical struggle) gets the combat pace &
+  // staging block INSTEAD of the talking-scene PACE_DIRECTION; a dialogue scene gets PACE_DIRECTION
+  // plus the universal "confrontation is staged face to face" sentence. Narration is unchanged.
+  const isAction = !isNarration && scene.sceneKind === "action";
+  const direction = isNarration
+    ? PACE_DIRECTION
+    : isAction
+      ? ACTION_PACE_DIRECTION
+      : `${PACE_DIRECTION} ${CONFRONTATION_STAGING_SENTENCE}`;
   // Sanitize visual descriptions BEFORE adding speech: never rewrite scripted dialogue / narration.
   let prompt = isNarration
-    ? `${buildNarrationAudioPrompt(stripSlowDirections(visualPrompt), scene.voiceover)}\n\n${PACE_DIRECTION}`
-    : `${buildNativeAudioPrompt(stripSlowDirections(visualPrompt), dialogue, characters.map(c => ({ name: c.name })), targetLanguage)}\n\n${PACE_DIRECTION}`;
+    ? `${buildNarrationAudioPrompt(stripSlowDirections(visualPrompt), scene.voiceover)}\n\n${direction}`
+    : `${buildNativeAudioPrompt(stripSlowDirections(visualPrompt), dialogue, characters.map(c => ({ name: c.name })), targetLanguage, { action: isAction })}\n\n${direction}`;
   // Stage 32: the assembled prompt is submitted VERBATIM — no moderation softening. The season
   // script now writes the real physical/dramatic action on purpose, so auto-softening here would
   // undo it. If the provider rejects an individual shot (E005) the job fails fast and the producer
@@ -212,7 +222,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   let newSceneReference = false;
   let referencePrompt: string | undefined;
   let newSceneReferenceNote: string | undefined;
-  let previousFrameSceneId: string | null = null;
+  const previousFrameSceneId: string | null = null;
 
   // Stage 36 — reference mode for EVERY scene. Ordered set:
   //   1. ALL individual (non-CROWD) characters linked to THIS scene (SceneCharacter is written per
@@ -220,13 +230,12 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   //      named in this scene's dialogue / videoPrompt are ranked first, then the rest of the linked
   //      list in its original order (deterministic);
   //   2. ALL styled location angles (wide first — locationAngleImages' own order), each with its own note;
-  //   3. crowd groups linked to the scene;
-  //   4. when canChainFrame(scene, previous) holds, the previous scene's last frame as the LAST
-  //      reference ("previous_frame") with a continuity note — it is no longer sent as the first-frame
-  //      `image` (the provider forbids combining that with reference images, which is exactly what
-  //      made characters drift between chained scenes).
+  //   3. crowd groups linked to the scene.
+  //   Stage 38: the previous scene's last frame is NOT sent any more (neither as first-frame `image`
+  //   nor as a "previous_frame" reference) — it was the recurring moderation trigger and made
+  //   characters drift. Continuity rests on the script text (presence / entrances / continuesFrom).
   // Trim order when the set exceeds REFERENCE_IMAGE_CAP: crowds first, then extra location angles
-  // (the wide angle is kept), never the characters or the previous frame.
+  // (the wide angle is kept), never the characters.
   const styled = characters.filter(c => isStyledAsset(c.imageFront));
   const individualsAll = styled.filter(c => c.tier !== "CROWD");
   const crowds = styled.filter(c => c.tier === "CROWD");
@@ -244,40 +253,32 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const characterRefs: Ref[] = individuals.map(c => ({ url: c.imageFront!, kind: "character", id: c.characterId, note: `defines ${c.name}'s photorealistic appearance and identity; use the scene's staging and camera.` }));
   const locationRefs: Ref[] = locationAngles.map(a => ({ url: a.url, kind: "location", id: effectiveLocation!.id, note: `the location "${effectiveLocation!.name}" — ${a.angle} angle. Same place, same time of day, same light and palette in every shot. Keep the camera inside this location and match this lighting exactly.` }));
   const crowdRefs: Ref[] = crowds.map(c => ({ url: c.imageFront!, kind: "crowd", id: c.characterId, note: `defines the look of the group "${c.name}" (extras): who they are and how they are dressed.` }));
-  const chainable = canChainFrame(scene, previous);
-  const skipPreviousFrame = !!scene.skipPreviousFrame;
-  const chained = chainable && !skipPreviousFrame;
-  const previousFrameRefs: Ref[] = chained
-    ? [{ url: previous!.lastFrameUrl!, kind: "previous_frame", id: previous!.id, note: "the final frame of the previous scene: start this scene from the same camera position, character placement, lighting and time of day; continue the action from here." }]
-    : [];
+  void previous; // Stage 38: accepted for compatibility, never used as a reference.
   // Reduced set (individual characters + the wide location angle) kept for diagnostics.
   const fallbackRefs: SceneReference[] = [...characterRefs, ...locationRefs.slice(0, 1)].slice(0, REFERENCE_IMAGE_CAP).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
   const skipReferences = !!scene.skipReferences;
 
   if (skipReferences) {
-    // Stage 33/36: producer asked for text-only submission (no reference images at all, not even the
-    // previous scene's frame) — typically after a provider block that the text alone cannot explain.
+    // Stage 33/36: producer asked for text-only submission (no reference images at all) — typically
+    // after a provider block that the text alone cannot explain.
     reference = { mode: "text_only", sceneId: scene.id };
     referenceKind = "text_only";
-  } else if (characterRefs.length || locationRefs.length || crowdRefs.length || previousFrameRefs.length) {
+  } else if (characterRefs.length || locationRefs.length || crowdRefs.length) {
     // Mandatory part first (never trimmed), then fill the remaining room: wide angle → extra angles → crowds.
-    const mandatory = characterRefs.length + previousFrameRefs.length;
+    const mandatory = characterRefs.length;
     let room = Math.max(0, REFERENCE_IMAGE_CAP - mandatory);
     const keptLocation = locationRefs.slice(0, room);
     room -= keptLocation.length;
     const keptCrowds = crowdRefs.slice(0, room);
-    const refs: Ref[] = [...characterRefs, ...keptLocation, ...keptCrowds, ...previousFrameRefs].slice(0, REFERENCE_IMAGE_CAP);
+    const refs: Ref[] = [...characterRefs, ...keptLocation, ...keptCrowds].slice(0, REFERENCE_IMAGE_CAP);
     referenceImages = refs.map(r => r.url);
     retryRefs = refs.map(r => ({ url: r.url, kind: r.kind, note: r.note }));
-    previousFrameSceneId = previousFrameRefs.length && refs.some(r => r.kind === "previous_frame") ? previous!.id : null;
     reference = {
       mode: "character_references",
       characterIds: refs.filter(r => r.kind === "character" || r.kind === "crowd").map(r => r.id),
       locationId: keptLocation.length ? effectiveLocation!.id : null,
       kinds: refs.map(r => r.kind),
-      previousFrameSceneId,
-      // Stage 37: the chain conditions held but the producer switched the previous frame off.
-      ...(chainable && skipPreviousFrame ? { previousFrameSkipped: true } : {}),
+      previousFrameSceneId, // Stage 38: always null (kept for diagnostics-shape compatibility)
     };
     referenceKind = "character_references";
     // With a manual override the producer owns the full text — never append the reference notes

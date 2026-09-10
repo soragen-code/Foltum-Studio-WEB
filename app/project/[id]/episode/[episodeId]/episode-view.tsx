@@ -45,7 +45,7 @@ const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.ima
 // serverless window and get killed — chunking + re-firing guarantees the target is actually reached).
 const LOCATION_EXTRA_CHUNK = 6
 
-type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; skipPreviousFrame?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; status: string; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
+type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; status: string; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null }
 
 export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits }: { episode: any; project: any; siblings?: Sibling[]; credits: number }) {
@@ -73,9 +73,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // Stage 33 — per-scene «Отправить без референс-изображений» toggle (persisted on Scene.skipReferences).
   const [promptSkipRefs, setPromptSkipRefs] = useState(false)
   const [promptSkipSaving, setPromptSkipSaving] = useState(false)
-  // Stage 37 — per-scene «Не использовать кадр предыдущей сцены» toggle (persisted on Scene.skipPreviousFrame).
-  const [promptSkipPrevFrame, setPromptSkipPrevFrame] = useState(false)
-  const [promptSkipPrevSaving, setPromptSkipPrevSaving] = useState(false)
   // Reference strategy the builder resolved for this scene (character_references | new_scene_reference | text_only).
   const [promptRefKind, setPromptRefKind] = useState<string | null>(null)
   // «Собрать» — pure concatenation of the ready scene clips into one episode (no audit / no polish / no re-gen).
@@ -439,7 +436,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     setPromptModal({ sceneId: scene.id, number: scene.number })
     setPromptText(''); setPromptErr(null); setPromptHasOverride(false)
     setPromptCopied(false); setPromptSaved(false); setPromptLoading(true)
-    setPromptSkipRefs(!!scene.skipReferences); setPromptSkipPrevFrame(!!scene.skipPreviousFrame); setPromptRefKind(null)
+    setPromptSkipRefs(!!scene.skipReferences); setPromptRefKind(null)
     try {
       const res = await fetch(`/api/ai/scenes/${scene.id}/prompt`)
       const data = await res.json().catch(() => ({}))
@@ -447,7 +444,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       setPromptText(String(data.prompt ?? ''))
       setPromptHasOverride(!!data.hasOverride)
       setPromptSkipRefs(!!data.skipReferences)
-      setPromptSkipPrevFrame(!!data.skipPreviousFrame)
       setPromptRefKind(typeof data.referenceKind === 'string' ? data.referenceKind : null)
     } catch (e: any) {
       setPromptErr(e?.message ?? 'Не удалось загрузить промпт')
@@ -489,32 +485,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       setPromptErr(e?.message ?? 'Не удалось сохранить')
     } finally {
       setPromptSkipSaving(false)
-    }
-  }
-
-  // Stage 37 — persist the «не использовать кадр предыдущей сцены» toggle immediately (PUT { skipPreviousFrame }).
-  const toggleSkipPreviousFrame = async (next: boolean) => {
-    if (!promptModal) return
-    const sceneId = promptModal.sceneId
-    setPromptSkipPrevSaving(true); setPromptErr(null)
-    try {
-      const res = await fetch(`/api/ai/scenes/${sceneId}/prompt`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skipPreviousFrame: next }),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data?.error || 'Не удалось сохранить')
-      setPromptSkipPrevFrame(!!data.skipPreviousFrame)
-      setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, skipPreviousFrame: !!data.skipPreviousFrame } : s)))
-      if (!promptHasOverride) {
-        const g = await fetch(`/api/ai/scenes/${sceneId}/prompt`)
-        const gd = await g.json().catch(() => ({}))
-        if (g.ok) { setPromptText(String(gd.prompt ?? '')); setPromptRefKind(typeof gd.referenceKind === 'string' ? gd.referenceKind : null) }
-      }
-    } catch (e: any) {
-      setPromptErr(e?.message ?? 'Не удалось сохранить')
-    } finally {
-      setPromptSkipPrevSaving(false)
     }
   }
 
@@ -817,6 +787,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   <div className="min-w-0">
                     <div className="font-semibold">Сцена {scene.number}
                       {scene.sceneKind === 'narration' && <span className="ml-2 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary align-middle" data-testid="narration-badge">Закадровый голос</span>}
+                      {scene.sceneKind === 'action' && <span className="ml-2 rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-600 align-middle" data-testid="scene-kind-action">Экшен</span>}
                       <span className="text-xs font-normal text-muted-foreground"> · ~{scene.durationSec ?? 15}с</span>
                     </div>
                   </div>
@@ -1035,32 +1006,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       <span className="font-medium">Отправить без референс‑изображений (только текст)</span>
                       {promptSkipSaving && <Loader2 className="ml-1 inline h-3 w-3 animate-spin" />}
                       <span className="mt-0.5 block text-[11px] text-muted-foreground">
-                        Провайдеру уйдёт только текст промпта — без портретов персонажей, без ракурсов локации и без кадра предыдущей сцены.
-                        Визуальная стыковка с предыдущей сценой будет жёсткой склейкой.
+                        Провайдеру уйдёт только текст промпта — без портретов персонажей, без ракурсов локации и без массовки.
                       </span>
                     </span>
                   </label>
-                  {/* Stage 37 — drop ONLY the previous scene's last frame; portraits/location angles are still sent. Scenes 2+ only. */}
-                  {promptModal.number > 1 && (
-                    <label className={`mt-2 flex items-start gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs ${promptSkipRefs ? 'opacity-50' : ''}`}>
-                      <input
-                        type="checkbox"
-                        className="mt-0.5 h-4 w-4"
-                        checked={promptSkipPrevFrame}
-                        disabled={promptSkipPrevSaving || promptSkipRefs}
-                        onChange={(e) => toggleSkipPreviousFrame(e.target.checked)}
-                        data-testid="scene-skip-prev-frame"
-                      />
-                      <span>
-                        <span className="font-medium">Не использовать кадр предыдущей сцены</span>
-                        {promptSkipPrevSaving && <Loader2 className="ml-1 inline h-3 w-3 animate-spin" />}
-                        <span className="mt-0.5 block text-[11px] text-muted-foreground">
-                          Портреты персонажей и ракурсы локации отправляются как обычно, но кадр из предыдущей сцены не передаётся — стык с предыдущей сценой будет монтажным. Включите, если блокируется именно этот кадр.
-                          {promptSkipRefs && ' Сейчас включён режим «только текст» — кадр и так не отправляется.'}
-                        </span>
-                      </span>
-                    </label>
-                  )}
                 </>
               )}
             </div>

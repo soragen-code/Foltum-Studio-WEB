@@ -11,7 +11,7 @@ import { sceneReviseSchema, sceneReviseSystemPrompt, renderScriptFromScenes, est
 
 /**
  * POST /api/ai/scenes/[id]/revise { instruction }
- * LLM rewrites one scene (shot / action / dialogue / videoPrompt) by the instruction. Text only —
+ * LLM rewrites one scene (kind / shot / action / dialogue / videoPrompt) by the instruction. Text only —
  * the paid clip regeneration is a separate, confirmed step (POST /api/ai/generate-video).
  */
 export async function POST(request: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -41,8 +41,12 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   try {
     const raw0 = sceneReviseSchema.parse(await chatJSON(sceneReviseSystemPrompt(language), user, { temperature: 0.6, maxTokens: 3000 }));
     // Seedance voices `dialogue` → guarantee English (swap swapped fields / translate).
-    const ensured = await ensureEnglishDialogue({ visualIdentity: "", scenes: [{ ...raw0, number: scene.number, sceneKind: "dialogue" as const, characters: scene.characters.map((c) => c.character.name) }] }, chatJSON);
-    const raw = { ...raw0, dialogue: ensured.scenes[0].dialogue, dialogueLocal: ensured.scenes[0].dialogueLocal };
+    // Stage 38: the model may switch the kind ("make this scene a fight" → "action"); a narration scene
+    // never changes kind here, otherwise keep the stored kind when the model omits it.
+    const currentKind = scene.sceneKind === "narration" ? "narration" : (scene.sceneKind === "action" ? "action" : "dialogue");
+    const sceneKind = currentKind === "narration" ? "narration" : (raw0.sceneKind ?? currentKind);
+    const ensured = await ensureEnglishDialogue({ visualIdentity: "", scenes: [{ ...raw0, number: scene.number, sceneKind, characters: scene.characters.map((c) => c.character.name) }] }, chatJSON);
+    const raw = { ...raw0, sceneKind, dialogue: ensured.scenes[0].dialogue, dialogueLocal: ensured.scenes[0].dialogueLocal };
     const { dialogueLocal, ...rest } = raw;
     // Speech is always English (`dialogueEn`); `dialogue` keeps the story-language text for the UI / subtitles.
     const parsed = {

@@ -376,7 +376,7 @@ const SENSITIVE_L2: SoftRule[] = [
 ];
 
 const CONTACT_LINES = /^\[(ACTION|NON-VERBAL|BLOCKING)\]:.*$/gmu;
-const CUE_IN_SPEECH = /(says in \p{L}+), [^,\n"]{1,60},( lips moving on camera)/gu;
+const CUE_IN_SPEECH = /(says in \p{L}+), [^,\n"]{1,60},( (?:lips moving )?on camera)/gu;
 
 function applyRules(text: string, rules: SoftRule[], hits: string[]): string {
   for (const [re, rep] of rules) {

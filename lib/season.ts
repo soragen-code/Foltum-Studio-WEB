@@ -50,6 +50,11 @@ export const seasonStructureSchema = z.object({
 export type SeasonStructure = z.infer<typeof seasonStructureSchema>;
 export type EpisodeOutline = z.infer<typeof episodeOutlineSchema>;
 
+/** Stage 38: every scene kind the script writer may emit (also the values persisted in Scene.sceneKind). */
+export const SCENE_KINDS = ["dialogue", "narration", "action"] as const;
+export type SceneKind = (typeof SCENE_KINDS)[number];
+export const isActionKind = (kind: string | null | undefined) => kind === "action";
+
 export const sceneScriptSchema = z.object({
   number: z.number().int().min(1),
   shotType: z.string().min(3),
@@ -67,8 +72,12 @@ export const sceneScriptSchema = z.object({
   voiceover: z.string().optional(),
   /** Same narration in the story language for the UI; equals `voiceover` for English projects. */
   voiceoverLocal: z.string().optional(),
-  /** "narration" = off-screen voice-over scene (b-roll under narration, no talking heads); "dialogue"/undefined = normal on-camera scene. */
-  sceneKind: z.enum(["dialogue", "narration"]).optional().default("dialogue"),
+  /**
+   * "narration" = off-screen voice-over scene (b-roll under narration, no talking heads);
+   * "action" (Stage 38) = fight / duel / chase / physical struggle staged face to face with beat-by-beat choreography
+   * and only short lines in the pauses between impacts; "dialogue"/undefined = normal on-camera talking scene.
+   */
+  sceneKind: z.enum(SCENE_KINDS).optional().default("dialogue"),
   videoPrompt: z.string().min(40),
   // Stage 11 — scene-to-scene CONTINUITY metadata (all optional so pre-Stage-11 scripts still validate).
   /** Who is present and WHERE at the START of the scene, carried over from the previous scene's ending. */
@@ -130,11 +139,36 @@ export const PACE_DIRECTION =
   "STAGING: never two people simply standing face to face talking. Place the characters NATURALLY in the space according to what the location is — at different distances and heights, one seated one standing, side by side at a counter/window/rail, one crossing the room while the other stays, angled to the environment rather than squared off to each other — and let them shift position and use the location's objects as they talk. " +
   "PERFORMANCE: expressive, energetic acting — vivid facial expressions, lively hand gestures, emotional nuance in the voice (a catch in the voice, a quiet bitter laugh, controlled intensity), eye contact and reactions while the other speaks.";
 
+/**
+ * Stage 38 — ONE universal sentence appended to the talking-scene staging rules: the "never squared off
+ * face to face" restriction is about CALM conversation only; any confrontational beat is staged face to face.
+ */
+export const CONFRONTATION_STAGING_SENTENCE =
+  "CONFRONTATION: any confrontational beat inside a dialogue scene — advancing on someone, a shove, a grab, a strike, a weapon drawn — is staged FACE TO FACE, bodies squared toward each other, just like a fight; the \"never squared off face to face\" rule applies only to calm conversation.";
+
+/**
+ * Stage 38 — staging + choreography rule for sceneKind "action" (fight / duel / chase / physical struggle).
+ * Shared by the script writer prompts (the "action"/videoPrompt of an action scene) and the final Seedance prompt.
+ */
+export const ACTION_STAGING_RULE =
+  "ACTION STAGING (fight / duel / chase / physical struggle): the opponents face EACH OTHER — bodies squared toward the opponent, eyes on the opponent, weapons or spells aimed AT the opponent. The camera shoots them in PROFILE, three-quarter, over-the-shoulder or from a LOW WIDE angle so both fighters and the space between them are in frame. NEVER both fighters facing the camera side by side, NEVER anyone casting, shooting or striking at someone's BACK or at empty air (unless the story explicitly says the attack comes from behind). " +
+  "CHOREOGRAPHY: write REAL combat choreography beat by beat — closing the distance, a lunge, a swing, a dodge, a duck, a roll, a jump, a spin, a block, a parry, a hit landing, being thrown back, hitting the ground, getting up, an acrobatic evasion, a counter-attack. Name who does what to whom, in order. " +
+  "CUTS: every cut in [SHOT TYPE] is a NEW BEAT of the fight (0–5s the lunge → 5–10s the block and counter → 10–15s the throw and fall), hard fast cuts, NO slow motion, NO lingering. Wide and medium shots keep BOTH fighters and the moment of impact in frame; a tight cut is used only for a single reaction and never fills the screen with a face. " +
+  "LINES: 1–3 short lines at most, spoken ONLY in the pauses between impacts (before the charge, after a fall, at the stand-off) — never while striking, dodging or falling; the speaker's face need not face the camera. " +
+  "NO BLOOD, no wounds, no gore on screen — show impacts, falls, dust, sparks, splintering wood, magic light, torn cloth, the shock on faces.";
+
+/** Stage 38 — PACE/CAMERA/STAGING/PERFORMANCE block appended to the Seedance prompt of an ACTION scene instead of PACE_DIRECTION. */
+export const ACTION_PACE_DIRECTION =
+  "PACE: fast and physical — the clip is a continuous fight / chase, every second carries a move (a lunge, a swing, a dodge, a block, a hit, a fall, a recovery); the few lines are short and land only in the pauses between impacts. " +
+  "CAMERA: 3–5 hard fast cuts, each a new beat of the fight — low wide shot of both fighters closing the distance → profile / three-quarter medium of the exchange of blows → over-the-shoulder on the counter-attack → wide of the throw / fall and the recovery; hard cuts, NO slow motion, NO lingering, NO slow pans. " +
+  ACTION_STAGING_RULE + " " +
+  "PERFORMANCE: committed physical acting — full-body effort, weight and momentum in every move, breath knocked out on impact, fierce focused eyes on the opponent, sweat and dust, real reactions to being hit or thrown.";
+
 /** Physical drama is ALLOWED: the script writes the real action the scene calls for — shared by all script prompts. */
 export const MODERATION_SAFE_RULE =
   "PHYSICAL DRAMA: express conflict BOTH through dialogue, faces, the distance between the characters and staging (turning away, stepping closer, holding an object, leaving the room) AND through the REAL physical action the beat requires — movement (advances with measured steps, strides in, backs away, spins around, stalks toward the other), charged looks (smirks, glares with fury, narrows the eyes, sizes the other up) and, when the story calls for it, dramatic physical beats (raises a hand, swings, strikes the chest, shoves, grabs by the collar, draws or throws a weapon such as a spear or knife, a blow lands, someone falls). " +
   "Tone cues may be tense, cold or menacing (\"furiously\", \"coldly\", \"through gritted teeth\"), not only neutral. " +
-  "The ONE technical constraint that stays: WHILE a character is speaking their line, that character's face must remain in frame for lip-sync — so place hard physical action in beats WITHOUT that character's spoken line, or just before / after their lines. " +
+  "Speaking does NOT require the speaker's face or lips in frame — the staging decides (profile, over the shoulder, from behind, a wide shot are all fine); just keep hard impacts out of the exact moment a line is spoken — place them just before / after the lines. " +
   "The provider may still reject an individual shot; that is normal and the producer fixes it by hand afterwards.";
 
 /** The location is a physical space the characters inhabit, never a flat backdrop — shared by all script prompts. */
@@ -152,8 +186,8 @@ export const SCALE_DEPTH_RULE =
 /** Every speaking character is DOING something physical and ordinary, not just talking. */
 export const EVERYDAY_BEHAVIOR_RULE =
   "CHARACTERS ACT (not talking heads): parallel to their lines every character performs concrete, ordinary, natural business — walking, sitting down and standing up, pouring and drinking, eating, picking up / holding / putting down objects, opening a door or a window, typing or sending a message on a phone, sorting papers, wiping a surface, adjusting clothes or hair, twirling a pen, laughing, shrugging, glancing at a watch, fidgeting. " +
-  "[BLOCKING] and [NON-VERBAL] must give EACH speaker a specific piece of business tied to the location's objects — nobody just stands and speaks. These micro-actions are lip-sync-safe (the speaker's face stays clearly in frame while they talk) and run WITH the dialogue, adding realism and motion, not replacing the spoken exchange. " +
-  "Beyond the everyday micro-actions, the scene ALSO carries the dramatic physical beats the story requires (see PHYSICAL DRAMA) — a confrontation, a strike, drawing or throwing a weapon, a shove — staged in beats without that speaker's spoken line so the lip-sync stays intact.";
+  "[BLOCKING] and [NON-VERBAL] must give EACH speaker a specific piece of business tied to the location's objects — nobody just stands and speaks. These micro-actions run WITH the dialogue, adding realism and motion, not replacing the spoken exchange. " +
+  "Beyond the everyday micro-actions, the scene ALSO carries the dramatic physical beats the story requires (see PHYSICAL DRAMA) — a confrontation, a strike, drawing or throwing a weapon, a shove — staged face to face, in beats just before or after that speaker's spoken line.";
 
 /** Creative bar for the story itself — shared by the season, episode, trailer and revise prompts. */
 export const CREATIVE_RULE =
@@ -203,7 +237,8 @@ export function validateEpisodeScript(script: EpisodeScript): string[] {
     if (s.number !== i + 1) problems.push(`scene ${i + 1} numbered ${s.number}`);
     // Narration scenes are exempt from on-camera dialogue-density checks (they carry narration, not spoken lines),
     // but they STILL need a complete videoPrompt with all tags — so only skip the dialogue checks.
-    if (!isNarration(s)) {
+    // Stage 38: action scenes legitimately carry only 1–3 short lines between impacts — no density checks for them.
+    if (!isNarration(s) && !isActionKind(s.sceneKind)) {
       const sentences = dialogueSentenceCount(s.dialogue);
       if (!isSilent(s.dialogue) && sentences < TALK_MIN_SENTENCES) problems.push(`soft: scene ${s.number}: ${sentences} dialogue sentences (want ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES})`);
       // Speech density is ADVISORY: durationSec is derived from the word count by normalizeEpisodeScript,
@@ -363,7 +398,7 @@ export function normalizeEpisodeScript(script: EpisodeScript, characters?: Chara
       dialogue: s.dialogue.trim() || "[NO DIALOGUE]",
       dialogueLocal: (s.dialogueLocal ?? "").trim() || undefined,
       // Stage 12 (Commit D) — normalize off-screen narration fields.
-      sceneKind: isNarr ? "narration" : "dialogue",
+      sceneKind: isNarr ? "narration" : isActionKind(s.sceneKind) ? "action" : "dialogue",
       voiceover: isNarr ? narrationText : undefined,
       voiceoverLocal: isNarr ? ((s.voiceoverLocal ?? "").trim() || undefined) : undefined,
       videoPrompt: repairPrompt(s),
@@ -500,18 +535,20 @@ export function episodeScriptSystemPrompt(language: IdeaLanguage, episodeNumber 
   const isSecond = episodeNumber === 2;
   // Off-screen narrator backstory: MANDATORY opening for episode 1, OPTIONAL light catch-up for episode 2, none after.
   const narrationRule = isFirst
-    ? `\nR7. OPENING NARRATION (MANDATORY for this episode — it is EPISODE 1): scene 1 is an off-screen NARRATOR voice-over that sets up the backstory/world before the drama starts. For that scene set "sceneKind": "narration", put 2–4 sentences of English backstory narration in "voiceover"${local ? ` and its ${L} translation in "voiceoverLocal"` : ""}, and set "dialogue": "[NO DIALOGUE]" (there is NO on-camera talking). Its "videoPrompt" is ATMOSPHERIC ESTABLISHING B-ROLL that plays UNDER the narration — sweeping/observational shots of the location and world, NO talking heads, NO character mouths moving, NO lip-sync; it still contains all 9 [..] lines (the [CHARACTER] line describes anyone glimpsed, and characters may appear in the distance doing ordinary things but NOT speaking). From scene 2 onward the episode is normal on-camera dialogue as usual. Every OTHER scene keeps "sceneKind": "dialogue".`
+    ? `\nR7. OPENING NARRATION (MANDATORY for this episode — it is EPISODE 1): scene 1 is an off-screen NARRATOR voice-over that sets up the backstory/world before the drama starts. For that scene set "sceneKind": "narration", put 2–4 sentences of English backstory narration in "voiceover"${local ? ` and its ${L} translation in "voiceoverLocal"` : ""}, and set "dialogue": "[NO DIALOGUE]" (there is NO on-camera talking). Its "videoPrompt" is ATMOSPHERIC ESTABLISHING B-ROLL that plays UNDER the narration — sweeping/observational shots of the location and world, NO talking heads, NO character mouths moving, NO lip-sync; it still contains all 9 [..] lines (the [CHARACTER] line describes anyone glimpsed, and characters may appear in the distance doing ordinary things but NOT speaking). From scene 2 onward the episode is normal on-camera dialogue as usual. Every OTHER scene is "sceneKind": "dialogue" (or "action" when it is a fight — see R9).`
     : isSecond
-      ? `\nR7. OPTIONAL CATCH-UP NARRATION: only IF it genuinely helps the viewer, scene 1 MAY be a short off-screen NARRATOR voice-over recapping what matters from earlier (1–3 sentences). If you use it, set "sceneKind": "narration", put the English narration in "voiceover"${local ? ` and its ${L} translation in "voiceoverLocal"` : ""}, "dialogue": "[NO DIALOGUE]", and make its "videoPrompt" atmospheric establishing b-roll (no talking heads, no lip-sync). This is NOT required — most episodes open straight on dialogue. Every non-narration scene keeps "sceneKind": "dialogue".`
-      : `\nR7. NO opening narration in this episode — open straight on on-camera dialogue. Every scene keeps "sceneKind": "dialogue".`;
+      ? `\nR7. OPTIONAL CATCH-UP NARRATION: only IF it genuinely helps the viewer, scene 1 MAY be a short off-screen NARRATOR voice-over recapping what matters from earlier (1–3 sentences). If you use it, set "sceneKind": "narration", put the English narration in "voiceover"${local ? ` and its ${L} translation in "voiceoverLocal"` : ""}, "dialogue": "[NO DIALOGUE]", and make its "videoPrompt" atmospheric establishing b-roll (no talking heads, no lip-sync). This is NOT required — most episodes open straight on dialogue. Every non-narration scene is "sceneKind": "dialogue" (or "action" when it is a fight — see R9).`
+      : `\nR7. NO opening narration in this episode — open straight on on-camera dialogue. Every scene is "sceneKind": "dialogue" (or "action" when it is a fight — see R9).`;
   return `You are a film director + cinematographer writing the FULL shooting script of ONE episode (EPISODE ${episodeNumber}) of a short-form VERTICAL drama (9:16). The episode is ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES} consecutive shots ("scenes"), each 15–${SCENE_MAX_SECONDS} seconds, generated by an AI video model WITH native speech: characters really speak their lines out loud, so the DIALOGUE IS THE PRODUCT. A scene without dialogue is a wasted shot (the ONLY exception is a narration scene — see R7).
 
-Return STRICT JSON: {"visualIdentity": string, "scenes": [{"number": int, "shotType": string, "durationSec": int, "locationDesc": string, "characters": [names], "action": string, "sceneKind": "dialogue"|"narration", "dialogue": string${local ? ', "dialogueLocal": string' : ""}, "voiceover": string, ${local ? '"voiceoverLocal": string, ' : ""}"videoPrompt": string, "presence": string, "entrances": string, "continuesFrom": string}]}. ("voiceover"${local ? '/"voiceoverLocal"' : ""} is used ONLY for narration scenes; leave it "" for normal scenes.)
+Return STRICT JSON: {"visualIdentity": string, "scenes": [{"number": int, "shotType": string, "durationSec": int, "locationDesc": string, "characters": [names], "action": string, "sceneKind": "dialogue"|"narration"|"action", "dialogue": string${local ? ', "dialogueLocal": string' : ""}, "voiceover": string, ${local ? '"voiceoverLocal": string, ' : ""}"videoPrompt": string, "presence": string, "entrances": string, "continuesFrom": string}]}. ("voiceover"${local ? '/"voiceoverLocal"' : ""} is used ONLY for narration scenes; leave it "" for normal scenes.)
+SCENE KINDS ("sceneKind"): "dialogue" = a normal on-camera talking scene (the default); "narration" = an off-screen narrator voice-over over b-roll (see R7); "action" = a FIGHT / DUEL / CHASE / physical struggle — REQUIRED whenever the beat is a physical confrontation. An action scene is written as combat choreography (see R9) and may carry only 1–3 short lines spoken in the pauses between impacts.
 
 HARD RULES (the script is REJECTED automatically if any is broken):
 R1. The NUMBER OF SCENES follows the drama of this episode's logline (min ${EPISODE_MIN_SCENES}, max ${EPISODE_MAX_SCENES}) — no padding, no filler. Nobody sets a running time: each scene lasts exactly as long as its dialogue needs (15–${SCENE_MAX_SECONDS} s at a natural conversational pace ~2.1 words/s; "durationSec" = round(words / 2.1) + 2, clamped to 15–${SCENE_MAX_SECONDS}). If the dialogue is too long to be spoken naturally within ${SCENE_MAX_SECONDS} s, break it into two consecutive scenes in the same location rather than cramming it into one clip. All scenes happen in/around the episode's key location; scene 1 may open on a wide shot but someone is ALREADY talking in it (UNLESS R7 makes scene 1 an off-screen narration scene).
 R2. AT MOST ${MAX_SILENT_SCENES} scenes in the whole episode may be silent ("[NO DIALOGUE]"). ALL OTHER SCENES contain a real spoken exchange. (A narration scene from R7 does NOT count as silent — it carries an English narration track, not on-camera dialogue.)
 R8. ${ONE_LOCATION_RULE}${narrationRule}
+R9. ACTION SCENES: whenever the beat is a fight, duel, chase, ambush or any physical struggle, the scene has "sceneKind": "action". Its "action" text and its videoPrompt are written as combat choreography, applying this rule INSTEAD of the talking-scene STAGING / FRAMING wording: ${ACTION_STAGING_RULE} An action scene may have only 1–3 SHORT lines (or "[NO DIALOGUE]"), spoken in the pauses between impacts; the R3 sentence minimum does not apply to it.
 R3. A talking scene = a SUBSTANTIVE exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences in total, spread over 3–6 lines where characters answer each other IMMEDIATELY (the story is told THROUGH the dialogue: decisions, accusations, confessions, information, subtext). Replies are quick, people interrupt and overlap; every second of the clip is filled with speech — at least ~35 words per talking scene (≥ 2 words per second of durationSec). Monologue or voice-over does NOT replace dialogue — when two people are in the shot they talk to each other; a lone character may talk on the phone or to someone off-screen. Short one-liners like "I have to know the truth." alone are REJECTED. One line per row, format: NAME (tone cue): "line". Tone cues like (sharply), (whispering), (holding back tears).
     "dialogue" is ALWAYS in ENGLISH — it is what the video model voices.${local ? ` "dialogueLocal" is the same lines translated into ${L}, same line structure and cues (shown to the author as the script text).` : ""}
     Example of a correct talking scene (6 sentences, 26 s):
@@ -532,13 +569,13 @@ R4. "videoPrompt" and "visualIdentity" are ENTIRELY in ENGLISH (every one of the
 
 STYLE RULES:
 S1. ${PACE_DIRECTION}
-S2. LIP-SYNC BIAS: talking scenes cut between Wide two-shot / Medium shot / Over-the-shoulder with the speaker's face clearly visible for lip-sync — but the face NEVER fills the screen: NO full-screen face close-ups, the tightest framing is a medium close-up (head and shoulders WITH clear environment behind) used only briefly, and most of each talking scene stays on wide / medium two-shots with bodies and the location in frame. Never two characters squared off face to face — stage them naturally in the location (different distances/heights, seated/standing, along a counter or rail, one moving while the other stays).
+S2. SPEAKER FRAMING: talking scenes cut between Wide two-shot / Medium shot / Over-the-shoulder; the speaker's face does NOT have to be visible on every line — the staging decides (profile, over the shoulder, from behind and wide shots are all fine) — and the face NEVER fills the screen: NO full-screen face close-ups, the tightest framing is a medium close-up (head and shoulders WITH clear environment behind) used only briefly, and most of each talking scene stays on wide / medium two-shots with bodies and the location in frame. Never two characters squared off face to face — stage them naturally in the location (different distances/heights, seated/standing, along a counter or rail, one moving while the other stays).
 S7. ${MODERATION_SAFE_RULE}
 S8. ${CREATIVE_RULE}
 S9. ${LOCATION_PRESENCE_RULE}
 S10. ${SCALE_DEPTH_RULE}
 S11. ${EVERYDAY_BEHAVIOR_RULE}
-S12. DYNAMIC TEXT: the episode ALTERNATES between talk-driven beats and active, physical beats — never a run of static conversations. Every scene carries an EVENT that moves the plot (a decision, a discovery, an arrival, a reversal) and combines DIALOGUE WITH ACTION so the script reads lively and cinematic, not like talking heads. The "action" line names a concrete physical EVENT happening in the scene, not a mood — and when the story has reached that point it names the real dramatic beat too (a collision, a strike, a shove, someone drawing or throwing a weapon, a blow landing, someone falling).
+S12. DYNAMIC TEXT: the episode ALTERNATES between talk-driven beats and active, physical beats — never a run of static conversations. Every scene carries an EVENT that moves the plot (a decision, a discovery, an arrival, a reversal) and combines DIALOGUE WITH ACTION so the script reads lively and cinematic, not like talking heads. The "action" line names a concrete physical EVENT happening in the scene, not a mood — and when the story has reached that point it names the real dramatic beat too (a collision, a strike, a shove, someone drawing or throwing a weapon, a blow landing, someone falling). MANDATORY: when this episode's logline (or the season arc at this point) promises a battle, a duel, an attack, a chase or any physical confrontation, the episode MUST contain at least one "sceneKind": "action" scene in which that confrontation ACTUALLY HAPPENS on screen, staged per R9 — it is never only talked about, threatened or reported afterwards. ${CONFRONTATION_STAGING_SENTENCE}
 S13. ${CONTINUITY_RULE}
     Write the whole episode as ONE unbroken chain: read your previous scene's ending before you write the next scene, and open the next scene from exactly that state. For EVERY scene ALSO fill three short ENGLISH continuity fields (outside the videoPrompt):
     - "presence": who is on screen and WHERE at the very start of this scene, carried over from how the previous scene ended (e.g. "Anna still at the workbench where scene 2 left her, Victor just having entered from the yard"). For scene 1, describe the opening arrangement.
@@ -550,7 +587,7 @@ S4. "visualIdentity": ONE SHORT English sentence (max 25 words) — photoreal li
 S5. Use ONLY the given character names (Western names, Latin letters, exactly as given). "characters" lists the names visible in the shot (a CROWD group name is listed when the group is in frame). SUPPORTING and MINOR characters present in the episode must actually speak in at least one scene each; crowds may have a short collective line or reactions.
 S6. Dramatize ONLY this episode's logline — a natural continuation of the previous episodes, ending on this episode's cliffhanger (the last scene IS the cliffhanger). Original content only: never reuse names, plots or lines of existing films/series.
 
-Before answering, check: scenes count ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES}; silent scenes ≤ ${MAX_SILENT_SCENES}; each talking scene has ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} English dialogue sentences and ≥ 2 words per second; every videoPrompt has all 9 tags including [CHARACTER] and a cut list in [SHOT TYPE] that opens wide and mixes shot scales across the space; [BLOCKING] moves characters between different zones and gives each speaker ordinary business; [ACTION] adds secondary background life so the place feels alive; and EACH scene continues seamlessly from the previous one — "presence"/"entrances"/"continuesFrom" are filled and every entrance/exit/move is shown in [BLOCKING]/[ACTION]/[TRANSITION] so nobody teleports or vanishes.`;
+Before answering, check: scenes count ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES}; silent scenes ≤ ${MAX_SILENT_SCENES}; each talking scene has ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} English dialogue sentences and ≥ 2 words per second; every fight / physical confrontation promised by the logline is an "action" scene with face-to-face beat-by-beat choreography (R9); every videoPrompt has all 9 tags including [CHARACTER] and a cut list in [SHOT TYPE] that opens wide and mixes shot scales across the space; [BLOCKING] moves characters between different zones and gives each speaker ordinary business; [ACTION] adds secondary background life so the place feels alive; and EACH scene continues seamlessly from the previous one — "presence"/"entrances"/"continuesFrom" are filled and every entrance/exit/move is shown in [BLOCKING]/[ACTION]/[TRANSITION] so nobody teleports or vanishes.`;
 }
 export function episodeScriptUserPrompt(input: {
   synopsis: string;
@@ -572,7 +609,7 @@ export function renderEpisodeScriptText(ep: EpisodeOutline, script: EpisodeScrip
   const head = `ЭПИЗОД ${ep.number}. ${ep.title}\n${ep.logline}\nЛокация: ${ep.locationName}\nПерсонажи: ${ep.characters.join(", ")}\n`;
   const body = script.scenes
     .map((s) => {
-      const head2 = `\nСЦЕНА ${s.number}${s.sceneKind === "narration" ? " · ЗАКАДРОВЫЙ ГОЛОС" : ""} · ${s.shotType} · ~${s.durationSec}с\n${s.locationDesc}\n${s.action}`;
+      const head2 = `\nСЦЕНА ${s.number}${s.sceneKind === "narration" ? " · ЗАКАДРОВЫЙ ГОЛОС" : isActionKind(s.sceneKind) ? " · ЭКШЕН" : ""} · ${s.shotType} · ~${s.durationSec}с\n${s.locationDesc}\n${s.action}`;
       if (s.sceneKind === "narration" && (s.voiceover ?? "").trim()) {
         const local = (s.voiceoverLocal ?? "").trim();
         return `${head2}\nЗакадровый голос: ${local || s.voiceover}${local && local !== s.voiceover ? `\n[EN voiceover]\n${s.voiceover}` : ""}`;
@@ -611,11 +648,11 @@ export function sceneClipPlan(tier: PowerTier, scenes: number | Array<{ duration
 export function renderScriptFromScenes(
   ep: { number: number; title: string; logline?: string | null; locationName?: string | null; cliffhanger?: string | null },
   characterNames: string[],
-  scenes: { number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null }[]
+  scenes: { number: number; sceneKind?: string | null; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null }[]
 ): string {
   const head = `ЭПИЗОД ${ep.number}. ${ep.title}\n${ep.logline ?? ""}\nЛокация: ${ep.locationName ?? ""}\nПерсонажи: ${characterNames.join(", ")}\n`;
   const body = scenes
-    .map((s) => `\nСЦЕНА ${s.number} · ${s.shotType ?? ""} · ~${s.durationSec ?? SCENE_MAX_SECONDS}с\n${s.locationDesc ?? ""}\n${s.action ?? ""}\n${s.dialogue ?? "[NO DIALOGUE]"}`)
+    .map((s) => `\nСЦЕНА ${s.number}${s.sceneKind === "narration" ? " · ЗАКАДРОВЫЙ ГОЛОС" : isActionKind(s.sceneKind) ? " · ЭКШЕН" : ""} · ${s.shotType ?? ""} · ~${s.durationSec ?? SCENE_MAX_SECONDS}с\n${s.locationDesc ?? ""}\n${s.action ?? ""}\n${s.dialogue ?? "[NO DIALOGUE]"}`)
     .join("\n");
   return `${head}${body}\n\nКЛИФФХЭНГЕР: ${ep.cliffhanger ?? ""}\n`;
 }
@@ -630,10 +667,12 @@ export type LocationRevise = z.infer<typeof locationReviseSchema>;
 export function locationReviseSystemPrompt(language: IdeaLanguage): string {
   return `You are a production designer + cinematographer. The author wants to change the KEY LOCATION of one episode of a vertical (9:16) drama. Apply the instruction to the location and reflect it in EVERY scene of the episode.
 Return STRICT JSON: {"locationName": string (${langName(language)}), "locationDesc": string (detailed ENGLISH visual description, 2–4 sentences: architecture, materials, textures, props, weather, light, palette, time of day), "scenes": [{"number": int, "locationDesc": "INT/EXT — place — time" in ${langName(language)}, "videoPrompt": string}]}.
-RULES: keep every scene's number, shot type, action, characters, [CHARACTER] descriptions and story beats; only change what the new location implies ([LIGHTING], set details in [BLOCKING]/[ACTION]/[SHOT TYPE], [VISUAL STYLE] stays identical). videoPrompt stays ENGLISH with exactly the 9 lines [SHOT TYPE]/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL]/[ACTION]/[CHARACTER]/[TRANSITION]. Return ALL scenes. Never add spoken text to videoPrompt. Original content only.`;
+RULES: keep every scene's number, shot type, action, characters, [CHARACTER] descriptions and story beats (an ACTION / fight scene keeps its face-to-face beat-by-beat combat choreography — never turn it into a conversation); only change what the new location implies ([LIGHTING], set details in [BLOCKING]/[ACTION]/[SHOT TYPE], [VISUAL STYLE] stays identical). videoPrompt stays ENGLISH with exactly the 9 lines [SHOT TYPE]/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL]/[ACTION]/[CHARACTER]/[TRANSITION]. Return ALL scenes. Never add spoken text to videoPrompt. Original content only.`;
 }
 
 export const sceneReviseSchema = z.object({
+  /** Stage 38: "action" when the (revised) scene is a fight / chase / physical struggle; omitted = keep the current kind. */
+  sceneKind: z.enum(["dialogue", "action"]).optional(),
   shotType: z.string().min(3),
   durationSec: z.number().int().min(SCENE_MIN_SECONDS).max(SCENE_MAX_SECONDS),
   locationDesc: z.string().min(3),
@@ -652,8 +691,9 @@ export function sceneReviseSystemPrompt(language: IdeaLanguage): string {
   const L = langName(language);
   const local = language !== "en";
   return `You are a film director rewriting ONE shot ("scene", ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS}s, vertical 9:16, AI video model with native speech) of an episode by the author's instruction.
-Return STRICT JSON: {"shotType": string, "durationSec": int, "locationDesc": "INT/EXT — place — time" (${L}), "action": string (${L}), "dialogue": string${local ? ', "dialogueLocal": string' : ""}, "videoPrompt": string, "presence": string, "entrances": string, "continuesFrom": string}.
-RULES: "dialogue" is ALWAYS in ENGLISH (it is what the model voices), one line per row NAME (tone cue): "line"; a talking scene has a substantive exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences (3–6 quick lines, characters answer each other instantly; the story is told through the dialogue), or exactly "[NO DIALOGUE]" for a rare purely visual beat.${local ? ` "dialogueLocal" = the same lines translated into ${L}, same structure and cues.` : ""} durationSec = round(words / 2.1) + 2 clamped to ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS} (≥ 2 words per second — no timing is set by anyone else). Talking scenes stay on wide / medium two-shots / over-the-shoulder with the speaker's face visible for lip-sync but NEVER filling the screen — NO full-screen face close-ups (tightest is a brief medium close-up with environment behind); the two characters are placed naturally in the location, never squared off face to face. ${PACE_DIRECTION} ${MODERATION_SAFE_RULE} ${CREATIVE_RULE} ${LOCATION_PRESENCE_RULE} ${SCALE_DEPTH_RULE} ${EVERYDAY_BEHAVIOR_RULE} videoPrompt is ENGLISH, exactly 9 lines [SHOT TYPE] (cut list, 2–4 hard cuts with time ranges)/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL] (expressive acting)/[ACTION]/[CHARACTER]/[TRANSITION] (hard cut); keep [VISUAL STYLE] and [CHARACTER] descriptions identical to the given scene unless the instruction requires otherwise; no spoken text in videoPrompt; never "slowly", "slow motion", "lingering", "long pause". ${CONTINUITY_RULE} This shot must still begin from the PREVIOUS shot's ending and hand off cleanly into the NEXT shot (both are given below): keep the same people in place unless the instruction changes that, and if the revision adds or removes someone or moves the action, SHOW that entrance/exit/move. Fill "presence" (who is where at the start, following the previous shot), "entrances" (who enters/leaves during the shot and how, or "none") and "continuesFrom" (same-location-continuation | character-moves | location-change | new-sequence) to match the neighbouring shots. Original content only; Western names, Latin letters, exactly as given.`;
+Return STRICT JSON: {"sceneKind": "dialogue"|"action", "shotType": string, "durationSec": int, "locationDesc": "INT/EXT — place — time" (${L}), "action": string (${L}), "dialogue": string${local ? ', "dialogueLocal": string' : ""}, "videoPrompt": string, "presence": string, "entrances": string, "continuesFrom": string}.
+SCENE KIND: "dialogue" = a normal talking scene; "action" = a fight / duel / chase / physical struggle. If the instruction asks for a fight, an attack, a duel, a chase or any physical confrontation ("make this scene a fight", "they start fighting", "he attacks her") — set "sceneKind": "action" and rewrite the scene as combat choreography: ${ACTION_STAGING_RULE} An action scene keeps only 1–3 short lines (or "[NO DIALOGUE]") spoken in the pauses between impacts, and the talking-scene rules below (sentence count, wide/medium two-shot staging) do NOT apply to it. If the current scene is already an action scene and the instruction does not turn it into a conversation, keep "sceneKind": "action" and its choreography. Otherwise keep "sceneKind": "dialogue".
+RULES: "dialogue" is ALWAYS in ENGLISH (it is what the model voices), one line per row NAME (tone cue): "line"; a talking scene has a substantive exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences (3–6 quick lines, characters answer each other instantly; the story is told through the dialogue), or exactly "[NO DIALOGUE]" for a rare purely visual beat.${local ? ` "dialogueLocal" = the same lines translated into ${L}, same structure and cues.` : ""} durationSec = round(words / 2.1) + 2 clamped to ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS} (≥ 2 words per second — no timing is set by anyone else). Talking scenes stay on wide / medium two-shots / over-the-shoulder — the speaker's face does not have to be visible on every line (staging decides) and it NEVER fills the screen — NO full-screen face close-ups (tightest is a brief medium close-up with environment behind); the two characters are placed naturally in the location, never squared off face to face when they simply talk. ${CONFRONTATION_STAGING_SENTENCE} ${PACE_DIRECTION} ${MODERATION_SAFE_RULE} ${CREATIVE_RULE} ${LOCATION_PRESENCE_RULE} ${SCALE_DEPTH_RULE} ${EVERYDAY_BEHAVIOR_RULE} videoPrompt is ENGLISH, exactly 9 lines [SHOT TYPE] (cut list, 2–4 hard cuts with time ranges)/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL] (expressive acting)/[ACTION]/[CHARACTER]/[TRANSITION] (hard cut); keep [VISUAL STYLE] and [CHARACTER] descriptions identical to the given scene unless the instruction requires otherwise; no spoken text in videoPrompt; never "slowly", "slow motion", "lingering", "long pause". ${CONTINUITY_RULE} This shot must still begin from the PREVIOUS shot's ending and hand off cleanly into the NEXT shot (both are given below): keep the same people in place unless the instruction changes that, and if the revision adds or removes someone or moves the action, SHOW that entrance/exit/move. Fill "presence" (who is where at the start, following the previous shot), "entrances" (who enters/leaves during the shot and how, or "none") and "continuesFrom" (same-location-continuation | character-moves | location-change | new-sequence) to match the neighbouring shots. Original content only; Western names, Latin letters, exactly as given.`;
 }
 
 /* ───────────── Stage 13 — episode-level continuity audit («Ассембл» final polish) ───────────── */
@@ -703,16 +743,17 @@ export function episodeContinuityAuditSystemPrompt(language: IdeaLanguage): stri
 CRITICAL — UNMOTIVATED LOCATION / SETTING JUMP: the episode has exactly ONE key location and every scene must stay in it (only the zone within it and the camera angle may change). If the SETTING itself changes between scenes without a deliberately shown, motivated move — e.g. a character sits at a table inside a temple in one scene and is suddenly sitting in a field / a different room / outdoors in the next, with no travel shown and the scene NOT marked continuesFrom="location-change" — that is a MUST-FLAG continuity error: set hasIssue=true and rewrite the scene so it happens BACK IN the episode's single key location (the same place as the surrounding scenes, matching the location references). Treat an interior→exterior (or exterior→interior) or any new building/room/landscape that isn't the episode's key location as this error. The corrected videoPrompt MUST place the scene inside the canonical episode location (same place, only zone/camera angle differs), never invent a new setting.
 At every boundary between scene N and scene N+1 (and across the whole chain) ALSO look for: a character who is present or speaking in one scene but has silently VANISHED or TELEPORTED in the next with no shown exit/entrance; someone who suddenly APPEARS already in place without walking in; the physical arrangement (who is where, seated/standing, what they hold) resetting between a continuing same-location pair instead of carrying over; an object / prop / costume that changes or disappears illogically; time-of-day / lighting / weather that jumps without reason; an action left mid-motion at the end of one scene and not continued at the start of the next. ${CONTINUITY_RULE} ${ONE_LOCATION_RULE}
 Return STRICT JSON: {"scenes":[{"number": int, "hasIssue": boolean, "issue": string (short, ${L}, ONLY when hasIssue is true), "correctedVideoPrompt": string (ONLY when hasIssue is true)}]} — include EVERY scene number exactly once, in order. A scene that already flows correctly: {"number":N,"hasIssue":false}. A scene that breaks continuity: hasIssue=true, "issue" = ONE short sentence naming the seam problem, "correctedVideoPrompt" = the FULL rewritten prompt for THAT scene that fixes the transition — make the entrance / exit / move EXPLICIT in [BLOCKING], [ACTION] and [TRANSITION], and keep positions, props, lighting and time-of-day consistent with the END of the previous scene and the START of the next.
-CORRECTED PROMPT RULES: exactly the 9 lines [SHOT TYPE]/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL]/[ACTION]/[CHARACTER]/[TRANSITION], ENGLISH, NO spoken text inside the videoPrompt, keep [VISUAL STYLE] and [CHARACTER] IDENTICAL to the given scene, preserve the scene's essence, its dialogue / narration and its duration; never "slowly", "slow motion", "lingering", "long pause". ${PACE_DIRECTION} ${MODERATION_SAFE_RULE} ${LOCATION_PRESENCE_RULE} Only flag REAL logical breaks — if the whole chain is already consistent, return every scene with hasIssue=false and change nothing. Original content only; Western names, Latin letters.`;
+CORRECTED PROMPT RULES: exactly the 9 lines [SHOT TYPE]/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL]/[ACTION]/[CHARACTER]/[TRANSITION], ENGLISH, NO spoken text inside the videoPrompt, keep [VISUAL STYLE] and [CHARACTER] IDENTICAL to the given scene, preserve the scene's essence, its kind, its dialogue / narration and its duration; a scene marked (action) is a FIGHT / physical confrontation — its corrected prompt stays combat choreography (opponents face each other, beat-by-beat moves per the rule below), it is NEVER rewritten into a conversation: ${ACTION_STAGING_RULE} never "slowly", "slow motion", "lingering", "long pause". ${PACE_DIRECTION} ${MODERATION_SAFE_RULE} ${LOCATION_PRESENCE_RULE} Only flag REAL logical breaks — if the whole chain is already consistent, return every scene with hasIssue=false and change nothing. Original content only; Western names, Latin letters.`;
 }
 
 /** The ordered scene chain rendered for the auditor. */
 export function episodeContinuityAuditUserPrompt(scenes: AuditSceneInput[]): string {
   const blocks = scenes.map((s) => {
     const isNarration = s.sceneKind === "narration";
+    const isAction = isActionKind(s.sceneKind);
     const speech = ((isNarration ? s.voiceover : s.dialogueEn) ?? "").replace(/\s+/g, " ").trim().slice(0, 500);
     return [
-      `### Scene ${s.number}${isNarration ? " (off-screen narration)" : ""} — ${s.locationDesc ?? ""} — ~${s.durationSec ?? 15}s`,
+      `### Scene ${s.number}${isNarration ? " (off-screen narration)" : isAction ? " (action — fight / physical confrontation, keep as action)" : ""} — ${s.locationDesc ?? ""} — ~${s.durationSec ?? 15}s`,
       `presence: ${s.presence ?? "(none)"}`,
       `entrances: ${s.entrances ?? "(none)"}`,
       `continuesFrom: ${s.continuesFrom ?? "(none)"}`,

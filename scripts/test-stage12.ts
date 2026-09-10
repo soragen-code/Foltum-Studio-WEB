@@ -171,7 +171,7 @@ ok(cleanStoryText("x".repeat(STORY_MAX_CHARS + 500)).length === STORY_MAX_CHARS,
   ok(/NO on-camera dialogue/i.test(np), "buildNarrationAudioPrompt: no on-camera dialogue");
   // Normal dialogue prompt still lip-syncs on camera (not broken by Commit D).
   const dp = buildNativeAudioPrompt("[SHOT TYPE]: medium", 'ANNA (softly): "We should go."', [{ name: "Anna" }], "English");
-  ok(/lips moving on camera/i.test(dp), "buildNativeAudioPrompt: normal scenes still lip-sync on camera (unbroken)");
+  ok(/ on camera: "We should go\."/i.test(dp) && /whenever the speaker's mouth IS visible/i.test(dp), "buildNativeAudioPrompt: normal scenes still speak on camera; face in frame is a staging choice (Stage 38)");
 
   console.log(`\nALL STAGE12 CHECKS PASSED (${pass})`);
 })();

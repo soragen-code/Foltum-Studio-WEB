@@ -56,13 +56,13 @@ export interface VideoJobState {
   hasOverride?: boolean;
   /** character_references | new_scene_reference | text_only */
   referenceKind?: string;
-  /** Counts of the reference images actually sent (`chained` = the previous scene's last frame was included). */
+  /** Counts of the reference images actually sent (Stage 38: `chained` is always false — the previous frame is never sent; kept for old state records). */
   refCounts?: { characters: number; location: number; crowd: number; scene: number; chained: boolean };
   /** Width the references were downscaled to before submission. */
   referenceWidth?: number;
   /** Stage 36: the exact ordered list of reference images sent (768px URLs), for UI previews. */
   submittedReferences?: { url: string; kind: string }[];
-  /** Stage 36: id of the previous scene whose last frame was sent as a reference, if any. */
+  /** Stage 36 legacy: id of the previous scene whose last frame was sent as a reference (Stage 38: always null). */
   previousFrameSceneId?: string | null;
 }
 
@@ -73,7 +73,7 @@ export interface ModerationRetryInput {
   model: string;
   duration: number;
   resolution: string;
-  /** Reference set of the first attempt (Stage 36: includes the previous frame as kind "previous_frame"). */
+  /** Reference set of the first attempt (portraits, location angles, crowd; Stage 38: never the previous scene's frame). */
   refs: { url: string; kind: string; note: string }[];
   /** Reduced set for the last retry: speaking characters + one location angle. */
   fallbackRefs: { url: string; kind: string; note: string }[];
@@ -248,7 +248,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       location: retryRefs.filter(r => r.kind === "location").length,
       crowd: retryRefs.filter(r => r.kind === "crowd").length,
       scene: retryRefs.filter(r => r.kind === "scene").length,
-      chained: retryRefs.some(r => r.kind === "previous_frame"),
+      chained: false, // Stage 38: the previous scene's last frame is never sent as a reference.
     };
     // Exact submitted list (downscaled URLs, same order as [ImageN]) for the scene-card previews.
     const submittedReferences = referenceImages.map((url, i) => ({ url, kind: retryRefs[i]?.kind ?? "reference" }));
@@ -367,20 +367,19 @@ async function moderationMessage(sceneId: string, error: unknown, state?: VideoJ
   }
   const hints = moderationHints(submitted);
   const counts = state?.refCounts;
-  const withPreviousFrame = !!counts?.chained;
-  const imagesSent = counts ? counts.characters + counts.location + counts.crowd + counts.scene + (counts.chained ? 1 : 0) : null;
+  // Stage 38: the previous scene's frame is never sent, so the message lists only portraits / location angles / crowd.
+  const imagesSent = counts ? counts.characters + counts.location + counts.crowd + counts.scene : null;
   const countsText = counts
-    ? ` Отправлено изображений: ${imagesSent} — портретов: ${counts.characters}, ракурсов локации: ${counts.location}, массовки: ${counts.crowd}${counts.scene ? `, кадр сцены: ${counts.scene}` : ""}, кадр предыдущей сцены: ${withPreviousFrame ? "да" : "нет"}.`
+    ? ` Отправлено изображений: ${imagesSent} — портретов: ${counts.characters}, ракурсов локации: ${counts.location}, массовки: ${counts.crowd}${counts.scene ? `, кадр сцены: ${counts.scene}` : ""}.`
     : "";
   let message: string;
   if (state?.hasOverride && !hints.length && state.referenceKind !== "text_only") {
-    message = `[moderation] Сцена не прошла модерацию провайдера. Текст промпта — ручной (override), текстовые триггеры не найдены; вероятная причина — референс‑изображения (лица персонажей, локация${withPreviousFrame ? ", кадр предыдущей сцены" : ""}).${countsText} Попробуйте вариант «Отправить без референс‑изображений» в окне «Смотреть промпт».`;
+    message = `[moderation] Сцена не прошла модерацию провайдера. Текст промпта — ручной (override), текстовые триггеры не найдены; вероятная причина — референс‑изображения (портреты персонажей, ракурсы локации, массовка).${countsText} Попробуйте вариант «Отправить без референс‑изображений (только текст)» в окне «Смотреть промпт» или отредактируйте промпт.`;
   } else {
     message = `[moderation] Сцена не прошла модерацию провайдера. Отредактируйте промпт вручную: откройте его кнопкой «Смотреть промпт», исправьте, сохраните свой вариант и запустите генерацию заново.` +
       (hints.length ? ` Вероятные триггеры: ${hints.map(h => `«${h}»`).join(", ")}.` : "") +
-      (state?.referenceKind === "text_only" ? " Референс‑изображения не отправлялись (только текст)." : countsText);
+      (state?.referenceKind === "text_only" ? " Референс‑изображения не отправлялись (только текст)." : countsText + " Если блокируются референс‑изображения (портреты, ракурсы локации, массовка) — используйте вариант «Отправить без референс‑изображений (только текст)» в окне «Смотреть промпт».");
   }
-  if (withPreviousFrame) message += " Если блокируется кадр предыдущей сцены — включите «Не использовать кадр предыдущей сцены» в окне «Смотреть промпт» (портреты и локация останутся) или перегенерируйте предыдущую сцену.";
   message += ` Код провайдера: ${safeProviderError(error)}`;
   return message;
 }
