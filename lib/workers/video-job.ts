@@ -10,8 +10,7 @@ import { VISUAL_STYLE_ID } from "@/lib/visual-style";
 import { buildScenePrompt } from "@/lib/scene-prompt";
 import { GenerationAttempt, safeProviderError, classifyProviderError, logAttempt, safeDiagnosticInput } from "@/lib/generation-diagnostics";
 import { updateJob, heartbeatJob, runInBackground, isCancelRequested, markCanceled } from "@/lib/jobs";
-import { softenForModeration, moderationHints, type SoftenLevel } from "@/lib/sanitize-prompt";
-import { sanitizePromptWithLlm } from "@/lib/moderation-sanitizer";
+import { moderationHints } from "@/lib/sanitize-prompt";
 
 export interface VideoJobParams {
   jobId: string;
@@ -232,8 +231,8 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     diagnostics.push(attempt); await persist(); logAttempt(attempt);
     predictionId = await startVideoPrediction({ ...input, ...(image ? { image } : { reference_images: referenceImages }) });
     submitMessage = "Submitted to Seedance; checking the same prediction...";
-    // Keep what is needed to auto-recover the SAME scene after a moderation refusal:
-    // resubmit Seedance (same model) with an LLM-rewritten, softened prompt. No extra charge.
+    // Retry plan is still persisted for diagnostics, but moderation is now fail-fast:
+    // no automatic rewrite/resubmit happens (see resumeVideoJob). The user edits the prompt manually.
     pipelineExtra.retry = {
       basePrompt, model: modelSlug, duration: input.duration, resolution: input.resolution, image, refs: retryRefs, fallbackRefs,
     };
@@ -313,17 +312,10 @@ async function handleFailure(jobId: string, ctx: { sceneId: string; userId?: str
     // Shown verbatim in the UI (job.error). Tell the user what to change instead of the raw provider code.
     const scene = await prisma.scene.findUnique({ where: { id: ctx.sceneId }, select: { videoPrompt: true, dialogueEn: true, dialogue: true, action: true } }).catch(() => null);
     const hints = moderationHints([scene?.videoPrompt, scene?.action, scene?.dialogueEn, scene?.dialogue].filter(Boolean).join("\n"));
-    // Tell the user what was already tried automatically before giving up.
-    const rewrote = (state?.moderationRetries ?? 0) > 0;
-    const autoNote = rewrote
-      ? "Мы автоматически переписали и смягчили текст сцены, но модерация всё равно отклонила видео. "
-      : "";
-    message = `[moderation] Сцена не прошла модерацию — измените текст сцены (кнопка «Изменить сцену»). ` +
-      autoNote +
-      (hints.length
-        ? `Смягчите или уберите: ${hints.map(h => `«${h}»`).join(", ")}. `
-        : "Уберите агрессию, физический контакт, опасность, оружие, кровь и интимные моменты; выразите конфликт через реплики, лица и мизансцену. ") +
-      `Код провайдера: ${safeProviderError(error)}`;
+    // Fail-fast: no automatic rewrite. Tell the user to edit the prompt manually and retry.
+    message = `[moderation] Сцена не прошла модерацию провайдера. Отредактируйте промпт вручную: скопируйте его кнопкой «Копировать промпт», исправьте и запустите генерацию заново.` +
+      (hints.length ? ` Вероятные триггеры: ${hints.map(h => `«${h}»`).join(", ")}.` : "") +
+      ` Код провайдера: ${safeProviderError(error)}`;
   }
   console.error("[video-job] failed:", { jobId, sceneId: ctx.sceneId, error: message });
   await prisma.$transaction(async tx => {
@@ -338,86 +330,6 @@ async function handleFailure(jobId: string, ctx: { sceneId: string; userId?: str
       await tx.creditTransaction.create({ data: { userId: ctx.userId, amount: Number(ctx.cost), description: `Refund: video generation failed (${jobId})` } });
     }
   });
-}
-
-/**
- * Moderation auto-recovery — automatic prompt rewrite on the SAME model (Seedance).
- *
- * The prompt is rewritten by the LLM (Russian "sanitizer" instruction) so it passes moderation
- * while keeping plot, characters, spoken lines, emotions and staging; the rule-based softener is
- * then applied on top as a safety net. Two escalating passes:
- *   pass 1 — LLM strictness 1 + rule level 2 (aggression / physical contact / delivery cues);
- *   pass 2 — LLM strictness 2 + rule level 3 (staging lines rewritten to neutral blocking,
- *            delivery cues stripped; for UNCHAINED scenes the reference set is reduced to speaking
- *            characters + one location angle). An adjacent-frame chain is PRESERVED on every pass —
- *            moderation is tripped by the prompt text, not by the previous scene's approved frame,
- *            so the chain is never broken (that would restart the scene from a fresh frame).
- *
- * The LLM call + resubmission can take a while, so we take a long finalize-length lease first and
- * do the work in the background, so a second poll never claims the job and submits a duplicate
- * prediction. The scene's own model (Seedance 2.5 or 2.0) is reused via retry.model.
- */
-async function retryAfterModeration(jobId: string, state: VideoJobState, reason: string): Promise<boolean> {
-  const retry = state.retry!;
-  const n = (state.moderationRetries ?? 0) + 1; // 1 or 2
-  state.leaseUntil = Date.now() + FINALIZE_LEASE_MS;
-  if (!await saveOwned(jobId, state, {
-    progress: 5, error: null,
-    message: `Сцена не прошла модерацию — переписываю текст и пробую снова (попытка ${n + 1} из ${MAX_MODERATION_RETRIES + 1})…`,
-  })) return false;
-  runInBackground(async () => {
-    try {
-      // 1. LLM rewrite (escalating strictness), then 2. rule-based softening as a safety net.
-      const llm = await sanitizePromptWithLlm(retry.basePrompt, n === 1 ? 1 : 2);
-      const level: SoftenLevel = n === 1 ? 2 : 3;
-      const softened = softenForModeration(llm.prompt, level);
-      let image = retry.image;
-      let refs = retry.refs;
-      // Keep the adjacent-frame chain through every moderation retry: the scene starts from the
-      // PREVIOUS scene's already-approved last frame, so the frame is never what tripped moderation
-      // (the prompt text is — and it is escalatingly sanitized above). Dropping the frame here would
-      // restart the scene from a fresh composition and break the strict scene-to-scene continuity.
-      // The fallback trim (speaking-character portraits + one location angle) is a safety net for
-      // scenes that had NO chain to begin with — so only apply it when there is no adjacent frame.
-      if (level === 3 && !image) {
-        if (retry.fallbackRefs.length) { refs = retry.fallbackRefs; }
-        else if (!refs.length) { refs = retry.refs; }
-      }
-      let prompt = softened.text;
-      if (!image && refs.length) {
-        prompt += "\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
-        if (refs.some(r => r.kind === "location")) prompt += "\nCamera stays inside this location across the whole shot; lighting, time of day and palette identical to the location reference.";
-      }
-      const input = {
-        prompt, model: retry.model, duration: retry.duration, resolution: retry.resolution,
-        aspect_ratio: image ? "adaptive" : "9:16", generate_audio: true, watermark: false,
-      };
-      const attempt: GenerationAttempt = {
-        jobId, sceneId: state.sceneId, attempt: n + 1, model: retry.model, phase: "video", status: "submitting",
-        style: VISUAL_STYLE_ID,
-        input: safeDiagnosticInput({ ...input, reference: { mode: "moderation_retry", level, llmRewritten: llm.changed, previousError: safeProviderError(reason), softenedPhrases: softened.hits, referenceCount: image ? 1 : refs.length } }),
-      };
-      logAttempt(attempt);
-      console.log("[video-job] moderation retry (LLM sanitize):", { jobId, sceneId: state.sceneId, attempt: n + 1, level, llmRewritten: llm.changed, hits: softened.hits, refs: image ? "adjacent_frame" : refs.map(r => r.kind) });
-      const predictionId = await startVideoPrediction({ ...input, ...(image ? { image } : { reference_images: refs.map(r => r.url) }) });
-      attempt.predictionId = predictionId; attempt.status = "processing"; logAttempt(attempt);
-      state.diagnostics = [...(state.diagnostics ?? []), attempt];
-      state.predictionId = predictionId;
-      state.startedAt = Date.now();
-      state.moderationRetries = n;
-      state.providerStatus = undefined; state.providerStartedAt = null; state.providerCompletedAt = null;
-      state.leaseUntil = 0;
-      await saveOwned(jobId, state, {
-        progress: 5, error: null,
-        message: `Сцена не прошла модерацию — переписал текст и повторяю (попытка ${n + 1} из ${MAX_MODERATION_RETRIES + 1})…`,
-      });
-    } catch (error) {
-      // Resubmission itself failed: report the original moderation refusal (refund happens once).
-      state.moderationRetries = n;
-      await handleFailure(jobId, state, new Error(reason), state);
-    }
-  });
-  return true;
 }
 
 /** One short provider check per poll, no sleeping invocation and no new prediction. */
@@ -459,11 +371,9 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
         await markCanceled(job.id);
         return true;
       }
-      // Seedance moderation (E005) auto-recovery, all within this one scene, no extra charge:
-      // rewrite the prompt with the LLM (2 escalating passes) and resubmit the same Seedance model.
-      if (classifyProviderError(reason) === "moderation" && state.retry && (state.moderationRetries ?? 0) < MAX_MODERATION_RETRIES) {
-        return await retryAfterModeration(job.id, state, reason);
-      }
+      // Seedance moderation (E005) is now fail-fast: no automatic prompt rewrite/resubmit.
+      // The refusal goes straight to handleFailure like any other provider error, and the user
+      // edits the prompt manually (copy → fix → regenerate) via the scene card.
       await handleFailure(job.id, state, new Error(reason), state);
       return true;
     }

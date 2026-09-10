@@ -47,9 +47,6 @@ const mocks: any = {
   },
   "@/lib/ffmpeg": { extractLastFrameBuffer: async () => Buffer.from("frame") },
   "@/lib/aws-config": { getBucketConfig: () => ({ folderPrefix: "media/" }) },
-  // Moderation auto-recovery rewrites the prompt with the LLM; mock it to return the text unchanged
-  // (the real network rewrite is not exercised here — we only assert the reference/frame plan).
-  "@/lib/moderation-sanitizer": { sanitizePromptWithLlm: async (prompt: string) => ({ prompt, changed: false }) },
 };
 Module._load = function(id: string, ...args: any[]) { return mocks[id] ?? originalLoad.call(this, id, ...args); };
 const { runVideoJob, resumeVideoJob, VIDEO_DEADLINE_MS } = require("../lib/workers/video-job");
@@ -152,41 +149,40 @@ test("submission (seedance-2.0): другой slug, аудио включено,
   assert.equal(JSON.parse(row.resultData).predictionId, "existing");
 });
 
-// A styled last frame (its pathname contains VISUAL_STYLE_ID) — the previous scene's approved frame.
+// Stage 30 — moderation is now FAIL-FAST: no automatic rewrite/resubmit. A Seedance moderation refusal
+// goes straight to handleFailure (like any other provider error) even when a retry plan is present.
 const chainFrame = "https:" + `//storage.invalid/${VISUAL_STYLE_ID}/prev-lastframe.jpg`;
-// Build a resume state whose FIRST attempt already used a moderation retry (moderationRetries: 1),
-// so the next retry escalates to level 3 (the only level that trims references for unchained scenes).
 const moderationState = (retry: any) => JSON.stringify({
-  ...base(), moderationRetries: 1,
+  ...base(),
   retry: { basePrompt: "[ACTION]: neutral.", model: "bytedance/seedance-2.5", duration: 5, resolution: "480p", ...retry },
 });
 
-test("moderation retry (level 3): adjacent-frame chain is PRESERVED (image-to-video, no reference_images)", async () => {
+test("moderation (fail-fast): a refusal fails the job immediately — no resubmission, refund once", async () => {
   Date.now = () => clock;
   try {
     reset();
-    // Chained scene: retry carries the previous frame; refs empty; a fallback set exists but must be IGNORED.
+    // A retry plan IS present (chained scene) — before Stage 30 this would have triggered a rewrite/resubmit.
     row.resultData = moderationState({ image: chainFrame, refs: [], fallbackRefs: [{ url: "https:" + "//x/portrait.jpg", kind: "character", note: "face" }] });
     provider = { status: "failed", error: "flagged as sensitive E005" };
     await check();
-    assert.equal(submissions, 1);                         // one resubmission was made
-    assert.equal(lastVideoInput.image, chainFrame);       // the chain frame is kept on level 3
-    assert.equal(lastVideoInput.reference_images, undefined); // pure image-to-video, no portrait refs
-    assert.ok(!/\[Image1\]/.test(lastVideoInput.prompt)); // no [ImageN] reference notes when chaining
+    assert.equal(submissions, 0);                 // NO new prediction was submitted
+    assert.equal(row.status, "failed");           // the job fails right away
+    assert.equal(refunds, 1);                      // credit refunded exactly once
+    assert.match(row.error, /\[moderation\]/);    // moderation-specific message prefix
+    assert.match(row.error, /Копировать промпт/); // tells the user to edit the prompt manually
   } finally { Date.now = originalNow; }
 });
 
-test("moderation retry (level 3): UNCHAINED scene still trims to fallback references (no image)", async () => {
+test("moderation (fail-fast): repeated poll of the same refusal refunds only once, still no resubmit", async () => {
   Date.now = () => clock;
   try {
     reset();
-    // No chain: retry has no image; level 3 must switch to the reduced fallback reference set.
-    const fb = [{ url: "https:" + "//x/portrait.jpg", kind: "character", note: "face" }, { url: "https:" + "//x/loc.jpg", kind: "location", note: "room" }];
-    row.resultData = moderationState({ image: undefined, refs: [{ url: "https:" + "//x/full.jpg", kind: "character", note: "full" }], fallbackRefs: fb });
+    row.resultData = moderationState({ image: undefined, refs: [{ url: "https:" + "//x/full.jpg", kind: "character", note: "full" }], fallbackRefs: [] });
     provider = { status: "failed", error: "flagged as sensitive E005" };
-    await check();
-    assert.equal(submissions, 1);
-    assert.equal(lastVideoInput.image, undefined);                       // no start frame for an unchained scene
-    assert.deepEqual(lastVideoInput.reference_images, fb.map(r => r.url)); // reduced to the fallback set
+    const old = { ...row };
+    await Promise.all([resumeVideoJob(old), resumeVideoJob(old)]); await resumeVideoJob(old);
+    assert.equal(submissions, 0);
+    assert.equal(row.status, "failed");
+    assert.equal(refunds, 1);
   } finally { Date.now = originalNow; }
 });
