@@ -9,7 +9,7 @@ import { detectLanguage } from "@/lib/idea";
 
 /**
  * POST /api/projects/[id]/test-episode
- * { prompt, title?, locationDesc?, dialogue?, action?, durationSec?, sceneKind?, endState? }
+ * { prompt, projectTitle?, title?, locationDesc?, dialogue?, action?, durationSec?, sceneKind?, startState?, endState? }
  * Stage 40: turns the project into a «Тестовая серия» sandbox — one season, one episode, ONE scene built
  * straight from the given Seedance prompt — and jumps the project to the `scenes` stage so the regular
  * episode page (prompt preview, generation, chain hand-off, assembly) can be used at the cost of a single clip.
@@ -34,6 +34,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
 
   const records = buildTestEpisodeRecords({
     prompt,
+    projectTitle: str("projectTitle"),
     title: str("title"),
     locationDesc: str("locationDesc"),
     dialogue: str("dialogue"),
@@ -41,7 +42,8 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     durationSec: Number.isFinite(durRaw) ? durRaw : null,
     sceneKind: str("sceneKind"),
     endState: str("endState"),
-    language: detectLanguage(str("title") || prompt),
+    startState: str("startState"),
+    language: detectLanguage(str("projectTitle") || str("title") || prompt),
   });
 
   const episodeId = await prisma.$transaction(async (tx) => {
@@ -62,5 +64,5 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     return episode.id;
   });
 
-  return NextResponse.json({ ok: true, episodeId, missingTags: missingPromptTags(prompt) });
+  return NextResponse.json({ ok: true, episodeId, projectName: records.project.name, missingTags: missingPromptTags(prompt) });
 }

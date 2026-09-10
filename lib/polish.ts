@@ -15,6 +15,8 @@ export interface AuditSceneResult {
   correctedVideoPrompt?: string;
   /** Stage 40 — corrected scripted end state (optional; kept in step with the corrected prompt). */
   correctedEndState?: string;
+  /** Stage 41 — corrected scripted start state (optional). */
+  correctedStartState?: string;
 }
 
 export interface PolishSceneInput {
@@ -32,6 +34,8 @@ export interface PolishSelection {
   correctedVideoPrompt: string;
   /** Stage 40 — corrected end state to store alongside the prompt (null = keep the current one). */
   correctedEndState: string | null;
+  /** Stage 41 — corrected start state to store alongside the prompt (null = keep the current one). */
+  correctedStartState: string | null;
   /** false when a job is already active for this scene → do not charge / re-create it. */
   needsCharge: boolean;
 }
@@ -69,6 +73,7 @@ export function selectPolishScenes(
       issue: (a.issue ?? "").trim() || "Логическая нестыковка на стыке сцен",
       correctedVideoPrompt: corrected,
       correctedEndState: (a.correctedEndState ?? "").trim() || null,
+      correctedStartState: (a.correctedStartState ?? "").trim() || null,
       needsCharge: scene.hasActiveJob !== true,
     });
   }

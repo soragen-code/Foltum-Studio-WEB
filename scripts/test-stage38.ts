@@ -80,18 +80,18 @@ const cast = ["Yara", "Theo"].map(n => ({ characterId: n.toLowerCase(), name: n,
     number: 4, shotType: "low wide → profile medium", durationSec: 12, locationDesc: "Courtyard", characters: ["Yara", "Theo"],
     action: "Yara lunges; Theo parries and throws her back.", dialogue: 'YARA: "Now."',
     videoPrompt: "[SHOT TYPE]: 0-5s low wide of both fighters closing the distance\n[VISUAL STYLE]: x\n[LIGHTING]: y\n[BLOCKING]: z\n[GAZE]: eyes on the opponent\n[NON-VERBAL]: strain\n[ACTION]: lunge, parry, throw\n[CHARACTER]: Yara, Theo\n[TRANSITION]: hard cut",
-    endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway.",
+    startState: "Anna stands in the doorway, facing the window, hands empty, wide shot from the corner.", endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway.",
   };
   const a = sceneScriptSchema.safeParse({ ...base, sceneKind: "action" });
   ok(a.success && a.data.sceneKind === "action", "d: sceneScriptSchema accepts sceneKind 'action'");
   const dflt = sceneScriptSchema.safeParse(base);
   ok(dflt.success && dflt.data.sceneKind === "dialogue", "d: sceneScriptSchema still defaults sceneKind to 'dialogue'");
   ok(!sceneScriptSchema.safeParse({ ...base, sceneKind: "fight" }).success, "d: sceneScriptSchema rejects unknown kinds");
-  const r = sceneReviseSchema.safeParse({ sceneKind: "action", shotType: "low wide", durationSec: 16, locationDesc: "Courtyard", action: "Yara lunges.", dialogue: 'YARA: "Now."', videoPrompt: base.videoPrompt, endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway." });
+  const r = sceneReviseSchema.safeParse({ sceneKind: "action", shotType: "low wide", durationSec: 16, locationDesc: "Courtyard", action: "Yara lunges.", dialogue: 'YARA: "Now."', videoPrompt: base.videoPrompt, startState: "Anna stands in the doorway, facing the window, hands empty, wide shot from the corner.", endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway." });
   ok(r.success && r.data.sceneKind === "action", "d: sceneReviseSchema accepts optional sceneKind 'action'");
-  const r2 = sceneReviseSchema.safeParse({ shotType: "low wide", durationSec: 16, locationDesc: "Courtyard", action: "Yara lunges.", dialogue: 'YARA: "Now."', videoPrompt: base.videoPrompt, endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway." });
+  const r2 = sceneReviseSchema.safeParse({ shotType: "low wide", durationSec: 16, locationDesc: "Courtyard", action: "Yara lunges.", dialogue: 'YARA: "Now."', videoPrompt: base.videoPrompt, startState: "Anna stands in the doorway, facing the window, hands empty, wide shot from the corner.", endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway." });
   ok(r2.success && r2.data.sceneKind === undefined, "d: sceneReviseSchema: sceneKind optional");
-  ok(!sceneReviseSchema.safeParse({ sceneKind: "narration", shotType: "low wide", durationSec: 16, locationDesc: "Courtyard", action: "Yara lunges.", dialogue: 'YARA: "Now."', videoPrompt: base.videoPrompt, endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway." }).success, "d: sceneReviseSchema does not allow switching to narration");
+  ok(!sceneReviseSchema.safeParse({ sceneKind: "narration", shotType: "low wide", durationSec: 16, locationDesc: "Courtyard", action: "Yara lunges.", dialogue: 'YARA: "Now."', videoPrompt: base.videoPrompt, startState: "Anna stands in the doorway, facing the window, hands empty, wide shot from the corner.", endState: "Anna stands by the window, back to the door, hands on the sill, medium shot from the doorway." }).success, "d: sceneReviseSchema does not allow switching to narration");
 
   // action scenes are exempt from the talking-scene density checks
   const script = { title: "T", synopsis: "S", scenes: [{ ...base, number: 1, sceneKind: "action" as const }] };

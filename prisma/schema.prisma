@@ -273,6 +273,7 @@ model Scene {
   promptOverride String? @db.Text // stage 31: manual per-scene final-prompt override — when non-empty it replaces the auto-assembled prompt TEXT verbatim (image/reference chaining is unaffected); null = use auto prompt
   skipReferences Boolean @default(false) // stage 33/36: submit this scene WITHOUT any reference images (text-only), previous-scene frame included
   skipPreviousFrame Boolean @default(false) // stage 37: keep character/location references but do NOT send the previous scene's last frame (moderation trigger)
+  startState    String?  @db.Text // stage 41: SCRIPTED start state of the scene's FIRST frame (English, from the screenwriter) — equals the previous scene's endState unless the scene starts a new sequence; opens the prompt as OPENING STATE
   endState      String?  @db.Text // stage 40: SCRIPTED end state of the scene's final frame (English, from the screenwriter) — the next scene's OPENING STATE in parallel mode
   endStateActual String? @db.Text // stage 40: ACTUAL end state described by a vision model from the generated last frame (chain mode) — wins over endState for the next scene
   createdAt     DateTime @default(now())

@@ -93,7 +93,15 @@ export function ScriptView({ text, scenes }: { text?: string | null; scenes?: { 
       </div>
     )
   }
-  return <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed">{text ?? ''}</pre>
+  // Stage 40/41 — «Старт кадра: …» / «Финал кадра: …» service lines are rendered dim.
+  const isStateLine = (l: string) => l.startsWith('Старт кадра: ') || l.startsWith('Финал кадра: ')
+  return (
+    <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed">
+      {(text ?? '').split('\n').map((l, i) => (
+        <span key={i} className={isStateLine(l) ? 'text-xs italic text-muted-foreground' : undefined} data-testid={isStateLine(l) ? 'script-state-line' : undefined}>{l}{'\n'}</span>
+      ))}
+    </pre>
+  )
 }
 
 /**

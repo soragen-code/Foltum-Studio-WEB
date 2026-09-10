@@ -175,6 +175,10 @@ ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "skipPreviousFrame" BOOLEAN NOT NUL
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "endState" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "endStateActual" TEXT;
 
+-- Stage 41: scripted START state of the scene's first frame (additive, nullable). OPENING STATE of a scene's prompt is
+-- previous.endStateActual (chain mode) ?? scene.startState ?? previous.endState.
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "startState" TEXT;
+
 -- Stage 40: per-episode generation order ("parallel" | "chain") + chain-run bookkeeping.
 ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "chainMode" TEXT NOT NULL DEFAULT 'parallel';
 ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "chainRunActive" BOOLEAN NOT NULL DEFAULT false;

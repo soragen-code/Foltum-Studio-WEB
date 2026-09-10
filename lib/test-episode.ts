@@ -12,6 +12,7 @@ import { z } from "zod";
 import {
   ACTION_STAGING_RULE,
   END_STATE_RULE,
+  START_STATE_RULE,
   EVERYDAY_BEHAVIOR_RULE,
   LOCATION_PRESENCE_RULE,
   MODERATION_SAFE_RULE,
@@ -22,6 +23,7 @@ import {
   type SceneKind,
 } from "@/lib/season";
 import { stripMarkup } from "@/lib/idea";
+import { resolveProjectName } from "@/lib/project-name";
 
 export const TEST_EPISODE_TITLE = "Тестовая серия";
 export const TEST_SEASON_TITLE = "Тест";
@@ -41,6 +43,7 @@ const clampDuration = (n: number) => Math.min(TEST_DURATION_MAX, Math.max(TEST_D
 
 /** What the "invent a test scene" LLM call returns. */
 export const testSceneResultSchema = z.object({
+  projectTitle: z.string().optional().nullable(),
   title: z.string().min(1),
   locationDesc: z.string().min(3),
   sceneKind: z.enum(SCENE_KINDS).optional().default("dialogue"),
@@ -50,6 +53,8 @@ export const testSceneResultSchema = z.object({
   action: z.string().min(5),
   durationSec: z.coerce.number().int().min(1).max(120).optional().default(15),
   endState: z.string().min(1),
+  /** Stage 41 — scripted first frame of the test scene. */
+  startState: z.string().min(1),
 });
 export type TestSceneResult = z.infer<typeof testSceneResultSchema>;
 
@@ -57,6 +62,7 @@ export function normalizeTestSceneResult(raw: unknown): TestSceneResult {
   const r = testSceneResultSchema.parse(raw);
   return {
     ...r,
+    projectTitle: r.projectTitle ? stripMarkup(r.projectTitle).trim() : null,
     title: stripMarkup(r.title).trim() || TEST_EPISODE_TITLE,
     videoPrompt: r.videoPrompt.trim(),
     dialogue: r.dialogue.trim(),
@@ -67,12 +73,12 @@ export function normalizeTestSceneResult(raw: unknown): TestSceneResult {
 export function testSceneSystemPrompt(): string {
   return (
     `You write ONE self-contained test scene for a vertical (9:16) AI video model (Seedance). The scene is generated WITHOUT any character or location reference images, so the prompt itself must fully describe everyone and everything in frame. ` +
-    `Return STRICT JSON: {"title": string, "locationDesc": string, "sceneKind": "dialogue"|"narration"|"action", "videoPrompt": string, "dialogue": string, "action": string, "durationSec": int, "endState": string}. ` +
-    `"title" = a short scene title in the language of the user's idea. ` +
+    `Return STRICT JSON: {"projectTitle": string, "title": string, "locationDesc": string, "sceneKind": "dialogue"|"narration"|"action", "videoPrompt": string, "dialogue": string, "action": string, "durationSec": int, "startState": string, "endState": string}. ` +
+    `"projectTitle" = a SHORT project name (2–4 words) in the language of the user's idea, derived from the idea itself, no quotes. "title" = a short scene title in the same language. ` +
     `"videoPrompt" is ENGLISH, exactly 9 lines, each starting with one tag in this order: ${PROMPT_TAGS.join("/")} — [SHOT TYPE] is a cut list with time ranges (2–4 hard cuts), [CHARACTER] gives a complete visual description (age, build, face, hair, clothing) of EVERY person on screen, since there are no references; no spoken text inside videoPrompt; never "slowly", "slow motion", "lingering", "long pause". ` +
     `"dialogue" is ALWAYS ENGLISH — one line per row NAME (tone cue): "line", 2–5 quick lines that the characters actually say, or exactly "[NO DIALOGUE]" for a purely visual beat. "action" = 2–4 English sentences of what physically happens. "durationSec" = round(spoken words / 2.1) + 2 clamped to ${TEST_DURATION_MIN}–${TEST_DURATION_MAX}. ` +
     `${MODERATION_SAFE_RULE} ${LOCATION_PRESENCE_RULE} ${SCALE_DEPTH_RULE} ${EVERYDAY_BEHAVIOR_RULE} For sceneKind "action": ${ACTION_STAGING_RULE} ` +
-    `END STATE: ${END_STATE_RULE} Original content only; Western names in Latin letters.`
+    `START / END STATE: ${START_STATE_RULE} (for this single scene startState simply describes frame 1.) ${END_STATE_RULE} Original content only; Western names in Latin letters.`
   );
 }
 
@@ -83,6 +89,7 @@ export function testSceneUserPrompt(idea: string, durationSec?: number | null): 
 
 export interface TestEpisodeInput {
   prompt: string;
+  projectTitle?: string | null;
   title?: string | null;
   locationDesc?: string | null;
   dialogue?: string | null;
@@ -90,12 +97,13 @@ export interface TestEpisodeInput {
   durationSec?: number | null;
   sceneKind?: string | null;
   endState?: string | null;
+  startState?: string | null;
   /** Story language (ISO 639-1) of the author's idea — kept on the project for UI purposes only. */
   language?: string | null;
 }
 
 export interface TestEpisodeRecords {
-  project: { isTest: true; stage: "scenes"; charactersApproved: true; synopsisApproved: true; synopsis: string; language: string };
+  project: { isTest: true; name: string; stage: "scenes"; charactersApproved: true; synopsisApproved: true; synopsis: string; language: string };
   season: { number: 1; title: string; logline: string };
   episode: { number: 1; title: string; logline: string; locationName: string; locationDesc: string; status: "script_ready"; script: string };
   scene: {
@@ -109,6 +117,7 @@ export interface TestEpisodeRecords {
     sceneKind: SceneKind;
     locationDesc: string;
     endState: string | null;
+    startState: string | null;
     language: "en";
     status: "pending";
     continuesFrom: "new-sequence";
@@ -131,15 +140,19 @@ export function buildTestEpisodeRecords(input: TestEpisodeInput): TestEpisodeRec
   const shotType = firstTagLine(prompt, "[SHOT TYPE]") || "medium";
   const durationSec = clampDuration(input.durationSec ?? 15);
   const endState = (input.endState ?? "").trim() || null;
+  const startState = (input.startState ?? "").trim() || null;
   const title = (input.title ?? "").trim() || TEST_EPISODE_TITLE;
+  // Never ask the author for a name: LLM projectTitle → the [ACTION] line / explicit action → the raw prompt.
+  const plotForName = (input.action ?? "").trim() || firstTagLine(prompt, "[ACTION]") || (input.title ?? "").trim() || prompt;
+  const name = resolveProjectName(input.projectTitle, plotForName);
   const language = (input.language ?? "").trim() || "en";
   const logline = `Тестовая сцена: ${action.slice(0, 160)}`;
   const ep = { number: 1 as const, title, logline, locationName: locationDesc.slice(0, 80), locationDesc, status: "script_ready" as const, script: "" };
-  ep.script = renderScriptFromScenes(ep, [], [{ number: 1, sceneKind, shotType, durationSec, locationDesc, action, dialogue, endState }]);
+  ep.script = renderScriptFromScenes(ep, [], [{ number: 1, sceneKind, shotType, durationSec, locationDesc, action, dialogue, startState, endState }]);
   return {
-    project: { isTest: true, stage: "scenes", charactersApproved: true, synopsisApproved: true, synopsis: logline, language },
+    project: { isTest: true, name, stage: "scenes", charactersApproved: true, synopsisApproved: true, synopsis: logline, language },
     season: { number: 1, title: TEST_SEASON_TITLE, logline },
     episode: ep,
-    scene: { number: 1, videoPrompt: prompt, dialogue, dialogueEn: dialogue, action, shotType, durationSec, sceneKind, locationDesc, endState, language: "en", status: "pending", continuesFrom: "new-sequence" },
+    scene: { number: 1, videoPrompt: prompt, dialogue, dialogueEn: dialogue, action, shotType, durationSec, sceneKind, locationDesc, startState, endState, language: "en", status: "pending", continuesFrom: "new-sequence" },
   };
 }

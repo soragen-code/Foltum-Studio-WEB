@@ -406,7 +406,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   const [testIdea, setTestIdea] = useState('')
   const [testDialogue, setTestDialogue] = useState('')
   const [testDuration, setTestDuration] = useState<number | 'auto'>('auto')
-  const [testMeta, setTestMeta] = useState<{ title?: string; locationDesc?: string; action?: string; sceneKind?: string; endState?: string } | null>(null)
+  const [testMeta, setTestMeta] = useState<{ projectTitle?: string | null; title?: string; locationDesc?: string; action?: string; sceneKind?: string; startState?: string; endState?: string } | null>(null)
   const [inventing, setInventing] = useState(false)
   const [creatingTest, setCreatingTest] = useState(false)
   const [genres, setGenres] = useState<string[]>([])
@@ -441,7 +441,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
       setTestPrompt(d.videoPrompt ?? '')
       setTestDialogue(d.dialogue ?? '')
       if (typeof d.durationSec === 'number') setTestDuration(d.durationSec)
-      setTestMeta({ title: d.title, locationDesc: d.locationDesc, action: d.action, sceneKind: d.sceneKind, endState: d.endState })
+      setTestMeta({ projectTitle: d.projectTitle, title: d.title, locationDesc: d.locationDesc, action: d.action, sceneKind: d.sceneKind, startState: d.startState, endState: d.endState })
       setNotice('Сцена придумана — проверьте промпт и реплики, при желании отредактируйте и создайте тестовую серию.')
     } catch (e: any) {
       setError(e?.message || 'Не удалось придумать сцену')
@@ -460,7 +460,8 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
           prompt: testPrompt,
           dialogue: testDialogue.trim() || undefined,
           durationSec: testDuration === 'auto' ? undefined : testDuration,
-          title: testMeta?.title, locationDesc: testMeta?.locationDesc, action: testMeta?.action, sceneKind: testMeta?.sceneKind, endState: testMeta?.endState,
+          projectTitle: testMeta?.projectTitle ?? undefined,
+          title: testMeta?.title, locationDesc: testMeta?.locationDesc, action: testMeta?.action, sceneKind: testMeta?.sceneKind, startState: testMeta?.startState, endState: testMeta?.endState,
         }),
       })
       const d = await res.json().catch(() => ({}))

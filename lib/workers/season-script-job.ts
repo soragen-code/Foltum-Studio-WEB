@@ -149,6 +149,8 @@ export async function persistEpisodeScript(
           continuesFrom: s.continuesFrom ?? null,
           // Stage 40 — scripted end state of the final frame (next scene's OPENING STATE in parallel mode).
           endState: (s.endState ?? "").trim() || null,
+          // Stage 41 — scripted start state of the first frame (this scene's OPENING STATE).
+          startState: (s.startState ?? "").trim() || null,
           endStateActual: null,
           // Stage 12 (Commit D) — off-screen narration: `voiceover` = English narration voiced by the model,
           // `voiceoverLocal` = the same narration translated for the UI. `sceneKind` distinguishes narration from dialogue.

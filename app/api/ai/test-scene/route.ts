@@ -10,7 +10,7 @@ import { detectLanguage } from "@/lib/idea";
 /**
  * POST /api/ai/test-scene { idea: string, durationSec?: number }
  * Stage 40: lets the LLM invent a complete self-contained test scene (9-line Seedance prompt, English lines,
- * end state) from a one-line idea. Nothing is persisted — the client fills the
+ * end state, short project title) from a one-line idea. Nothing is persisted — the client fills the
  * «Тестовая серия» form with the result and the author may edit it before creating the episode.
  */
 export async function POST(request: Request) {

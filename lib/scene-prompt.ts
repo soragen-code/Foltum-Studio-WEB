@@ -46,6 +46,10 @@ export interface ScenePromptScene {
   language?: string | null;
   locationDesc?: string | null;
   continuesFrom?: string | null;
+  /** Stage 41 — scripted START state of this scene's first frame (its own OPENING STATE unless the previous scene has an actual last-frame description). */
+  startState?: string | null;
+  /** Stage 40/41 — scripted END state of this scene's final frame; appended to the prompt as END STATE. */
+  endState?: string | null;
   /**
    * Stage 31: manual final-prompt override. When non-empty it REPLACES the auto-assembled prompt
    * TEXT verbatim (no moderation softening, no `[ImageN]` notes appended); the reference image set
@@ -102,18 +106,32 @@ export function breaksSequence(continuesFrom?: string | null): boolean {
 
 /** Stage 40 — prefix of the OPENING STATE block inserted before the 9-line visual prompt. */
 export const OPENING_STATE_PREFIX = "OPENING STATE (frame 1 — continue exactly from here): ";
+/** Stage 41 — prefix of the END STATE block inserted after OPENING STATE, before the 9-line visual prompt. */
+export const END_STATE_PREFIX = "END STATE (last frame — end exactly here): ";
+
+const oneLine = (t?: string | null) => (t ?? "").replace(/\s+/g, " ").trim();
 
 /**
- * Stage 40 — the end state the scene must open from: the previous scene's actual (vision-described)
- * last frame when available, else its scripted end state; null for scene 1, for a sequence break
- * (location-change / new-sequence) or when the previous scene has neither.
+ * The state the scene must open from (Stage 40/41), in priority order:
+ *  1. the previous scene's ACTUAL last-frame description (chain mode) — unless this scene breaks the
+ *     sequence (location-change / new-sequence);
+ *  2. this scene's own scripted `startState` (written by the screenwriter for every scene, incl. scene 1);
+ *  3. legacy fallback for scenes scripted before Stage 41: the previous scene's scripted `endState`.
+ * null when nothing applies.
  */
-export function resolveOpeningState(scene: { continuesFrom?: string | null }, previous: ScenePromptPrevious | null | undefined): string | null {
-  if (!previous || breaksSequence(scene.continuesFrom)) return null;
-  const actual = (previous.endStateActual ?? "").trim();
-  const scripted = (previous.endState ?? "").trim();
-  const text = (actual || scripted).replace(/\s+/g, " ").trim();
-  return text || null;
+export function resolveOpeningState(scene: { continuesFrom?: string | null; startState?: string | null }, previous: ScenePromptPrevious | null | undefined): string | null {
+  const continues = !!previous && !breaksSequence(scene.continuesFrom);
+  const actual = continues ? oneLine(previous!.endStateActual) : "";
+  if (actual) return actual;
+  const own = oneLine(scene.startState);
+  if (own) return own;
+  if (!continues) return null;
+  return oneLine(previous!.endState) || null;
+}
+
+/** Stage 41 — the scene's own scripted end state for the END STATE block (null when absent). */
+export function resolveEndState(scene: { endState?: string | null }): string | null {
+  return oneLine(scene.endState) || null;
 }
 
 export interface BuildScenePromptInput {
@@ -170,6 +188,8 @@ export interface BuildScenePromptResult {
   hasOverride: boolean;
   /** Stage 40 — the OPENING STATE text inserted before the visual prompt (null when none applies). */
   openingState: string | null;
+  /** Stage 41 — the END STATE text inserted after OPENING STATE (null when the scene has no scripted end state). */
+  endState: string | null;
   /** Reference descriptor persisted with the prediction (referencePredictionId is added later for new_scene_reference). */
   reference: Record<string, unknown>;
   /** Reference image URLs for character_references; empty for text_only and (until the worker generates it) new_scene_reference. */
@@ -234,9 +254,16 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // Stage 40 — scripted / actual end-state hand-off: when this scene continues the previous one
   // (not a location-change / new-sequence), the previous scene's end state opens the prompt so the
   // model starts frame 1 exactly where the last clip ended. The previous frame IMAGE is still never sent.
+  // Stage 41 — the scene's own scripted END STATE follows the OPENING STATE block so the model knows
+  // both where frame 1 starts and where the last frame must end.
   const openingState = resolveOpeningState(scene, previous);
-  const visualWithOpening = openingState
-    ? `${OPENING_STATE_PREFIX}${openingState}\n\n${stripSlowDirections(visualPrompt)}`
+  const endState = resolveEndState(scene);
+  const stateBlocks = [
+    openingState ? `${OPENING_STATE_PREFIX}${openingState}` : "",
+    endState ? `${END_STATE_PREFIX}${endState}` : "",
+  ].filter(Boolean);
+  const visualWithOpening = stateBlocks.length
+    ? `${stateBlocks.join("\n")}\n\n${stripSlowDirections(visualPrompt)}`
     : stripSlowDirections(visualPrompt);
   // Sanitize visual descriptions BEFORE adding speech: never rewrite scripted dialogue / narration.
   let prompt = isNarration
@@ -356,6 +383,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     referenceKind,
     hasOverride,
     openingState,
+    endState,
     reference,
     referenceImages,
     retryRefs,
