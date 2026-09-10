@@ -492,8 +492,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         const gd = await g.json().catch(() => ({}))
         if (g.ok) { setPromptText(String(gd.prompt ?? '')); setPromptHasOverride(!!gd.hasOverride) }
       } else {
-        setPromptSaved(true)
-        setTimeout(() => setPromptSaved(false), 2000)
+        // Stage 35: a successful manual save closes the modal right away (the card badge reflects it).
+        setPromptSaved(false)
+        setPromptModal(null)
       }
     } catch (e: any) {
       setPromptErr(e?.message ?? 'Не удалось сохранить')
@@ -791,23 +792,43 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                 {sceneError[scene.id] && <p className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive" data-testid="scene-error">{sceneError[scene.id]}</p>}
 
                 <div className="mt-3 space-y-2">
-                  {/* EDIT 5 — per-scene generate button with spinner + sequential gate.
-                      Shown for a not-yet-generated scene; disabled until the previous scene is ready. */}
-                  {!ready && (
-                    <>
+                  {/* Stage 35 — one row, two half-width buttons under the preview: the primary action
+                      (generate / regenerate, sequential gate kept) and «Смотреть промпт». */}
+                  <div className="grid grid-cols-2 gap-2">
+                    {!ready ? (
                       <button
                         onClick={() => generateScene(scene.id, true)}
                         disabled={gen || !prevReady}
-                        className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+                        className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
                         data-testid="scene-generate"
                         title={prevReady ? 'Сгенерировать эту сцену' : 'Сначала завершите предыдущую сцену'}
                       >
                         {gen ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {gen ? 'Генерирую…' : 'Сгенерировать сцену'}
                       </button>
-                      {!gen && !prevReady && (
-                        <p className="text-xs text-muted-foreground" data-testid="scene-gate-hint">Сначала завершите предыдущую сцену</p>
-                      )}
-                    </>
+                    ) : (
+                      <button
+                        onClick={() => setRegenAsk(scene.id)}
+                        disabled={gen || regenAsk === scene.id}
+                        className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
+                        data-testid="scene-regenerate"
+                      >
+                        <RefreshCw className="h-4 w-4" /> Перегенерировать
+                      </button>
+                    )}
+                    <button
+                      onClick={() => openPromptModal(scene)}
+                      disabled={!scene.videoPrompt}
+                      className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
+                      data-testid="scene-view-prompt"
+                      title="Посмотреть, скопировать или изменить полный промпт"
+                    >
+                      <FileText className="h-4 w-4 shrink-0" />
+                      Смотреть промпт
+                      {scene.promptOverride ? <span className="ml-1 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary" data-testid="scene-override-badge">изменён</span> : null}
+                    </button>
+                  </div>
+                  {!ready && !gen && !prevReady && (
+                    <p className="text-xs text-muted-foreground" data-testid="scene-gate-hint">Сначала завершите предыдущую сцену</p>
                   )}
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <input value={sceneEdit[scene.id] ?? ''} onChange={(e) => setSceneEdit((t) => ({ ...t, [scene.id]: e.target.value }))} placeholder="Изменить сцену: что поправить…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-sm" data-testid="scene-revise-input" disabled={gen} />
@@ -815,23 +836,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       {sceneBusy[scene.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Изменить
                     </button>
                   </div>
-                  {/* Stage 31 — view / copy / manually override the exact final Seedance prompt for this
-                      scene in a modal (edit it with your own LLM after a moderation refusal). Lightweight
-                      secondary utility (muted, compact) so it doesn't compete with the primary actions. */}
-                  {scene.videoPrompt ? (
-                    <div className="border-t border-border/60 pt-2">
-                      <button
-                        onClick={() => openPromptModal(scene)}
-                        className="inline-flex w-full items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                        data-testid="scene-view-prompt"
-                        title="Посмотреть, скопировать или изменить полный промпт"
-                      >
-                        <FileText className="h-3.5 w-3.5 shrink-0" />
-                        Смотреть промпт
-                        {scene.promptOverride ? <span className="ml-1 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary" data-testid="scene-override-badge">изменён</span> : null}
-                      </button>
-                    </div>
-                  ) : null}
                   {regenAsk === scene.id && (
                     <div className="rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm" data-testid="regen-confirm">
                       Сцена переписана. Перегенерировать ролик?
@@ -840,9 +844,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                         <button onClick={() => setRegenAsk(null)} className="rounded-lg border border-border px-3 py-1.5">Позже</button>
                       </div>
                     </div>
-                  )}
-                  {!gen && ready && regenAsk !== scene.id && (
-                    <button onClick={() => setRegenAsk(scene.id)} className="text-xs text-muted-foreground underline">Перегенерировать ролик</button>
                   )}
                 </div>
               </div>
