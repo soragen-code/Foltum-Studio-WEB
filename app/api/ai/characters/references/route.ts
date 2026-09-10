@@ -11,7 +11,7 @@ import { runCharacterImagesJob } from "@/lib/workers/character-images-job";
 import { CHARACTER_REFERENCE_COST } from "@/lib/power-tier";
 import { CHARACTER_PHOTO_COUNT, parseImageArray } from "@/lib/reference-counts";
 
-/** Extra angles required beyond the 3 base shots so a character reaches the full photo set. */
+/** Extra angles required beyond the 3 base shots — 0 in Stage 18 (character = 3 photos). */
 const CHARACTER_EXTRA_COUNT = Math.max(0, CHARACTER_PHOTO_COUNT - 3);
 const missingBase = (c: { imageFront: string | null; imageProfile: string | null; imageFull: string | null }) =>
   !c.imageFront || !c.imageProfile || !c.imageFull;

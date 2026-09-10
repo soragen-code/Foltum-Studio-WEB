@@ -41,23 +41,23 @@ const ok = (c: unknown, m: string) => {
 
 async function main() {
   // --- (A) reference counts ---------------------------------------------------
-  ok(CHARACTER_PHOTO_COUNT === 5, "character reference = 5 photos");
-  ok(ARTIFACT_FRAME_COUNT === 3, "artifact/important object = 3 frames (Stage 16)");
+  ok(CHARACTER_PHOTO_COUNT === 3, "character reference = 3 photos (Stage 18)");
+  ok(ARTIFACT_FRAME_COUNT === 1, "artifact/important object = 1 frame (Stage 18)");
   ok(REF_BATCH_CONCURRENCY === 20, "parallel batch concurrency = 20");
-  ok(CHARACTER_SHOTS.length === 5, "5 character shot slots defined");
-  ok(new Set(CHARACTER_SHOTS).size === 5, "character shot slots are distinct");
+  ok(CHARACTER_SHOTS.length === 3, "3 character shot slots defined (Stage 18)");
+  ok(new Set(CHARACTER_SHOTS).size === 3, "character shot slots are distinct");
 
-  // --- (B) location scale: Stage 16 → FIXED 15 angles for every scale ---------
+  // --- (B) location scale: Stage 18 → 3 / 6 / 9 angles by scale ---------------
   ok(LOCATION_BASE_FRAMES === 3, "location base angles = 3");
-  ok(LOCATION_TOTAL_MIN === 15 && LOCATION_TOTAL_MAX === 15, "location total fixed at 15 (Stage 16)");
-  ok(desiredTotalFrames({ name: "Кабинет" }) === 15, "small location → 15 angles total");
-  ok(desiredTotalFrames({ name: "Склад" }) === 15, "big location → 15 angles total (fixed)");
-  ok(desiredTotalFrames({ name: "Ночной город" }) === 15, "huge location → 15 angles total (fixed)");
+  ok(LOCATION_TOTAL_MIN === 3 && LOCATION_TOTAL_MAX === 9, "location total ranges 3..9 by scale (Stage 18)");
+  ok(desiredTotalFrames({ name: "Кабинет" }) === 3, "small location → 3 angles total");
+  ok(desiredTotalFrames({ name: "Склад" }) === 6, "big location → 6 angles total");
+  ok(desiredTotalFrames({ name: "Ночной город" }) === 9, "huge location → 9 angles total");
   ok(
     desiredExtraFrames({ name: "Кабинет" }) === desiredTotalFrames({ name: "Кабинет" }) - LOCATION_BASE_FRAMES,
     "extra frames = total − base (base 3 subtracted)",
   );
-  ok(desiredExtraFrames({ name: "Ночной город" }) === 12, "every location → 12 extra frames (Stage 16)");
+  ok(desiredExtraFrames({ name: "Ночной город" }) === 6, "huge location → 6 extra frames (Stage 18)");
 
   // --- (C) runWithConcurrency: order preserved + never exceeds limit ----------
   {
@@ -99,8 +99,8 @@ async function main() {
   ok(parseImageArray(JSON.stringify(["https://example.com/a", "", null, "not-a-url"])).length === 1, "parseImageArray keeps only valid http URLs");
 
   // --- (E) prompt builders: correct variant counts + key phrasing ------------
-  ok(CHARACTER_EXTRA_VARIANTS.length >= CHARACTER_PHOTO_COUNT - 3, "character extra-variant pool covers the 2 extra photos of the 5-photo set");
-  ok(ARTIFACT_VARIANTS.length === ARTIFACT_FRAME_COUNT, "artifact variants = 3 frames (Stage 16)");
+  ok(CHARACTER_EXTRA_VARIANTS.length >= CHARACTER_PHOTO_COUNT - 3, "character extra-variant pool covers the extra photos (0 for the 3-photo set)");
+  ok(ARTIFACT_VARIANTS.length >= ARTIFACT_FRAME_COUNT, "artifact variant pool covers the 1 required frame (Stage 18)");
   const cp = characterExtraAnglePrompt("weathered fisherman, grey beard", "Marco", 0);
   ok(/fisherman|beard/i.test(cp) && cp.length > 40, "characterExtraAnglePrompt embeds the appearance description");
   const ap0 = artifactImagePrompt("an antique brass compass", "Compass", 0);

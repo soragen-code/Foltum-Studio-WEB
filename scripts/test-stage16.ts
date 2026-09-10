@@ -34,23 +34,20 @@ import {
 let pass = 0;
 const ok = (c: unknown, m: string) => { assert(c, m); console.log("ok:", m); pass++; };
 
-// --- A1: artifact = 3 frames ------------------------------------------------
-ok(ARTIFACT_FRAME_COUNT === 3, "A1: artifact = 3 frames");
-ok(ARTIFACT_VARIANTS.length === 3, "A1: 3 artifact variants defined");
-ok(new Set(ARTIFACT_VARIANTS).size === 3, "A1: artifact variants are distinct");
+// --- A1: artifact = 1 frame (Stage 18) --------------------------------------
+ok((ARTIFACT_FRAME_COUNT as number) === 1, "A1: artifact = 1 frame (Stage 18)");
+ok(ARTIFACT_VARIANTS.length >= 1, "A1: artifact variant pool covers the 1 required frame");
+ok(new Set(ARTIFACT_VARIANTS).size === ARTIFACT_VARIANTS.length, "A1: artifact variants are distinct");
 const a0 = artifactImagePrompt("an antique brass compass", "Compass", 0);
-const a1 = artifactImagePrompt("an antique brass compass", "Compass", 1);
-const a2 = artifactImagePrompt("an antique brass compass", "Compass", 2);
-ok(a0 !== a1 && a1 !== a2 && a0 !== a2, "A1: the 3 artifact frame prompts all differ");
-ok(/isolated/i.test(a0) && /context/i.test(a1) && /close-up|detail|macro/i.test(a2), "A1: frame 0 clean, 1 in-context, 2 close-up detail");
-ok([a0, a1, a2].every((p) => /No people/i.test(p)), "A1: artifact prompts keep 'no people'");
+ok(/isolated/i.test(a0), "A1: frame 0 is a clean isolated reference");
+ok(/No people/i.test(a0), "A1: artifact prompt keeps 'no people'");
 
-// --- A2: character = 5 fixed angles -----------------------------------------
-ok(CHARACTER_PHOTO_COUNT === 5, "A2: character = 5 photos");
-ok(CHARACTER_ANGLE_SET.length === 5 && new Set(CHARACTER_ANGLE_SET).size === 5, "A2: 5 distinct fixed angle slots");
+// --- A2: character = 3 fixed angles (Stage 18) ------------------------------
+ok((CHARACTER_PHOTO_COUNT as number) === 3, "A2: character = 3 photos");
+ok(CHARACTER_ANGLE_SET.length === 3 && new Set(CHARACTER_ANGLE_SET).size === 3, "A2: 3 distinct fixed angle slots");
 ok(
-  JSON.stringify([...CHARACTER_ANGLE_SET]) === JSON.stringify(["face", "leftProfile", "fullFront", "rightProfile", "fullBack"]),
-  "A2: fixed angle order = face, leftProfile, fullFront, rightProfile, fullBack",
+  JSON.stringify([...CHARACTER_ANGLE_SET]) === JSON.stringify(["face", "leftProfile", "fullFront"]),
+  "A2: fixed angle order = face, leftProfile, fullFront",
 );
 const appearance = "weathered fisherman, grey beard, yellow raincoat";
 const front = characterImagePrompt(appearance, "front", "Marco");
@@ -69,10 +66,10 @@ ok(ex0 !== ex1, "A2: the two extra prompts differ");
 // Unity: every character prompt keeps the same appearance description.
 ok([front, profile, full, ex0, ex1].every((p) => /fisherman|beard/i.test(p)), "A2: all 5 prompts embed the same appearance (unity)");
 
-// --- A3: location fixed 15 for every scale ----------------------------------
-for (const [label, loc] of [["small", { name: "Кабинет" }], ["big", { name: "Склад" }], ["huge", { name: "Ночной город" }]] as const) {
-  ok(desiredTotalFrames(loc) === 15, `A3: ${label} location → 15 total`);
-  ok(desiredExtraFrames(loc) === 15 - LOCATION_BASE_FRAMES, `A3: ${label} location → 12 extra`);
+// --- A3: location frames scale with size (Stage 18: 3 / 6 / 9) ---------------
+for (const [label, loc, total] of [["small", { name: "Кабинет" }, 3], ["big", { name: "Склад" }, 6], ["huge", { name: "Ночной город" }, 9]] as const) {
+  ok(desiredTotalFrames(loc) === total, `A3: ${label} location → ${total} total`);
+  ok(desiredExtraFrames(loc) === total - LOCATION_BASE_FRAMES, `A3: ${label} location → ${total - 3} extra`);
 }
 
 // --- B2: ≥15 distinct location camera formulations --------------------------

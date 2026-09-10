@@ -9,7 +9,7 @@ import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
 import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
 import { CancelButton } from '../../_components/cancel-button'
-import { desiredExtraFrames, locationScale, locationScaleLabel, episodeLocations, LOCATION_TOTAL_TARGET } from '@/lib/location-scale'
+import { desiredExtraFrames, desiredTotalFrames, locationScale, locationScaleLabel, episodeLocations } from '@/lib/location-scale'
 import { CHARACTER_PHOTO_COUNT, ARTIFACT_FRAME_COUNT } from '@/lib/reference-counts'
 import { EpisodeNavGrid } from './episode-nav-grid'
 
@@ -17,21 +17,21 @@ type EpisodePhase = 'script' | 'references' | 'scenes'
 
 const VIDEO_EXPECTED_SEC = 600
 const REF_POLL_MS = 3500
-// Stage 16: fixed 5-angle set, in stored order (face, left profile, full front, right profile, back).
-const SHOT_LABELS = ['Портрет (лицо)', 'Левый профиль', 'В полный рост (спереди)', 'Правый профиль', 'Со спины']
-const CHAR_EXTRA_MIN = Math.max(0, CHARACTER_PHOTO_COUNT - 3) // extra angles required beyond the 3 base shots → 5 photos
+// Stage 18: fixed 3-angle set, in stored order (face, left profile, full front).
+const SHOT_LABELS = ['Портрет (лицо)', 'Левый профиль', 'В полный рост (спереди)']
+const CHAR_EXTRA_MIN = Math.max(0, CHARACTER_PHOTO_COUNT - 3) // extra angles beyond the 3 base shots → 0 (3 photos)
 const validUrl = (u?: string | null) => typeof u === 'string' && u.startsWith('http') && u.length > 10
 function parseExtra(imageExtra?: string | null): string[] {
   if (!imageExtra) return []
   try { const a = JSON.parse(imageExtra); return Array.isArray(a) ? a.filter((u): u is string => typeof u === 'string' && u.startsWith('http')) : [] } catch { return [] }
 }
-// Stage 14 (E): a character reference is complete only with all 5 photos (3 base + 2 extra angles).
+// Stage 18: a character reference is complete with the 3 base photos (face, left profile, full front).
 const charPhotos = (c: any): string[] => [c?.imageFront, c?.imageProfile, c?.imageFull, ...parseExtra(c?.imageExtra)].filter(validUrl)
 const hasAllImages = (c: any) => validUrl(c?.imageFront) && validUrl(c?.imageProfile) && validUrl(c?.imageFull) && parseExtra(c?.imageExtra).length >= CHAR_EXTRA_MIN
 // Stage 14 (E): an artifact reference is complete with ARTIFACT_FRAME_COUNT frames.
 const artifactPhotos = (a: any): string[] => [a?.imageUrl, ...parseExtra(a?.imageExtra)].filter(validUrl)
 const artifactReady = (a: any) => artifactPhotos(a).length >= ARTIFACT_FRAME_COUNT
-// Stage 17: total generated frames of a location = present base angles + extra angles (target = 15).
+// Stage 18: total generated frames of a location = present base angles + extra angles (target = 3/6/9 by scale).
 const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.imageDetail].filter(validUrl).length + parseExtra(l?.imageExtra).length
 // Stage 17: top up location extras in serverless-safe chunks (a single 12-frame job can overrun the
 // serverless window and get killed — chunking + re-firing guarantees the target is actually reached).
@@ -705,7 +705,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               return (
                 <div key={l.id} className="rounded-lg border border-border/60 p-3" data-testid="ref-location">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0 truncate text-sm font-medium">{l.name} <span className="font-normal text-muted-foreground">· {Math.min(locationFrames(l), LOCATION_TOTAL_TARGET)}/{LOCATION_TOTAL_TARGET} кадров</span></div>
+                    <div className="min-w-0 truncate text-sm font-medium">{l.name} <span className="font-normal text-muted-foreground">· {Math.min(locationFrames(l), desiredTotalFrames(l))}/{desiredTotalFrames(l)} кадров</span></div>
                     <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground" title={`Больше кадров для крупных мест`}>{locationScaleLabel(scale)}{want > 0 ? ` · +${want} кадров` : ''}</span>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -763,7 +763,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                           </button>
                         ))}
                       </div>
-                      <div className="mt-2 truncate text-sm font-medium">{a.name} <span className="font-normal text-muted-foreground">· {photos.length}/{ARTIFACT_FRAME_COUNT} кадра</span></div>
+                      <div className="mt-2 truncate text-sm font-medium">{a.name} <span className="font-normal text-muted-foreground">· {photos.length}/{ARTIFACT_FRAME_COUNT} кадр</span></div>
                       {a.description && <div className="line-clamp-2 text-xs text-muted-foreground">{a.description}</div>}
                       <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
                         <input value={artEdit[a.id] ?? ''} onChange={(e) => setArtEdit((t) => ({ ...t, [a.id]: e.target.value }))} placeholder="Изменить объект по промпту…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-artifact-input" disabled={busy} />

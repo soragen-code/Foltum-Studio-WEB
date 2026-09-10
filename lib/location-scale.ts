@@ -44,22 +44,24 @@ export function locationScale(loc: { name?: string | null; description?: string 
 }
 
 /**
- * Stage 16 (A3): every episode location has a FIXED 15 reference frames, regardless of scale
- * (the previous 15/18/20 spread is removed — big/huge locations could never reach their higher
- * target because of the per-request clamp, which permanently blocked progress to scenes). The
- * base 3 angles (imageUrl/imageReverse/imageDetail) are always generated, so the EXTRA count
- * below always tops the total up to exactly 15 → 12 extra frames from distinct camera positions.
- * `locationScale` is retained for UI labelling only.
+ * Stage 18: the number of reference frames scales with the location size again — small
+ * places need only the base coverage, large ones need more. Totals by scale:
+ *   small (компактная) → 3 frames  (base 3, 0 extra)
+ *   big   (крупная)     → 6 frames  (base 3, 3 extra)
+ *   huge  (очень крупная) → 9 frames (base 3, 6 extra)
+ * The base 3 angles (imageUrl/imageReverse/imageDetail) are always generated; the EXTRA count
+ * tops the total up to the scale target from distinct camera positions.
  */
-export const LOCATION_TOTAL_MIN = 15
-export const LOCATION_TOTAL_TARGET = 15
-export const LOCATION_TOTAL_MAX = 15
+/** Minimum / maximum possible total across scales (small=3 … huge=9). */
+export const LOCATION_TOTAL_MIN = 3
+export const LOCATION_TOTAL_MAX = 9
 /** Base angles always generated on the Location row (imageUrl + imageReverse + imageDetail). */
 export const LOCATION_BASE_FRAMES = 3
 
-/** Stage 16: fixed at 15 frames for every location scale. */
-export function desiredTotalFrames(_loc?: { name?: string | null; description?: string | null; visualPrompt?: string | null }): number {
-  return LOCATION_TOTAL_TARGET // 15 for all scales
+/** Stage 18: total reference frames a location should have, by its estimated scale (3 / 6 / 9). */
+export function desiredTotalFrames(loc?: { name?: string | null; description?: string | null; visualPrompt?: string | null }): number {
+  const scale = loc ? locationScale(loc) : 'small'
+  return scale === 'huge' ? 9 : scale === 'big' ? 6 : 3
 }
 
 export function desiredExtraFrames(loc: { name?: string | null; description?: string | null; visualPrompt?: string | null }): number {

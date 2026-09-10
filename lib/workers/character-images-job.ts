@@ -7,9 +7,8 @@ import { characterImagePrompt, characterExtraAnglePrompt, VISUAL_STYLE_ID } from
 import { detectC2paFromUrl } from "@/lib/c2pa";
 import { CHARACTER_PHOTO_COUNT, REF_BATCH_CONCURRENCY, runWithConcurrency, parseImageArray } from "@/lib/reference-counts";
 
-// Stage 14 (E): every character reference now has 5 photos — the 3 canonical shots plus
-// 2 extra angles (three-quarter / action) generated WITH the front portrait as image_input
-// so the same face, hair and wardrobe are preserved.
+// Stage 18: every character reference has 3 photos — the 3 canonical shots (front, profile,
+// full). No extra angles are generated (EXTRA_COUNT resolves to 0).
 const BASE_SHOTS = ["front", "profile", "full"] as const;
 type BaseShot = (typeof BASE_SHOTS)[number];
 const ASPECT_RATIOS: Record<BaseShot, string> = { front: "3:4", profile: "3:4", full: "9:16" };
@@ -19,7 +18,7 @@ const SHOT_FIELDS: Record<BaseShot, "imageFront" | "imageProfile" | "imageFull">
   profile: "imageProfile",
   full: "imageFull",
 };
-/** Extra angles to add on top of the 3 base shots so every character has 5 photos. */
+/** Extra angles on top of the 3 base shots — 0 in Stage 18 (character = 3 photos). */
 const EXTRA_COUNT = Math.max(0, CHARACTER_PHOTO_COUNT - BASE_SHOTS.length);
 
 export interface CharacterImagesJobParams {
