@@ -9,7 +9,8 @@ const assert = (c: unknown, m: string) => { if (!c) { console.error("FAIL:", m);
 
 const NOW = 1_000_000_000;
 const KICK = 75_000;
-const OPTS = { nowMs: NOW, kickStaleMs: KICK, concurrency: 3, maxAttempts: 2, manualMaxAttempts: 4 };
+// Generation is strictly sequential: at most ONE scene (the earliest not-done one) is (re)started per pass.
+const OPTS = { nowMs: NOW, kickStaleMs: KICK, concurrency: 1, maxAttempts: 2, manualMaxAttempts: 4 };
 
 const done = (n: number): SceneJobSnapshot => ({ sceneId: `d${n}`, number: n, hasVideo: true, attempts: 1, latestJob: { status: "completed", hasPrediction: true, isModeration: false, updatedAtMs: NOW - 500_000 } });
 const inflight = (n: number): SceneJobSnapshot => ({ sceneId: `g${n}`, number: n, hasVideo: false, attempts: 1, latestJob: { status: "processing", hasPrediction: true, isModeration: false, updatedAtMs: NOW - 10_000 } });
@@ -33,11 +34,13 @@ const nojob = (n: number): SceneJobSnapshot => ({ sceneId: `n${n}`, number: n, h
   assert(p.remaining === 2, "in-flight counts as remaining work");
 }
 
-// 3) Orphaned pending (no prediction, stale) → resubmit; fresh pending → left as generating.
+// 3) Orphaned pending (no prediction, stale) at the frontier → resubmit; the LATER scene waits its turn.
 {
   const p = planContinuation([orphan(1), fresh(2)], OPTS);
-  assert(p.resubmit.includes("o1"), "stale orphan resubmitted");
-  assert(!p.resubmit.includes("f2") && p.generating === 1, "fresh pending NOT resubmitted (pool owns it)");
+  assert(p.resubmit.includes("o1"), "stale orphan at the frontier is resubmitted");
+  // Sequential: scene 2 is behind the not-done frontier → never resubmitted this pass and not counted
+  // as in-flight (it can only chain once scene 1 finishes).
+  assert(!p.resubmit.includes("f2") && p.generating === 0, "later scene waits for the frontier (not started, not in-flight)");
 }
 
 // 4) Auto mode never re-charges a failed scene (surfaced as terminal, excluded from remaining).
@@ -63,17 +66,25 @@ const nojob = (n: number): SceneJobSnapshot => ({ sceneId: `n${n}`, number: n, h
   assert(manual.retry.includes("n1"), "manual: never-queued scene started on explicit request");
 }
 
-// 7) Concurrency: only (concurrency - generating) scenes are (re)started per invocation.
+// 7) Sequential: at most ONE scene is (re)started per pass — the earliest not-done one; the rest wait.
 {
-  const p = planContinuation([inflight(1), orphan(2), orphan(3), orphan(4)], OPTS); // concurrency 3, 1 in-flight → capacity 2
-  assert(p.resubmit.length === 2, `capacity respected: started ${p.resubmit.length} (expected 2)`);
-  assert(p.remaining === 4, "all four unfinished scenes counted as remaining");
+  const p = planContinuation([orphan(1), orphan(2), orphan(3)], OPTS);
+  assert(p.resubmit.length === 1 && p.resubmit[0] === "o1", `only the earliest orphan is resubmitted (got ${JSON.stringify(p.resubmit)})`);
+  assert(p.remaining >= 1, "unfinished scenes keep the batch running");
+  // An in-flight frontier (live prediction) blocks every later scene from starting out of order.
+  const q = planContinuation([inflight(1), orphan(2), orphan(3)], OPTS);
+  assert(q.resubmit.length === 0, "no later scene starts while the frontier is still generating");
 }
 
-// 8) Selection order: resubmit (already paid) is preferred over retry (fresh charge) within capacity.
+// 8) Ordering is enforced across modes: the earliest actionable scene goes first; a not-done predecessor
+//    blocks every later scene so the next scene can only chain once its predecessor is finished.
 {
-  const p = planContinuation([orphan(1), orphan(2), orphan(3), failed(4)], { ...OPTS, retryFailed: true }); // capacity 3
-  assert(p.resubmit.length === 3 && p.retry.length === 0, "resubmit fills capacity before retry");
+  // Manual mode, frontier is an orphan (already paid) → resubmit it; the later failed scene waits.
+  const p = planContinuation([orphan(1), failed(2)], { ...OPTS, retryFailed: true });
+  assert(p.resubmit.length === 1 && p.resubmit[0] === "o1" && p.retry.length === 0, "frontier resubmit (already paid) goes first; later scene waits");
+  // Frontier failed + manual retry → the frontier is retried; a later orphan does NOT start out of order.
+  const q = planContinuation([failed(1), orphan(2)], { ...OPTS, retryFailed: true });
+  assert(q.retry.length === 1 && q.retry[0] === "x1" && q.resubmit.length === 0, "failed frontier is retried first; later scene is gated behind it");
 }
 
 // 9) All done → nothing to do, batch complete.

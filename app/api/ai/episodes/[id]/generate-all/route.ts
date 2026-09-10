@@ -10,8 +10,12 @@ import { runVideoJob } from "@/lib/workers/video-job";
 import { resolvePowerTier } from "@/lib/power-tier";
 import { sceneClipPlan, sceneClipSeconds, sceneClipCost } from "@/lib/season";
 
-/** How many scene submissions run at once; the rest wait in the queue (Replicate rate limit). */
-export const GENERATE_ALL_CONCURRENCY = 3;
+/**
+ * Scenes are generated STRICTLY ONE AT A TIME (no parallelism). Each scene starts only after the
+ * previous scene has finished and committed its last frame, so the next scene can be chained from
+ * the real photo of that last frame (image-to-video). Kept as a named export for the unit test.
+ */
+export const GENERATE_ALL_CONCURRENCY = 1;
 const QUEUE_HEARTBEAT_MS = 45_000;
 
 async function loadEpisode(episodeId: string, userId: string) {
@@ -43,7 +47,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
 /**
  * POST /api/ai/episodes/[id]/generate-all { language?, force? }
  * Starts video generation for EVERY scene of the episode that has no video yet (or all when force=true),
- * with a queue (GENERATE_ALL_CONCURRENCY at a time). Idempotent: scenes with an active job are reused
+ * strictly one scene at a time in ascending order (each scene chains from the previous scene's last
+ * frame). Idempotent: scenes with an active job are reused
  * (not charged again). Credits are charged per scene actually started; insufficient balance is a clear
  * error BEFORE anything starts.
  */
@@ -95,12 +100,14 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
 
   if (queued.length) {
     runInBackground(async () => {
+      // STRICTLY SEQUENTIAL (concurrency = 1): `queued` is in ascending scene order, so scene N only
+      // runs after scene N-1 has fully finished and committed its lastFrameUrl. runVideoJob reads the
+      // previous scene's lastFrameUrl fresh from the DB at start, so this ordering is what lets it chain
+      // the next scene from the REAL last frame of the previous scene (image-to-video via canChainFrame).
       const waiting = new Set(queued.map((q) => q.jobId));
       const hb = setInterval(() => { for (const j of waiting) void heartbeatJob(j); }, QUEUE_HEARTBEAT_MS);
-      let idx = 0;
-      const worker = async () => {
-        while (idx < queued.length) {
-          const item = queued[idx++];
+      try {
+        for (const item of queued) {
           waiting.delete(item.jobId);
           await updateJob(item.jobId, { status: "processing", progress: 2, message: "Старт видеомодели…" });
           try {
@@ -110,9 +117,6 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
           }
           await new Promise((r) => setTimeout(r, 1500)); // pace Replicate submissions
         }
-      };
-      try {
-        await Promise.all(Array.from({ length: Math.min(GENERATE_ALL_CONCURRENCY, queued.length) }, worker));
       } finally {
         clearInterval(hb);
       }

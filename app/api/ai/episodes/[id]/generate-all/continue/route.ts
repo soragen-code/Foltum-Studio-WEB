@@ -11,8 +11,9 @@ import { resolvePowerTier } from "@/lib/power-tier";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
 import { planContinuation, type SceneJobSnapshot } from "@/lib/batch-continue";
 
-/** Mirror of GENERATE_ALL_CONCURRENCY — how many scenes a single continue invocation may (re)start. */
-const CONTINUE_CONCURRENCY = 3;
+/** Mirror of GENERATE_ALL_CONCURRENCY — generation is strictly sequential, so at most one scene
+ *  (the earliest not-done one, whose predecessor is already finished) is (re)started per invocation. */
+const CONTINUE_CONCURRENCY = 1;
 /** A pending/processing job with no predictionId untouched for this long is orphaned → resubmit. */
 const KICK_STALE_MS = 75_000;
 /** Auto-continue never creates more than this many jobs per scene (broken scene can't loop forever). */
