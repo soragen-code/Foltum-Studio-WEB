@@ -10,7 +10,7 @@ import { StickyReviseBar } from '../../_components/sticky-revise-bar'
 import { useJobPolling, JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
 import { CancelButton } from '../../_components/cancel-button'
 import { desiredExtraFrames, desiredTotalFrames, locationScale, locationScaleLabel, episodeLocations } from '@/lib/location-scale'
-import { CHARACTER_PHOTO_COUNT, ARTIFACT_FRAME_COUNT } from '@/lib/reference-counts'
+import { CHARACTER_PHOTO_COUNT } from '@/lib/reference-counts'
 import { EpisodeNavGrid } from './episode-nav-grid'
 
 type EpisodePhase = 'script' | 'references' | 'scenes'
@@ -28,9 +28,6 @@ function parseExtra(imageExtra?: string | null): string[] {
 // Stage 18: a character reference is complete with the 3 base photos (face, left profile, full front).
 const charPhotos = (c: any): string[] => [c?.imageFront, c?.imageProfile, c?.imageFull, ...parseExtra(c?.imageExtra)].filter(validUrl)
 const hasAllImages = (c: any) => validUrl(c?.imageFront) && validUrl(c?.imageProfile) && validUrl(c?.imageFull) && parseExtra(c?.imageExtra).length >= CHAR_EXTRA_MIN
-// Stage 14 (E): an artifact reference is complete with ARTIFACT_FRAME_COUNT frames.
-const artifactPhotos = (a: any): string[] => [a?.imageUrl, ...parseExtra(a?.imageExtra)].filter(validUrl)
-const artifactReady = (a: any) => artifactPhotos(a).length >= ARTIFACT_FRAME_COUNT
 // Stage 18: total generated frames of a location = present base angles + extra angles (target = 3/6/9 by scale).
 const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.imageDetail].filter(validUrl).length + parseExtra(l?.imageExtra).length
 // Stage 17: top up location extras in serverless-safe chunks (a single 12-frame job can overrun the
@@ -81,17 +78,12 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [refLocs, setRefLocs] = useState<any[]>(episodeLocations(initial, project.locations ?? []))
   const [refSession, setRefSession] = useState(false) // polling active while refs are generating
   const [refStarting, setRefStarting] = useState(false)
-  const refJobs = useRef<{ char?: string; artifact?: string; loc: Record<string, string>; extra: Record<string, string> }>({ loc: {}, extra: {} })
+  const refJobs = useRef<{ char?: string; loc: Record<string, string>; extra: Record<string, string> }>({ loc: {}, extra: {} })
   const refCanceled = useRef(false)
   const [charBusy, setCharBusy] = useState<Record<string, boolean>>({}) // per-character prompt-revise spinner
   const [locBusy, setLocBusy] = useState<Record<string, boolean>>({})   // per-location prompt-revise spinner
-  const [artBusy, setArtBusy] = useState<Record<string, boolean>>({})   // per-artifact prompt-revise spinner
   const [charEdit, setCharEdit] = useState<Record<string, string>>({})
   const [locEdit, setLocEdit] = useState<Record<string, string>>({})
-  const [artEdit, setArtEdit] = useState<Record<string, string>>({})
-  // Stage 14 (E): important objects / artifacts of this episode (2 reference frames each).
-  const [refArtifacts, setRefArtifacts] = useState<any[]>(((initial.artifacts ?? []) as any[]).map((ea) => ea.artifact ?? ea).filter(Boolean))
-  const [artifactsLoaded, setArtifactsLoaded] = useState(false)
   // Fullscreen carousel over ALL photos of one reference (mobile-safe: object-contain, arrows/keys/wheel/swipe, tap/Esc to close).
   const [lightbox, setLightbox] = useState<{ images: string[]; index: number; title?: string } | null>(null)
   const openLightbox = (images: (string | null | undefined)[], index = 0, title?: string) => {
@@ -124,15 +116,12 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // ---- Reference readiness ----
   const locBaseReady = (l: any) => validUrl(l?.imageUrl)
   const locExtraReady = (l: any) => parseExtra(l?.imageExtra).length >= desiredExtraFrames(l)
-  // Stage 17: important objects (artifacts) are OPTIONAL — they never gate scene generation. The
-  // scenes step unlocks as soon as the MANDATORY references are ready: every character has its full
-  // photo set and every episode location has its full frame set. Artifacts can still be generated and
-  // edited, but a missing/partial artifact must never block progress (the previous gate included
-  // `refArtifacts.every(artifactReady)`, which could keep scenes locked forever).
+  // Stage 21: the scenes step unlocks as soon as the references are ready — every character has its
+  // full photo set and every episode location has its full frame set. (Important objects / artifacts
+  // were removed in Stage 21 and no longer exist as a reference type.)
   const refsReady = refChars.every(hasAllImages) && refLocs.every((l) => locBaseReady(l) && locExtraReady(l))
   const refsCharsDone = refChars.filter(hasAllImages).length
   const refsLocsDone = refLocs.filter((l) => locBaseReady(l) && locExtraReady(l)).length
-  const refsArtsDone = refArtifacts.filter(artifactReady).length
 
   // Fullscreen carousel keyboard nav: Esc closes, ←/→ move between a reference's photos.
   useEffect(() => {
@@ -145,15 +134,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [lightbox])
-
-  // Load this episode's artifacts (important objects) once on mount so they show up in the references step.
-  useEffect(() => {
-    fetch(`/api/ai/episodes/${episode.id}/artifacts`, { cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (Array.isArray(d?.artifacts)) setRefArtifacts(d.artifacts) })
-      .catch(() => {})
-      .finally(() => setArtifactsLoaded(true))
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Same stable-spinner logic as ScenesStage: poll one scene's job until terminal. */
   const pollVideoJob = (sceneId: string, jobId: string) => {
@@ -200,12 +180,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       setRefChars((prev) => prev.map((c) => pchars.find((x) => x.id === c.id) ?? c))
       // recompute episode locations from fresh project locations, preserving order/membership
       setRefLocs((prev) => prev.map((l) => plocs.find((x) => x.id === l.id) ?? l))
-      // refresh this episode's artifacts (important objects) + their reference frames
-      try {
-        const ra = await fetch(`/api/ai/episodes/${episode.id}/artifacts`, { cache: 'no-store' })
-        if (ra.ok) { const da = await ra.json(); if (Array.isArray(da?.artifacts)) setRefArtifacts(da.artifacts) }
-      } catch {}
-      setArtifactsLoaded(true)
       return { pchars, plocs }
     } catch { return }
   }, [project.id, episode.id])
@@ -322,22 +296,13 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           else if (!res.ok && d?.error) setError(d.error)
         }
       }
-      // Detect this episode's important objects and generate their reference frames (idempotent).
-      if (!refArtifacts.every(artifactReady)) {
-        try {
-          const res = await fetch(`/api/ai/episodes/${episode.id}/artifacts`, { method: 'POST' })
-          const d = await res.json().catch(() => ({}))
-          if (res.ok && d?.jobId) refJobs.current.artifact = d.jobId
-          else if (!res.ok && d?.error) setError(d.error)
-        } catch {}
-      }
       setRefSession(true)
     } catch { setError('Ошибка сети') } finally { setRefStarting(false) }
   }
 
   const cancelRefs = async () => {
     refCanceled.current = true
-    const ids = [refJobs.current.char, refJobs.current.artifact, ...Object.values(refJobs.current.loc), ...Object.values(refJobs.current.extra)].filter(Boolean) as string[]
+    const ids = [refJobs.current.char, ...Object.values(refJobs.current.loc), ...Object.values(refJobs.current.extra)].filter(Boolean) as string[]
     for (const id of ids) { try { await fetch(`/api/ai/jobs/${id}/cancel`, { method: 'POST' }) } catch {} }
     setRefSession(false); refJobs.current = { loc: {}, extra: {} }
     void refreshRefs(); void refreshCredits()
@@ -369,20 +334,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       setLocEdit((t) => ({ ...t, [locationId]: '' }))
       setRefSession(true)
     } catch { setError('Ошибка сети') } finally { setLocBusy((b) => { const n = { ...b }; delete n[locationId]; return n }) }
-  }
-
-  /** Prompt-edit an important object (regenerates both reference frames; C2PA preserved). */
-  const reviseArtifact = async (artifactId: string) => {
-    const instruction = artEdit[artifactId]?.trim(); if (!instruction) return
-    setArtBusy((b) => ({ ...b, [artifactId]: true })); setError('')
-    try {
-      const res = await fetch(`/api/ai/artifacts/${artifactId}/revise`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instruction }) })
-      const d = await res.json()
-      if (!res.ok) { setError(d?.error ?? 'Не удалось изменить объект'); return }
-      if (d?.artifact) setRefArtifacts((prev) => prev.map((a) => (a.id === artifactId ? { ...a, ...d.artifact } : a)))
-      setArtEdit((t) => ({ ...t, [artifactId]: '' }))
-      setRefSession(true) // poll until the new frames land
-    } catch { setError('Ошибка сети') } finally { setArtBusy((b) => { const n = { ...b }; delete n[artifactId]; return n }) }
   }
 
   // Stage 8: one continue "kick". Idempotent server-side; safe to call every few seconds.
@@ -627,9 +578,13 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <div className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="phase-script">
             <h2 className="mb-3 font-display text-xl font-bold">Сценарий эпизода</h2>
             <BookScript text={episode.script} scenes={scenes} />
-            <div className="mt-5 flex flex-wrap items-center justify-end gap-3 border-t border-border pt-4">
-              <button onClick={() => goPhase('references')} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" data-testid="confirm-script">
-                Подтвердить сценарий · к референсам <ArrowRight className="h-4 w-4" />
+            {/* Stage 21 navigation — Сценарий is step 2: back to references · forward to scenes. */}
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+              <button onClick={() => goPhase('references')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="script-to-references">
+                <ArrowLeft className="h-4 w-4" /> Референсы
+              </button>
+              <button onClick={() => goPhase('scenes')} disabled={!refsReady} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="script-to-scenes" title={refsReady ? '' : 'Сначала сгенерируйте все референсы эпизода'}>
+                К сценам <ArrowRight className="h-4 w-4" />
               </button>
             </div>
           </div>
@@ -642,7 +597,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             <h2 className="inline-flex items-center gap-2 font-display text-xl font-bold"><Images className="h-5 w-5 text-primary" /> Референсы эпизода</h2>
             {refSession ? (
               <span className="inline-flex items-center gap-2 text-xs text-muted-foreground" data-testid="refs-progress">
-                <Loader2 className="h-4 w-4 animate-spin text-primary" /> Генерирую референсы: персонажи {refsCharsDone}/{refChars.length}, локации {refsLocsDone}/{refLocs.length}{refArtifacts.length > 0 ? `, важные объекты ${refsArtsDone}/${refArtifacts.length}` : ''}
+                <Loader2 className="h-4 w-4 animate-spin text-primary" /> Генерирую референсы: персонажи {refsCharsDone}/{refChars.length}, локации {refsLocsDone}/{refLocs.length}
                 <CancelButton onCancel={cancelRefs} testId="refs-cancel" label="Отменить" pendingLabel="Останавливаю…" />
               </span>
             ) : refsReady ? (
@@ -737,59 +692,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             {refLocs.length === 0 && <p className="text-sm text-muted-foreground">У эпизода нет привязанных локаций.</p>}
           </div>
 
-          {/* Artifacts / important objects (Stage 14 E): 2 reference frames each, auto-detected from the script */}
-          {(refArtifacts.length > 0 || refSession) && (
-            <>
-              <h3 className="mt-6 flex items-center gap-2 text-sm font-semibold"><Film className="h-4 w-4" /> Важные объекты ({refArtifacts.length}) <span className="rounded bg-muted px-2 py-0.5 text-[10px] font-normal text-muted-foreground">необязательно</span></h3>
-              <p className="mt-1 text-xs text-muted-foreground">Важные объекты можно сгенерировать и отредактировать, но они не влияют на переход к сценам — для сцен достаточно готовых персонажей и локаций.</p>
-              <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {refArtifacts.map((a) => {
-                  const photos = artifactPhotos(a)
-                  const busy = !!artBusy[a.id] || (refSession && !artifactReady(a))
-                  const slots = [...photos]
-                  while (slots.length < ARTIFACT_FRAME_COUNT) slots.push(null as any)
-                  return (
-                    <div key={a.id} className="rounded-lg border border-border/60 p-3" data-testid="ref-artifact">
-                      <div className="grid grid-cols-2 gap-2">
-                        {slots.slice(0, ARTIFACT_FRAME_COUNT).map((img, i) => (
-                          <button key={i} type="button" onClick={() => validUrl(img) && openLightbox(photos, photos.indexOf(img as string), `${a.name} — кадр ${i + 1}`)} className="group relative aspect-square overflow-hidden rounded bg-muted" title={`Кадр ${i + 1}`} data-testid="ref-image">
-                            {validUrl(img) ? (
-                              <>
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img src={img as string} alt={`${a.name} — кадр ${i + 1}`} className="h-full w-full object-cover" />
-                                <span className="absolute right-1 top-1 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
-                              </>
-                            ) : busy ? (
-                              <div className="flex h-full w-full items-center justify-center"><Loader2 className="h-4 w-4 animate-spin text-primary" /></div>
-                            ) : (
-                              <div className="flex h-full w-full items-center justify-center"><ImageOff className="h-4 w-4 text-muted-foreground/40" /></div>
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                      <div className="mt-2 truncate text-sm font-medium">{a.name} <span className="font-normal text-muted-foreground">· {photos.length}/{ARTIFACT_FRAME_COUNT} кадр</span></div>
-                      {a.description && <div className="line-clamp-2 text-xs text-muted-foreground">{a.description}</div>}
-                      <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
-                        <input value={artEdit[a.id] ?? ''} onChange={(e) => setArtEdit((t) => ({ ...t, [a.id]: e.target.value }))} placeholder="Изменить объект по промпту…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-artifact-input" disabled={busy} />
-                        <button onClick={() => reviseArtifact(a.id)} disabled={busy || !(artEdit[a.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-artifact-submit">
-                          {artBusy[a.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
-                        </button>
-                      </div>
-                    </div>
-                  )
-                })}
-                {refArtifacts.length === 0 && artifactsLoaded && <p className="text-sm text-muted-foreground">Важные объекты определяются автоматически по сценарию во время генерации референсов.</p>}
-              </div>
-            </>
-          )}
-
-          {/* Step-2 navigation (D4): back to script · to scenes (enabled only when all refs are ready) */}
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-            <button onClick={() => goPhase('script')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="back-to-script">
-              <ArrowLeft className="h-4 w-4" /> К сценарию
-            </button>
-            <button onClick={() => goPhase('scenes')} disabled={!refsReady} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="go-to-scenes" title={refsReady ? '' : 'Сначала сгенерируйте все референсы эпизода'}>
-              Перейти к сценам <ArrowRight className="h-4 w-4" />
+          {/* Stage 21 navigation — Референсы is step 1: only a forward button to the script.
+              Enabled once all references (characters + locations) are ready. */}
+          <div className="mt-5 flex flex-wrap items-center justify-end gap-3 border-t border-border pt-4">
+            <button onClick={() => goPhase('script')} disabled={!refsReady} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="refs-to-script" title={refsReady ? '' : 'Сначала сгенерируйте все референсы эпизода'}>
+              К сценарию <ArrowRight className="h-4 w-4" />
             </button>
           </div>
         </section>
@@ -799,8 +706,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         {phase === 'scenes' && (
         <>
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
-          <button onClick={() => goPhase('references')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted" data-testid="back-to-references">
-            <ArrowLeft className="h-4 w-4" /> К референсам
+          <button onClick={() => goPhase('script')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted" data-testid="back-to-script">
+            <ArrowLeft className="h-4 w-4" /> Сценарий
           </button>
           <button onClick={openModal} disabled={startingAll || scenes.length === 0 || !refsReady} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all" title={refsReady ? '' : 'Сначала сгенерируйте все референсы эпизода'}>
             <Play className="h-4 w-4" /> Сгенерировать все сцены

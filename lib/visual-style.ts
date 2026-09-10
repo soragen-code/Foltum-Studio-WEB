@@ -18,7 +18,7 @@ export function styledVisualPrompt(input: string, names: string[] = []): string 
   return /\[VISUAL STYLE\]:/i.test(clean) ? clean : `[VISUAL STYLE]: ${VISUAL_STYLE}\n${clean}`;
 }
 
-export function characterImagePrompt(appearance: string, shot: "front" | "profile" | "full", name = "", tier?: string | null, groupSize?: number | null): string {
+export function characterImagePrompt(appearance: string, shot: "front" | "profile" | "full", name = "", tier?: string | null, groupSize?: number | null, chained = false): string {
   if (tier === "CROWD") {
     // A crowd group is one reference: the whole group in frame, so Seedance can reuse the same extras.
     const framing = {
@@ -36,7 +36,12 @@ export function characterImagePrompt(appearance: string, shot: "front" | "profil
     profile: "Left-side profile portrait — camera on the character's LEFT side, showing the left cheek and side of the face in clean profile, soft rim lighting.",
     full: "Full-body standing portrait from the FRONT, facing the camera, entire figure head to toe, all clothing and silhouette visible.",
   }[shot];
-  return `${VISUAL_STYLE}\nCharacter: ${sanitizeVideoPrompt(appearance, { keep: [name] }).prompt}. ${framing} Neutral unobtrusive background. No text or logos.`;
+  // Stage 21: profile/full are generated WITH the front portrait as image_input, so they must lock
+  // onto that exact identity — only the camera angle/pose changes, never the face, hair or outfit.
+  const identityLock = chained
+    ? " This is the SAME person as the reference image — keep the identical face, facial features, skin tone, hairstyle, hair colour, build, wardrobe, clothing colours and lighting as the reference; ONLY the camera angle and pose change."
+    : "";
+  return `${VISUAL_STYLE}\nCharacter: ${sanitizeVideoPrompt(appearance, { keep: [name] }).prompt}. ${framing}${identityLock} Neutral unobtrusive background. No text or logos.`;
 }
 
 /**

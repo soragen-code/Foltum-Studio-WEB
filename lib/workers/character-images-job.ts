@@ -65,15 +65,19 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds }: 
 
     const canceled = () => isCancelRequested(jobId);
 
-    // ---- Pass 1: the 3 base shots, concurrency-limited across every (character, shot) pair ----
-    const baseTasks = characters.flatMap((char) =>
-      BASE_SHOTS.filter((shot) => !(char as any)[SHOT_FIELDS[shot]]).map((shot) => ({ char, shot }))
-    );
-    await runWithConcurrency(baseTasks, REF_BATCH_CONCURRENCY, async ({ char, shot }) => {
+    // Generate one base shot, upload, persist, verify C2PA and bump progress.
+    // Stage 21: `refFront` (when given) is passed as image_input so the shot locks onto the SAME
+    // identity as the stored front portrait — profile/full must be the same person as the face shot.
+    const genBaseShot = async (char: (typeof characters)[number], shot: BaseShot, refFront: string | null) => {
       if (await canceled()) return;
+      const chained = shot !== "front" && !!refFront;
       try {
         const replicateUrl = await generateImage(
-          { prompt: characterImagePrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize), aspect_ratio: ASPECT_RATIOS[shot] },
+          {
+            prompt: characterImagePrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize, chained),
+            aspect_ratio: ASPECT_RATIOS[shot],
+            ...(chained ? { image_input: [refFront!] } : {}),
+          },
           { jobId, characterId: char.id }
         );
         const s3Key = `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/${shot}-${Date.now()}.png`;
@@ -90,7 +94,24 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds }: 
         done += 1;
         await bump("Базовые ракурсы");
       }
-    });
+    };
+
+    // ---- Pass 1a: FRONT portraits first (concurrency across characters), stored as the identity anchor ----
+    const frontTasks = characters.filter((char) => !(char as any).imageFront).map((char) => ({ char }));
+    await runWithConcurrency(frontTasks, REF_BATCH_CONCURRENCY, async ({ char }) => genBaseShot(char, "front", null));
+
+    // ---- Pass 1b: PROFILE + FULL, each chained on the character's own (now stored) front portrait ----
+    // Chaining on the front image_input locks profile/full to the SAME face/identity so the 3 shots
+    // are recognisably the same person. If a front is missing (its generation failed), fall back to
+    // plain text-to-image for that character's profile/full so the job never crashes.
+    const chainedTasks = characters.flatMap((char) =>
+      (["profile", "full"] as const)
+        .filter((shot) => !(char as any)[SHOT_FIELDS[shot]])
+        .map((shot) => ({ char, shot }))
+    );
+    await runWithConcurrency(chainedTasks, REF_BATCH_CONCURRENCY, async ({ char, shot }) =>
+      genBaseShot(char, shot, ((char as any).imageFront as string | null) ?? null)
+    );
 
     // ---- Pass 2: 2 extra angles per character, each chained on the (now stored) front portrait ----
     if (!(await canceled()) && EXTRA_COUNT > 0) {
