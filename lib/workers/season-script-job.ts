@@ -10,7 +10,7 @@
  * POSTs /api/ai/season again to continue.
  */
 import { prisma } from "@/lib/db";
-import { chatJSON } from "@/lib/ai";
+import { chatJSON, SCRIPT_MODEL } from "@/lib/ai";
 import { heartbeatJob, updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { toCharacterCard, normalizeLanguage, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
 import {
@@ -39,8 +39,12 @@ import { anchorSceneLocation } from "@/lib/location-anchor";
 import { episodeCastFromScenes } from "@/lib/episode-cast";
 
 export const SEASON_JOB_TYPE = "season_script";
-/** Stop starting new episodes after this many ms (Vercel maxDuration is 800s). */
-const TIME_BUDGET_MS = 560_000;
+/**
+ * Stop starting new episodes after this many ms (Vercel maxDuration is 800s).
+ * gpt-6-astra can spend several minutes on one episode script, so a new episode is only started
+ * while there is still time for a long completion; the client re-POSTs to continue (resumable job).
+ */
+const TIME_BUDGET_MS = 240_000;
 
 /** Run an LLM call while keeping the job alive (heartbeat every 45s). */
 async function withHeartbeat<T>(jobId: string, fn: () => Promise<T>): Promise<T> {
@@ -76,9 +80,11 @@ export async function generateEpisodeScript(input: {
   instruction?: string;
 }): Promise<EpisodeScript> {
   return generateWithRetry(input.jobId, 2, async () => {
+    // gpt-6-astra: reasoning tokens share the completion budget → large budget + long timeout; temperature is not sent.
     const raw = await chatJSON(episodeScriptSystemPrompt(input.language, input.episode.number), episodeScriptUserPrompt(input), {
-      temperature: 0.6,
-      maxTokens: 16000,
+      model: SCRIPT_MODEL,
+      maxTokens: 32000,
+      timeoutMs: 600_000,
     });
     const script = normalizeEpisodeScript(episodeScriptSchema.parse(raw), input.characters);
     const problems = validateEpisodeScript(script);
@@ -104,7 +110,7 @@ export async function generateFullStory(input: {
     const raw = await chatJSON(
       seasonFullStorySystemPrompt(input.language, input.structure.episodes.length),
       seasonFullStoryUserPrompt({ synopsis: input.synopsis, structure: input.structure, characters: input.characters, locations: input.locations }),
-      { temperature: 0.65, maxTokens: 16000 }
+      { model: SCRIPT_MODEL, maxTokens: 32000, timeoutMs: 600_000 }
     );
     const parsed = seasonFullStorySchema.parse(raw);
     const text = parsed.fullStory.trim();
@@ -210,7 +216,7 @@ export async function runSeasonScriptJob(jobId: string, projectId: string, episo
     if (!season || season.episodes.length === 0) {
       await updateJob(jobId, { status: "processing", progress: 3, message: "Строю структуру сезона…" });
       const structure = await generateWithRetry(jobId, 2, async () => {
-        const raw = await chatJSON(seasonStructureSystemPrompt(language, episodeCount), seasonStructureUserPrompt(project.synopsis!, cards, project.locations), { temperature: 0.7, maxTokens: 6000 });
+        const raw = await chatJSON(seasonStructureSystemPrompt(language, episodeCount), seasonStructureUserPrompt(project.synopsis!, cards, project.locations), { model: SCRIPT_MODEL, maxTokens: 12000, timeoutMs: 600_000 });
         const parsed = seasonStructureSchema.parse(raw);
         // Stage 14 (B2): the producer sets the episode count — enforce it exactly (retry if the model drifts).
         if (parsed.episodes.length !== episodeCount)

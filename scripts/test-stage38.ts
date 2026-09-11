@@ -51,7 +51,7 @@ const cast = ["Yara", "Theo"].map(n => ({ characterId: n.toLowerCase(), name: n,
   ok(/ONLY in the pauses between impacts/.test(b.prompt), "b: dialogue preamble says lines land only in the pauses between impacts");
   ok(/opponents face EACH OTHER/.test(b.prompt) && /NEVER both fighters facing the camera side by side/.test(b.prompt), "b: face-to-face combat + no side-by-side-to-camera");
   ok(/NEVER anyone casting, shooting or striking at someone's BACK/.test(b.prompt), "b: no attacks at someone's back / empty air");
-  ok(/NO BLOOD/.test(b.prompt), "b: no-blood clause present");
+  ok(!/NO BLOOD/.test(b.prompt) && /blood, wounds/.test(b.prompt), "b: no-blood softening removed, impact consequences allowed");
   ok(/on camera: "Now\."/.test(b.prompt), "b: the spoken line is still rendered");
   ok(b.referenceImages.length === 5, "b: references unchanged for action scenes (2 portraits + 3 angles)");
 }

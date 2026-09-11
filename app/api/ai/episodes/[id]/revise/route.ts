@@ -1,5 +1,5 @@
 export const dynamic = "force-dynamic";
-export const maxDuration = 300;
+export const maxDuration = 800; // the episode script is rewritten by the reasoning model inside this invocation
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
