@@ -6,6 +6,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { failStaleJobs, STALE_JOB_MS } from "@/lib/jobs";
 import { resumeVideoJob } from "@/lib/workers/video-job";
+import { advanceSeasonJob, SEASON_JOB_TYPE } from "@/lib/workers/season-script-job";
 
 /**
  * GET /api/jobs/[id] — status polling for a GenerationJob.
@@ -21,6 +22,10 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   // Video job whose worker went quiet → pick the Replicate prediction up from here (resume / heartbeat)
   if (job && (await resumeVideoJob(job))) {
     job = await prisma.generationJob.findUnique({ where: { id } });
+  }
+  // Season script job: polling advances the state machine (OpenAI background response → next step).
+  if (job && job.type === SEASON_JOB_TYPE && ["pending", "processing"].includes(job.status)) {
+    job = (await advanceSeasonJob(job)) ?? job;
   }
   // Stale processing job (function was killed) → mark failed so the UI stops waiting
   if (job && ["pending", "processing"].includes(job.status) && Date.now() - job.updatedAt.getTime() > STALE_JOB_MS) {

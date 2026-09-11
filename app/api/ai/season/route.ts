@@ -6,7 +6,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
-import { runSeasonScriptJob, SEASON_JOB_TYPE } from "@/lib/workers/season-script-job";
+import { runSeasonScriptJob, advanceSeasonJob, SEASON_JOB_TYPE } from "@/lib/workers/season-script-job";
 import { SEASON_MIN_EPISODES, SEASON_MAX_EPISODES, SEASON_DEFAULT_EPISODES } from "@/lib/season";
 
 /**
@@ -39,13 +39,20 @@ export async function POST(request: Request) {
   return NextResponse.json({ jobId: job.id, resumed: false });
 }
 
-/** GET /api/ai/season?projectId=… → season with episodes (scripts + scene counts) and the latest job. */
+/**
+ * GET /api/ai/season?projectId=… → season with episodes (scripts + scene counts) and the latest job.
+ * Polling drives the season job: an active job is advanced here (poll the OpenAI background response,
+ * persist a finished step, start the next one) — no long-running work lives in any single request.
+ */
 export async function GET(request: Request) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const projectId = new URL(request.url).searchParams.get("projectId") ?? "";
   const project = await prisma.project.findFirst({ where: { id: projectId, userId: session.user.id }, select: { id: true } });
   if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  await failStaleJobs({ projectId, type: SEASON_JOB_TYPE });
+  const latest = await prisma.generationJob.findFirst({ where: { projectId, type: SEASON_JOB_TYPE }, orderBy: { createdAt: "desc" } });
+  if (latest && ["pending", "processing"].includes(latest.status)) await advanceSeasonJob(latest);
   const [season, job] = await Promise.all([
     prisma.season.findFirst({
       where: { projectId, number: 1 },

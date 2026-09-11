@@ -72,11 +72,12 @@ export async function failStaleJobs(where: { projectId?: string; sceneId?: strin
     const res = await prisma.generationJob.updateMany({
       where: {
         ...where,
-        // A persisted video prediction is owned by provider/poll recovery, not heartbeat age.
+        // A persisted video prediction (video) or OpenAI background response (season_script) is owned
+        // by provider/poll recovery, not heartbeat age — those jobs are advanced by GET polling.
         OR: [
-          { type: { not: "video" } },
+          { type: { notIn: ["video", "season_script"] } },
           { resultData: null },
-          { NOT: { resultData: { contains: '"predictionId":' } } },
+          { AND: [{ NOT: { resultData: { contains: '"predictionId":' } } }, { NOT: { resultData: { contains: '"responseId":' } } }] },
         ],
         status: { in: ["pending", "processing"] },
         updatedAt: { lt: new Date(Date.now() - STALE_JOB_MS) },

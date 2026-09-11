@@ -1,18 +1,18 @@
 export const dynamic = "force-dynamic";
-export const maxDuration = 800; // the episode script is rewritten by the reasoning model inside this invocation
+export const maxDuration = 300; // only starts the background job (the rewrite itself runs in OpenAI background mode)
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
-import { toCharacterCard, normalizeLanguage } from "@/lib/idea";
-import { generateEpisodeScript, persistEpisodeScript, outlineFromEpisode, SEASON_JOB_TYPE } from "@/lib/workers/season-script-job";
-import type { SeasonStructure } from "@/lib/season";
+import { runInBackground, failStaleJobs } from "@/lib/jobs";
+import { runSeasonScriptJob, initialSeasonState, SEASON_JOB_TYPE } from "@/lib/workers/season-script-job";
 
 /**
- * POST /api/ai/episodes/[id]/revise { instruction }
+ * POST /api/ai/episodes/[id]/revise { instruction, force? } → { jobId }
  * LLM rewrites the whole episode script by the author's instruction (same schema: 10–15 scenes,
  * timing, language, coherence with neighbouring episodes) and rebuilds the episode's Scene rows.
+ * Runs as a season_script job (poll GET /api/ai/season or /api/jobs/[id]).
  * Safety: scenes that already have a generated video are NOT deleted — the request is refused with
  * 409 unless `force: true` is sent (the UI warns; forcing drops the existing clips of this episode).
  */
@@ -28,7 +28,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
 
   const episode = await prisma.episode.findFirst({
     where: { id, season: { project: { userId: session.user.id } } },
-    include: { characters: { include: { character: true } }, scenes: { select: { videoUrl: true } }, season: { include: { project: { include: { characters: true } }, episodes: { orderBy: { number: "asc" }, include: { characters: { include: { character: true } } } } } } },
+    include: { scenes: { select: { videoUrl: true } }, season: { select: { projectId: true, episodes: { select: { id: true } } } } },
   });
   if (!episode) return NextResponse.json({ error: "Episode not found" }, { status: 404 });
   // Stage 5: the season job (generation or season-level revise) writes episodes whose `script` is null —
@@ -41,22 +41,14 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   if (withVideo > 0 && !body?.force) {
     return NextResponse.json({ error: `У ${withVideo} сцен уже есть готовое видео. Переписывание сценария пересоберёт сцены и удалит эти ролики из эпизода.`, needsForce: true, withVideo }, { status: 409 });
   }
-  const project = episode.season.project;
-  const language = normalizeLanguage(project.language, project.synopsis ?? "");
-  const cards = project.characters.map(toCharacterCard);
-  const seasonStruct: SeasonStructure = { title: episode.season.title ?? "", logline: episode.season.logline ?? "", episodes: episode.season.episodes.map(outlineFromEpisode) };
-  const outline = outlineFromEpisode(episode);
-  const next = episode.season.episodes.find((e) => e.number === episode.number + 1);
-  try {
-    const script = await generateEpisodeScript({
-      jobId: "", language, synopsis: project.synopsis ?? "", season: seasonStruct, episode: outline, characters: cards,
-      previous: episode.season.episodes.filter((p) => p.number < episode.number).map((p) => ({ number: p.number, title: p.title, logline: p.logline ?? "", cliffhanger: p.cliffhanger ?? "" })),
-      instruction: `${instruction}${next ? `\n(The NEXT episode ${next.number} «${next.title}» starts from: ${next.logline ?? ""} — keep this episode's ending compatible with it.)` : ""}`,
-    });
-    await persistEpisodeScript(episode.id, outline, script, project.characters.map((c) => ({ id: c.id, name: c.name })), language);
-    return NextResponse.json({ ok: true, sceneCount: script.scenes.length });
-  } catch (err) {
-    console.error("[episode revise]", err);
-    return NextResponse.json({ error: err instanceof Error ? err.message : "Revision failed" }, { status: 500 });
-  }
+  const projectId = episode.season.projectId;
+  // Stage 2 (background mode): the rewrite runs as a season_script job with a revise queue — the reasoning
+  // model works in OpenAI background mode and the client's job polling advances it (same as generation).
+  await failStaleJobs({ projectId, type: SEASON_JOB_TYPE });
+  const active = await prisma.generationJob.findFirst({ where: { projectId, type: SEASON_JOB_TYPE, status: { in: ["pending", "processing"] } }, select: { id: true } });
+  if (active) return NextResponse.json({ error: "Сценарий сезона сейчас генерируется — дождитесь окончания.", writing: true }, { status: 409 });
+  const state = initialSeasonState(episode.season.episodes.length, { episodeIds: [episode.id], instruction, force: !!body?.force });
+  const job = await prisma.generationJob.create({ data: { type: SEASON_JOB_TYPE, status: "pending", progress: 0, message: "Запуск…", projectId, resultData: JSON.stringify(state) } });
+  runInBackground(() => runSeasonScriptJob(job.id, projectId, episode.season.episodes.length));
+  return NextResponse.json({ jobId: job.id });
 }

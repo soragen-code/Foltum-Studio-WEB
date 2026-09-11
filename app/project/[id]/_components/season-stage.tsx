@@ -338,10 +338,23 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
       if (res.status === 409 && data?.writing) throw new Error(data.error)
       if (!res.ok) throw new Error(data?.error ?? 'Не удалось переписать эпизод')
       setReviseText((t) => ({ ...t, [ep.id]: '' }))
+      // The rewrite runs as a season job (reasoning model in OpenAI background mode): the regular
+      // job polling shows its progress; this episode stays busy until the job finishes (see below).
+      if (data?.jobId) setJob({ id: data.jobId, status: 'processing', progress: 1, message: 'Запуск…' })
       await load()
-    } catch (e: any) { setError(e?.message ?? 'Ошибка') }
-    finally { setBusy((b) => { const n = { ...b }; delete n[ep.id]; return n }) }
+    } catch (e: any) {
+      setError(e?.message ?? 'Ошибка')
+      setBusy((b) => { const n = { ...b }; delete n[ep.id]; return n })
+    }
   }
+  // Release per-episode «revise» busy flags once the season job is no longer active.
+  useEffect(() => {
+    if (jobActive) return
+    setBusy((b) => {
+      if (!Object.values(b).includes('revise')) return b
+      const n = { ...b }; for (const k of Object.keys(n)) if (n[k] === 'revise') delete n[k]; return n
+    })
+  }, [jobActive])
 
   const reviseLocation = async (ep: SeasonEpisode) => {
     const instruction = locText[ep.id]?.trim()
@@ -538,7 +551,7 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
                           {b === 'revise' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Переписать
                         </button>
                       </div>
-                      {b === 'revise' && <p className="text-xs text-muted-foreground">Переписываю сценарий эпизода (1–2 минуты)…</p>}
+                      {b === 'revise' && <p className="text-xs text-muted-foreground">{jobActive && job?.message ? job.message : 'Переписываю сценарий эпизода (обычно 5–10 минут)…'}</p>}
                     </div>
                   )}
                   {ep.script && (

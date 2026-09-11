@@ -1,18 +1,24 @@
 /**
- * Stage 2 — season script background job (resumable).
+ * Stage 2 — season script background job (resumable, poll-driven state machine).
  *
- * Step 1: season structure (6–10 episodes) → Season + Episode rows (script = null).
- * Step 2: for every episode without a script, generate the full shooting script
- *         (10–15 scenes) with previous-episodes context → Episode.script + Scene rows
- *         + SceneCharacter / EpisodeCharacter links. Progress is persisted per episode,
- *         so a re-run only fills in what is missing (never regenerates finished episodes).
- * The worker stops before Vercel's maxDuration and reports `remaining`; the client
- * POSTs /api/ai/season again to continue.
+ * gpt-6-astra spends 5–10 minutes on one episode script — far beyond what a single serverless
+ * request can wait for (Node's ~300 s headers timeout, Vercel's 800 s function kill). So every
+ * model call runs in OpenAI *background mode*: we store the response id in GenerationJob.resultData
+ * (`SeasonJobState`) and `advanceSeasonJob()` — called from the GET polling routes — polls it,
+ * persists the finished step and starts the next one. Nothing long-running lives inside a request.
+ *
+ * Steps:  structure → fullStory → episode (× N, plus the revise queue) → done.
+ *   structure: season structure (episodeCount episodes) → Season + Episode rows (script = null).
+ *   fullStory: whole-season prose story (non-fatal — skipped after 2 failed attempts).
+ *   episode:   full shooting script → Episode.script + Scene rows (+ cast links) for every episode
+ *              without a script, and for every episode in `revise.episodeIds` (author instruction).
+ * Progress is persisted per episode, so a re-run only fills in what is missing.
  */
 import { prisma } from "@/lib/db";
-import { chatJSON, SCRIPT_MODEL } from "@/lib/ai";
+import type { GenerationJob } from "@prisma/client";
+import { chatJSON, SCRIPT_MODEL, startBackgroundJSON, pollBackgroundJSON, cancelBackgroundResponse, type BackgroundPollResult } from "@/lib/ai";
 import { maxDetailLevel, isLocationDetailLevel } from "@/lib/location-scale";
-import { heartbeatJob, updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
+import { completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { toCharacterCard, normalizeLanguage, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
 import {
   seasonStructureSchema,
@@ -40,84 +46,148 @@ import { anchorSceneLocation } from "@/lib/location-anchor";
 import { episodeCastFromScenes } from "@/lib/episode-cast";
 
 export const SEASON_JOB_TYPE = "season_script";
-/**
- * Stop starting new episodes after this many ms (Vercel maxDuration is 800s).
- * gpt-6-astra can spend several minutes on one episode script, so a new episode is only started
- * while there is still time for a long completion; the client re-POSTs to continue (resumable job).
- */
-const TIME_BUDGET_MS = 240_000;
 
-/** Run an LLM call while keeping the job alive (heartbeat every 45s). */
-async function withHeartbeat<T>(jobId: string, fn: () => Promise<T>): Promise<T> {
-  const t = setInterval(() => void heartbeatJob(jobId), 45_000);
-  try {
-    return await fn();
-  } finally {
-    clearInterval(t);
-  }
+// ---------------------------------------------------------------------------
+// State (GenerationJob.resultData)
+// ---------------------------------------------------------------------------
+
+export type SeasonJobStep = "structure" | "fullStory" | "episode" | "done";
+
+export type SeasonJobState = {
+  v: 2;
+  step: SeasonJobStep;
+  /** Episode being written (step === "episode"). */
+  episodeId?: string;
+  /** OpenAI background response currently running for this step (absent between steps). */
+  responseId?: string;
+  /** 0-based attempt counter of the current step (a step is retried once). */
+  attempt: number;
+  /** ISO time the current step's response was started. */
+  stepStartedAt?: string;
+  /** ISO time a poller took the advance lock (released when the advance finishes). */
+  lockedAt?: string;
+  total: number;
+  remaining: number;
+  done: boolean;
+  episodeCount: number;
+  /** Full story failed twice — do not block the episode scripts on it. */
+  skipFullStory?: boolean;
+  /** Author-requested rewrite of specific (already written) episodes. */
+  revise?: { episodeIds: string[]; instruction: string; force?: boolean };
+};
+
+/** Two pollers must not advance the same job at once; a stuck lock expires after this long. */
+export const ADVANCE_LOCK_MS = 60_000;
+/** A background response older than this is treated as failed (the step is retried / the job fails). */
+export const STEP_TIMEOUT_MS = 45 * 60_000;
+const MAX_ATTEMPTS = 2;
+const ACTIVE_STATUSES = ["pending", "processing"];
+
+export function initialSeasonState(episodeCount = SEASON_DEFAULT_EPISODES, revise?: SeasonJobState["revise"]): SeasonJobState {
+  return { v: 2, step: "structure", attempt: 0, total: episodeCount, remaining: episodeCount, done: false, episodeCount, ...(revise ? { revise } : {}) };
 }
 
-async function generateWithRetry<T>(jobId: string, attempts: number, fn: () => Promise<T>): Promise<T> {
-  let last: unknown;
-  for (let i = 0; i < attempts; i++) {
+/** Parse resultData; anything that is not a v2 state (legacy `{revise:true, affected}`, null) → fresh state. */
+export function parseSeasonState(raw: string | null | undefined, episodeCount = SEASON_DEFAULT_EPISODES): SeasonJobState {
+  if (raw) {
     try {
-      return await withHeartbeat(jobId, fn);
-    } catch (err) {
-      last = err;
-      console.warn(`[season] attempt ${i + 1}/${attempts} failed:`, err);
-    }
+      const j = JSON.parse(raw);
+      if (j && j.v === 2 && typeof j.step === "string") return { ...initialSeasonState(j.episodeCount ?? episodeCount), ...j };
+    } catch {}
   }
-  throw last instanceof Error ? last : new Error(String(last));
+  return initialSeasonState(episodeCount);
 }
 
-export async function generateEpisodeScript(input: {
-  jobId: string;
-  language: IdeaLanguage;
-  synopsis: string;
-  season: SeasonStructure;
-  episode: EpisodeOutline;
-  characters: CharacterCard[];
-  previous: { number: number; title: string; logline: string; cliffhanger: string }[];
-  instruction?: string;
-}): Promise<EpisodeScript> {
-  return generateWithRetry(input.jobId, 2, async () => {
-    // gpt-6-astra: reasoning tokens share the completion budget → large budget + long timeout; temperature is not sent.
-    const raw = await chatJSON(episodeScriptSystemPrompt(input.language, input.episode.number), episodeScriptUserPrompt(input), {
-      model: SCRIPT_MODEL,
-      maxTokens: 32000,
-      timeoutMs: 600_000,
-    });
-    const script = normalizeEpisodeScript(episodeScriptSchema.parse(raw), input.characters);
-    const problems = validateEpisodeScript(script);
-    // Word-count drift is tolerated (logged); hard problems (count, missing prompt lines, no dialogue) fail → retry.
-    const hard = hardProblems(problems); // density / sentence / camera-wording drift is soft (logged), see lib/season.ts
-    if (hard.length) throw new Error(`episode ${input.episode.number} script invalid: ${hard.slice(0, 3).join("; ")}`);
-    if (problems.length) console.warn(`[season] ep ${input.episode.number} soft issues:`, problems);
-    // Seedance voices `dialogue` → it must be English; swap swapped fields / translate leftovers.
-    return ensureEnglishDialogue(script, chatJSON);
-  });
+/** Is another poller currently advancing this job (lock younger than ADVANCE_LOCK_MS)? */
+export function isAdvanceLocked(state: SeasonJobState, now = Date.now()): boolean {
+  if (!state.lockedAt) return false;
+  const t = Date.parse(state.lockedAt);
+  return Number.isFinite(t) && now - t < ADVANCE_LOCK_MS;
 }
 
-/** Generate the whole-season prose story (the "Сюжет" screen) from the fixed structure. */
-export async function generateFullStory(input: {
-  jobId: string;
-  language: IdeaLanguage;
-  synopsis: string;
-  structure: SeasonStructure;
-  characters: CharacterCard[];
-  locations: { name: string; description?: string | null; visualPrompt?: string | null }[];
-}): Promise<string> {
-  return generateWithRetry(input.jobId, 2, async () => {
-    const raw = await chatJSON(
-      seasonFullStorySystemPrompt(input.language, input.structure.episodes.length),
-      seasonFullStoryUserPrompt({ synopsis: input.synopsis, structure: input.structure, characters: input.characters, locations: input.locations }),
-      { model: SCRIPT_MODEL, maxTokens: 32000, timeoutMs: 600_000 }
-    );
-    const parsed = seasonFullStorySchema.parse(raw);
-    const text = parsed.fullStory.trim();
-    if (text.length < 200) throw new Error("full story too short");
-    return text;
-  });
+/** Has the running step exceeded STEP_TIMEOUT_MS? */
+export function isStepTimedOut(state: SeasonJobState, now = Date.now()): boolean {
+  if (!state.stepStartedAt) return false;
+  const t = Date.parse(state.stepStartedAt);
+  return Number.isFinite(t) && now - t > STEP_TIMEOUT_MS;
+}
+
+/** Minimal episode shape the planner needs. */
+export type PlannerEpisode = { id: string; number: number; script: string | null };
+
+export type PlannedStep =
+  | { step: "structure" }
+  | { step: "fullStory" }
+  | { step: "episode"; episodeId: string; instruction?: string }
+  | { step: "done" };
+
+/** Decide the next step from what is in the DB (pure). */
+export function planNextStep(
+  season: { fullStory: string | null; episodes: PlannerEpisode[] } | null,
+  state: Pick<SeasonJobState, "revise" | "skipFullStory">
+): PlannedStep {
+  if (!season || season.episodes.length === 0) return { step: "structure" };
+  if (!season.fullStory && !state.skipFullStory) return { step: "fullStory" };
+  const queue = state.revise?.episodeIds ?? [];
+  for (const id of queue) {
+    if (season.episodes.some((e) => e.id === id)) return { step: "episode", episodeId: id, instruction: state.revise!.instruction };
+  }
+  const missing = season.episodes.find((e) => !e.script);
+  if (missing) return { step: "episode", episodeId: missing.id };
+  return { step: "done" };
+}
+
+/** After a step failed: retry the same step or give up? (pure) */
+export function retryDecision(state: Pick<SeasonJobState, "step" | "attempt">): "retry" | "skip" | "fail" {
+  if (state.attempt + 1 < MAX_ATTEMPTS) return "retry";
+  return state.step === "fullStory" ? "skip" : "fail";
+}
+
+/** The revise hint appended to the author's instruction so the rewritten ending still leads into the next episode. */
+export function reviseInstruction(instruction: string, next?: { number: number; title: string; logline: string | null } | null): string {
+  return `${instruction}${next ? `\n(The NEXT episode ${next.number} «${next.title}» starts from: ${next.logline ?? ""} — keep this episode's ending compatible with it.)` : ""}`;
+}
+
+export function episodeProgress(done: number, total: number): number {
+  return 5 + Math.round((done / Math.max(1, total)) * 90);
+}
+
+/** Injectable model calls (unit tests replace them). */
+export type SeasonJobDeps = {
+  start: typeof startBackgroundJSON;
+  poll: typeof pollBackgroundJSON;
+  cancel: typeof cancelBackgroundResponse;
+  /** Synchronous JSON chat used for the short gpt-4o dialogue translation pass. */
+  chatJSON: typeof chatJSON;
+};
+const defaultDeps: SeasonJobDeps = { start: startBackgroundJSON, poll: pollBackgroundJSON, cancel: cancelBackgroundResponse, chatJSON };
+
+// ---------------------------------------------------------------------------
+// Step result validation (pure — schema + business rules)
+// ---------------------------------------------------------------------------
+
+export function validateStructure(raw: unknown, episodeCount: number): SeasonStructure {
+  const parsed = seasonStructureSchema.parse(raw);
+  // Stage 14 (B2): the producer sets the episode count — enforce it exactly (retry if the model drifts).
+  if (parsed.episodes.length !== episodeCount) throw new Error(`structure returned ${parsed.episodes.length} episodes, expected exactly ${episodeCount}`);
+  return { ...parsed, episodes: parsed.episodes.map((e, i) => ({ ...e, number: i + 1 })) };
+}
+
+export function validateFullStory(raw: unknown): string {
+  const text = seasonFullStorySchema.parse(raw).fullStory.trim();
+  if (text.length < 200) throw new Error("full story too short");
+  return text;
+}
+
+/** Schema + normalization + hard-problem gate; soft problems are logged. Dialogue translation is done by the caller. */
+export function validateEpisode(raw: unknown, episodeNumber: number, characters: CharacterCard[]): EpisodeScript {
+  const script = normalizeEpisodeScript(episodeScriptSchema.parse(raw), characters);
+  const problems = validateEpisodeScript(script);
+  // Word-count drift is tolerated (logged); hard problems (count, missing prompt lines, no dialogue) fail → retry.
+  const hard = hardProblems(problems);
+  if (hard.length) throw new Error(`episode ${episodeNumber} script invalid: ${hard.slice(0, 3).join("; ")}`);
+  if (problems.length) console.warn(`[season] ep ${episodeNumber} soft issues:`, problems);
+  return script;
 }
 
 /** Replace an episode's Scene rows with the given script (keeps the episode row / id). */
@@ -203,107 +273,231 @@ export function outlineFromEpisode(e: { number: number; title: string; logline: 
   };
 }
 
-export async function runSeasonScriptJob(jobId: string, projectId: string, episodeCount = SEASON_DEFAULT_EPISODES): Promise<void> {
-  const started = Date.now();
+
+// ---------------------------------------------------------------------------
+// The state machine
+// ---------------------------------------------------------------------------
+
+const seasonInclude = { episodes: { orderBy: { number: "asc" as const }, include: { characters: { include: { character: true } }, location: { select: { detailLevel: true } } } } };
+
+async function loadProject(projectId: string) {
+  return prisma.project.findUnique({ where: { id: projectId }, include: { characters: true, locations: { orderBy: { createdAt: "asc" } } } });
+}
+
+async function loadSeason(projectId: string) {
+  return prisma.season.findFirst({ where: { projectId, number: 1 }, include: seasonInclude });
+}
+
+/** Persist the state (+ optional job fields). Always bumps updatedAt so the job is never "stale" while it is being advanced. */
+async function saveState(jobId: string, state: SeasonJobState, extra: { status?: string; progress?: number; message?: string } = {}): Promise<void> {
+  const { lockedAt: _drop, ...clean } = state;
+  await prisma.generationJob.update({
+    where: { id: jobId },
+    data: { resultData: JSON.stringify(clean), updatedAt: new Date(), ...(extra.progress !== undefined ? { progress: Math.max(0, Math.min(100, Math.round(extra.progress))) } : {}), ...(extra.message !== undefined ? { message: extra.message } : {}), ...(extra.status !== undefined ? { status: extra.status } : {}) },
+  });
+}
+
+/**
+ * Advance a season job by one tick: poll the running background response (persist its result when
+ * done) and/or start the next step. Safe to call from every poll request — a CAS lock on resultData
+ * makes concurrent pollers no-ops. Returns the refreshed job (or the same job when nothing was done).
+ */
+export async function advanceSeasonJob(job: GenerationJob, deps: SeasonJobDeps = defaultDeps, init?: { episodeCount?: number }): Promise<GenerationJob | null> {
+  if (job.type !== SEASON_JOB_TYPE || !ACTIVE_STATUSES.includes(job.status)) return job;
+  const prevRaw = job.resultData;
+  const state = parseSeasonState(prevRaw, init?.episodeCount);
+  if (init?.episodeCount) { state.episodeCount = init.episodeCount; if (state.step === "structure" && !state.responseId) { state.total = init.episodeCount; state.remaining = init.episodeCount; } }
+  if (isAdvanceLocked(state)) return job;
+  // CAS lock: only the poller that sees exactly the previous resultData wins.
+  const lock = await prisma.generationJob.updateMany({ where: { id: job.id, resultData: prevRaw }, data: { resultData: JSON.stringify({ ...state, lockedAt: new Date().toISOString() }) } });
+  if (lock.count !== 1) return job;
   try {
-    const project = await prisma.project.findUnique({ where: { id: projectId }, include: { characters: true, locations: { orderBy: { createdAt: "asc" } } } });
-    if (!project?.synopsis) throw new Error("Project synopsis missing");
-    const language = normalizeLanguage(project.language, project.synopsis);
-    const cards = project.characters.map(toCharacterCard);
-
-    // Cancellation checkpoint before any heavy LLM work.
-    if (await isCancelRequested(jobId)) { await markCanceled(jobId, "Генерация сценария отменена"); return; }
-
-    // Step 1 — structure (skipped when the season already exists).
-    let season = await prisma.season.findFirst({ where: { projectId, number: 1 }, include: { episodes: { orderBy: { number: "asc" }, include: { characters: { include: { character: true } } } } } });
-    if (!season || season.episodes.length === 0) {
-      await updateJob(jobId, { status: "processing", progress: 3, message: "Строю структуру сезона…" });
-      const structure = await generateWithRetry(jobId, 2, async () => {
-        const raw = await chatJSON(seasonStructureSystemPrompt(language, episodeCount), seasonStructureUserPrompt(project.synopsis!, cards, project.locations), { model: SCRIPT_MODEL, maxTokens: 12000, timeoutMs: 600_000 });
-        const parsed = seasonStructureSchema.parse(raw);
-        // Stage 14 (B2): the producer sets the episode count — enforce it exactly (retry if the model drifts).
-        if (parsed.episodes.length !== episodeCount)
-          throw new Error(`structure returned ${parsed.episodes.length} episodes, expected exactly ${episodeCount}`);
-        return { ...parsed, episodes: parsed.episodes.map((e, i) => ({ ...e, number: i + 1 })) };
-      });
-      const byName = new Map(project.characters.map((c) => [c.name.toLowerCase(), c.id]));
-      season = await prisma.$transaction(async (tx) => {
-        const s = season
-          ? await tx.season.update({ where: { id: season.id }, data: { title: structure.title, logline: structure.logline } })
-          : await tx.season.create({ data: { projectId, number: 1, title: structure.title, logline: structure.logline } });
-        const locs: { id: string; name: string; detailLevel: string | null }[] = project.locations.map((l) => ({ id: l.id, name: l.name, detailLevel: l.detailLevel }));
-        for (const e of structure.episodes) {
-          // Bind the episode to an existing project Location (reference image); unknown names become new Locations without an image.
-          let loc = matchLocation(locs, e.locationName);
-          if (!loc) {
-            const created = await tx.location.create({ data: { projectId, name: e.locationName, description: e.locationName, visualPrompt: e.locationDesc, detailLevel: e.locationDetail } });
-            loc = { id: created.id, name: created.name, detailLevel: created.detailLevel };
-            locs.push(loc);
-          } else {
-            // Reused location: raise its required detail level if the new structure needs more (never downgrade).
-            const level = maxDetailLevel(loc.detailLevel, e.locationDetail);
-            if (level && level !== loc.detailLevel) { await tx.location.update({ where: { id: loc.id }, data: { detailLevel: level } }); loc.detailLevel = level; }
-          }
-          const ep = await tx.episode.create({ data: { seasonId: s.id, number: e.number, title: e.title, description: e.logline, logline: e.logline, cliffhanger: e.cliffhanger, locationName: loc.name, locationDesc: e.locationDesc, locationId: loc.id, arcRole: e.arcRole, status: "draft" } });
-          const ids = Array.from(new Set(e.characters.map((n) => byName.get(n.toLowerCase())).filter((x): x is string => !!x)));
-          if (ids.length) await tx.episodeCharacter.createMany({ data: ids.map((characterId) => ({ episodeId: ep.id, characterId })) });
-        }
-        return tx.season.findUniqueOrThrow({ where: { id: s.id }, include: { episodes: { orderBy: { number: "asc" }, include: { characters: { include: { character: true } } } } } });
-      }, { timeout: 30_000 });
-      await prisma.project.update({ where: { id: projectId }, data: { stage: "structure" } });
-    }
-
-    const seasonStruct: SeasonStructure = { title: season.title ?? "", logline: season.logline ?? "", episodes: season.episodes.map(outlineFromEpisode) };
-    const total = season.episodes.length;
-    const chars = project.characters.map((c) => ({ id: c.id, name: c.name }));
-
-    // Step 1b — whole-season prose story ("Сюжет" screen). Generated once; resumable (only if missing).
-    if (!season.fullStory) {
-      if (await isCancelRequested(jobId)) { await markCanceled(jobId, "Генерация отменена"); return; }
-      await updateJob(jobId, { status: "processing", progress: 4, message: "Пишу сюжет сезона..." });
-      try {
-        const fullStory = await generateFullStory({ jobId, language, synopsis: project.synopsis, structure: seasonStruct, characters: cards, locations: project.locations });
-        await prisma.season.update({ where: { id: season.id }, data: { fullStory } });
-        season.fullStory = fullStory;
-      } catch (err) {
-        // Never block episode scripts on the prose story — the author can regenerate it from the story screen.
-        console.warn("[season] full story generation failed:", err);
-      }
-    }
-
-    // Step 2 — episode scripts, one at a time, only for episodes still missing a script.
-    for (const ep of season.episodes) {
-      if (ep.script) continue;
-      // Cancellation checkpoint: stop BEFORE starting the next episode. Episodes already
-      // written are kept (their scripts stay in the DB); the author can resume later.
-      if (await isCancelRequested(jobId)) {
-        const remaining = season.episodes.filter((e) => !e.script).length;
-        await markCanceled(jobId, `Генерация отменена. Готово эпизодов: ${total - remaining} из ${total}.`);
-        return;
-      }
-      if (Date.now() - started > TIME_BUDGET_MS) {
-        const remaining = season.episodes.filter((e) => !e.script).length;
-        await completeJob(jobId, { done: false, remaining, total }, `Пауза: осталось эпизодов — ${remaining}. Продолжаю…`);
-        return;
-      }
-      const done = season.episodes.filter((e) => e.script).length;
-      await updateJob(jobId, { status: "processing", progress: 5 + Math.round((done / total) * 90), message: `Пишу сценарий эпизода ${ep.number} из ${total}…` });
-      const outline = outlineFromEpisode(ep);
-      const script = await generateEpisodeScript({
-        jobId,
-        language,
-        synopsis: project.synopsis,
-        season: seasonStruct,
-        episode: outline,
-        characters: cards,
-        previous: season.episodes.filter((p) => p.number < ep.number).map((p) => ({ number: p.number, title: p.title, logline: p.logline ?? "", cliffhanger: p.cliffhanger ?? "" })),
-      });
-      await persistEpisodeScript(ep.id, outline, script, chars, language);
-      ep.script = "done";
-    }
-    await prisma.season.update({ where: { id: season.id }, data: { status: "script_ready" } });
-    await completeJob(jobId, { done: true, remaining: 0, total }, "Сценарий сезона готов");
+    await tick(job.id, job.projectId, state, deps);
   } catch (err) {
-    await failJob(jobId, err instanceof Error ? err.message : String(err));
+    console.error(`[season] advance failed for job ${job.id}:`, err);
+    await failJob(job.id, err instanceof Error ? err.message : String(err));
   }
+  return prisma.generationJob.findUnique({ where: { id: job.id } });
+}
+
+async function tick(jobId: string, projectId: string, state: SeasonJobState, deps: SeasonJobDeps): Promise<void> {
+  const project = await loadProject(projectId);
+  if (!project?.synopsis) throw new Error("Project synopsis missing");
+  const language = normalizeLanguage(project.language, project.synopsis);
+  const cards = project.characters.map(toCharacterCard);
+  let season = await loadSeason(projectId);
+  const countDone = () => season ? season.episodes.filter((e) => e.script).length : 0;
+  const total = season && season.episodes.length ? season.episodes.length : state.episodeCount;
+
+  // (a) Cancellation — stop the running response, keep everything already written.
+  if (await isCancelRequested(jobId)) {
+    if (state.responseId) await deps.cancel(state.responseId);
+    await saveState(jobId, { ...state, responseId: undefined });
+    await markCanceled(jobId, `Генерация отменена. Готово эпизодов: ${countDone()} из ${total}.`);
+    return;
+  }
+
+  // (b) A background response is running for the current step → poll it.
+  let retryStep: PlannedStep | null = null;
+  if (state.responseId) {
+    let poll: BackgroundPollResult<unknown>;
+    try {
+      poll = await deps.poll(state.responseId);
+    } catch (err) {
+      // Transient retrieve error: keep waiting (heartbeat), the next poll retries.
+      console.warn(`[season] poll error for ${state.responseId}:`, err);
+      poll = { status: "running" };
+    }
+    if (poll.status === "running" && isStepTimedOut(state)) {
+      await deps.cancel(state.responseId);
+      poll = { status: "failed", error: `step ${state.step} timed out after ${Math.round(STEP_TIMEOUT_MS / 60000)} min` };
+    }
+    if (poll.status === "running") {
+      await saveState(jobId, state); // heartbeat (keeps message/progress, releases the lock)
+      return;
+    }
+    let failure: string | null = null;
+    if (poll.status === "completed") {
+      try {
+        season = await applyStepResult(project, season, state, poll.json, language, cards, deps);
+      } catch (err) {
+        failure = err instanceof Error ? err.message : String(err);
+      }
+    } else {
+      failure = poll.error;
+    }
+    if (failure) {
+      console.warn(`[season] attempt ${state.attempt + 1}/${MAX_ATTEMPTS} of step ${state.step} failed: ${failure}`);
+      const decision = retryDecision(state);
+      if (decision === "fail") {
+        await saveState(jobId, { ...state, responseId: undefined });
+        await failJob(jobId, failure);
+        return;
+      }
+      if (decision === "skip") {
+        // Never block episode scripts on the prose story — the author can regenerate it from the story screen.
+        state = { ...state, skipFullStory: true, attempt: 0 };
+      } else {
+        retryStep = state.step === "episode" && state.episodeId
+          ? { step: "episode", episodeId: state.episodeId, instruction: state.revise?.episodeIds.includes(state.episodeId) ? state.revise.instruction : undefined }
+          : { step: state.step as "structure" | "fullStory" };
+        state = { ...state, attempt: state.attempt + 1 };
+      }
+    } else {
+      state = { ...state, attempt: 0 };
+      if (state.step === "episode" && state.episodeId && state.revise?.episodeIds.includes(state.episodeId)) {
+        state = { ...state, revise: { ...state.revise, episodeIds: state.revise.episodeIds.filter((id) => id !== state.episodeId) } };
+      }
+    }
+    state = { ...state, responseId: undefined, episodeId: undefined, stepStartedAt: undefined };
+  }
+
+  // (c) Start the next step (or retry the failed one).
+  const planned = retryStep ?? planNextStep(season, state);
+  const seasonStruct: SeasonStructure | null = season ? { title: season.title ?? "", logline: season.logline ?? "", episodes: season.episodes.map(outlineFromEpisode) } : null;
+  const done = countDone();
+  const curTotal = season && season.episodes.length ? season.episodes.length : state.episodeCount;
+  const remaining = season ? season.episodes.filter((e) => !e.script).length + (state.revise?.episodeIds.length ?? 0) : state.episodeCount;
+
+  if (planned.step === "done") {
+    if (season) await prisma.season.update({ where: { id: season.id }, data: { status: "script_ready" } });
+    await saveState(jobId, { ...state, step: "done", remaining: 0, total: curTotal, done: true });
+    await completeJob(jobId, { ...state, step: "done", remaining: 0, total: curTotal, done: true, lockedAt: undefined }, "Сценарий сезона готов");
+    return;
+  }
+
+  let responseId: string;
+  let message: string;
+  let progress: number;
+  if (planned.step === "structure") {
+    responseId = await deps.start(seasonStructureSystemPrompt(language, state.episodeCount), seasonStructureUserPrompt(project.synopsis, cards, project.locations), { model: SCRIPT_MODEL, maxTokens: 12000 });
+    message = "Строю структуру сезона…"; progress = 3;
+  } else if (planned.step === "fullStory") {
+    responseId = await deps.start(
+      seasonFullStorySystemPrompt(language, seasonStruct!.episodes.length),
+      seasonFullStoryUserPrompt({ synopsis: project.synopsis, structure: seasonStruct!, characters: cards, locations: project.locations }),
+      { model: SCRIPT_MODEL, maxTokens: 32000 }
+    );
+    message = "Пишу сюжет сезона…"; progress = 4;
+  } else {
+    const ep = season!.episodes.find((e) => e.id === planned.episodeId)!;
+    const next = season!.episodes.find((e) => e.number === ep.number + 1);
+    responseId = await deps.start(
+      episodeScriptSystemPrompt(language, ep.number),
+      episodeScriptUserPrompt({
+        synopsis: project.synopsis, season: seasonStruct!, episode: outlineFromEpisode(ep), characters: cards,
+        previous: season!.episodes.filter((p) => p.number < ep.number).map((p) => ({ number: p.number, title: p.title, logline: p.logline ?? "", cliffhanger: p.cliffhanger ?? "" })),
+        ...(planned.instruction ? { instruction: reviseInstruction(planned.instruction, next) } : {}),
+      }),
+      { model: SCRIPT_MODEL, maxTokens: 32000 }
+    );
+    message = planned.instruction
+      ? `Переписываю сценарий эпизода ${ep.number}… (модель рассуждает, обычно 5–10 минут)`
+      : `Пишу сценарий эпизода ${ep.number} из ${curTotal}… (модель рассуждает, обычно 5–10 минут)`;
+    progress = episodeProgress(done, curTotal);
+  }
+  await saveState(
+    jobId,
+    { ...state, step: planned.step, episodeId: planned.step === "episode" ? planned.episodeId : undefined, responseId, stepStartedAt: new Date().toISOString(), total: curTotal, remaining, done: false },
+    { status: "processing", progress, message }
+  );
+}
+
+type LoadedSeason = NonNullable<Awaited<ReturnType<typeof loadSeason>>>;
+type LoadedProject = NonNullable<Awaited<ReturnType<typeof loadProject>>>;
+
+/** Validate a completed step's JSON and persist it. Throws on invalid output (→ retry). Returns the refreshed season. */
+async function applyStepResult(project: LoadedProject, season: LoadedSeason | null, state: SeasonJobState, raw: unknown, language: IdeaLanguage, cards: CharacterCard[], deps: SeasonJobDeps): Promise<LoadedSeason | null> {
+  const projectId = project.id;
+  if (state.step === "structure") {
+    const structure = validateStructure(raw, state.episodeCount);
+    const byName = new Map(project.characters.map((c) => [c.name.toLowerCase(), c.id]));
+    await prisma.$transaction(async (tx) => {
+      const s = season
+        ? await tx.season.update({ where: { id: season.id }, data: { title: structure.title, logline: structure.logline } })
+        : await tx.season.create({ data: { projectId, number: 1, title: structure.title, logline: structure.logline } });
+      const locs: { id: string; name: string; detailLevel: string | null }[] = project.locations.map((l) => ({ id: l.id, name: l.name, detailLevel: l.detailLevel }));
+      for (const e of structure.episodes) {
+        // Bind the episode to an existing project Location (reference image); unknown names become new Locations without an image.
+        let loc = matchLocation(locs, e.locationName);
+        if (!loc) {
+          const created = await tx.location.create({ data: { projectId, name: e.locationName, description: e.locationName, visualPrompt: e.locationDesc, detailLevel: e.locationDetail } });
+          loc = { id: created.id, name: created.name, detailLevel: created.detailLevel };
+          locs.push(loc);
+        } else {
+          // Reused location: raise its required detail level if the new structure needs more (never downgrade).
+          const level = maxDetailLevel(loc.detailLevel, e.locationDetail);
+          if (level && level !== loc.detailLevel) { await tx.location.update({ where: { id: loc.id }, data: { detailLevel: level } }); loc.detailLevel = level; }
+        }
+        const ep = await tx.episode.create({ data: { seasonId: s.id, number: e.number, title: e.title, description: e.logline, logline: e.logline, cliffhanger: e.cliffhanger, locationName: loc.name, locationDesc: e.locationDesc, locationId: loc.id, arcRole: e.arcRole, status: "draft" } });
+        const ids = Array.from(new Set(e.characters.map((n) => byName.get(n.toLowerCase())).filter((x): x is string => !!x)));
+        if (ids.length) await tx.episodeCharacter.createMany({ data: ids.map((characterId) => ({ episodeId: ep.id, characterId })) });
+      }
+    }, { timeout: 30_000 });
+    await prisma.project.update({ where: { id: projectId }, data: { stage: "structure" } });
+    return loadSeason(projectId);
+  }
+  if (!season) throw new Error("season missing");
+  if (state.step === "fullStory") {
+    const fullStory = validateFullStory(raw);
+    await prisma.season.update({ where: { id: season.id }, data: { fullStory } });
+    return loadSeason(projectId);
+  }
+  if (state.step === "episode") {
+    const ep = season.episodes.find((e) => e.id === state.episodeId);
+    if (!ep) throw new Error("episode missing");
+    const outline = outlineFromEpisode(ep);
+    // Seedance voices `dialogue` → it must be English; swap swapped fields / translate leftovers (short gpt-4o pass).
+    const script = await ensureEnglishDialogue(validateEpisode(raw, ep.number, cards), deps.chatJSON);
+    await persistEpisodeScript(ep.id, outline, script, project.characters.map((c) => ({ id: c.id, name: c.name })), language);
+    return loadSeason(projectId);
+  }
+  return season;
+}
+
+/** Entry point used by the routes that create a job: records the episode count and performs the first advance. */
+export async function runSeasonScriptJob(jobId: string, projectId: string, episodeCount = SEASON_DEFAULT_EPISODES): Promise<void> {
+  const job = await prisma.generationJob.findUnique({ where: { id: jobId } });
+  if (!job) return;
+  await advanceSeasonJob(job, defaultDeps, { episodeCount });
 }

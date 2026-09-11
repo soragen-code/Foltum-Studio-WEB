@@ -34,6 +34,9 @@ export function isReasoningModel(model: string): boolean {
   return /^(gpt-6|gpt-5|o\d)/.test(model);
 }
 
+/** Default reasoning effort for SCRIPT generation (chat() and background responses). */
+export const SCRIPT_REASONING_EFFORT: "low" | "medium" | "high" = "medium";
+
 /** Token usage of the last chat() call — for diagnostics / smoke tests only. */
 export let lastChatUsage: { model: string; promptTokens: number; completionTokens: number; totalTokens: number } | null = null;
 
@@ -76,7 +79,7 @@ export async function chat(
       ],
       // Reasoning models: no temperature, `max_completion_tokens`, explicit reasoning effort.
       ...(reasoning
-        ? { max_completion_tokens: budget, reasoning_effort: opts?.reasoningEffort ?? "medium" }
+        ? { max_completion_tokens: budget, reasoning_effort: opts?.reasoningEffort ?? SCRIPT_REASONING_EFFORT }
         : { temperature: opts?.temperature ?? 0.85, max_tokens: budget }),
       ...(opts?.json ? { response_format: { type: "json_object" } } : {}),
     },
@@ -106,7 +109,86 @@ export async function chatJSON<T = any>(
 }
 
 /** Some models wrap JSON in ```json fences even in json mode — strip them before parsing. */
-function stripJsonFences(raw: string): string {
+export function stripJsonFences(raw: string): string {
   const m = raw.trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
   return m ? m[1] : raw;
+}
+
+// ---------------------------------------------------------------------------
+// Background (asynchronous) JSON generation via the Responses API.
+//
+// gpt-6-astra spends 5–10 minutes on one episode script. A synchronous call dies at ~300 s
+// (Node undici headers timeout, regardless of the SDK timeout) and the Vercel function is killed
+// at 800 s. In background mode OpenAI runs the generation server-side; we only store the response
+// id and poll it from short requests (see lib/workers/season-script-job.ts).
+// ---------------------------------------------------------------------------
+
+export type BackgroundJSONOptions = {
+  model?: string;
+  maxTokens?: number;
+  reasoningEffort?: "low" | "medium" | "high";
+  temperature?: number;
+};
+
+export type BackgroundPollResult<T> =
+  | { status: "running" }
+  | { status: "completed"; json: T; usage?: { inputTokens: number; outputTokens: number; totalTokens: number } }
+  | { status: "failed"; error: string };
+
+/** Start a background JSON response. Returns the response id (poll it with pollBackgroundJSON). */
+export async function startBackgroundJSON(system: string, user: string, opts?: BackgroundJSONOptions): Promise<string> {
+  const openai = getOpenAI();
+  const model = opts?.model ?? MODEL;
+  const budget = opts?.maxTokens ?? 4096;
+  // NOTE: `instructions:` does not satisfy json_object mode ("json" must appear in an input message) —
+  // the system prompt is sent as an input message instead.
+  const res = await openai.responses.create(
+    {
+      model,
+      background: true,
+      store: true,
+      input: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      text: { format: { type: "json_object" } },
+      max_output_tokens: budget,
+      ...(isReasoningModel(model)
+        ? { reasoning: { effort: opts?.reasoningEffort ?? SCRIPT_REASONING_EFFORT } }
+        : { temperature: opts?.temperature ?? 0.85 }),
+    } as any,
+    { timeout: 60_000, maxRetries: 2 },
+  );
+  return res.id;
+}
+
+/** Poll a background response: running / completed (parsed JSON) / failed (readable reason). */
+export async function pollBackgroundJSON<T = any>(id: string): Promise<BackgroundPollResult<T>> {
+  const openai = getOpenAI();
+  const r: any = await openai.responses.retrieve(id, {}, { timeout: 60_000, maxRetries: 2 });
+  const status = String(r.status ?? "");
+  if (status === "queued" || status === "in_progress") return { status: "running" };
+  if (status === "completed") {
+    const raw = String(r.output_text ?? "");
+    let json: T;
+    try {
+      json = JSON.parse(stripJsonFences(raw)) as T;
+    } catch {
+      return { status: "failed", error: `invalid JSON in response (${raw.length} chars)` };
+    }
+    const usage = r.usage
+      ? { inputTokens: r.usage.input_tokens ?? 0, outputTokens: r.usage.output_tokens ?? 0, totalTokens: r.usage.total_tokens ?? 0 }
+      : undefined;
+    return { status: "completed", json, usage };
+  }
+  if (status === "incomplete") return { status: "failed", error: `response incomplete: ${r.incomplete_details?.reason ?? "unknown reason"}` };
+  if (status === "cancelled") return { status: "failed", error: "response cancelled" };
+  return { status: "failed", error: `response ${status || "failed"}: ${r.error?.message ?? r.error?.code ?? "unknown error"}` };
+}
+
+/** Cancel a background response (best effort — errors are swallowed). */
+export async function cancelBackgroundResponse(id: string): Promise<void> {
+  try {
+    await getOpenAI().responses.cancel(id, { timeout: 30_000, maxRetries: 0 });
+  } catch {}
 }
