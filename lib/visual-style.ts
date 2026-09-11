@@ -48,7 +48,7 @@ export function characterImagePrompt(appearance: string, shot: "front" | "profil
     : "";
   // Full-body: the framing comes FIRST and dominates the prompt — the description of the person follows.
   if (shot === "full") {
-    return `${framing}\n${VISUAL_STYLE}\nCharacter: ${who}.${identityLock} ${FULL_BODY_PROPORTIONS} Neutral unobtrusive background. No text or logos.`;
+    return `${framing}\n${VISUAL_STYLE}\nCharacter: ${who}.${identityLock} ${fullBodyProportionsFor(appearance)} Neutral unobtrusive background. No text or logos.`;
   }
   return `${VISUAL_STYLE}\nCharacter: ${who}. ${framing}${identityLock} Neutral unobtrusive background. No text or logos.`;
 }
@@ -60,19 +60,52 @@ export function characterImagePrompt(appearance: string, shot: "front" | "profil
 export const FULL_BODY_FRAMING =
   "FULL-BODY FULL-LENGTH SHOT, head to toe: a distant full-length standing figure photographed from the FRONT, facing the camera. " +
   "Camera at chest height about 4–5 metres away, 50mm lens, no wide-angle distortion. " +
-  "The ENTIRE body from the top of the hair to the soles of the shoes is inside the frame, with visible floor below the feet and empty space above the head; " +
-  "the figure fills about 75–85% of the frame height. " +
-  "NOT a close-up, NOT a medium shot, NOT a portrait — no cropping at the waist, hips or knees; both feet and shoes fully visible standing on the floor. " +
+  "The ENTIRE body from the top of the hair to the soles of the shoes is inside the frame, with a little floor below the feet and a little empty space above the head; " +
+  "the standing figure fills about 85–90% of the frame height (tall vertical 9:16 frame — the body is TALL and stretches almost the whole frame). " +
+  "NOT a close-up, NOT a medium shot, NOT a portrait — no cropping at the waist, hips or knees; both feet and shoes fully visible standing flat on the floor. " +
   "Standing straight, symmetric shoulders, relaxed arms at the sides, all clothing and the full silhouette visible.";
 
-/** Realistic body proportions for the full-body shot (appended after the character description). */
+/**
+ * Realistic ADULT body proportions for the full-body shot (appended after the character description).
+ * The chained face close-up tends to pull the model into a big-headed, short-legged "chibi" figure, so the
+ * proportions are spelled out in heads-tall terms with explicit negatives.
+ */
 export const FULL_BODY_PROPORTIONS =
-  "Realistic human proportions: the head is about 1/7–1/8 of the total body height, normal-sized head, natural shoulder width and leg length.";
+  "ANATOMY / PROPORTIONS (critical): realistic adult human proportions — the figure is 7.5–8 heads tall; the head is SMALL relative to the body (about 1/8 of the total height); " +
+  "long legs — the legs (from hip to sole) are about HALF of the total body height; natural long torso; shoulders about 2–2.5 head-widths wide; feet flat on the ground. " +
+  "NOT chibi, NOT a stylized short or stocky figure, NO oversized head, NO short stubby legs, NO dwarf-like, NO child-like proportions, NO caricature — a tall, naturally proportioned adult.";
+
+/** Child / young-teen variant — a child character keeps age-appropriate proportions instead of adult ones. */
+export const FULL_BODY_PROPORTIONS_CHILD =
+  "ANATOMY / PROPORTIONS (critical): realistic proportions for a child of the stated age (about 6–7 heads tall, naturally larger head-to-body ratio than an adult, legs a bit under half of the total height), feet flat on the ground. " +
+  "NOT chibi, NOT a caricature, NO grotesquely oversized head, NO stubby legs — a real child photographed head to toe.";
+
+/**
+ * Heuristic: does the appearance text describe a child / young teen (≤ 14)? Adults get the adult
+ * proportions block; children keep child proportions. Exported for unit tests.
+ */
+export function isChildAppearance(appearance: string): boolean {
+  const a = appearance.toLowerCase();
+  // (\b is ASCII-only in JS regexes, so the Russian alternatives avoid it.)
+  const ageMatch = a.match(/(?:^|[^\d])(\d{1,2})[\s-]*(?:years?[\s-]*old\b|y\.?o\.?\b|лет|года?)(?![a-zа-яё])/);
+  if (ageMatch) return Number(ageMatch[1]) <= 14;
+  const range = a.match(/\baged?\s+(\d{1,2})\b/);
+  if (range) return Number(range[1]) <= 14;
+  if (/\b(?:adult|man|woman|grown|elderly|old man|old woman|in (?:his|her|their) (?:20|30|40|50|60|70)s|twenties|thirties|forties|fifties|sixties)\b/.test(a)) return false;
+  return /\b(?:child|kid|little (?:boy|girl)|small (?:boy|girl)|young (?:boy|girl)|toddler|schoolboy|schoolgirl|preteen|pre-teen)\b/.test(a)
+    || /(?:^|[^a-zа-яё])(?:ребён|ребен|мальчик|девочк|малыш|подросток)/.test(a)
+    || /\b(?:boy|girl)\b/.test(a) && !/\b(?:girlfriend|boyfriend|cowboy|cowgirl|playboy|tomboy)\b/.test(a);
+}
+
+/** Proportions block appropriate to the character's stated age / build. */
+export function fullBodyProportionsFor(appearance: string): string {
+  return isChildAppearance(appearance) ? FULL_BODY_PROPORTIONS_CHILD : FULL_BODY_PROPORTIONS;
+}
 
 /** Chained full-body shot: the reference image is a face CLOSE-UP — use it for identity only. */
 export const FULL_BODY_REFERENCE_NOTE =
-  "The reference image is a CLOSE-UP of this person's face and is used ONLY for identity — copy the identical face, facial features, skin tone, hairstyle and hair colour, build and wardrobe from it. " +
-  "Do NOT copy the reference's framing, crop or scale: the reference is tightly framed, this image must be a distant full-length shot of the whole body.";
+  "The reference image is a CLOSE-UP of this person's face and is used ONLY for identity — copy the identical face, facial features, skin tone, hairstyle and hair colour and the outfit / wardrobe from it. " +
+  "Do NOT copy the reference's framing, crop, head size or head-to-frame scale: the reference is tightly framed on the face, this image must be a distant full-length shot in which the head is a small part of a tall body.";
 
 /**
  * Stage 16: the 2 EXTRA angles that complete the FIXED 5-photo character set (beyond the
@@ -83,7 +116,7 @@ export const FULL_BODY_REFERENCE_NOTE =
  */
 export const CHARACTER_EXTRA_VARIANTS = [
   "Right-side profile portrait — camera on the character's RIGHT side, showing the right cheek and side of the face in clean profile, same face, hair, wardrobe and lighting as the reference.",
-  "FULL-BODY FULL-LENGTH SHOT from directly BEHIND (back view), head to toe: a distant full-length standing figure, camera at chest height about 4–5 metres away, 50mm lens, no wide-angle distortion. The ENTIRE body from the top of the hair to the soles of the shoes is inside the frame with visible floor below the feet and empty space above the head, the figure about 75–85% of the frame height, realistic proportions (head about 1/7–1/8 of the body height). NOT a close-up, NOT a medium shot — no cropping at the waist, hips or knees. Shows the hairstyle and the outfit from the back, same wardrobe, colours and lighting as the reference; the reference is a face close-up used ONLY for identity — do not copy its framing or scale.",
+  "FULL-BODY FULL-LENGTH SHOT from directly BEHIND (back view), head to toe: a distant full-length standing figure, camera at chest height about 4–5 metres away, 50mm lens, no wide-angle distortion. The ENTIRE body from the top of the hair to the soles of the shoes is inside the frame with visible floor below the feet and empty space above the head, the figure about 85–90% of the frame height, realistic adult proportions (7.5–8 heads tall, small head about 1/8 of the body height, long legs about half of the total height — NOT chibi, NO oversized head, NO short stubby legs). NOT a close-up, NOT a medium shot — no cropping at the waist, hips or knees. Shows the hairstyle and the outfit from the back, same wardrobe, colours and lighting as the reference; the reference is a face close-up used ONLY for identity — do not copy its framing or scale.",
 ] as const;
 
 export function characterExtraAnglePrompt(appearance: string, name = "", index = 0): string {
