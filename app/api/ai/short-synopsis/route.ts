@@ -51,7 +51,7 @@ export async function POST(request: Request) {
         const raw = await chatJSON(
           shortSynopsisSystemPrompt(language, episodeCount),
           shortSynopsisUserPrompt({ idea: project.idea ?? "", synopsis: project.synopsis, characters: cards, episodeCount, previous, comment }),
-          { temperature: attempt === 1 ? 0.8 : 0.6, maxTokens: 2500 },
+          { temperature: attempt === 1 ? 0.8 : 0.6, maxTokens: Math.min(16000, 1500 + 140 * episodeCount) },
         );
         result = normalizeShortSynopsis(raw, episodeCount);
       } catch (e) { lastErr = e; console.warn(`[short-synopsis] attempt ${attempt} failed:`, e instanceof Error ? e.message : e); }

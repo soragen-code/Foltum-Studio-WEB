@@ -196,3 +196,10 @@ ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "shortSynopsis" TEXT;
 -- Stage 46B: production quality / fps of the last episode assembly (scenes are always 480p)
 ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "assembleQuality" TEXT;
 ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "assembleFps" INTEGER;
+
+-- Stage 46C: Season entity fields + backfill of planned episode count from existing episodes
+ALTER TABLE "Season" ADD COLUMN IF NOT EXISTS "premise" TEXT;
+ALTER TABLE "Season" ADD COLUMN IF NOT EXISTS "previousSeasonId" TEXT;
+ALTER TABLE "Season" ADD COLUMN IF NOT EXISTS "episodeCount" INTEGER;
+ALTER TABLE "Season" ADD COLUMN IF NOT EXISTS "direction" TEXT;
+UPDATE "Season" SET "episodeCount" = (SELECT count(*) FROM "Episode" e WHERE e."seasonId" = "Season".id) WHERE "episodeCount" IS NULL;

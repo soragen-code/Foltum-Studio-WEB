@@ -62,7 +62,7 @@ const ok = (c: unknown, m: string) => { assert(c, m); console.log("ok:", m); pas
   ok(back && back.episodes.length === 3 && back.premise === n.premise, "B: parseStoredShortSynopsis round-trips the JSON column");
   ok(parseStoredShortSynopsis("plain legacy text") === null && parseStoredShortSynopsis(null) === null && parseStoredShortSynopsis("{}") === null, "B: legacy / empty / invalid stored values → null");
 
-  ok(clampEpisodeCount(2, 8) === SEASON_MIN_EPISODES && clampEpisodeCount(99, 8) === SEASON_MAX_EPISODES && clampEpisodeCount("x", 7) === 7 && clampEpisodeCount(8.4, 6) === 8, "B: clampEpisodeCount clamps to product limits and falls back");
+  ok(clampEpisodeCount(0, 8) === SEASON_MIN_EPISODES && clampEpisodeCount(101, 8) === SEASON_MAX_EPISODES && clampEpisodeCount("x", 7) === 7 && clampEpisodeCount(8.4, 6) === 8, "B: clampEpisodeCount clamps to product limits and falls back");
 
   const sys = shortSynopsisSystemPrompt("ru", 8);
   ok(sys.includes("EXACTLY 8 entries") && sys.includes("Russian"), "B: short-synopsis system prompt pins the episode count and language");

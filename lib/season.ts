@@ -9,8 +9,20 @@ import { POWER_TIER_CONFIG, SEEDANCE_MAX_DURATION, sceneTierConfig, type PowerTi
 import { LOCATION_DETAIL_LEVELS } from "@/lib/location-scale";
 
 /** Stage 4: nobody is asked for a running time — the story decides. These are only sanity bounds for the LLM output. */
-export const SEASON_MIN_EPISODES = 3;
-export const SEASON_MAX_EPISODES = 12;
+export const SEASON_MIN_EPISODES = 1;
+export const SEASON_MAX_EPISODES = 100;
+/** Stage 46C — season structure is generated in batches of this many episodes per LLM call. */
+export const STRUCTURE_BATCH_SIZE = 10;
+/** Stage 46C — short synopsis loglines are generated in batches of this many per LLM call. */
+export const SHORT_SYNOPSIS_BATCH_SIZE = 25;
+/** Stage 46C — split 1..total into consecutive inclusive ranges of at most `size` episodes. */
+export function episodeBatches(total: number, size: number): { from: number; to: number }[] {
+  const n = Math.max(0, Math.floor(total));
+  const step = Math.max(1, Math.floor(size));
+  const out: { from: number; to: number }[] = [];
+  for (let from = 1; from <= n; from += step) out.push({ from, to: Math.min(n, from + step - 1) });
+  return out;
+}
 export const SEASON_DEFAULT_EPISODES = 8;
 export const EPISODE_MIN_SCENES = 6;
 export const EPISODE_MAX_SCENES = 15;

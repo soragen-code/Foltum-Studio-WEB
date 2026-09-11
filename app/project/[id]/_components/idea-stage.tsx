@@ -415,7 +415,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   const [genres, setGenres] = useState<string[]>([])
   // Stage 14 (B): producer-chosen number of episodes (manual/auto). Default = 8; range 3..12.
   const [episodeCount, setEpisodeCount] = useState<number>(
-    typeof project?.episodeCount === 'number' && project.episodeCount >= 3 ? project.episodeCount : 8
+    typeof project?.episodeCount === 'number' && project.episodeCount >= 1 ? project.episodeCount : 8
   )
   const [extras, setExtras] = useState('')
   // Stage 12 — uploaded story file state.
@@ -720,8 +720,8 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
             <div className="inline-flex items-center overflow-hidden rounded-lg border border-border">
               <button
                 type="button"
-                onClick={() => setEpisodeCount((n) => Math.max(3, n - 1))}
-                disabled={busy || episodeCount <= 3}
+                onClick={() => setEpisodeCount((n) => Math.max(1, n - 1))}
+                disabled={busy || episodeCount <= 1}
                 className="px-3 py-2 text-sm font-bold text-muted-foreground transition hover:bg-muted disabled:opacity-40"
                 data-testid="episode-count-minus"
                 aria-label="Меньше эпизодов"
@@ -731,12 +731,12 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
               <input
                 id="episode-count"
                 type="number"
-                min={3}
-                max={12}
+                min={1}
+                max={100}
                 value={episodeCount}
                 onChange={(e) => {
                   const v = Math.round(Number(e.target.value))
-                  if (Number.isFinite(v)) setEpisodeCount(Math.min(12, Math.max(3, v)))
+                  if (Number.isFinite(v)) setEpisodeCount(Math.min(100, Math.max(1, v)))
                 }}
                 disabled={busy}
                 className="w-14 border-x border-border bg-background py-2 text-center text-sm outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
@@ -744,8 +744,8 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
               />
               <button
                 type="button"
-                onClick={() => setEpisodeCount((n) => Math.min(12, n + 1))}
-                disabled={busy || episodeCount >= 12}
+                onClick={() => setEpisodeCount((n) => Math.min(100, n + 1))}
+                disabled={busy || episodeCount >= 100}
                 className="px-3 py-2 text-sm font-bold text-muted-foreground transition hover:bg-muted disabled:opacity-40"
                 data-testid="episode-count-plus"
                 aria-label="Больше эпизодов"
@@ -753,7 +753,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
                 +
               </button>
             </div>
-            <span className="text-xs text-muted-foreground">ИИ построит драматургию (вступление → завязка → кульминация → развязка) ровно на {episodeCount} эпизодов (3–12).</span>
+            <span className="text-xs text-muted-foreground">ИИ построит драматургию (вступление → завязка → кульминация → развязка) ровно на {episodeCount} эпизодов (1–100).</span>
           </div>
         )}
         {mode !== 'test' && <button

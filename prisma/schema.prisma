@@ -137,6 +137,10 @@ model Season {
   logline     String?  @db.Text // stage 2: season arc summary
   fullStory   String?  @db.Text // stage 12: whole detailed season story with explicit episode markers (canon for the whole season)
   status      String   @default("draft") // draft, approved
+  premise     String?  @db.Text // stage 46C: season synopsis / short-synopsis JSON for seasons > 1
+  previousSeasonId String? // stage 46C: the season this one continues
+  episodeCount Int?    // stage 46C: planned episode count
+  direction   String?  @db.Text // stage 46C: author's comment for this season
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

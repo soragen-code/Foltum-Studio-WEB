@@ -422,7 +422,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
   let message: string;
   let progress: number;
   if (planned.step === "structure") {
-    responseId = await deps.start(seasonStructureSystemPrompt(language, state.episodeCount), seasonStructureUserPrompt(project.synopsis, cards, project.locations, shortSynopsisOutline(project.shortSynopsis)), { model: SCRIPT_MODEL, maxTokens: 12000 });
+    responseId = await deps.start(seasonStructureSystemPrompt(language, state.episodeCount), seasonStructureUserPrompt(project.synopsis, cards, project.locations, shortSynopsisOutline(project.shortSynopsis)), { model: SCRIPT_MODEL, maxTokens: Math.min(64000, 4000 + 800 * state.episodeCount) });
     message = "Строю структуру сезона…"; progress = 3;
   } else if (planned.step === "fullStory") {
     responseId = await deps.start(
