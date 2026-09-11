@@ -59,6 +59,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [sceneEdit, setSceneEdit] = useState<Record<string, string>>({})
   const [sceneBusy, setSceneBusy] = useState<Record<string, boolean>>({})
   const [regenAsk, setRegenAsk] = useState<string | null>(null) // sceneId awaiting paid regen confirmation
+  const [cancelAsk, setCancelAsk] = useState<string | null>(null) // sceneId awaiting «Отменить генерацию» confirmation
+  const [cancelling, setCancelling] = useState<Record<string, boolean>>({}) // per-scene: cancel request in flight
   const [sceneError, setSceneError] = useState<Record<string, string>>({}) // per-scene generation error shown on the card
   // Stage 36 — the reference images the failed job actually submitted (from job.result.submittedReferences), for previews under the error.
   const [sceneErrorRefs, setSceneErrorRefs] = useState<Record<string, SubmittedReference[]>>({})
@@ -160,8 +162,13 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         const data: JobPollResponse = await res.json()
         if (data?.job) {
           setVideoJobs((prev) => ({ ...prev, [sceneId]: data.job }))
-          if (data.job.status === 'completed' || data.job.status === 'failed') {
+          if (data.job.status === 'completed' || data.job.status === 'failed' || data.job.status === 'canceled') {
             stopPolling(sceneId); clearGen(sceneId)
+            setCancelling((prev) => { const n = { ...prev }; delete n[sceneId]; return n })
+            if (data.job.status === 'canceled') {
+              // The worker reset the scene to «pending» and refunded the credits; drop the stale «generating» flag.
+              patchScene(sceneId, { status: 'pending' })
+            }
             if (data.job.status === 'failed') {
               setSceneError((prev) => ({ ...prev, [sceneId]: data.job.error ?? 'Генерация не удалась' }))
               // Stage 36: show which reference images were actually sent with the failed submission.
@@ -429,6 +436,33 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     } catch (e: any) { clearGen(sceneId); setError(e?.message ?? 'Ошибка') }
   }
   const regenScene = (sceneId: string) => generateScene(sceneId, false)
+
+  // «Отменить генерацию» (confirmed): flag the running video job; the worker cancels the provider
+  // prediction at its next check, refunds the credits and marks the job «canceled» — the poller then
+  // clears the spinner. If the job is unknown/finished the card is unlocked immediately.
+  const cancelSceneGen = async (sceneId: string) => {
+    setCancelAsk(null)
+    const jobId = videoJobs[sceneId]?.id
+    if (!jobId) { stopPolling(sceneId); clearGen(sceneId); return }
+    setCancelling((p) => ({ ...p, [sceneId]: true }))
+    try {
+      const res = await fetch(`/api/ai/jobs/${jobId}/cancel`, { method: 'POST' })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(data?.error ?? 'Не удалось отменить генерацию')
+      if (data?.result === 'already-finished' || data?.result === 'not-found') {
+        // Nothing left to cancel — unlock the card right away.
+        stopPolling(sceneId); clearGen(sceneId)
+        setCancelling((p) => { const n = { ...p }; delete n[sceneId]; return n })
+        setVideoJobs((prev) => { const n = { ...prev }; delete n[sceneId]; return n })
+        if (data?.result === 'not-found') patchScene(sceneId, { status: 'pending' })
+        void refreshCredits()
+      }
+      // Otherwise keep polling: the job turns «canceled» within one worker tick and the poller cleans up.
+    } catch (e: any) {
+      setCancelling((p) => { const n = { ...p }; delete n[sceneId]; return n })
+      setError(e?.message ?? 'Ошибка')
+    }
+  }
 
   // Stage 39 — «Сгенерировать все сцены»: POST /api/ai/episodes/[id]/generate-all starts EVERY pending /
   // failed scene at once (server-side fan-out); the client polls all returned jobs simultaneously so each
@@ -927,20 +961,31 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   {/* Stage 35 — one row, two half-width buttons under the preview: the primary action
                       (generate / regenerate — Stage 39: no sequential gate) and «Смотреть промпт». */}
                   <div className="grid grid-cols-2 gap-2">
-                    {!ready ? (
+                    {gen ? (
+                      /* While THIS scene is generating the primary button becomes «Отменить генерацию»
+                         (confirmed in the box below). */
+                      <button
+                        onClick={() => setCancelAsk(scene.id)}
+                        disabled={cancelAsk === scene.id || !!cancelling[scene.id]}
+                        className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-destructive/50 px-3 py-2 text-sm font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                        data-testid="scene-cancel-gen"
+                        title="Остановить генерацию этой сцены"
+                      >
+                        {cancelling[scene.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />} {cancelling[scene.id] ? 'Останавливаю...' : 'Отменить генерацию'}
+                      </button>
+                    ) : !ready ? (
                       <button
                         onClick={() => generateScene(scene.id, true)}
-                        disabled={gen}
                         className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
                         data-testid="scene-generate"
                         title="Сгенерировать эту сцену"
                       >
-                        {gen ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {gen ? 'Генерирую…' : 'Сгенерировать сцену'}
+                        <Wand2 className="h-4 w-4" /> Сгенерировать сцену
                       </button>
                     ) : (
                       <button
                         onClick={() => setRegenAsk(scene.id)}
-                        disabled={gen || regenAsk === scene.id}
+                        disabled={regenAsk === scene.id}
                         className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
                         data-testid="scene-regenerate"
                       >
@@ -965,6 +1010,15 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       {sceneBusy[scene.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Изменить
                     </button>
                   </div>
+                  {cancelAsk === scene.id && gen && (
+                    <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm" data-testid="cancel-confirm">
+                      Остановить генерацию этой сцены? Списанные кредиты вернутся.
+                      <div className="mt-2 flex gap-2">
+                        <button onClick={() => cancelSceneGen(scene.id)} className="inline-flex items-center gap-1 rounded-lg bg-destructive px-3 py-1.5 text-destructive-foreground" data-testid="cancel-ok"><X className="h-4 w-4" /> Да, отменить</button>
+                        <button onClick={() => setCancelAsk(null)} className="rounded-lg border border-border px-3 py-1.5" data-testid="cancel-keep">Продолжить генерацию</button>
+                      </div>
+                    </div>
+                  )}
                   {regenAsk === scene.id && (
                     <div className="rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm" data-testid="regen-confirm">
                       Сцена переписана. Перегенерировать ролик?

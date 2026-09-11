@@ -497,6 +497,12 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
       await cancelVideoPrediction(state.predictionId);
       prediction = await getPredictionState(state.predictionId);
     }
+    // The author pressed «Отменить генерацию» while the prediction is still running: cancel it at the
+    // provider right away instead of waiting for it to finish — the canceled branch below refunds.
+    if (["starting", "processing"].includes(prediction.status) && (fresh.cancelRequested === true || await isCancelRequested(job.id))) {
+      await cancelVideoPrediction(state.predictionId).catch(() => {});
+      prediction = await getPredictionState(state.predictionId);
+    }
     state.providerStatus = prediction.status;
     state.providerStartedAt = prediction.startedAt;
     state.providerCompletedAt = prediction.completedAt;
