@@ -87,14 +87,14 @@ export const sceneScriptSchema = z.object({
   /** How this scene links to the previous one: same-location-continuation | character-moves | location-change | new-sequence. */
   continuesFrom: z.string().optional(),
   /**
-   * Stage 40 — REQUIRED scripted END STATE of the scene's final frame (English, 3–6 sentences): where every
+   * Stage 40 — REQUIRED scripted END STATE of the scene's final frame (English, 12–20 sentences, ≥150 words): where every
    * present character is relative to the landmarks, body orientation, posture, hands / held objects, gaze and
    * expression; props / doors / light state; camera position and shot scale at the cut. The next scene's prompt
    * opens with it as OPENING STATE (parallel mode) so independently generated clips join seamlessly.
    */
   endState: z.string().min(1),
   /**
-   * Stage 41 — REQUIRED scripted START STATE of the scene's FIRST frame (English, 3–6 sentences, same contract as
+   * Stage 41 — REQUIRED scripted START STATE of the scene's FIRST frame (English, 12–20 sentences, ≥150 words, same contract as
    * endState). Equals the previous scene's endState exactly unless continuesFrom is location-change / new-sequence
    * (then it describes the fresh opening). Opens this scene's prompt as OPENING STATE.
    */
@@ -225,12 +225,19 @@ export const ONE_LOCATION_RULE =
   "The ONLY exception is a DELIBERATELY SHOWN, MOTIVATED move to another place — and then that scene MUST have \"continuesFrom\": \"location-change\" and SHOW the travel on camera (a character walks out and we follow them to the new place). Absent that shown, motivated move, an unmotivated setting change is a HARD ERROR — treat it exactly like a character teleporting between frames (it breaks the same continuity rule).";
 
 /** Stage 40 — what a scripted "endState" must contain. Shared by the episode script, scene revise and continuity audit prompts. */
+// Stage 42 — the frame-state descriptions must be EXHAUSTIVE (≈5× the old detail). A single static
+// still frame is described in ~12–20 sentences / ≥150 words, covering pose, wardrobe, camera,
+// composition, depth, background, lighting, time/weather, colour palette and props.
+const FRAME_STATE_ASPECTS =
+  "Describe, in full: (1) for EVERY character present — exact position relative to fixed landmarks (door, table, window, wall, bench), body orientation (which way the torso and the face point), full posture (standing / seated / leaning / crouched / mid-step held still), the position of each arm and hand and exactly what is held in them, gaze direction, and facial expression; (2) each character's clothing and its condition (neat, wet, torn, dusty, blood-flecked); (3) the spatial relationship and distance between the characters (who is nearer the camera, who is behind whom, how many steps apart, who faces whom); (4) the CAMERA — shot scale (wide / full / medium / medium close-up), height (eye-level / low / high), angle and lens feel; (5) the COMPOSITION — what sits in each corner and third of the frame and along the foreground / midground / background planes; (6) the background set dressing and the elements of the location; (7) the LIGHTING — source, direction, colour and the shadows it casts; (8) the time of day and the weather / atmosphere (haze, dust, smoke, rain); (9) the overall colour palette; (10) notable props and their exact placement. Write it as ONE frozen still — present tense, no motion, no action unfolding over time, no story interpretation, only what is visible in that single instant.";
 export const START_STATE_RULE =
-  "\"startState\" (REQUIRED, ENGLISH, 3–6 sentences) = the same pixel-precise description for the scene's FIRST FRAME: for EVERY character present — position relative to fixed landmarks, body orientation, posture, hands and held objects, gaze and expression; props, doors, light sources and time of day; and the CAMERA position, height, angle and shot scale on frame 1. " +
-  "CHAIN RULE: the startState of scene N+1 must match the endState of scene N EXACTLY (same people in the same spots, same props, same light, same camera) unless its \"continuesFrom\" is \"location-change\" or \"new-sequence\" — only then startState describes the fresh opening of the new sequence.";
+  "\"startState\" (REQUIRED, ENGLISH, present tense, 12–20 sentences, AT LEAST 150 words) = an exhaustive, pixel-precise description of ONE STATIC still frame — the scene's FIRST FRAME, as if the video were frozen on frame 1. " +
+  FRAME_STATE_ASPECTS +
+  " CHAIN RULE: the startState of scene N+1 must match the endState of scene N EXACTLY (same people in the same spots, same wardrobe, same props, same light, same camera) unless its \"continuesFrom\" is \"location-change\" or \"new-sequence\" — only then startState describes the fresh opening of the new sequence.";
 export const END_STATE_RULE =
-  "\"endState\" (REQUIRED, ENGLISH, 3–6 sentences) = a pixel-precise description of the scene's FINAL FRAME at the cut, written for the next scene to start from: for EVERY character present — position relative to fixed landmarks (door, table, window, bench…), body orientation (facing the window, back to the door, three-quarter to camera), posture (standing / seated / leaning / mid-step), hands and held objects, gaze direction and facial expression; the state of props, doors, light sources and time of day; and the CAMERA — position, height, angle and shot scale (wide / medium / medium close-up) at the cut. No story interpretation, no future action — only what is visible in the last frame. " +
-  "HAND-OFF RULE: scene N+1 BEGINS from scene N's endState — same people in the same spots, same props, same light — unless its \"continuesFrom\" is \"location-change\" or \"new-sequence\". So write each endState knowing the next scene's [BLOCKING] / [SHOT TYPE] first beat must match it exactly, and write each scene's opening to match the previous endState.";
+  "\"endState\" (REQUIRED, ENGLISH, present tense, 12–20 sentences, AT LEAST 150 words) = an exhaustive, pixel-precise description of ONE STATIC still frame — the scene's FINAL FRAME at the cut, written so the next scene can start from it verbatim. " +
+  FRAME_STATE_ASPECTS +
+  " HAND-OFF RULE: scene N+1 BEGINS from scene N's endState — same people in the same spots, same wardrobe, same props, same light — unless its \"continuesFrom\" is \"location-change\" or \"new-sequence\". So write each endState knowing the next scene's [BLOCKING] / [SHOT TYPE] first beat must match it exactly, and write each scene's opening to match the previous endState.";
 
 const PROMPT_LINES = ["[SHOT TYPE]", "[VISUAL STYLE]", "[LIGHTING]", "[BLOCKING]", "[GAZE]", "[NON-VERBAL]", "[ACTION]", "[CHARACTER]", "[TRANSITION]"];
 
@@ -404,11 +411,9 @@ export function normalizeEpisodeScript(script: EpisodeScript, characters?: Chara
     }
     return vp;
   };
-  return {
-    ...script,
-    // Stage 27a: auto-split any over-long scene FIRST, then renumber the flat result contiguously (1..N)
-    // and derive each piece's durationSec from its own (now-fitting) speech.
-    scenes: splitOverlongScenes(script.scenes).map((s, i) => {
+  // Stage 27a: auto-split any over-long scene FIRST, then renumber the flat result contiguously (1..N)
+  // and derive each piece's durationSec from its own (now-fitting) speech.
+  const scenes = splitOverlongScenes(script.scenes).map((s, i) => {
       const narrationText = (s.voiceover ?? "").trim();
       const isNarr = s.sceneKind === "narration" && !!narrationText;
       return {
@@ -432,8 +437,17 @@ export function normalizeEpisodeScript(script: EpisodeScript, characters?: Chara
       // Stage 41 — scripted start state of the first frame (OPENING STATE of this scene's prompt).
       startState: (s.startState ?? "").trim(),
       };
-    }),
-  };
+    });
+  // Stage 42 — deterministic frame hand-off: the start frame of scene N+1 IS the end frame of scene N.
+  // We overwrite each scene's startState with the previous scene's endState verbatim (scene 1 keeps its
+  // own). In parallel mode there is no vision-derived endStateActual, so buildScenePrompt's OPENING STATE
+  // then equals scene.startState === previous.endState — a text-level butt-join between adjacent scenes.
+  // (Chain mode is unaffected: resolveOpeningState still prefers previous.endStateActual there.)
+  for (let i = 1; i < scenes.length; i++) {
+    const prevEnd = (scenes[i - 1].endState ?? "").trim();
+    if (prevEnd) scenes[i].startState = prevEnd;
+  }
+  return { ...script, scenes } as EpisodeScript;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -613,7 +627,7 @@ S4. "visualIdentity": ONE SHORT English sentence (max 25 words) — photoreal li
 S5. Use ONLY the given character names (Western names, Latin letters, exactly as given). "characters" lists the names visible in the shot (a CROWD group name is listed when the group is in frame). SUPPORTING and MINOR characters present in the episode must actually speak in at least one scene each; crowds may have a short collective line or reactions.
 S6. Dramatize ONLY this episode's logline — a natural continuation of the previous episodes, ending on this episode's cliffhanger (the last scene IS the cliffhanger). Original content only: never reuse names, plots or lines of existing films/series.
 
-Before answering, check: scenes count ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES}; silent scenes ≤ ${MAX_SILENT_SCENES}; each talking scene has ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} English dialogue sentences and ≥ 2 words per second; every fight / physical confrontation promised by the logline is an "action" scene with face-to-face beat-by-beat choreography (R9); every videoPrompt has all 9 tags including [CHARACTER] and a cut list in [SHOT TYPE] that opens wide and mixes shot scales across the space; [BLOCKING] moves characters between different zones and gives each speaker ordinary business; [ACTION] adds secondary background life so the place feels alive; and EACH scene continues seamlessly from the previous one — "presence"/"entrances"/"continuesFrom" are filled and every entrance/exit/move is shown in [BLOCKING]/[ACTION]/[TRANSITION] so nobody teleports or vanishes; EVERY scene has a non-empty English "endState" (3–6 sentences: positions, orientation, posture, hands, gaze, props, light, camera at the cut) AND a non-empty English "startState" (the same for frame 1), and each startState equals the previous scene's endState exactly unless continuesFrom is location-change / new-sequence.`;
+Before answering, check: scenes count ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES}; silent scenes ≤ ${MAX_SILENT_SCENES}; each talking scene has ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} English dialogue sentences and ≥ 2 words per second; every fight / physical confrontation promised by the logline is an "action" scene with face-to-face beat-by-beat choreography (R9); every videoPrompt has all 9 tags including [CHARACTER] and a cut list in [SHOT TYPE] that opens wide and mixes shot scales across the space; [BLOCKING] moves characters between different zones and gives each speaker ordinary business; [ACTION] adds secondary background life so the place feels alive; and EACH scene continues seamlessly from the previous one — "presence"/"entrances"/"continuesFrom" are filled and every entrance/exit/move is shown in [BLOCKING]/[ACTION]/[TRANSITION] so nobody teleports or vanishes; EVERY scene has a non-empty English "endState" (12–20 sentences, ≥150 words: pose, wardrobe, camera, composition, depth, background, lighting, time/weather, colour palette and props of the final frame) AND a non-empty English "startState" (the same exhaustive still for frame 1), and each startState equals the previous scene's endState exactly unless continuesFrom is location-change / new-sequence.`;
 }
 export function episodeScriptUserPrompt(input: {
   synopsis: string;

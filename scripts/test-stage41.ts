@@ -61,7 +61,8 @@ const loc = { id: "loc", name: "Kitchen", imageUrl: styledUrl("k-wide"), imageRe
   ok(sceneScriptSchema.safeParse({ ...base, startState: start, endState: end }).success, "B: sceneScriptSchema accepts both");
   ok(!sceneReviseSchema.safeParse({ ...base, endState: end }).success && sceneReviseSchema.safeParse({ ...base, startState: start, endState: end }).success, "B: sceneReviseSchema requires startState");
   const ep = normalizeEpisodeScript(episodeScriptSchema.parse({ visualIdentity: "photoreal cinematic", scenes: Array.from({ length: 6 }, (_, i) => ({ ...base, number: i + 1, startState: ` ${start} `, endState: end })) }));
-  ok(ep.scenes.every(s => s.startState === start && s.endState === end), "B: normalizeEpisodeScript trims and keeps startState / endState");
+  // Stage 42 — scene 1 keeps its own trimmed startState; scenes 2..N inherit the previous endState (here === end).
+  ok(ep.scenes[0].startState === start && ep.scenes.every(s => s.endState === end) && ep.scenes.slice(1).every(s => s.startState === end), "B: normalizeEpisodeScript trims + hands off startState[i]=endState[i-1]");
 
   const sys = episodeScriptSystemPrompt("en", 1);
   ok(sys.includes('"startState": string, "endState": string') && sys.includes("R10. START / END STATE HAND-OFF") && sys.includes("CHAIN RULE") && sys.includes(START_STATE_RULE), "B: episode script prompt asks for startState + endState with the chain rule");
