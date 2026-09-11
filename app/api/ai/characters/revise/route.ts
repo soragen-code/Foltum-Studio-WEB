@@ -84,6 +84,14 @@ export async function POST(request: Request) {
       },
     });
 
+    if (appearanceChanged) {
+      // Stage 46B-1: rendered scenes with this character now show a stale look.
+      await prisma.scene.updateMany({
+        where: { characters: { some: { characterId } }, videoUrl: { not: null } },
+        data: { lookStale: true },
+      }).catch(() => {});
+    }
+
     return NextResponse.json({ character: updated, appearanceChanged });
   } catch (err: any) {
     console.error("Character revise error:", err);

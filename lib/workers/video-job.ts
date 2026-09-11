@@ -7,7 +7,8 @@ import { extractLastFrameBuffer } from "@/lib/ffmpeg";
 import { normalizeVideoModel, videoModelSlug } from "@/lib/ai-models";
 import { getBucketConfig } from "@/lib/aws-config";
 import { VISUAL_STYLE_ID } from "@/lib/visual-style";
-import { buildScenePrompt, type SceneReference } from "@/lib/scene-prompt";
+import { buildScenePrompt, resolveOpeningState, type SceneReference } from "@/lib/scene-prompt";
+import { rewriteSceneLook, parseLookCache } from "@/lib/character-look";
 import { GenerationAttempt, safeProviderError, classifyProviderError, logAttempt, safeDiagnosticInput } from "@/lib/generation-diagnostics";
 import { updateJob, heartbeatJob, runInBackground, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { moderationHints } from "@/lib/sanitize-prompt";
@@ -39,6 +40,8 @@ export interface VideoJobState {
   cost?: number;
   startedAt: number;
   diagnostics?: GenerationAttempt[];
+  /** Stage 46B-1: set when the live-look rewrite fell back to the original scene text. */
+  lookWarning?: string;
   /** set once finalization (upload) has begun, to avoid running it twice */
   finalizing?: boolean;
   leaseToken?: string;
@@ -172,11 +175,35 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     // Stage 27c: single source of truth — the exact final prompt + reference plan is assembled by the
     // pure buildScenePrompt (lib/scene-prompt.ts), shared with the "show full prompt" preview so the
     // preview can never drift from what is actually submitted.
+    // Stage 46B-1: rewrite the scene text (all 9 prompt lines, start/end state, resolved opening state and a
+    // manual override) to the CURRENT character look — one gpt-4o call per scene, cached in Scene.lookCache.
+    // On failure the original text is used (the [CHARACTER] line is still refreshed by buildScenePrompt).
+    const lookChars = links.map(l => ({ characterId: l.characterId, name: l.character.name, age: l.character.age, appearance: l.character.appearance }));
+    const originalOpening = resolveOpeningState(scene, previous);
+    const overrideText = (scene.promptOverride ?? "").trim();
+    const look = await rewriteSceneLook(lookChars, {
+      videoPrompt: overrideText || scene.videoPrompt,
+      startState: scene.startState ?? null,
+      endState: scene.endState ?? null,
+      openingState: originalOpening,
+    }, parseLookCache(scene.lookCache));
+    const lookWarning = look.warning;
+    if (lookWarning) console.warn(`[video-job] ${sceneId}: ${lookWarning}`);
+    if (look.cache && !look.fromCache) await prisma.scene.update({ where: { id: sceneId }, data: { lookCache: JSON.stringify(look.cache) } }).catch(() => {});
+    const lookScene = {
+      ...scene,
+      videoPrompt: overrideText ? scene.videoPrompt : look.texts.videoPrompt,
+      promptOverride: overrideText ? look.texts.videoPrompt : scene.promptOverride,
+      startState: look.texts.openingState ?? scene.startState,
+      endState: look.texts.endState ?? scene.endState,
+    };
+    // The rewritten opening state replaces the previous scene's stored states so resolveOpeningState picks it.
+    const lookPrevious = previous && look.texts.openingState ? { ...previous, endStateActual: null, endState: null } : previous;
     const built = buildScenePrompt({
-      scene,
-      characters: links.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront, appearance: l.character.appearance, age: l.character.age })),
+      scene: lookScene,
+      characters: links.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront, imageFull: l.character.imageFull, appearance: l.character.appearance, age: l.character.age })),
       location: episodeLoc?.location ?? null,
-      previous,
+      previous: lookPrevious,
       provider: params.provider,
       resolvedDialogueEn: dialogueEn,
       // Stage 40: a test episode has no linked characters/location → plain text-to-video, no Flux still.
@@ -293,7 +320,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     pipelineExtra.submittedReferences = submittedReferences;
     pipelineExtra.previousFrameSceneId = built.previousFrameSceneId;
     attempt.predictionId = predictionId; attempt.status = "processing";
-    state = { predictionId, sceneId, projectId, userId, cost, startedAt: Date.now(), diagnostics, ...pipelineExtra };
+    state = { predictionId, sceneId, projectId, userId, cost, startedAt: Date.now(), diagnostics, ...(lookWarning ? { lookWarning } : {}), ...pipelineExtra };
     // This checkpoint MUST succeed: never swallow the prediction ID write.
     await prisma.generationJob.update({ where: { id: jobId }, data: {
       resultData: JSON.stringify(state), message: submitMessage, progress: SCENE_STAGE_PROGRESS.queued,
@@ -362,6 +389,8 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, source: str
     if (!result.count) return false;
     await tx.scene.update({ where: { id: state.sceneId }, data: {
       videoUrl, audioUrl: null, status: "generated", lastFrameUrl, subtitled: false, endStateActual,
+      // Stage 46B-1: the new clip renders the current look — clear the stale marker.
+      lookStale: false,
       // Persist the model that actually succeeded (set only when the auto-fallback switched models).
       ...(state.videoModel ? { videoModel: state.videoModel } : {}),
     } });

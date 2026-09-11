@@ -38,11 +38,13 @@ export interface FrameStateCharacter {
 
 export const FRAME_STATE_SYSTEM_PROMPT =
   "You describe the FINAL frame of a short vertical (9:16) video clip for a continuity hand-off to the next clip. " +
-  "Describe exactly what is visible, pixel-precisely: framing and shot size, camera angle, the position of every person " +
-  "in the frame (left/center/right, foreground/background), body pose, gaze direction, facial expression, hand positions, " +
-  "clothing state, props being held, key objects and their placement, lighting direction and colour, time of day, weather. " +
+  "Describe exactly what is visible, pixel-precisely: framing and shot size, camera angle and height, composition, the position of every person " +
+  "in the frame (left/center/right, foreground/background), body pose, gaze direction, hand positions, props being held, key objects and their " +
+  "placement, environment, lighting direction and colour, time of day, weather. " +
+  "Do NOT describe people's faces, hair, skin, body build or clothing — refer to people ONLY by name or role (e.g. \"Anna\", \"the barman\"); " +
+  "their look is defined elsewhere and must not be repeated here. " +
   "Write in English, 4–8 sentences, present tense, plain visual facts only — no story interpretation, no emotions guessed " +
-  "beyond what the face shows, no assumptions about what happens next. Never mention that this is a frame or a screenshot.";
+  "beyond the visible expression, no assumptions about what happens next. Never mention that this is a frame or a screenshot.";
 
 /** Build the vision request for a last-frame description (pure; unit-tested). */
 export function buildFrameStateRequest(imageUrl: string, scene: FrameStateScene, characters: readonly FrameStateCharacter[]): VisionRequest {

@@ -203,3 +203,7 @@ ALTER TABLE "Season" ADD COLUMN IF NOT EXISTS "previousSeasonId" TEXT;
 ALTER TABLE "Season" ADD COLUMN IF NOT EXISTS "episodeCount" INTEGER;
 ALTER TABLE "Season" ADD COLUMN IF NOT EXISTS "direction" TEXT;
 UPDATE "Season" SET "episodeCount" = (SELECT count(*) FROM "Episode" e WHERE e."seasonId" = "Season".id) WHERE "episodeCount" IS NULL;
+
+-- Stage 46B-1: live character look cache + stale marker per scene
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "lookCache" TEXT;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "lookStale" BOOLEAN NOT NULL DEFAULT false;

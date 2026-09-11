@@ -78,6 +78,8 @@ export interface ScenePromptCharacterLink {
   name: string;
   tier?: string | null;
   imageFront?: string | null;
+  /** Stage 46B-1 — styled full-body reference; sent right after imageFront for individuals (build, proportions, current clothing). */
+  imageFull?: string | null;
   /** Stage 46B-0 — CURRENT saved appearance / age of the live Character row (rebuilds the [CHARACTER] line). */
   appearance?: string | null;
   age?: string | null;
@@ -375,7 +377,13 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const locationExtras = location ? parseLocationExtra(location.imageExtra).slice(0, LOCATION_EXTRA_REF_CAP) : [];
   const effectiveLocation = locationAngles.length ? location : null;
   type Ref = SceneReference & { id: string };
-  const characterRefs: Ref[] = individuals.map(c => ({ url: c.imageFront!, kind: "character", id: c.characterId, note: `defines ${c.name}'s photorealistic appearance and identity; use the scene's staging and camera.` }));
+  // Stage 46B-1: every individual sends its FRONT (face/identity) and, when styled, its FULL-BODY reference
+  // (build, proportions, CURRENT clothing) right after it — character-first ordering, never trimmed. Crowds: front only.
+  const characterRefs: Ref[] = individuals.flatMap(c => {
+    const refs: Ref[] = [{ url: c.imageFront!, kind: "character", id: c.characterId, note: `defines ${c.name}'s face and identity; use the scene's staging and camera.` }];
+    if (isStyledAsset(c.imageFull)) refs.push({ url: c.imageFull!, kind: "character", id: c.characterId, note: `defines ${c.name}'s full-body build, proportions and current clothing.` });
+    return refs;
+  });
   const locationRefs: Ref[] = [
     ...locationAngles.map(a => ({ url: a.url, angle: a.angle as string })),
     ...(effectiveLocation ? locationExtras.map((url, i) => ({ url, angle: locationExtraLabel(i) })) : []),

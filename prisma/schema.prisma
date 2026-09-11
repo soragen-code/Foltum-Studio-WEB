@@ -285,6 +285,8 @@ model Scene {
   startState    String?  @db.Text // stage 41: SCRIPTED start state of the scene's FIRST frame (English, from the screenwriter) — equals the previous scene's endState unless the scene starts a new sequence; opens the prompt as OPENING STATE
   endState      String?  @db.Text // stage 40: SCRIPTED end state of the scene's final frame (English, from the screenwriter) — the next scene's OPENING STATE in parallel mode
   endStateActual String? @db.Text // stage 40: ACTUAL end state described by a vision model from the generated last frame (chain mode) — wins over endState for the next scene
+  lookCache     String?  @db.Text // stage 46B-1: JSON {hash, videoPrompt, startState, endState, openingState} — scene text rewritten to the CURRENT character look
+  lookStale     Boolean  @default(false) // stage 46B-1: a linked character's appearance changed after this scene's video was rendered
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

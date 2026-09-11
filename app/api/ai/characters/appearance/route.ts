@@ -42,9 +42,6 @@ export async function POST(request: Request) {
       include: { project: true },
     });
     if (!character) return NextResponse.json({ error: "Character not found" }, { status: 404 });
-    if (character.project.charactersLocked)
-      return NextResponse.json({ error: "Characters are locked" }, { status: 409 });
-
     const projectId = character.projectId;
 
     // Idempotent start: reuse an active regeneration job for this character.
@@ -95,9 +92,7 @@ export async function POST(request: Request) {
     // (a) the idempotent character worker regenerates all 3 shots (front → profile/full),
     // (b) the frontend's completeness check flips to false → reference polling resumes and
     //     the spinner holds until the new photos land.
-    // A prompt edit no longer auto-locks the reference: the user may revise as many times as
-    // needed and the character stays editable until they explicitly press «Сохранить навсегда»
-    // (POST /api/ai/characters/lock), which is the only place refLocked is set to true.
+    // Stage 46B-1: no lock concept any more — the character stays editable; scenes always render the current look.
     const updated = await prisma.character.update({
       where: { id: characterId },
       data: {
@@ -109,6 +104,12 @@ export async function POST(request: Request) {
         imageExtra: null,
       },
     });
+
+    // Stage 46B-1: every rendered scene of the project that shows this character now carries a stale look.
+    await prisma.scene.updateMany({
+      where: { characters: { some: { characterId } }, videoUrl: { not: null } },
+      data: { lookStale: true },
+    }).catch(() => {});
 
     // 3. Background regeneration of the 3 reference shots for this character only
     const job = await prisma.generationJob.create({

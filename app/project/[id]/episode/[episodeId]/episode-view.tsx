@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Header } from '@/components/header'
-import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Lock, Copy, Check, FileText, RotateCcw, Save, Plus } from 'lucide-react'
+import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Copy, Check, FileText, RotateCcw, Save, Plus } from 'lucide-react'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
@@ -48,7 +48,7 @@ const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.ima
 // Stage 17: top up location extras in serverless-safe chunks (a single 12-frame job can overrun the
 // serverless window and get killed — chunking + re-firing guarantees the target is actually reached).
 
-type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; status: string; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
+type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; lookStale?: boolean | null; status: string; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null }
 
 export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits }: { episode: any; project: any; siblings?: Sibling[]; credits: number }) {
@@ -394,20 +394,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     } catch { setError('Ошибка сети') } finally { setRefStarting(false) }
   }
 
-  /** «Зафиксировать все референсы» (Stage 46A): lock every character with a full photo set and every location
-   *  with a master frame that is not locked yet — one click instead of a button on every card. */
-  const [lockingAll, setLockingAll] = useState(false)
-  const lockableChars = refChars.filter((c) => !c.refLocked && hasAllImages(c))
-  const lockableLocs = refLocs.filter((l) => !l.refLocked && locBaseReady(l))
-  const lockAllRefs = async () => {
-    setLockingAll(true); setError('')
-    try {
-      for (const c of lockableChars) await lockCharacter(c.id)
-      for (const l of lockableLocs) await lockLocation(l.id)
-    } finally { setLockingAll(false) }
-  }
-
-  const cancelRefs = async () => {
+    const cancelRefs = async () => {
     refCanceled.current = true; autoResumedRef.current = true // don't let the self-heal effect restart what was just canceled
     const ids = [refJobs.current.char, ...Object.values(refJobs.current.loc), ...Object.values(refJobs.current.extra)].filter(Boolean) as string[]
     for (const id of ids) { try { await fetch(`/api/ai/jobs/${id}/cancel`, { method: 'POST' }) } catch {} }
@@ -490,28 +477,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       if (d?.location) setRefLocs((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...d.location } : l)))
       setLocEdit((t) => ({ ...t, [locationId]: '' }))
       if (d?.jobId) setRefSession(true) // poll only when a regeneration job actually started
-    } catch { setError('Ошибка сети') } finally { setLocBusy((b) => { const n = { ...b }; delete n[locationId]; return n }) }
-  }
-
-  /** Stage 22 — "Сохранить навсегда": lock a character reference without regeneration. */
-  const lockCharacter = async (characterId: string) => {
-    setCharBusy((b) => ({ ...b, [characterId]: true })); setError('')
-    try {
-      const res = await fetch('/api/ai/characters/lock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ characterId }) })
-      const d = await res.json()
-      if (!res.ok) { setError(d?.error ?? 'Не удалось зафиксировать персонажа'); return }
-      if (d?.character) setRefChars((prev) => prev.map((c) => (c.id === characterId ? { ...c, ...d.character } : c)))
-    } catch { setError('Ошибка сети') } finally { setCharBusy((b) => { const n = { ...b }; delete n[characterId]; return n }) }
-  }
-
-  /** Stage 22 — "Сохранить навсегда": lock a location reference without regeneration. */
-  const lockLocation = async (locationId: string) => {
-    setLocBusy((b) => ({ ...b, [locationId]: true })); setError('')
-    try {
-      const res = await fetch(`/api/ai/locations/${locationId}/lock`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) })
-      const d = await res.json()
-      if (!res.ok) { setError(d?.error ?? 'Не удалось зафиксировать локацию'); return }
-      if (d?.location) setRefLocs((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...d.location } : l)))
     } catch { setError('Ошибка сети') } finally { setLocBusy((b) => { const n = { ...b }; delete n[locationId]; return n }) }
   }
 
@@ -821,11 +786,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                     {refStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Сгенерировать персонажей
                   </button>
                 )}
-                {(lockableChars.length > 0 || lockableLocs.length > 0) && (
-                  <button onClick={lockAllRefs} disabled={lockingAll || refStarting} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="lock-all-refs" title="Зафиксировать без изменений все персонажи и локации, у которых уже есть изображения">
-                    {lockingAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />} Зафиксировать все референсы
-                  </button>
-                )}
               </span>
             )}
           </div>
@@ -861,20 +821,12 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   </div>
                   <div className="mt-2 truncate text-sm font-medium">{c.name} <span className="font-normal text-muted-foreground">· {photos.length}/{CHARACTER_PHOTO_COUNT} фото</span></div>
                   {c.role && <div className="truncate text-xs text-muted-foreground">{c.role}</div>}
-                  {c.refLocked ? (
-                    <div className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 px-2 py-1 text-xs text-muted-foreground" data-testid="ref-character-locked">
-                      <Lock className="h-3.5 w-3.5" /> Зафиксировано
-                    </div>
-                  ) : (
-                    <>
                       <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
                         <input value={charEdit[c.id] ?? ''} onChange={(e) => setCharEdit((t) => ({ ...t, [c.id]: e.target.value }))} placeholder="Изменить по промпту…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-character-input" disabled={busy} />
-                        <button onClick={() => reviseCharacter(c.id)} disabled={busy || !(charEdit[c.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-character-submit" title="Изменить по промпту (после правки референс фиксируется)">
+                        <button onClick={() => reviseCharacter(c.id)} disabled={busy || !(charEdit[c.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-character-submit" title="Изменить по промпту">
                           {charBusy[c.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
                         </button>
                       </div>
-                    </>
-                  )}
                 </div>
               )
             })}
@@ -911,12 +863,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       <div className="flex h-24 w-16 items-center justify-center rounded bg-muted"><ImageOff className="h-4 w-4 text-muted-foreground/40" /></div>
                     ) })()}
                   </div>
-                  {l.refLocked ? (
-                    <div className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/50 px-2 py-1 text-xs text-muted-foreground" data-testid="ref-location-locked">
-                      <Lock className="h-3.5 w-3.5" /> Зафиксировано
-                    </div>
-                  ) : (
-                    <>
                       {locGen || cancelling ? (
                         /* While THIS location is generating the button becomes «Отменить генерацию» (confirmed below),
                            mirroring the scene-video cancel. */
@@ -967,12 +913,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       )}
                       <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
                         <input value={locEdit[l.id] ?? ''} onChange={(e) => setLocEdit((t) => ({ ...t, [l.id]: e.target.value }))} placeholder="Изменить локацию по промпту…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-location-input" disabled={busy} />
-                        <button onClick={() => reviseLocation(l.id)} disabled={busy || !(locEdit[l.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-location-submit" title="Изменить по промпту (после правки референс фиксируется)">
+                        <button onClick={() => reviseLocation(l.id)} disabled={busy || !(locEdit[l.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-location-submit" title="Изменить по промпту">
                           {locBusy[l.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
                         </button>
                       </div>
-                    </>
-                  )}
                 </div>
               )
             })}
@@ -1064,6 +1008,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       {scene.sceneKind === 'action' && <span className="ml-2 rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-600 align-middle" data-testid="scene-kind-action">Экшен</span>}
                       <span className="text-xs font-normal text-muted-foreground"> · ~{scene.durationSec ?? 15}с</span>
                     </div>
+                    {scene.lookStale && validUrl(scene.videoUrl) && (
+                      <div className="mt-1 inline-flex items-center rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-700" data-testid="scene-look-stale">Облик персонажа изменён — перегенерируйте</div>
+                    )}
                   </div>
                   <div className="flex -space-x-1">{scene.characters?.map(({ character: c }) => validUrl(c.imageFront) ? <img key={c.id} src={c.imageFront as string} alt={c.name} title={c.name} className="h-6 w-6 rounded-full border border-background object-cover" /> : null)}</div>
                 </div>

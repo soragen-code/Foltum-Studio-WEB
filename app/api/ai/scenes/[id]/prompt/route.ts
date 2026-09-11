@@ -49,7 +49,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
   }) : null;
   const built = buildScenePrompt({
     scene,
-    characters: scene.characters.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront, appearance: l.character.appearance, age: l.character.age })),
+    characters: scene.characters.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront, imageFull: l.character.imageFull, appearance: l.character.appearance, age: l.character.age })),
     location: scene.episode.location ?? null,
     previous,
     // Stage 33: always Seedance 2.5 (legacy stored ids are normalized the same way in the worker).
