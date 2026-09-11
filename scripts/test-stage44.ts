@@ -161,7 +161,7 @@ const mk = (n: number, opts: { continuesFrom?: (string | undefined)[]; startCame
   }
   ok(true, "F: every extra prompt anchors to the photographed reference image (LIGHT_LOCK + no people kept)");
   ok(/IS this location, already photographed/.test(locationAnglePrompt("cabin", "Cabin", "reverse")) && /medium shot 45° from the side, the action zone/.test(locationAnglePrompt("cabin", "Cabin", "detail")), "F: reverse / detail base prompts use the same anchor and wording");
-  ok(LOCATION_TOTAL_MIN === 6 && desiredTotalFrames({ name: "Кабинет" }) === 6 && desiredExtraFrames({ name: "Кабинет" }) === 3 && desiredTotalFrames({ name: "Ночной город" }) === 9, "F: LOCATION_TOTAL_MIN = 6; small/big → 6, huge → 9");
+  ok(LOCATION_TOTAL_MIN === 4 && desiredTotalFrames({ name: "Кабинет", detailLevel: "low" }) === 4 && desiredTotalFrames({ name: "Кабинет", detailLevel: "medium" }) === 6 && desiredExtraFrames({ name: "Кабинет", detailLevel: "medium" }) === 3 && desiredTotalFrames({ name: "Ночной город", detailLevel: "high" }) === 9, "F: LOCATION_TOTAL_MIN = 4; detail low/medium/high → 4/6/9 (not size)");
 }
 
 // ── G. extra plate job always attaches the photographs, master first ─────────────────────────────

@@ -6,6 +6,7 @@ import { z } from "zod";
 import { LANGUAGE_NAMES, type IdeaLanguage, type CharacterCard } from "@/lib/idea";
 import { VISUAL_STYLE } from "@/lib/visual-style";
 import { POWER_TIER_CONFIG, SEEDANCE_MAX_DURATION, type PowerTier } from "@/lib/power-tier";
+import { LOCATION_DETAIL_LEVELS } from "@/lib/location-scale";
 
 /** Stage 4: nobody is asked for a running time — the story decides. These are only sanity bounds for the LLM output. */
 export const SEASON_MIN_EPISODES = 3;
@@ -38,6 +39,8 @@ export const episodeOutlineSchema = z.object({
   logline: z.string().min(10),
   locationName: z.string().min(1),
   locationDesc: z.string().min(20),
+  /** Required visual detail level of the location (how many camera setups it needs) — drives the reference frame count (4/6/9). Optional so older outputs still parse. */
+  locationDetail: z.enum(LOCATION_DETAIL_LEVELS).optional().default("medium"),
   characters: z.array(z.string().min(1)).min(1),
   arcRole: z.enum(ARC_ROLES),
   cliffhanger: z.string().min(5),
@@ -666,9 +669,13 @@ export function matchLocation<T extends { name: string }>(locations: T[], raw: s
   return matchCharacter(locations, raw);
 }
 
+/** Definition of "locationDetail" shared by the season structure / revise prompts. */
+export const LOCATION_DETAIL_RULE =
+  '"locationDetail" is the level of VISUAL DETAILING the shooting of that location needs — i.e. how many distinct camera setups the place must be photographed from for reference. Judge it by: (1) the number of distinct zones / sub-areas the characters actually use, (2) the density of props and objects that must stay consistent between shots, (3) the complexity of staging (fights, chases, many characters moving through the space → high), and (4) how many scenes of the season happen there. It is NOT about physical size: a huge empty desert or an open field is "low"; an ordinary room used for a conversation is "medium"; a small cluttered workshop where a fight happens, or a market/tavern used across many episodes, is "high". When the same location appears in several episodes, give it the same (highest needed) level every time.';
+
 export function seasonStructureSystemPrompt(language: IdeaLanguage, episodeCount = SEASON_DEFAULT_EPISODES): string {
   return `You are a showrunner planning ONE season of a short-form vertical drama series (9:16 video, each episode = ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES} fast-paced dialogue shots of 15–30 seconds).
-Return STRICT JSON: {"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string}]}.
+Return STRICT JSON: {"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string}]}.
 RULES:
 - NUMBER OF EPISODES: produce EXACTLY ${episodeCount} episodes — no more, no fewer — numbered 1..${episodeCount} contiguously. This count is set by the producer; do NOT change it, do NOT pad and do NOT compress the story into a different number.
 - DRAMATURGY across the whole season (spread these four acts over the ${episodeCount} episodes, in order): ВСТУПЛЕНИЕ → ЗАВЯЗКА → КУЛЬМИНАЦИЯ → РАЗВЯЗКА.
@@ -678,6 +685,7 @@ RULES:
   • РАЗВЯЗКА (the LAST episode, arcRole "финал"): the aftermath and resolution — consequences land, the main dramatic question is answered, threads close (a final hook is allowed but the arc resolves).
   Distribute these beats proportionally to ${episodeCount}: the more episodes, the more развитие episodes between завязка and the кульминация; with few episodes, compress развитие but NEVER drop вступление, кульминация or развязка.
 - Each episode has ONE key location. "locationName" MUST be one of the given LOCATIONS, copied verbatim (they already have reference images). Only if the story truly needs a place that is not in the list may you invent a new one (then give it a new name) — at most 2 new locations per season. "locationDesc" is a DETAILED English visual description (2–4 sentences: architecture, materials, textures, props, weather, light, color palette, time of day) usable verbatim by an image/video model — for a listed location, expand its given description. "locationName" is in ${langName(language)}.
+- ${LOCATION_DETAIL_RULE}
 - Use ONLY the given character names (verbatim; a CROWD group name counts as a character). Every episode lists 2–6 characters actually present: the MAIN characters carrying it plus the SUPPORTING characters (family, colleagues, rivals) involved. Across the season EVERY SUPPORTING character appears in at least one episode, MINOR characters and CROWD groups are used where the story plausibly gathers people (family dinners, workplaces, hospitals, streets, court, celebrations).
 - Each logline is 2–3 sentences of concrete dramatic events (who wants what, what goes wrong). Cliffhanger = the final beat that forces the viewer into the next episode. No summaries like "tension rises".
 - Continuous story: consequences carry over episode to episode; no repetition.
@@ -974,11 +982,12 @@ export const SEASON_SYNC_INSTRUCTION =
 
 export function seasonReviseSystemPrompt(language: IdeaLanguage, episodeCount: number): string {
   return `You are the showrunner of a short-form vertical drama series. You receive the CURRENT season structure (${episodeCount} episodes) and an INSTRUCTION from the author. Apply the instruction to the structure and return the FULL updated structure as STRICT JSON with exactly the same shape:
-{"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string}]}.
+{"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string}]}.
 RULES:
 - Keep EXACTLY ${episodeCount} episodes with the same numbers 1..${episodeCount}. Never add or remove episodes.
 - MINIMAL CHANGE: copy every field of every episode VERBATIM unless the instruction (or story consistency it forces) requires changing it. Episodes that the instruction does not touch must be returned character-for-character identical — the system regenerates only episodes whose logline / arc / location / characters changed, and rewriting untouched episodes wastes the author's work.
 - Use ONLY the given character names verbatim (a new character requested by the author is allowed only if it is present in the CHARACTERS list; otherwise weave the request into the existing cast). "locationName" should be one of the given LOCATIONS (verbatim); a new place only when the story truly needs it.
+- ${LOCATION_DETAIL_RULE}
 - Loglines are 2–3 sentences of concrete dramatic events; cliffhanger = the final beat. Keep continuity: consequences carry over episode to episode.
 - ${CREATIVE_RULE}
 - ${MODERATION_SAFE_RULE}
@@ -1034,11 +1043,12 @@ export function seasonFullStoryUserPrompt(input: { synopsis: string; structure: 
 /** Story-screen revise: rewrite the prose per the author's instruction AND keep the structure in sync (count may change). */
 export function seasonStoryReviseSystemPrompt(language: IdeaLanguage, episodeCount: number): string {
   return `You are the showrunner of a short-form vertical drama. You receive the CURRENT season structure (${episodeCount} episodes), the CURRENT full-story prose, and an INSTRUCTION from the author. Apply the instruction and return the FULL updated season as STRICT JSON:
-{"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string}], "fullStory": string}.
+{"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string}], "fullStory": string}.
 RULES:
 - MINIMAL CHANGE: keep the structure and prose the author did NOT ask to change VERBATIM. Only touch what the instruction (or the story consistency it forces) requires — the system regenerates scripts only for episodes whose logline / arc / location / cast changed, so needless edits waste the author's work.
 - EPISODE COUNT: keep ${episodeCount} episodes UNLESS the author explicitly asks to add or remove episodes; then return the new count (allowed range ${SEASON_MIN_EPISODES}–${SEASON_MAX_EPISODES}), renumber episodes 1..N contiguously, and make "episodes" and "fullStory" agree exactly (same number of episode blocks, same titles/order). Episode 1 = завязка, last = финал.
 - Use ONLY the given character names verbatim; "locationName" should be one of the given LOCATIONS (verbatim) unless the story truly needs a new place. Loglines are 2–3 sentences of concrete events; cliffhanger = the final beat.
+- ${LOCATION_DETAIL_RULE}
 - ${CREATIVE_RULE}
 - ${MODERATION_SAFE_RULE}
 - In "episodes", all text except "locationDesc" is in ${langName(language)}; "locationDesc" is detailed English. Character names stay exactly as given (Western names in Latin letters).

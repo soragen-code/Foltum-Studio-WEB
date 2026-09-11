@@ -186,3 +186,6 @@ ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "chainRunNote" TEXT;
 
 -- Stage 40: «Тестовая серия» — one-scene sandbox projects.
 ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "isTest" BOOLEAN NOT NULL DEFAULT false;
+
+-- Location reference photo count depends on the required detail level (LLM-set), not on size.
+ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "detailLevel" TEXT;

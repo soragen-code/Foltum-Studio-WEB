@@ -110,15 +110,15 @@ ok(cleanStoryText("x".repeat(STORY_MAX_CHARS + 500)).length === STORY_MAX_CHARS,
   ok(/MINIMAL CHANGE/.test(rvSys) && new RegExp(`${SEASON_MIN_EPISODES}[–-]${SEASON_MAX_EPISODES}`).test(rvSys), "seasonStoryReviseSystemPrompt: minimal change + count range for add/remove");
   ok(/add or remove episodes/i.test(rvSys), "seasonStoryReviseSystemPrompt: author may change episode count via prompt");
 
-  // --- (C) location scale + episode locations --------------------------------
-  const { locationScale, desiredExtraFrames, episodeLocations } = await import("../lib/location-scale");
-  ok(locationScale({ name: "Ночной город", description: "огни небоскрёбов" }) === "huge", "locationScale: city → huge");
-  ok(locationScale({ name: "Морской порт", description: "причалы и краны" }) === "big", "locationScale: harbour → big");
-  ok(locationScale({ name: "Тесная кухня", description: "маленькая комната" }) === "small", "locationScale: small room → small");
-  // Stage 18: frames scale with location size → small 3 (0 extra), big 6 (3 extra), huge 9 (6 extra).
-  ok(desiredExtraFrames({ name: "Лес" }) === 6, "desiredExtraFrames: huge → 6 extra (9 total)");
-  ok(desiredExtraFrames({ name: "Склад" }) === 3, "desiredExtraFrames: big → 3 extra (6 total)");
-  ok(desiredExtraFrames({ name: "Кабинет" }) === 3, "desiredExtraFrames: small → 3 extra (6 total, Stage 44 six-shot plan)");
+  // --- (C) location detail level + episode locations -------------------------
+  const { locationDetailLevel, desiredExtraFrames, episodeLocations } = await import("../lib/location-scale");
+  ok(locationDetailLevel({ name: "Ночной город", detailLevel: "low" }) === "low", "locationDetailLevel: stored LLM level wins over size (huge city → low)");
+  ok(locationDetailLevel({ name: "Тесная мастерская", detailLevel: "high" }) === "high", "locationDetailLevel: small cluttered workshop → high");
+  ok(locationDetailLevel({ name: "Тесная кухня", description: "маленькая комната" }) === "low", "locationDetailLevel: legacy short prompt → low (heuristic)");
+  // Frames depend on the required detail level → low 4 (1 extra), medium 6 (3 extra), high 9 (6 extra).
+  ok(desiredExtraFrames({ name: "Лес", detailLevel: "high" }) === 6, "desiredExtraFrames: high → 6 extra (9 total)");
+  ok(desiredExtraFrames({ name: "Склад", detailLevel: "medium" }) === 3, "desiredExtraFrames: medium → 3 extra (6 total)");
+  ok(desiredExtraFrames({ name: "Пустыня", detailLevel: "low" }) === 1, "desiredExtraFrames: low → 1 extra (4 total)");
   const locList = [{ id: "l1", name: "Маяк" }, { id: "l2", name: "Пирс" }, { id: "l3", name: "Чердак" }];
   const epLocs = episodeLocations({ locationId: "l1", locationName: "Маяк", scenes: [{ locationDesc: "разговор на пирсе" }] }, locList);
   ok(epLocs.some((l: any) => l.id === "l1") && epLocs.some((l: any) => l.id === "l2"), "episodeLocations: bound location + scene-mentioned location");

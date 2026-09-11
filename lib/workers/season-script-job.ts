@@ -11,6 +11,7 @@
  */
 import { prisma } from "@/lib/db";
 import { chatJSON, SCRIPT_MODEL } from "@/lib/ai";
+import { maxDetailLevel, isLocationDetailLevel } from "@/lib/location-scale";
 import { heartbeatJob, updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { toCharacterCard, normalizeLanguage, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
 import {
@@ -186,7 +187,7 @@ export async function persistEpisodeScript(
   }, { timeout: 60_000, maxWait: 15_000 }); // 15 scenes × (create + characters) over Neon exceed Prisma's default 5 s interactive-transaction timeout (seen on prod: "Transaction not found")
 }
 
-export function outlineFromEpisode(e: { number: number; title: string; logline: string | null; description: string | null; locationName: string | null; locationDesc: string | null; cliffhanger: string | null; arcRole: string | null; characters: { character: { name: string } }[] }): EpisodeOutline {
+export function outlineFromEpisode(e: { number: number; title: string; logline: string | null; description: string | null; locationName: string | null; locationDesc: string | null; cliffhanger: string | null; arcRole: string | null; characters: { character: { name: string } }[]; location?: { detailLevel?: string | null } | null }): EpisodeOutline {
   const role = (["завязка", "развитие", "поворот", "финал"] as const).find((r) => r === e.arcRole) ?? "развитие";
   return {
     number: e.number,
@@ -194,6 +195,8 @@ export function outlineFromEpisode(e: { number: number; title: string; logline: 
     logline: e.logline ?? e.description ?? "",
     locationName: e.locationName ?? "",
     locationDesc: e.locationDesc ?? "",
+    // Current stored detail level of the bound location (so a revise round-trip does not lose it); "medium" when unknown.
+    locationDetail: isLocationDetailLevel(e.location?.detailLevel) ? e.location.detailLevel : "medium",
     characters: e.characters.map((c) => c.character.name),
     arcRole: role,
     cliffhanger: e.cliffhanger ?? "",
@@ -228,14 +231,18 @@ export async function runSeasonScriptJob(jobId: string, projectId: string, episo
         const s = season
           ? await tx.season.update({ where: { id: season.id }, data: { title: structure.title, logline: structure.logline } })
           : await tx.season.create({ data: { projectId, number: 1, title: structure.title, logline: structure.logline } });
-        const locs: { id: string; name: string }[] = project.locations.map((l) => ({ id: l.id, name: l.name }));
+        const locs: { id: string; name: string; detailLevel: string | null }[] = project.locations.map((l) => ({ id: l.id, name: l.name, detailLevel: l.detailLevel }));
         for (const e of structure.episodes) {
           // Bind the episode to an existing project Location (reference image); unknown names become new Locations without an image.
           let loc = matchLocation(locs, e.locationName);
           if (!loc) {
-            const created = await tx.location.create({ data: { projectId, name: e.locationName, description: e.locationName, visualPrompt: e.locationDesc } });
-            loc = { id: created.id, name: created.name };
+            const created = await tx.location.create({ data: { projectId, name: e.locationName, description: e.locationName, visualPrompt: e.locationDesc, detailLevel: e.locationDetail } });
+            loc = { id: created.id, name: created.name, detailLevel: created.detailLevel };
             locs.push(loc);
+          } else {
+            // Reused location: raise its required detail level if the new structure needs more (never downgrade).
+            const level = maxDetailLevel(loc.detailLevel, e.locationDetail);
+            if (level && level !== loc.detailLevel) { await tx.location.update({ where: { id: loc.id }, data: { detailLevel: level } }); loc.detailLevel = level; }
           }
           const ep = await tx.episode.create({ data: { seasonId: s.id, number: e.number, title: e.title, description: e.logline, logline: e.logline, cliffhanger: e.cliffhanger, locationName: loc.name, locationDesc: e.locationDesc, locationId: loc.id, arcRole: e.arcRole, status: "draft" } });
           const ids = Array.from(new Set(e.characters.map((n) => byName.get(n.toLowerCase())).filter((x): x is string => !!x)));

@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 800; // the story LLM call runs here; affected-episode scripts are rewritten in the background via after()
 
 import { NextResponse } from "next/server";
+import { maxDetailLevel } from "@/lib/location-scale";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { chatJSON } from "@/lib/ai";
@@ -52,7 +53,7 @@ export async function POST(request: Request) {
 
   const season = await prisma.season.findFirst({
     where: { projectId, number: 1 },
-    include: { episodes: { orderBy: { number: "asc" }, include: { characters: { include: { character: true } }, scenes: { select: { videoUrl: true } } } } },
+    include: { episodes: { orderBy: { number: "asc" }, include: { characters: { include: { character: true } }, scenes: { select: { videoUrl: true } }, location: { select: { detailLevel: true } } } } },
   });
   if (!season || season.episodes.length === 0) return NextResponse.json({ error: "Сначала сгенерируйте сезон" }, { status: 400 });
 
@@ -92,15 +93,19 @@ export async function POST(request: Request) {
   }
 
   const byName = new Map(project.characters.map((c) => [c.name.toLowerCase(), c.id]));
-  const locs: { id: string; name: string }[] = project.locations.map((l) => ({ id: l.id, name: l.name }));
+  const locs: { id: string; name: string; detailLevel: string | null }[] = project.locations.map((l) => ({ id: l.id, name: l.name, detailLevel: l.detailLevel }));
   await prisma.$transaction(async (tx) => {
     await tx.season.update({ where: { id: season.id }, data: { title: after.title, logline: after.logline, fullStory } });
     if (removedNumbers.length) await tx.episode.deleteMany({ where: { seasonId: season.id, number: { in: removedNumbers } } }); // cascades scenes
     for (const e of after.episodes) {
       let loc = matchLocation(locs, e.locationName);
       if (!loc) {
-        const created = await tx.location.create({ data: { projectId, name: e.locationName, description: e.locationName, visualPrompt: e.locationDesc } });
-        loc = { id: created.id, name: created.name }; locs.push(loc);
+        const created = await tx.location.create({ data: { projectId, name: e.locationName, description: e.locationName, visualPrompt: e.locationDesc, detailLevel: e.locationDetail } });
+        loc = { id: created.id, name: created.name, detailLevel: created.detailLevel }; locs.push(loc);
+      } else {
+        // Reused location: raise its required detail level if the new structure needs more (never downgrade).
+        const level = maxDetailLevel(loc.detailLevel, e.locationDetail);
+        if (level && level !== loc.detailLevel) { await tx.location.update({ where: { id: loc.id }, data: { detailLevel: level } }); loc.detailLevel = level; }
       }
       const ep = season.episodes.find((x) => x.number === e.number);
       const ids = Array.from(new Set(e.characters.map((n) => byName.get(n.toLowerCase())).filter((x): x is string => !!x)));

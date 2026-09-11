@@ -6,7 +6,7 @@ import { parseLocationExtra } from "@/lib/visual-style";
 import { LOCATION_TOTAL_MAX, LOCATION_BASE_FRAMES } from "@/lib/location-scale";
 import { CHARACTER_REFERENCE_COST } from "@/lib/power-tier";
 
-/** Stage 18: max extra angles one request may generate — the largest scale top-up (huge = 9 total → 6 extra). */
+/** Max extra angles one request may generate — the highest detail level top-up (high = 9 total → 6 extra). */
 const MAX_EXTRA_PER_REQUEST = LOCATION_TOTAL_MAX - LOCATION_BASE_FRAMES;
 
 export const LOCATION_JOB_TYPE = "location_image";

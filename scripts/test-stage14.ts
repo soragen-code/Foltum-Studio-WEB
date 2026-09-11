@@ -23,7 +23,10 @@ import {
   LOCATION_BASE_FRAMES,
   LOCATION_TOTAL_MIN,
   LOCATION_TOTAL_MAX,
+  maxDetailLevel,
+  inferDetailLevel,
 } from "../lib/location-scale";
+import { episodeOutlineSchema, seasonStructureSystemPrompt, seasonReviseSystemPrompt, LOCATION_DETAIL_RULE } from "../lib/season";
 import {
   CHARACTER_EXTRA_VARIANTS,
   characterExtraAnglePrompt,
@@ -49,15 +52,26 @@ async function main() {
 
   // --- (B) location scale: Stage 18 → 3 / 6 / 9 angles by scale ---------------
   ok(LOCATION_BASE_FRAMES === 3, "location base angles = 3");
-  ok(LOCATION_TOTAL_MIN === 6 && LOCATION_TOTAL_MAX === 9, "location total ranges 6..9 by scale (Stage 44)");
-  ok(desiredTotalFrames({ name: "Кабинет" }) === 6, "small location → 6 angles total (Stage 44 six-shot plan)");
-  ok(desiredTotalFrames({ name: "Склад" }) === 6, "big location → 6 angles total");
-  ok(desiredTotalFrames({ name: "Ночной город" }) === 9, "huge location → 9 angles total");
+  ok(LOCATION_TOTAL_MIN === 4 && LOCATION_TOTAL_MAX === 9, "location total ranges 4..9 by detail level");
+  ok(desiredTotalFrames({ name: "Кабинет", detailLevel: "low" }) === 4, "low detail → 4 angles total");
+  ok(desiredTotalFrames({ name: "Склад", detailLevel: "medium" }) === 6, "medium detail → 6 angles total");
+  ok(desiredTotalFrames({ name: "Ночной город", detailLevel: "high" }) === 9, "high detail → 9 angles total");
   ok(
     desiredExtraFrames({ name: "Кабинет" }) === desiredTotalFrames({ name: "Кабинет" }) - LOCATION_BASE_FRAMES,
     "extra frames = total − base (base 3 subtracted)",
   );
-  ok(desiredExtraFrames({ name: "Ночной город" }) === 6, "huge location → 6 extra frames (Stage 18)");
+  ok(desiredExtraFrames({ name: "Ночной город", detailLevel: "high" }) === 6, "high detail → 6 extra frames");
+  ok(desiredExtraFrames({ name: "Пустыня", description: "Endless flat sand under a white sky.", detailLevel: "low" }) === 1, "low detail → 1 extra frame (size does not matter)");
+  // Detail level: never downgrade a stored level; legacy heuristic; LLM schema field (optional, default medium).
+  ok(maxDetailLevel(null, "low") === "low" && maxDetailLevel("high", "low") === "high" && maxDetailLevel("low", "high") === "high" && maxDetailLevel("medium", "bogus") === "medium", "maxDetailLevel: takes the max, never downgrades, ignores junk");
+  ok(inferDetailLevel({ name: "Пустыня", visualPrompt: "Endless dunes." }) === "low", "inferDetailLevel: short/empty prompt → low");
+  ok(inferDetailLevel({ name: "Мастерская", visualPrompt: "A cramped cluttered workshop: workbench with tools, shelves stacked with crates and barrels, a corner forge, stairs to a mezzanine, racks of machines, tables covered in parts, a brawl breaks out between the shelves and the doorways, crowded corners, many zones." }) === "high", "inferDetailLevel: dense props/zones/staging → high");
+  ok(inferDetailLevel({ name: "Кухня", visualPrompt: "A warm family kitchen with a wooden table by the window, morning light on the tiled floor and a kettle on the stove." }) === "medium", "inferDetailLevel: ordinary prompt → medium");
+  const outlineBase = { number: 1, title: "T", logline: "Long enough logline here.", locationName: "Кухня", locationDesc: "A warm family kitchen with a wooden table.", characters: ["Anna"], arcRole: "завязка", cliffhanger: "Door rings." };
+  ok(episodeOutlineSchema.parse(outlineBase).locationDetail === "medium", "episodeOutlineSchema: locationDetail optional → default medium (old outputs parse)");
+  ok(episodeOutlineSchema.parse({ ...outlineBase, locationDetail: "high" }).locationDetail === "high" && !episodeOutlineSchema.safeParse({ ...outlineBase, locationDetail: "huge" }).success, "episodeOutlineSchema: accepts low/medium/high, rejects other values");
+  const sp = seasonStructureSystemPrompt("ru", 8);
+  ok(sp.includes('"locationDetail": "low"|"medium"|"high"') && sp.includes(LOCATION_DETAIL_RULE) && /NOT about physical size/.test(sp) && seasonReviseSystemPrompt("ru", 8).includes(LOCATION_DETAIL_RULE), "season prompts define locationDetail by required detailing, not size");
 
   // --- (C) runWithConcurrency: order preserved + never exceeds limit ----------
   {

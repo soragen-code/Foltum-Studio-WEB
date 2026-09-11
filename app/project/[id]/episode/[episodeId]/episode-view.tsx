@@ -9,7 +9,7 @@ import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
 import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
 import { CancelButton } from '../../_components/cancel-button'
-import { desiredExtraFrames, desiredTotalFrames, locationScale, locationScaleLabel, episodeLocations } from '@/lib/location-scale'
+import { desiredExtraFrames, desiredTotalFrames, locationDetailLevel, locationDetailLabel, episodeLocations } from '@/lib/location-scale'
 import { CHARACTER_PHOTO_COUNT } from '@/lib/reference-counts'
 import { CHARACTER_REFERENCE_COST } from '@/lib/power-tier'
 import { IMAGE_MODELS, DEFAULT_IMAGE_MODEL, VIDEO_MODEL_LABEL, type ImageModelId } from '@/lib/ai-models'
@@ -883,7 +883,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <h3 className="mt-6 flex items-center gap-2 text-sm font-semibold"><MapPin className="h-4 w-4" /> Локации ({refLocs.length})</h3>
           <div className="mt-2 grid gap-4 sm:grid-cols-2">
             {refLocs.map((l) => {
-              const scale = locationScale(l)
+              const detail = locationDetailLevel(l)
               const want = desiredExtraFrames(l)
               const base = [{ url: l.imageUrl, label: 'Общий план' }, { url: l.imageReverse, label: 'Обратный ракурс' }, { url: l.imageDetail, label: 'Средний план' }].filter((a) => validUrl(a.url))
               const extras = parseExtra(l.imageExtra)
@@ -895,7 +895,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                 <div key={l.id} className="rounded-lg border border-border/60 p-3" data-testid="ref-location">
                   <div className="flex items-center justify-between gap-2">
                     <div className="min-w-0 truncate text-sm font-medium">{l.name} <span className="font-normal text-muted-foreground">· {Math.min(locationFrames(l), desiredTotalFrames(l))}/{desiredTotalFrames(l)} кадров</span></div>
-                    <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground" title={`Больше кадров для крупных мест`}>{locationScaleLabel(scale)}{want > 0 ? ` · +${want} кадров` : ''}</span>
+                    <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground" title="Число кадров зависит от требуемой детализации локации, а не от её размера" data-testid="location-detail-badge">детализация: {locationDetailLabel(detail)} · {desiredTotalFrames(l)} кадров</span>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {(() => { const all = [...base.map((a) => ({ url: a.url as string, label: a.label })), ...extras.map((u, i) => ({ url: u, label: `${i + 1}. ${locationExtraLabel(i)}` }))]; const urls = all.map((a) => a.url); return base.length > 0 ? all.map((a, i) => (

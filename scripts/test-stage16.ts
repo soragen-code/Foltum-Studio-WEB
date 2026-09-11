@@ -66,8 +66,8 @@ ok(ex0 !== ex1, "A2: the two extra prompts differ");
 // Unity: every character prompt keeps the same appearance description.
 ok([front, profile, full, ex0, ex1].every((p) => /fisherman|beard/i.test(p)), "A2: all 5 prompts embed the same appearance (unity)");
 
-// --- A3: location frames scale with size (Stage 18: 3 / 6 / 9) ---------------
-for (const [label, loc, total] of [["small", { name: "Кабинет" }, 6], ["big", { name: "Склад" }, 6], ["huge", { name: "Ночной город" }, 9]] as const) {
+// --- A3: location frames follow the required detail level (4 / 6 / 9), not the size ---
+for (const [label, loc, total] of [["low", { name: "Ночной город", detailLevel: "low" }, 4], ["medium", { name: "Склад", detailLevel: "medium" }, 6], ["high", { name: "Кабинет", detailLevel: "high" }, 9]] as const) {
   ok(desiredTotalFrames(loc) === total, `A3: ${label} location → ${total} total`);
   ok(desiredExtraFrames(loc) === total - LOCATION_BASE_FRAMES, `A3: ${label} location → ${total - 3} extra`);
 }

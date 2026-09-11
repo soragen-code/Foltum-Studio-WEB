@@ -1,77 +1,88 @@
-// Stage 12: estimate how "big" a location is so the episode reference generator
-// produces MORE reference frames for large spaces (a city street or a forest needs
-// far more coverage than a small room). Pure/client-safe — no server imports.
+// The number of location reference frames depends on the REQUIRED VISUAL DETAIL LEVEL of the
+// place (how many distinct camera setups the shooting needs), NOT on its physical size.
+// The level is chosen by the script LLM when locations are created (Location.detailLevel);
+// legacy rows without a level fall back to a heuristic on the prompt richness.
+// Pure/client-safe — no server imports.
 
-/** Keywords that imply a large, spatially complex place (need many reference frames). */
-const BIG_KEYWORDS = [
+export const LOCATION_DETAIL_LEVELS = ['low', 'medium', 'high'] as const
+export type LocationDetailLevel = (typeof LOCATION_DETAIL_LEVELS)[number]
+
+export type LocationLike = { name?: string | null; description?: string | null; visualPrompt?: string | null; detailLevel?: string | null }
+
+/** Base angles always generated on the Location row (imageUrl + imageReverse + imageDetail). */
+export const LOCATION_BASE_FRAMES = 3
+/** Total reference frames per detail level: low = 3+1, medium = 3+3, high = 3+6 (the full six-slot extra plan). */
+export const LOCATION_FRAMES_BY_DETAIL: Record<LocationDetailLevel, number> = { low: 4, medium: 6, high: 9 }
+/** Minimum / maximum possible total across detail levels (low=4 ... high=9). */
+export const LOCATION_TOTAL_MIN = LOCATION_FRAMES_BY_DETAIL.low
+export const LOCATION_TOTAL_MAX = LOCATION_FRAMES_BY_DETAIL.high
+
+export function isLocationDetailLevel(v: unknown): v is LocationDetailLevel {
+  return typeof v === 'string' && (LOCATION_DETAIL_LEVELS as readonly string[]).includes(v)
+}
+
+const DETAIL_RANK: Record<LocationDetailLevel, number> = { low: 0, medium: 1, high: 2 }
+
+/** Never downgrade a stored level: keep the higher of the current and the incoming one. */
+export function maxDetailLevel(current: string | null | undefined, incoming: string | null | undefined): LocationDetailLevel | null {
+  const a = isLocationDetailLevel(current) ? current : null
+  const b = isLocationDetailLevel(incoming) ? incoming : null
+  if (!a) return b
+  if (!b) return a
+  return DETAIL_RANK[b] > DETAIL_RANK[a] ? b : a
+}
+
+/** Words that signal many distinct zones / dense props / complex staging in a location prompt. */
+const RICHNESS_HINTS = [
   // en
-  'city', 'street', 'avenue', 'square', 'plaza', 'boulevard', 'downtown', 'skyline',
-  'forest', 'woods', 'field', 'meadow', 'valley', 'mountain', 'desert', 'beach', 'coast',
-  'harbor', 'harbour', 'port', 'dock', 'pier', 'river', 'lake', 'sea', 'ocean',
-  'station', 'terminal', 'airport', 'stadium', 'arena', 'hall', 'factory', 'warehouse',
-  'mall', 'market', 'bazaar', 'campus', 'hospital', 'castle', 'palace', 'mansion',
-  'complex', 'landscape', 'park', 'garden', 'yard', 'courtyard', 'rooftop', 'bridge',
-  'highway', 'road', 'village', 'town', 'district', 'quarter', 'cathedral', 'church',
-  'hangar', 'dam', 'quarry', 'mine', 'canyon', 'cliff', 'hill', 'ruins', 'temple',
+  'zone', 'zones', 'area', 'areas', 'corner', 'corners', 'shelves', 'shelf', 'crowded', 'cluttered', 'packed', 'stacks', 'stacked',
+  'tables', 'benches', 'workbench', 'machines', 'machinery', 'crates', 'barrels', 'stalls', 'booths', 'counters', 'racks', 'tools',
+  'fight', 'chase', 'battle', 'brawl', 'crowd', 'staircase', 'stairs', 'balcony', 'mezzanine', 'corridors', 'rooms', 'doorways',
   // ru
-  'город', 'улиц', 'площад', 'проспект', 'лес', 'поле', 'долин', 'гор', 'пустын',
-  'пляж', 'побережь', 'порт', 'причал', 'река', 'озер', 'море', 'океан', 'вокзал',
-  'станци', 'аэропорт', 'стадион', 'арен', 'завод', 'фабрик', 'склад', 'рынок',
-  'базар', 'кампус', 'больниц', 'замок', 'дворец', 'особняк', 'комплекс', 'парк',
-  'сад', 'двор', 'крыш', 'мост', 'шоссе', 'дорог', 'деревн', 'посёлок', 'посел',
-  'район', 'собор', 'церков', 'храм', 'каньон', 'утёс', 'холм', 'руин', 'ландшафт',
+  'зон', 'участк', 'угол', 'углы', 'полк', 'стеллаж', 'загромож', 'заставлен', 'тесн', 'столы', 'скамь', 'верстак', 'станк', 'ящик',
+  'бочк', 'прилавк', 'лавк', 'инструмент', 'драк', 'бой', 'погон', 'толп', 'лестниц', 'балкон', 'коридор', 'комнат', 'двер',
 ]
 
-/** Keywords that imply an especially vast/open place (need the most frames). */
-const HUGE_KEYWORDS = [
-  'city', 'skyline', 'downtown', 'forest', 'desert', 'valley', 'mountain', 'ocean',
-  'sea', 'landscape', 'stadium', 'airport', 'canyon', 'harbor', 'harbour',
-  'город', 'лес', 'пустын', 'долин', 'гор', 'океан', 'море', 'ландшафт', 'стадион', 'аэропорт', 'каньон',
-]
-
-function textOf(loc: { name?: string | null; description?: string | null; visualPrompt?: string | null }): string {
+function textOf(loc: LocationLike): string {
   return `${loc.name ?? ''} ${loc.description ?? ''} ${loc.visualPrompt ?? ''}`.toLowerCase()
 }
 
-export type LocationScale = 'small' | 'big' | 'huge'
-
-/** Estimate location scale from its name/description/prompt. */
-export function locationScale(loc: { name?: string | null; description?: string | null; visualPrompt?: string | null }): LocationScale {
-  const t = textOf(loc)
-  if (HUGE_KEYWORDS.some((k) => t.includes(k))) return 'huge'
-  if (BIG_KEYWORDS.some((k) => t.includes(k))) return 'big'
-  return 'small'
-}
-
 /**
- * Stage 18: the number of reference frames scales with the location size again — small
- * places need only the base coverage, large ones need more. Totals by scale:
- *   Stage 44: every location gets the full 6-shot plan (base 3 + 6-slot extra plan capped by scale).
- *   small (компактная) → 6 frames  (base 3, 3 extra)
- *   big   (крупная)     → 6 frames  (base 3, 3 extra)
- *   huge  (очень крупная) → 9 frames (base 3, 6 extra)
- * The base 3 angles (imageUrl/imageReverse/imageDetail) are always generated; the EXTRA count
- * tops the total up to the scale target from distinct camera positions.
+ * Heuristic fallback for legacy locations without an LLM-set detail level: judge the richness
+ * of the visual prompt (how many distinct objects/zones it enumerates), never its physical size.
+ *   very short / empty prompt → low; long, list-like prompt with many zones/props → high; else medium.
  */
-/** Minimum / maximum possible total across scales (small=3 … huge=9). */
-export const LOCATION_TOTAL_MIN = 6
-export const LOCATION_TOTAL_MAX = 9
-/** Base angles always generated on the Location row (imageUrl + imageReverse + imageDetail). */
-export const LOCATION_BASE_FRAMES = 3
-
-/** Stage 18: total reference frames a location should have, by its estimated scale (Stage 44: 6 / 6 / 9). */
-export function desiredTotalFrames(loc?: { name?: string | null; description?: string | null; visualPrompt?: string | null }): number {
-  const scale = loc ? locationScale(loc) : 'small'
-  return scale === 'huge' ? 9 : 6
+export function inferDetailLevel(loc: LocationLike): LocationDetailLevel {
+  const prompt = `${loc.description ?? ''} ${loc.visualPrompt ?? ''}`.trim()
+  // A bare name or a one-liner: nothing to cover from many setups.
+  if (prompt.length < 100) return 'low'
+  const t = textOf(loc)
+  const items = prompt.split(/[,;]/).filter((x) => x.trim().length > 2).length
+  const hints = RICHNESS_HINTS.reduce((n, k) => (t.includes(k) ? n + 1 : n), 0)
+  const score = items + hints * 2 + (prompt.length > 500 ? 3 : prompt.length > 300 ? 1 : 0)
+  if (score >= 14) return 'high'
+  return 'medium'
 }
 
-export function desiredExtraFrames(loc: { name?: string | null; description?: string | null; visualPrompt?: string | null }): number {
-  return Math.max(0, desiredTotalFrames(loc) - LOCATION_BASE_FRAMES)
+/** Effective detail level of a location: the stored LLM level, or the heuristic fallback. */
+export function locationDetailLevel(loc?: LocationLike | null): LocationDetailLevel {
+  if (!loc) return 'medium'
+  return isLocationDetailLevel(loc.detailLevel) ? loc.detailLevel : inferDetailLevel(loc)
 }
 
-/** Human label for the scale (RU UI). */
-export function locationScaleLabel(scale: LocationScale): string {
-  return scale === 'huge' ? 'очень крупная' : scale === 'big' ? 'крупная' : 'компактная'
+/** Total reference frames a location should have, by its required detail level (4 / 6 / 9). */
+export function desiredTotalFrames(loc?: LocationLike | null): number {
+  return LOCATION_FRAMES_BY_DETAIL[locationDetailLevel(loc)]
+}
+
+/** Extra frames on top of the 3 base angles (1 / 3 / 6) — never more than the six unique extra slots. */
+export function desiredExtraFrames(loc: LocationLike): number {
+  return Math.min(LOCATION_TOTAL_MAX - LOCATION_BASE_FRAMES, Math.max(0, desiredTotalFrames(loc) - LOCATION_BASE_FRAMES))
+}
+
+/** Human label for the detail level (RU UI). */
+export function locationDetailLabel(level: LocationDetailLevel): string {
+  return level === 'high' ? 'высокая' : level === 'low' ? 'низкая' : 'средняя'
 }
 
 /**

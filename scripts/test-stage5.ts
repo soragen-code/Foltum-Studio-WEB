@@ -5,7 +5,7 @@ const assert = (c: unknown, m: string) => { if (!c) { console.error("FAIL:", m);
 const ep = (number: number, extra: Partial<SeasonStructure["episodes"][number]> = {}) => ({
   number, title: `Эпизод ${number}`, logline: `Анна узнаёт правду о брате и решает уехать из города. Виктор пытается её остановить (${number}).`,
   locationName: "Дом у моря", locationDesc: "A weathered two-storey wooden house on a cliff above the sea, grey shingles, salt-stained windows, evening light.",
-  characters: ["Anna", "Victor"], arcRole: (number === 1 ? "завязка" : number === 8 ? "финал" : "развитие") as any, cliffhanger: `Звонок в дверь, которого никто не ждал (${number}).`, ...extra,
+  locationDetail: "medium" as const, characters: ["Anna", "Victor"], arcRole: (number === 1 ? "завязка" : number === 8 ? "финал" : "развитие") as any, cliffhanger: `Звонок в дверь, которого никто не ждал (${number}).`, ...extra,
 });
 const before: SeasonStructure = { title: "Семья у моря", logline: "Семейная сага о доме на берегу и тайне, которая держит всех вместе.", episodes: Array.from({ length: 8 }, (_, i) => ep(i + 1)) };
 assert(seasonReviseSchema.safeParse(before).success, "revise schema accepts a full 8-episode structure");

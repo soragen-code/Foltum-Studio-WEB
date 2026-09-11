@@ -17,9 +17,10 @@
 import assert from "node:assert";
 import { CHARACTER_PHOTO_COUNT, ARTIFACT_FRAME_COUNT, parseImageArray } from "../lib/reference-counts";
 import { LOCATION_BASE_FRAMES, desiredExtraFrames, desiredTotalFrames } from "../lib/location-scale";
-// A huge-scale location name so fixtures have a known target (huge → 9 total, 6 extra).
+// A high-detail location so fixtures have a known target (high → 9 total, 6 extra).
 const HUGE = "Ночной город";
-const TARGET = desiredTotalFrames({ name: HUGE }); // 9
+const HIGH_LOC = { name: HUGE, detailLevel: "high" as const };
+const TARGET = desiredTotalFrames(HIGH_LOC); // 9
 
 let pass = 0;
 const ok = (c: unknown, m: string) => { assert(c, m); console.log("ok:", m); pass++; };
@@ -46,8 +47,8 @@ const arr = (n: number) => JSON.stringify(Array.from({ length: n }, () => U));
 const fullChar = () => ({ imageFront: U, imageProfile: U, imageFull: U, imageExtra: arr(CHAR_EXTRA_MIN) });
 const baseOnlyChar = () => ({ imageFront: U, imageProfile: U, imageFull: U, imageExtra: null }); // 3/3 — complete in Stage 18
 const missingBaseChar = () => ({ imageFront: U, imageProfile: U, imageFull: null, imageExtra: null }); // 2/3 — incomplete
-const fullLoc = () => ({ name: HUGE, imageUrl: U, imageReverse: U, imageDetail: U, imageExtra: arr(TARGET - LOCATION_BASE_FRAMES) });
-const baseOnlyLoc = () => ({ name: HUGE, imageUrl: U, imageReverse: U, imageDetail: U, imageExtra: null }); // 3/9
+const fullLoc = () => ({ ...HIGH_LOC, imageUrl: U, imageReverse: U, imageDetail: U, imageExtra: arr(TARGET - LOCATION_BASE_FRAMES) });
+const baseOnlyLoc = () => ({ ...HIGH_LOC, imageUrl: U, imageReverse: U, imageDetail: U, imageExtra: null }); // 3/9
 
 // --- A1: gate guarantees unlock when mandatory refs ready -------------------
 ok(gate([fullChar(), fullChar()], [fullLoc(), fullLoc()]) === true, "A1: gate OPENS when all characters 3/3 and all locations at target");
