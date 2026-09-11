@@ -8,18 +8,28 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, assembleEpisodeSchema } from "@/lib/validations";
 import { assembleEpisodeVideo } from "@/lib/assemble";
+import { completeJob, failJob, heartbeatJob, runInBackground, updateJob } from "@/lib/jobs";
+import { DEFAULT_ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY } from "@/lib/assemble-options";
+
+/** GenerationJob.type of the plain «Собрать» stitch (Stage 46B: background job with real progress). */
+const STITCH_JOB_TYPE = "episode_stitch";
+const HEARTBEAT_MS = 45_000;
 
 /**
  * Assemble a full episode from all accepted scene videos (in scene order).
  *
+ * Stage 46B: the request returns a `jobId` immediately; the stitch runs in the background and
+ * reports real stages («Скачивание клипов k/N» → «Подбор музыки» → «Склейка» → «Загрузка»)
+ * through GET /api/jobs/[id]. Body may carry the production `quality` (480p/720p/1080p) and
+ * `fps` (30/60) of the final file — defaults 480p/30. Scenes themselves are always 480p.
+ *
  * New scenes carry Seedance native speech and ambience. Older scenes may retain
  * a separate audio asset in `scene.audioUrl`; assembly preserves that compatibility:
  *   1. muxes each scene's voiceover into its clip (clips without a voiceover keep their
- *      own audio if they have one, otherwise get a silent track) so every clip has a
- *      uniform video + AAC audio layout,
- *   2. concatenates the clips with local ffmpeg — the audio stream is verified to be
- *      present in the result,
- *   3. uploads the file to S3 and stores the URL on the episode.
+ *      own audio if they have one, otherwise get a silent track),
+ *   2. joins the clips with local ffmpeg, renders the final quality/fps with thematic
+ *      background music (music failure → assembled without music),
+ *   3. uploads the file to S3 and stores the URL + quality/fps on the episode.
  */
 export async function POST(request: Request) {
   try {
@@ -33,19 +43,63 @@ export async function POST(request: Request) {
     const parsed = await parseBody(request, assembleEpisodeSchema);
     if (!parsed.ok) return parsed.response;
     const { episodeId } = parsed.data;
+    const quality = parsed.data.quality ?? DEFAULT_ASSEMBLE_QUALITY;
+    const fps = parsed.data.fps ?? DEFAULT_ASSEMBLE_FPS;
     if (!episodeId)
       return NextResponse.json({ error: "Episode ID required" }, { status: 400 });
 
     // Scope to the owner before stitching.
     const owned = await prisma.episode.findFirst({
       where: { id: episodeId, season: { project: { user: { email: session.user.email } } } },
-      select: { id: true },
+      select: { id: true, season: { select: { projectId: true } } },
     });
     if (!owned) return NextResponse.json({ error: "Episode not found" }, { status: 404 });
+    const projectId = owned.season.projectId;
 
-    // Shared stitch helper — also used by the background episode_assemble job.
-    const { videoUrl, sceneCount } = await assembleEpisodeVideo(episodeId);
-    return NextResponse.json({ videoUrl, sceneCount });
+    // One active stitch per episode — return the running job instead of starting a second one.
+    const active = await prisma.generationJob.findMany({
+      where: { projectId, type: STITCH_JOB_TYPE, status: { in: ["pending", "processing"] } },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, resultData: true },
+    });
+    for (const j of active) {
+      try { if (JSON.parse(j.resultData ?? "{}")?.episodeId === episodeId) return NextResponse.json({ jobId: j.id }); } catch {}
+    }
+
+    const job = await prisma.generationJob.create({
+      data: {
+        type: STITCH_JOB_TYPE,
+        status: "processing",
+        progress: 0,
+        message: "Подготовка",
+        projectId,
+        resultData: JSON.stringify({ episodeId, quality, fps }),
+      },
+    });
+    const jobId = job.id;
+
+    runInBackground(async () => {
+      const hb = setInterval(() => void heartbeatJob(jobId), HEARTBEAT_MS);
+      try {
+        const result = await assembleEpisodeVideo(episodeId, {
+          quality,
+          fps,
+          onProgress: (progress, message) => updateJob(jobId, { progress, message }),
+        });
+        await completeJob(
+          jobId,
+          { episodeId, quality, fps, videoUrl: result.videoUrl, sceneCount: result.sceneCount, mood: result.mood, musicApplied: result.musicApplied, note: result.note },
+          result.note ?? "Эпизод собран"
+        );
+      } catch (err: any) {
+        console.error("Episode assembly error:", err);
+        await failJob(jobId, err?.message ?? "Сборка эпизода не удалась");
+      } finally {
+        clearInterval(hb);
+      }
+    });
+
+    return NextResponse.json({ jobId });
   } catch (err: any) {
     console.error("Episode assembly error:", err);
     return NextResponse.json({ error: err?.message ?? "Assembly failed" }, { status: 500 });

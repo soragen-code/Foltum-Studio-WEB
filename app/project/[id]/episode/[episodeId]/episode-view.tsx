@@ -7,7 +7,7 @@ import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshC
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
-import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
+import { JobProgressBar, useJobPolling, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
 import { CancelButton } from '../../_components/cancel-button'
 import { desiredTotalFrames, locationDetailLevel, locationDetailLabel, episodeLocations } from '@/lib/location-scale'
 import { CHARACTER_PHOTO_COUNT } from '@/lib/reference-counts'
@@ -16,6 +16,7 @@ import { IMAGE_MODELS, DEFAULT_IMAGE_MODEL, type ImageModelId } from '@/lib/ai-m
 import { EpisodeNavGrid } from './episode-nav-grid'
 import { locationExtraLabel } from '@/lib/visual-style'
 import { episodeTotalSeconds, EPISODE_MAX_TOTAL_SECONDS } from '@/lib/season'
+import { ASSEMBLE_QUALITIES, ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY, DEFAULT_ASSEMBLE_FPS, type AssembleQuality, type AssembleFps } from '@/lib/assemble-options'
 
 type EpisodePhase = 'script' | 'references' | 'scenes'
 
@@ -78,6 +79,24 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [promptRefKind, setPromptRefKind] = useState<string | null>(null)
   // «Собрать» — pure concatenation of the ready scene clips into one episode (no audit / no polish / no re-gen).
   const [stitching, setStitching] = useState(false)
+  // Stage 46B: «Собрать» opens a dialog — production quality / fps of the FINAL file (scenes are always 480p);
+  // the stitch runs as a background job whose real stages are shown in a progress bar.
+  const [assembleDialogOpen, setAssembleDialogOpen] = useState(false)
+  const [assembleQuality, setAssembleQuality] = useState<AssembleQuality>(DEFAULT_ASSEMBLE_QUALITY)
+  const [assembleFps, setAssembleFps] = useState<AssembleFps>(DEFAULT_ASSEMBLE_FPS)
+  const [assembleNote, setAssembleNote] = useState<string | null>(null)
+  const stitchJob = useJobPolling({
+    onFinish: (res) => {
+      setStitching(false)
+      const j = res.job
+      if (j.status === 'completed') {
+        if (validUrl(j.result?.videoUrl)) setEpisode((p: any) => ({ ...p, videoUrl: j.result.videoUrl, status: 'assembled', assembleQuality: j.result?.quality ?? null, assembleFps: j.result?.fps ?? null }))
+        setAssembleNote(j.result?.note ?? null)
+      } else {
+        setError(j.error ?? j.message ?? 'Не удалось собрать эпизод')
+      }
+    },
+  })
   // AI image model chosen for reference generation (EDIT 1). `refModalOpen` gates the picker
   // shown before «Сгенерировать всё»; the ref keeps the choice available to the resume poll loop.
   const [imageModel, setImageModel] = useState<ImageModelId>(DEFAULT_IMAGE_MODEL)
@@ -712,14 +731,17 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // «Собрать» — pure concatenation of the ready scene clips into a single episode video.
   // No audit, no polish, no re-generation: just stitches the existing clips together and
   // stores the result on the episode. The button is enabled only when every scene is ready.
+  // Stage 46B: the POST returns a jobId; progress comes from GET /api/jobs/[id].
   const stitch = async () => {
-    setStitching(true); setError(null)
+    setAssembleDialogOpen(false)
+    setStitching(true); setError(null); setAssembleNote(null)
     try {
-      const res = await fetch('/api/ai/assemble-episode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ episodeId: episode.id }) })
+      const res = await fetch('/api/ai/assemble-episode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ episodeId: episode.id, quality: assembleQuality, fps: assembleFps }) })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error ?? 'Не удалось собрать эпизод')
-      if (validUrl(data?.videoUrl)) setEpisode((p: any) => ({ ...p, videoUrl: data.videoUrl, status: 'assembled' }))
-    } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setStitching(false) }
+      if (!data?.jobId) throw new Error('Сборка не запустилась')
+      stitchJob.start(data.jobId)
+    } catch (e: any) { setError(e?.message ?? 'Ошибка'); setStitching(false) }
   }
 
   const isAssembled = episode.status === 'assembled' || validUrl(episode.videoUrl)
@@ -980,15 +1002,17 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               {genAllStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Сгенерировать все сцены
             </button>
           )}
-          <button onClick={stitch} disabled={!allReady || stitching} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? 'Склеить готовые сцены в один эпизод' : 'Доступно, когда все сцены готовы'}>
+          <button onClick={() => setAssembleDialogOpen(true)} disabled={!allReady || stitching} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? 'Склеить готовые сцены в один эпизод' : 'Доступно, когда все сцены готовы'}>
             {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Собрать
           </button>
           <span className="text-xs text-muted-foreground" data-testid="batch-status">{scenes.filter((s) => validUrl(s.videoUrl)).length} из {scenes.length} сцен готово{generatingCount > 0 ? ` · генерируется: ${generatingCount}` : ''}{isAssembled ? ' · эпизод собран' : ''}</span>
           {chainRunActive && <span className="inline-flex items-center gap-1 text-xs text-primary" data-testid="chain-run-active"><Loader2 className="h-3 w-3 animate-spin" /> Цепочка идёт: сцены генерируются по очереди</span>}
           <p className="w-full text-xs text-muted-foreground" data-testid="scenes-hint">
             Все сцены стартуют сразу, стыковка между сценами — по сценарному описанию финального кадра предыдущей сцены («Финал кадра»). <b>Сгенерировать все сцены:</b> запускает все ещё не готовые сцены сразу (кредиты списываются за каждую сцену).{' '}
-            <b>Собрать:</b> склеивает готовые ролики всех сцен в один эпизод без перегенерации — доступно, когда все сцены готовы.
+            <b>Собрать:</b> склеивает готовые ролики всех сцен в один эпизод без перегенерации — доступно, когда все сцены готовы. Качество серии (480p/720p/1080p, 30/60 кадров/с) и фоновая музыка выбираются при сборке.
           </p>
+          {stitching && stitchJob.job && <div className="w-full" data-testid="assemble-progress"><JobProgressBar job={stitchJob.job} expectedTotalSec={180} /></div>}
+          {assembleNote && <p className="w-full text-sm text-amber-400" data-testid="assemble-note">{assembleNote}</p>}
           {chainRunNote && !chainRunActive && <p className="w-full text-sm text-destructive" data-testid="chain-run-note">{chainRunNote}</p>}
           {error && <p className="w-full text-sm text-destructive" data-testid="error">{error}</p>}
         </div>
@@ -996,7 +1020,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         {/* Assembled episode + go to next */}
         {validUrl(episode.videoUrl) && (
           <div className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="episode-video">
-            <h2 className="mb-2 inline-flex items-center gap-1 font-semibold"><Film className="h-4 w-4" /> Собранный эпизод</h2>
+            <h2 className="mb-2 inline-flex items-center gap-1 font-semibold"><Film className="h-4 w-4" /> Собранный эпизод{episode.assembleQuality ? <span className="ml-1 text-xs font-normal text-muted-foreground" data-testid="assembled-settings">· {episode.assembleQuality}{episode.assembleFps ? ` · ${episode.assembleFps} к/с` : ''}</span> : null}</h2>
             <video src={episode.videoUrl} controls playsInline className="mx-auto max-h-[70vh] w-full max-w-sm rounded-lg bg-black" />
             <div className="mt-2 flex flex-wrap items-center gap-4">
               <a href={episode.videoUrl} download className="inline-flex items-center gap-1 text-sm text-primary"><Download className="h-4 w-4" /> Скачать mp4</a>
@@ -1240,6 +1264,31 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               <button onClick={() => setRefModalOpen(false)} className="rounded-lg border border-border px-3 py-1.5 text-sm">Отмена</button>
               <button onClick={generateCharacterRefs} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="ref-model-ok">
                 <Wand2 className="h-4 w-4" /> Сгенерировать
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stage 46B — «Собрать» dialog: production quality / fps of the final episode file. */}
+      {assembleDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" data-testid="assemble-dialog">
+          <div className="w-full max-w-md rounded-xl border border-border bg-card p-5">
+            <h3 className="font-display text-lg font-bold">Собрать эпизод</h3>
+            <p className="mt-1 text-sm text-muted-foreground">Сцены отрендерены в 480p. Здесь выбирается качество готовой серии: масштабируется только собранный файл. 480p / 30 — без перекодирования, быстрее всего.</p>
+            <label className="mt-4 block text-sm font-medium" htmlFor="assemble-quality">Качество продакшн-серии</label>
+            <select id="assemble-quality" data-testid="assemble-quality" value={assembleQuality} onChange={(e) => setAssembleQuality(e.target.value as AssembleQuality)} className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
+              {ASSEMBLE_QUALITIES.map((q) => (<option key={q} value={q}>{q}</option>))}
+            </select>
+            <label className="mt-3 block text-sm font-medium" htmlFor="assemble-fps">Частота кадров</label>
+            <select id="assemble-fps" data-testid="assemble-fps" value={assembleFps} onChange={(e) => setAssembleFps(Number(e.target.value) as AssembleFps)} className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
+              {ASSEMBLE_FPS.map((f) => (<option key={f} value={f}>{f} кадров/с</option>))}
+            </select>
+            <p className="mt-3 text-xs text-muted-foreground">Фоновая музыка подбирается по настроению серии автоматически; если музыка недоступна, эпизод собирается без неё.</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => setAssembleDialogOpen(false)} className="rounded-lg border border-border px-3 py-1.5 text-sm" data-testid="assemble-cancel">Отмена</button>
+              <button onClick={stitch} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground" data-testid="assemble-ok">
+                <Film className="h-4 w-4" /> Собрать
               </button>
             </div>
           </div>

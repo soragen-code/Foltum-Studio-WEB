@@ -225,6 +225,8 @@ export interface PredictionState {
   error?: string;
   startedAt?: string | null;
   completedAt?: string | null;
+  /** Provider logs tail (Stage 46B: parsed for a render percent when the model reports one). */
+  logs?: string | null;
 }
 
 /** Fetch the current state of a prediction. */
@@ -237,7 +239,7 @@ export async function getPredictionState(id: string): Promise<PredictionState> {
   // video worker fails the job with a refund rather than retrying the status GET forever.
   if (status === "succeeded") { let url: string | undefined; try { url = extractUrl(p.output); } catch { url = undefined; } return { status, ...times, url }; }
   if (status === "failed" || status === "canceled") return { status, ...times, error: p.error ? String(p.error) : undefined };
-  return { status, ...times };
+  return { status, ...times, logs: typeof p.logs === "string" ? p.logs.slice(-2000) : null };
 }
 
 /* ------------------------------------------------------------------ */

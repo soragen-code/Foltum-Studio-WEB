@@ -14,12 +14,16 @@
  * (`crossfadeClips`) paths are kept but are only used when explicitly requested via
  * `AssembleOptions.mode`.
  */
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
 import { promisify } from "util";
 import { runFrameInterpolation } from "./replicate";
+import {
+  ASSEMBLE_DIMENSIONS, ASSEMBLE_FPS, ASSEMBLE_QUALITIES, DEFAULT_ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY,
+  type AssembleFps, type AssembleQuality,
+} from "./assemble-options";
 
 const execFileAsync = promisify(execFile);
 
@@ -49,6 +53,72 @@ async function runFfmpeg(args: string[], label: string, opts?: { cwd?: string })
     const tail = String(err?.stderr ?? err?.message ?? "").split("\n").slice(-12).join("\n");
     throw new Error(`ffmpeg ${label} failed: ${tail}`);
   }
+}
+
+/**
+ * Stage 46B — run ffmpeg with `-progress pipe:1` and report REAL render progress (0–100 % of
+ * `totalSec`) through `onPct`. Used for the final episode render so the job bar shows how far the
+ * encode actually is instead of a timer.
+ */
+export async function runFfmpegWithProgress(
+  args: string[],
+  label: string,
+  totalSec: number,
+  onPct?: (pct: number) => void
+): Promise<void> {
+  const bin = getFfmpegPath();
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(bin, ["-hide_banner", "-nostdin", "-y", "-nostats", "-progress", "pipe:1", ...args]);
+    let stderr = "";
+    let stdoutBuf = "";
+    let lastPct = -1;
+    const timer = setTimeout(() => child.kill("SIGKILL"), 10 * 60 * 1000);
+    child.stderr.on("data", (d) => { stderr += String(d); if (stderr.length > 64_000) stderr = stderr.slice(-32_000); });
+    child.stdout.on("data", (d) => {
+      stdoutBuf += String(d);
+      const lines = stdoutBuf.split("\n");
+      stdoutBuf = lines.pop() ?? "";
+      for (const line of lines) {
+        const sec = parseProgressLine(line);
+        if (sec === null || totalSec <= 0) continue;
+        const pct = Math.max(0, Math.min(100, Math.round((sec / totalSec) * 100)));
+        if (pct !== lastPct) { lastPct = pct; onPct?.(pct); }
+      }
+    });
+    child.on("error", (err) => { clearTimeout(timer); reject(new Error(`ffmpeg ${label} failed: ${err.message}`)); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) { if (lastPct !== 100) onPct?.(100); resolve(); }
+      else reject(new Error(`ffmpeg ${label} failed: ${stderr.split("\n").slice(-12).join("\n")}`));
+    });
+  });
+}
+
+/** Parse one `-progress` key=value line into seconds of output written (null for other keys). */
+export function parseProgressLine(line: string): number | null {
+  const ms = line.match(/^out_time_us=(\d+)/) ?? line.match(/^out_time_ms=(\d+)/);
+  if (ms) return Number(ms[1]) / 1_000_000;
+  const t = line.match(/^out_time=(\d+):(\d+):(\d+(?:\.\d+)?)/);
+  if (t) return Number(t[1]) * 3600 + Number(t[2]) * 60 + Number(t[3]);
+  return null;
+}
+
+/** Run `fn` over `items` with at most `limit` in flight; results keep the input order. */
+export async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
 }
 
 /** Download a remote file to disk. */
@@ -184,6 +254,11 @@ export interface AssembleResult {
   /** Per-scene audio source actually used, for logging/diagnostics. */
   audioSources: Array<"voiceover" | "native" | "silence">;
   info: MediaInfo;
+  /** Stage 46B: production settings actually rendered. */
+  quality: AssembleQuality;
+  fps: AssembleFps;
+  /** Stage 46B: true when background music was mixed into the file. */
+  musicApplied: boolean;
 }
 
 /**
@@ -517,6 +592,118 @@ export interface AssembleOptions {
   interpolate?: InterpolateFn;
   /** FILM depth: 2^t + 1 frames @ 30fps. Default 3 (≈0.3s bridge). */
   timesToInterpolate?: number;
+  /** Stage 46B: production quality of the FINAL episode file (scenes themselves are always 480p). Default "480p". */
+  quality?: AssembleQuality;
+  /** Stage 46B: frame rate of the final file. Default 30. */
+  fps?: AssembleFps;
+  /** Stage 46B: how many clips download in parallel. Default DOWNLOAD_CONCURRENCY. */
+  downloadConcurrency?: number;
+  /**
+   * Stage 46B: called after the clips are on disk — returns a local path to a background music
+   * file (any ffmpeg-readable format; it is looped and trimmed to the episode) or null for no music.
+   * Throwing is treated as "no music".
+   */
+  resolveMusic?: (workDir: string) => Promise<string | null>;
+  /** Stage 46B: real progress events for the job bar. */
+  onProgress?: (event: AssembleProgressEvent) => void;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Stage 46B — final render (quality / fps / background music)         */
+/* ------------------------------------------------------------------ */
+
+// Quality / fps option lists live in the pure, client-safe `lib/assemble-options.ts`.
+export {
+  ASSEMBLE_QUALITIES, ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY, DEFAULT_ASSEMBLE_FPS, ASSEMBLE_DIMENSIONS,
+  isAssembleQuality, isAssembleFps, type AssembleQuality, type AssembleFps,
+} from "./assemble-options";
+export const DOWNLOAD_CONCURRENCY = 4;
+
+export type AssembleProgressEvent =
+  | { stage: "download"; done: number; total: number }
+  | { stage: "music" }
+  | { stage: "join"; pct: number }
+  | { stage: "render"; pct: number };
+
+export interface MusicMixOptions {
+  /** Episode length in seconds — music is trimmed to it. */
+  durationSec: number;
+  /** Music gain under the clip audio (0.15–0.2 recommended). Default 0.18. */
+  volume?: number;
+  /** Seconds. Default 2. */
+  fadeIn?: number;
+  /** Seconds. Default 3. */
+  fadeOut?: number;
+}
+
+/**
+ * Pure: filtergraph mixing looped background music (input 1) under the clip audio (input 0).
+ * Music: trimmed to the episode, gain `volume`, fade-in / fade-out; clip audio stays primary
+ * (`duration=first`, no normalisation). Output label `[aout]`.
+ */
+export function buildMusicMixFilter(opts: MusicMixOptions): string {
+  const dur = Math.max(0.1, opts.durationSec);
+  const volume = opts.volume ?? 0.18;
+  const fadeIn = Math.min(opts.fadeIn ?? 2, dur / 2);
+  const fadeOut = Math.min(opts.fadeOut ?? 3, dur / 2);
+  const fadeOutStart = Math.max(0, dur - fadeOut);
+  return (
+    `[1:a]atrim=0:${dur.toFixed(3)},asetpts=PTS-STARTPTS,` +
+    `aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,` +
+    `volume=${volume},afade=t=in:st=0:d=${fadeIn.toFixed(2)},afade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fadeOut.toFixed(2)}[m];` +
+    `[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[c];` +
+    `[c][m]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]`
+  );
+}
+
+export interface FinalRenderOptions {
+  input: string;
+  output: string;
+  quality: AssembleQuality;
+  fps: AssembleFps;
+  /** Local music file (looped) or null. */
+  musicPath?: string | null;
+  /** Episode length (needed for the music trim / fades). */
+  durationSec: number;
+}
+
+/**
+ * Pure: ffmpeg args for the FINAL episode render.
+ *   480p/30 without music → `-c copy` (no re-encode at all);
+ *   480p/30 with music    → `-c:v copy` + audio mix (`-c:a aac`), video untouched;
+ *   any other quality/fps → scale/pad to the 9:16 geometry, `fps=` filter + `-r`, libx264.
+ * `reencodesVideo` tells the caller (and tests) which path was taken.
+ */
+export function buildFinalRenderArgs(o: FinalRenderOptions): { args: string[]; reencodesVideo: boolean; reencodesAudio: boolean } {
+  const isNative = o.quality === "480p" && o.fps === 30;
+  const hasMusic = Boolean(o.musicPath);
+  const { width, height } = ASSEMBLE_DIMENSIONS[o.quality];
+  const inputs = ["-i", o.input, ...(hasMusic ? ["-stream_loop", "-1", "-i", o.musicPath as string] : [])];
+  const audioEnc = ["-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2"];
+  const tail = ["-movflags", "+faststart", o.output];
+
+  if (isNative && !hasMusic) {
+    return { args: [...inputs, "-map", "0:v:0", "-map", "0:a:0", "-c", "copy", ...tail], reencodesVideo: false, reencodesAudio: false };
+  }
+  const filters: string[] = [];
+  if (!isNative) {
+    filters.push(
+      `[0:v:0]scale=${width}:${height}:force_original_aspect_ratio=decrease,` +
+        `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${o.fps},format=yuv420p[vout]`
+    );
+  }
+  if (hasMusic) filters.push(buildMusicMixFilter({ durationSec: o.durationSec }));
+  const videoMap = isNative ? ["-map", "0:v:0", "-c:v", "copy"] : ["-map", "[vout]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-r", String(o.fps)];
+  const audioMap = hasMusic ? ["-map", "[aout]", ...audioEnc] : ["-map", "0:a:0", ...(isNative ? ["-c:a", "copy"] : audioEnc)];
+  const args = [
+    ...inputs,
+    ...(filters.length ? ["-filter_complex", filters.join(";")] : []),
+    ...videoMap,
+    ...audioMap,
+    "-t", Math.max(0.1, o.durationSec).toFixed(3),
+    ...tail,
+  ];
+  return { args, reencodesVideo: !isNative, reencodesAudio: hasMusic || !isNative };
 }
 
 /**
@@ -714,11 +901,11 @@ export async function assembleEpisodeLocally(scenes: SceneClipInput[], opts: Ass
   if (scenes.length === 0) throw new Error("No scenes to assemble");
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "episode-"));
 
-  const audioSources: AssembleResult["audioSources"] = [];
-  const normalized: string[] = [];
-
-  for (let i = 0; i < scenes.length; i++) {
-    const s = scenes[i];
+  // Stage 46B: clips are downloaded + normalized in parallel (cap `downloadConcurrency`), with a
+  // real «k/N» progress event after each one.
+  let downloaded = 0;
+  opts.onProgress?.({ stage: "download", done: 0, total: scenes.length });
+  const prepared = await mapWithConcurrency(scenes, opts.downloadConcurrency ?? DOWNLOAD_CONCURRENCY, async (s, i) => {
     const idx = String(i + 1).padStart(3, "0");
     const videoPath = path.join(workDir, `scene_${idx}.mp4`);
     await downloadToFile(s.videoUrl, videoPath);
@@ -730,12 +917,28 @@ export async function assembleEpisodeLocally(scenes: SceneClipInput[], opts: Ass
     }
 
     const outPath = path.join(workDir, `clip_${idx}.mp4`);
-    audioSources.push(await normalizeClip(videoPath, audioPath, outPath));
-    normalized.push(outPath);
+    const source = await normalizeClip(videoPath, audioPath, outPath);
 
     // Free disk early — /tmp on serverless is limited.
     await fs.rm(videoPath, { force: true });
     if (audioPath) await fs.rm(audioPath, { force: true });
+    downloaded += 1;
+    opts.onProgress?.({ stage: "download", done: downloaded, total: scenes.length });
+    return { outPath, source };
+  });
+  const audioSources: AssembleResult["audioSources"] = prepared.map((p) => p.source);
+  const normalized: string[] = prepared.map((p) => p.outPath);
+
+  // Stage 46B: background music is resolved once the clips are local (mood → generate / cached track).
+  let musicPath: string | null = null;
+  if (opts.resolveMusic) {
+    opts.onProgress?.({ stage: "music" });
+    try {
+      musicPath = await opts.resolveMusic(workDir);
+    } catch (err) {
+      console.warn("[ffmpeg] background music unavailable — assembling without music:", (err as Error).message);
+      musicPath = null;
+    }
   }
 
   // Probe every normalized clip up-front — needed for the crossfade math.
@@ -743,6 +946,7 @@ export async function assembleEpisodeLocally(scenes: SceneClipInput[], opts: Ass
 
   const joinedPath = path.join(workDir, "joined.mp4");
   const mode: StitchMode = opts.mode ?? DEFAULT_STITCH_MODE;
+  opts.onProgress?.({ stage: "join", pct: 0 });
   if (normalized.length === 1) {
     await fs.copyFile(normalized[0], joinedPath);
   } else if (mode === "seamless-cut") {
@@ -784,14 +988,32 @@ export async function assembleEpisodeLocally(scenes: SceneClipInput[], opts: Ass
     }
   }
 
-  // No subtitles are burned in: the clips carry Seedance native speech; the episode is the clean joined video.
+  // No subtitles are burned in: the clips carry Seedance native speech.
+  // Stage 46B — FINAL render: only here the episode is scaled to the chosen quality / fps and the
+  // background music is mixed in. 480p/30 without music is a pure stream copy.
+  const joinedInfo = await probeMedia(joinedPath);
+  const quality = opts.quality ?? DEFAULT_ASSEMBLE_QUALITY;
+  const fps = opts.fps ?? DEFAULT_ASSEMBLE_FPS;
   const outputPath = path.join(workDir, "episode.mp4");
-  await fs.copyFile(joinedPath, outputPath);
+  const render = buildFinalRenderArgs({ input: joinedPath, output: outputPath, quality, fps, musicPath, durationSec: joinedInfo.duration });
+  let musicApplied = false;
+  try {
+    opts.onProgress?.({ stage: "render", pct: 0 });
+    await runFfmpegWithProgress(render.args, "final render", joinedInfo.duration, (pct) => opts.onProgress?.({ stage: "render", pct }));
+    musicApplied = Boolean(musicPath);
+  } catch (err) {
+    if (!musicPath) throw err;
+    // Music mix failed → render the same quality/fps WITHOUT music; assembly always completes.
+    console.warn("[ffmpeg] music mix failed — rendering without music:", (err as Error).message);
+    await fs.rm(outputPath, { force: true });
+    const plain = buildFinalRenderArgs({ input: joinedPath, output: outputPath, quality, fps, musicPath: null, durationSec: joinedInfo.duration });
+    await runFfmpegWithProgress(plain.args, "final render (no music)", joinedInfo.duration, (pct) => opts.onProgress?.({ stage: "render", pct }));
+  }
   await fs.rm(joinedPath, { force: true }).catch(() => {});
 
   const info = await probeMedia(outputPath);
   if (!info.hasVideo) throw new Error("Assembled episode has no video stream");
   if (!info.hasAudio) throw new Error("Assembled episode has no audio stream");
 
-  return { outputPath, workDir, audioSources, info };
+  return { outputPath, workDir, audioSources, info, quality, fps, musicApplied };
 }

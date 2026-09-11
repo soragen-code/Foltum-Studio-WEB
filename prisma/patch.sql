@@ -192,3 +192,7 @@ ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "detailLevel" TEXT;
 
 -- Stage 46A: short synopsis step (premise + one-line logline per episode) approved before the season script.
 ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "shortSynopsis" TEXT;
+
+-- Stage 46B: production quality / fps of the last episode assembly (scenes are always 480p)
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "assembleQuality" TEXT;
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "assembleFps" INTEGER;

@@ -14,7 +14,8 @@ import { moderationHints } from "@/lib/sanitize-prompt";
 import { downscaleReferences, REFERENCE_WIDTH } from "@/lib/reference-downscale";
 import { describeLastFrame } from "@/lib/frame-state";
 import { nextChainScene, chainStopMessage, CHAIN_INSUFFICIENT_CREDITS } from "@/lib/chain-run";
-import { resolvePowerTier } from "@/lib/power-tier";
+import { resolvePowerTier, SCENE_RESOLUTION } from "@/lib/power-tier";
+import { sceneProgressStage, SCENE_STAGE_PROGRESS, SCENE_STAGE_MESSAGE } from "@/lib/scene-progress";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
 
 export interface VideoJobParams {
@@ -87,7 +88,6 @@ export const MAX_MODERATION_RETRIES = 2;
 
 const POLL_INTERVAL_MS = 8_000;
 /** Typical Seedance time — only used to animate the progress bar while waiting. */
-const EXPECTED_VIDEO_MS = Number(process.env.SEEDANCE_EXPECTED_MS ?? 10 * 60 * 1000);
 /** Hard cap for waiting on Replicate. */
 // End-to-end budget, not an invocation timer. Check provider terminal state BEFORE enforcing it.
 export const VIDEO_DEADLINE_MS = 30 * 60 * 1000;
@@ -108,12 +108,6 @@ function parseState(resultData: string | null | undefined): VideoJobState | null
   } catch {
     return null;
   }
-}
-
-/** Progress 5 → 55 while the video model works, based on elapsed time. */
-function waitingProgress(startedAt: number): number {
-  const ratio = Math.min(1, (Date.now() - startedAt) / EXPECTED_VIDEO_MS);
-  return 5 + Math.round(ratio * 50);
 }
 
 /**
@@ -270,8 +264,9 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       referenceWidth: REFERENCE_WIDTH, referenceImageCount: referenceImages.length,
       previousFrameSceneId: built.previousFrameSceneId,
     };
+    // Stage 46B: scenes are always rendered at 480p — the requested `params.resolution` is ignored.
     const input = {
-      prompt, model: modelSlug, duration: clipDuration, resolution: String(params.resolution ?? "480p"),
+      prompt, model: modelSlug, duration: clipDuration, resolution: SCENE_RESOLUTION,
       aspect_ratio: "9:16", generate_audio: true, watermark: false,
     };
     attempt = {
@@ -281,7 +276,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     diagnostics.push(attempt); await persist(); logAttempt(attempt);
     // Stage 40: `reference_images` is omitted entirely for text-only submissions (never sent as []).
     predictionId = await startVideoPrediction({ ...input, ...(referenceImages.length ? { reference_images: referenceImages } : {}) });
-    submitMessage = "Submitted to Seedance; checking the same prediction...";
+    submitMessage = SCENE_STAGE_MESSAGE.queued; // Stage 46B: «В очереди» until the provider reports processing
     // Retry plan is still persisted for diagnostics, but moderation is now fail-fast:
     // no automatic rewrite/resubmit happens (see resumeVideoJob). The user edits the prompt manually.
     pipelineExtra.retry = {
@@ -301,7 +296,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     state = { predictionId, sceneId, projectId, userId, cost, startedAt: Date.now(), diagnostics, ...pipelineExtra };
     // This checkpoint MUST succeed: never swallow the prediction ID write.
     await prisma.generationJob.update({ where: { id: jobId }, data: {
-      resultData: JSON.stringify(state), message: submitMessage,
+      resultData: JSON.stringify(state), message: submitMessage, progress: SCENE_STAGE_PROGRESS.queued,
     } });
     logAttempt(attempt);
     // Release the serverless invocation immediately. Polling inspects the persisted prediction,
@@ -356,10 +351,12 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, source: str
     const links = await prisma.sceneCharacter.findMany({ where: { sceneId: scene.id }, select: { character: { select: { name: true } } } }).catch(() => []);
     endStateActual = await describeLastFrame(lastFrameUrl, scene, links.map(l => ({ name: l.character.name })));
   }
+  // Stage 46B: «Проверка» 95 % — the clip is stored, the scene is about to be published.
+  await saveOwned(jobId, state, { progress: SCENE_STAGE_PROGRESS.verifying, message: SCENE_STAGE_MESSAGE.verifying });
   // Publish scene and completed job together. A stale lease holder cannot publish or refund.
   const published = await prisma.$transaction(async tx => {
     const result = await tx.generationJob.updateMany({ where: owned(jobId, state), data: {
-      status: "completed", progress: 100, message: "Video ready", error: null,
+      status: "completed", progress: 100, message: SCENE_STAGE_MESSAGE.done, error: null,
       resultData: JSON.stringify({ ...state, leaseUntil: 0, finalizing: false, videoUrl }),
     } });
     if (!result.count) return false;
@@ -549,7 +546,7 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
         return true;
       }
       state.leaseUntil = Date.now() + FINALIZE_LEASE_MS;
-      if (!await saveOwned(job.id, state, { progress: 60, message: "Video ready. Uploading to storage..." })) return false;
+      if (!await saveOwned(job.id, state, { progress: SCENE_STAGE_PROGRESS.uploading, message: SCENE_STAGE_MESSAGE.uploading })) return false;
       runInBackground(async () => {
         try { await finalizeVideoJob(job.id, state, prediction.url!); }
         catch (error) {
@@ -561,7 +558,12 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
       return true;
     }
     state.leaseUntil = 0;
-    await saveOwned(job.id, state, { progress: waitingProgress(state.startedAt), message: prediction.status === "starting" ? "Queued at Seedance; checking the same prediction..." : "Seedance is processing; waiting for the result..." });
+    // Stage 46B: stage-based progress — «В очереди» 5 % / «Рендер видео (Seedance)… mm:ss» 40 % (elapsed
+    // since the model actually started; a model-reported percent is used when the logs carry one).
+    const renderStart = prediction.startedAt ? Date.parse(prediction.startedAt) : NaN;
+    const elapsedMs = Date.now() - (Number.isFinite(renderStart) ? renderStart : state.startedAt);
+    const stage = sceneProgressStage(prediction.status, elapsedMs, prediction.logs);
+    await saveOwned(job.id, state, { progress: stage.progress, message: stage.message });
     return true;
   } catch (error) {
     // A failed status GET is NOT a failed generation. Leave it recoverable, without a refund.

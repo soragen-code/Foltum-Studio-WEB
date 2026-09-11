@@ -11,7 +11,7 @@ import { ScenesStage } from './scenes-stage'
 import { IdeaStage } from './idea-stage'
 import { ReferencesStage } from './references-stage'
 import { StoryStage } from './story-stage'
-import { resolvePowerTier } from '@/lib/power-tier'
+import { SCENE_RESOLUTION } from '@/lib/power-tier'
 import { Gauge, ArrowLeft } from 'lucide-react'
 import { motion } from 'framer-motion'
 
@@ -25,7 +25,6 @@ function isNewFlow(project: any): boolean {
 export function ProjectWizard({ project: initialProject }: { project: any }) {
   const [project, setProject] = useState(initialProject)
   const currentStage = project?.stage ?? 'synopsis'
-  const power = resolvePowerTier(project ?? {})
   // Optional «Референсы» tab (stage 5), opened via ?tab=references from the season/episode screens.
   const searchParams = useSearchParams()
   const referencesTab = searchParams?.get('tab') === 'references' && isNewFlow(project) && currentStage !== 'idea'
@@ -47,15 +46,16 @@ export function ProjectWizard({ project: initialProject }: { project: any }) {
             {project?.name ?? 'Project'}
           </h1>
           <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+            {/* Stage 46B: scenes are always 480p; the production quality is chosen when the episode is assembled. */}
             <span
               className="inline-flex items-center gap-1 rounded bg-muted px-2 py-0.5 uppercase"
-              title={`Качество видео: ${power.resolution}`}
+              title={`Сцены рендерятся в ${SCENE_RESOLUTION}; качество серии выбирается при сборке`}
               data-testid="power-badge"
             >
               <Gauge className="h-3 w-3" />
-              {power.label}
+              {SCENE_RESOLUTION}
             </span>
-            <span className="hidden sm:inline">качество {power.resolution}</span>
+            <span className="hidden sm:inline">сцены {SCENE_RESOLUTION} · качество серии — при сборке</span>
           </div>
         </div>
 

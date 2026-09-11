@@ -5,7 +5,7 @@
 import { z } from "zod";
 import { LANGUAGE_NAMES, type IdeaLanguage, type CharacterCard } from "@/lib/idea";
 import { VISUAL_STYLE } from "@/lib/visual-style";
-import { POWER_TIER_CONFIG, SEEDANCE_MAX_DURATION, type PowerTier } from "@/lib/power-tier";
+import { POWER_TIER_CONFIG, SEEDANCE_MAX_DURATION, sceneTierConfig, type PowerTier } from "@/lib/power-tier";
 import { LOCATION_DETAIL_LEVELS } from "@/lib/location-scale";
 
 /** Stage 4: nobody is asked for a running time — the story decides. These are only sanity bounds for the LLM output. */
@@ -886,14 +886,14 @@ export function renderEpisodeScriptText(ep: EpisodeOutline, script: EpisodeScrip
 
 /** Clip length for one scene: the scripted durationSec (new flow), clamped to what the tier/model allows. */
 export function sceneClipSeconds(tier: PowerTier, plannedSec?: number | null): number {
-  const cfg = POWER_TIER_CONFIG[tier];
+  const cfg = sceneTierConfig(POWER_TIER_CONFIG[tier]); // Stage 46B: scenes are always priced/rendered as 480p
   const max = Math.min(cfg.maxDuration, SCENE_MAX_SECONDS);
   const want = plannedSec && plannedSec > 0 ? plannedSec : max;
   return Math.min(max, Math.max(SCENE_MIN_SECONDS, cfg.baseDuration, Math.round(want)));
 }
 /** Credits for one clip of the given length — same rule as /api/ai/generate-video. */
 export function sceneClipCost(tier: PowerTier, durationSec: number): number {
-  const cfg = POWER_TIER_CONFIG[tier];
+  const cfg = sceneTierConfig(POWER_TIER_CONFIG[tier]); // Stage 46B: 480p price for every scene
   return Math.max(cfg.costPerScene, Math.ceil((cfg.costPerScene * durationSec) / cfg.baseDuration));
 }
 /**

@@ -46,8 +46,9 @@ const ep = { number: 1, title: "t", logline: "Логлайн эпизода до
 assert(!seasonStructureSchema.safeParse({ title: "S", logline: "Сезонный логлайн.", episodes: Array(2).fill(ep) }).success, "2 episodes rejected (min 3 — story decides the count)");
 assert(seasonStructureSchema.safeParse({ title: "S", logline: "Сезонный логлайн.", episodes: Array(8).fill(ep) }).success, "8 episodes accepted");
 const plan = sceneClipPlan("HIGH", 12);
-assert(plan.duration === 30 && plan.costPerScene === 24 && plan.total === 288, `HIGH plan ${JSON.stringify({ ...plan, clips: undefined })}`);
-assert(sceneClipPlan("LOW", 12).costPerScene === 6 && sceneClipPlan("MEDIUM", 12).costPerScene === 18, "LOW/MEDIUM cost at 30s");
+// Stage 46B: every scene is rendered at 480p → LOW pricing for any stored tier (1 cr / 5 s → 6 cr per 30 s clip).
+assert(plan.duration === 30 && plan.costPerScene === 6 && plan.total === 72, `HIGH plan ${JSON.stringify({ ...plan, clips: undefined })}`);
+assert(sceneClipPlan("LOW", 12).costPerScene === 6 && sceneClipPlan("MEDIUM", 12).costPerScene === 6, "LOW/MEDIUM cost at 30s (both 480p price, Stage 46B)");
 const mixed = sceneClipPlan("LOW", [{ durationSec: 15 }, { durationSec: 30 }, { durationSec: null }]);
 assert(mixed.total === 3 + 6 + 6 && mixed.totalSeconds === 75 && mixed.duration === 30, `mixed plan ${JSON.stringify({ ...mixed, clips: undefined })}`);
 const shortTalk = validateEpisodeScript({ ...ok, scenes: ok.scenes.map((s) => ({ ...s, dialogue: 'АННА: "Да."' })) });
