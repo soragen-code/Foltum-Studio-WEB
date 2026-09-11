@@ -44,7 +44,7 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
         const wideRemote = await generateImage({ prompt: locationAnglePrompt(visual, loc.name, "wide"), aspect_ratio: "9:16" }, { jobId, imageModel });
         const stamp = Date.now();
         const wideUrl = await uploadRemoteToS3(wideRemote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${stamp}-wide.png`, "image/png");
-        await prisma.location.update({ where: { id: loc.id }, data: { imageUrl: wideUrl, imageReverse: null, imageDetail: null } });
+        await prisma.location.update({ where: { id: loc.id }, data: { imageUrl: wideUrl, imageReverse: null, imageDetail: null, imageExtra: null } }); // new master → the old angles no longer match; re-shot from this frame
         await checkC2pa(loc.id, "wide", wideUrl);
         // 2) other angles of the SAME place: the wide shot is passed as image_input so light/materials stay identical
         for (const a of LOCATION_ANGLES.filter((x) => x.angle !== "wide")) {

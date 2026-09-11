@@ -11,6 +11,7 @@ import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_M
 import { CancelButton } from '../../_components/cancel-button'
 import { desiredExtraFrames, desiredTotalFrames, locationScale, locationScaleLabel, episodeLocations } from '@/lib/location-scale'
 import { CHARACTER_PHOTO_COUNT } from '@/lib/reference-counts'
+import { CHARACTER_REFERENCE_COST } from '@/lib/power-tier'
 import { IMAGE_MODELS, DEFAULT_IMAGE_MODEL, VIDEO_MODEL_LABEL, type ImageModelId } from '@/lib/ai-models'
 import { EpisodeNavGrid } from './episode-nav-grid'
 import { locationExtraLabel } from '@/lib/visual-style'
@@ -96,6 +97,13 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [refLocs, setRefLocs] = useState<any[]>(episodeLocations(initial, project.locations ?? []))
   const [refSession, setRefSession] = useState(false) // polling active while refs are generating
   const [refStarting, setRefStarting] = useState(false)
+  // Scope of the running reference session: «Сгенерировать всё» (characters + locations) or the separate
+  // «Сгенерировать локацию» button (locations only — characters are never touched).
+  const [refScope, setRefScope] = useState<'all' | 'locations'>('all')
+  const refScopeRef = useRef<'all' | 'locations'>('all')
+  // A location master-frame job is running (server truth, refreshed every tick) — keeps a locations-only
+  // session alive while the server still shows the OLD (complete) photo set of the location being re-shot.
+  const [locBaseJobActive, setLocBaseJobActive] = useState(false)
   const refJobs = useRef<{ char?: string; loc: Record<string, string>; extra: Record<string, string> }>({ loc: {}, extra: {} })
   const refCanceled = useRef(false)
   const [charBusy, setCharBusy] = useState<Record<string, boolean>>({}) // per-character prompt-revise spinner
@@ -239,6 +247,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
 
       // Which reference jobs are currently running? (avoids duplicate starts across ticks / reloads)
       let activeCharJob = false
+      let activeLocBase = false
       const activeExtraLocs = new Set<string>()
       try {
         const jr = await fetch(`/api/jobs?projectId=${project.id}&active=1`, { cache: 'no-store' })
@@ -246,14 +255,17 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           const jd = await jr.json()
           for (const j of jd?.jobs ?? []) {
             if (j?.type === 'characters') activeCharJob = true
+            if (j?.type === 'location_image') activeLocBase = true
             if (j?.type === 'location_extra_image') { try { const rd = JSON.parse(j?.resultData ?? '{}'); if (rd?.locationId) activeExtraLocs.add(rd.locationId) } catch {} }
           }
         }
       } catch {}
       if (stopped || refCanceled.current) return
+      setLocBaseJobActive(activeLocBase)
 
       // Characters: resume any episode character that is not fully complete (missing base OR extras).
-      const incompleteChars = refChars.filter((c) => !hasAllImages(fresh.pchars.find((x: any) => x.id === c.id) ?? c))
+      // Skipped entirely in a locations-only session.
+      const incompleteChars = refScopeRef.current === 'all' ? refChars.filter((c) => !hasAllImages(fresh.pchars.find((x: any) => x.id === c.id) ?? c)) : []
       if (incompleteChars.length > 0 && !activeCharJob) {
         try {
           const res = await fetch('/api/ai/characters/references', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, characterIds: incompleteChars.map((c) => c.id), imageModel: imageModelRef.current }) })
@@ -287,8 +299,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     return () => { stopped = true; clearInterval(id) }
   }, [refSession, refreshRefs, refreshCredits, project.id])
 
-  // Stop the reference session once everything is ready.
-  useEffect(() => { if (refSession && refsReady) { setRefSession(false); refJobs.current = { loc: {}, extra: {} } } }, [refSession, refsReady])
+  // Stop the reference session once everything is ready (locations-only session: once every location is ready).
+  const refsLocsReady = refLocs.length > 0 && refLocs.every((l) => locBaseReady(l) && locExtraReady(l))
+  useEffect(() => {
+    if (refSession && (refsReady || (refScope === 'locations' && refsLocsReady && !locBaseJobActive))) { setRefSession(false); refJobs.current = { loc: {}, extra: {} } }
+  }, [refSession, refsReady, refScope, refsLocsReady, locBaseJobActive])
 
   // Stage 17: self-heal a stuck episode. If references were already initiated in a previous session
   // (some character/location already has a base image) but the mandatory set is NOT complete and no
@@ -300,7 +315,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     if (autoResumedRef.current) return
     if (refSession || refStarting || refsReady) return
     const initiated = refChars.some((c) => validUrl(c?.imageFront)) || refLocs.some((l) => validUrl(l?.imageUrl))
-    if (initiated) { autoResumedRef.current = true; refCanceled.current = false; setRefSession(true) }
+    if (initiated) { autoResumedRef.current = true; refCanceled.current = false; refScopeRef.current = 'all'; setRefScope('all'); setRefSession(true) }
   }, [refSession, refStarting, refsReady, refChars, refLocs])
 
   /** Single button: generate every missing reference for this episode's characters and locations.
@@ -308,6 +323,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const generateAllRefs = async () => {
     setRefModalOpen(false)
     setError(''); setRefStarting(true); refCanceled.current = false
+    refScopeRef.current = 'all'; setRefScope('all')
     const model = imageModelRef.current
     try {
       const missingChars = refChars.filter((c) => !hasAllImages(c))
@@ -326,6 +342,23 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           else if (!res.ok && d?.error) setError(d.error)
         }
       }
+      setRefSession(true)
+    } catch { setError('Ошибка сети') } finally { setRefStarting(false) }
+  }
+
+  /** Separate button: (re)generate ONE location's full photo set — the master frame job now, then the
+   *  session loop tops up the extra angles from that master. Characters are not touched. */
+  const generateLocationRefs = async (locationId: string) => {
+    setError(''); setRefStarting(true); refCanceled.current = false
+    refScopeRef.current = 'locations'; setRefScope('locations'); setLocBaseJobActive(true)
+    try {
+      const res = await fetch(`/api/ai/locations/${locationId}/image`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageModel: imageModelRef.current }) })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) { setError(d?.error ?? 'Не удалось запустить генерацию локации'); return }
+      if (d?.jobId) refJobs.current.loc[locationId] = d.jobId
+      if (typeof d?.creditsRemaining === 'number') setCredits(d.creditsRemaining)
+      // A new master frame starts a new photo session: drop the old angles locally so the loop re-shoots them.
+      setRefLocs((prev) => prev.map((l) => (l.id === locationId ? { ...l, imageReverse: null, imageDetail: null, imageExtra: null } : l)))
       setRefSession(true)
     } catch { setError('Ошибка сети') } finally { setRefStarting(false) }
   }
@@ -721,7 +754,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             <h2 className="inline-flex items-center gap-2 font-display text-xl font-bold"><Images className="h-5 w-5 text-primary" /> Референсы эпизода</h2>
             {refSession ? (
               <span className="inline-flex items-center gap-2 text-xs text-muted-foreground" data-testid="refs-progress">
-                <Loader2 className="h-4 w-4 animate-spin text-primary" /> Генерирую референсы: персонажи {refsCharsDone}/{refChars.length}, локации {refsLocsDone}/{refLocs.length}
+                <Loader2 className="h-4 w-4 animate-spin text-primary" /> {refScope === 'locations' ? <>Генерирую локацию: {refsLocsDone}/{refLocs.length}</> : <>Генерирую референсы: персонажи {refsCharsDone}/{refChars.length}, локации {refsLocsDone}/{refLocs.length}</>}
                 <CancelButton onCancel={cancelRefs} testId="refs-cancel" label="Отменить" pendingLabel="Останавливаю…" />
               </span>
             ) : refsReady ? (
@@ -738,7 +771,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <h3 className="mt-4 flex items-center gap-2 text-sm font-semibold"><Users className="h-4 w-4" /> Персонажи ({refChars.length})</h3>
           <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {refChars.map((c) => {
-              const busy = !!charBusy[c.id] || (refSession && !hasAllImages(c))
+              const busy = !!charBusy[c.id] || (refSession && refScope === 'all' && !hasAllImages(c))
               // 5 photo slots: 3 base shots + 2 extra angles. Clicking any opens the carousel over all of them.
               const slots = [c.imageFront, c.imageProfile, c.imageFull, ...parseExtra(c.imageExtra)].slice(0, CHARACTER_PHOTO_COUNT)
               while (slots.length < CHARACTER_PHOTO_COUNT) slots.push(null)
@@ -795,7 +828,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               const want = desiredExtraFrames(l)
               const base = [{ url: l.imageUrl, label: 'Общий план' }, { url: l.imageReverse, label: 'Обратный ракурс' }, { url: l.imageDetail, label: 'Средний план' }].filter((a) => validUrl(a.url))
               const extras = parseExtra(l.imageExtra)
-              const busy = !!locBusy[l.id] || (refSession && !(locBaseReady(l) && locExtraReady(l)))
+              const busy = !!locBusy[l.id] || (refSession && (!(locBaseReady(l) && locExtraReady(l)) || (refScope === 'locations' && locBaseJobActive && !!refJobs.current.loc[l.id])))
               return (
                 <div key={l.id} className="rounded-lg border border-border/60 p-3" data-testid="ref-location">
                   <div className="flex items-center justify-between gap-2">
@@ -821,6 +854,17 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                     </div>
                   ) : (
                     <>
+                      {/* Separate «Сгенерировать локацию» button: master frame + all angles of THIS location only. */}
+                      <button
+                        onClick={() => generateLocationRefs(l.id)}
+                        disabled={busy || refSession || refStarting}
+                        className="mt-2 inline-flex w-full items-center justify-center gap-1 rounded-lg bg-primary px-2 py-1 text-xs font-medium text-primary-foreground disabled:opacity-50"
+                        data-testid="ref-location-generate"
+                        title={locBaseReady(l) ? 'Снять локацию заново: новый мастер-кадр и все ракурсы' : 'Сгенерировать мастер-кадр и все ракурсы этой локации'}
+                      >
+                        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : locBaseReady(l) ? <RefreshCw className="h-3.5 w-3.5" /> : <Wand2 className="h-3.5 w-3.5" />}
+                        {busy ? 'Генерирую локацию...' : `${locBaseReady(l) ? 'Перегенерировать' : 'Сгенерировать'} локацию (${CHARACTER_REFERENCE_COST * (1 + want)} кр.)`}
+                      </button>
                       <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
                         <input value={locEdit[l.id] ?? ''} onChange={(e) => setLocEdit((t) => ({ ...t, [l.id]: e.target.value }))} placeholder="Изменить локацию по промпту…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-location-input" disabled={busy} />
                         <button onClick={() => reviseLocation(l.id)} disabled={busy || !(locEdit[l.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-location-submit" title="Изменить по промпту (после правки референс фиксируется)">

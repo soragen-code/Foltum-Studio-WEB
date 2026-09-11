@@ -475,6 +475,9 @@ async function handleFailure(jobId: string, ctx: { sceneId: string; userId?: str
   if (applied) await stopChainRun(ctx.sceneId, `[${kind}] ${safeProviderError(error)}`);
 }
 
+/** Succeeded predictions whose output is missing for longer than this are treated as expired at the provider. */
+const EXPIRED_OUTPUT_GRACE_MS = 3 * 60_000;
+
 /** One short provider check per poll, no sleeping invocation and no new prediction. */
 export async function resumeVideoJob(job: { id: string; type: string; status: string; resultData: string | null; updatedAt: Date }): Promise<boolean> {
   if (job.type !== "video" || job.status !== "processing") return false;
@@ -491,16 +494,18 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
   });
   if (!claim.count) return false;
   try {
+    // «Отменить генерацию» — check the flag BEFORE the provider status GET, so a cancel goes through even
+    // while the provider is unreachable or its status read keeps failing (otherwise the card spun forever).
+    if (fresh.cancelRequested === true || await isCancelRequested(job.id)) {
+      await cancelVideoPrediction(state.predictionId).catch(() => {});
+      await handleFailure(job.id, state, new Error("Генерация отменена автором"), state);
+      await markCanceled(job.id);
+      return true;
+    }
     let prediction = await getPredictionState(state.predictionId);
     // Deadline only applies to NON-terminal predictions. Late success still gets saved.
     if (["starting", "processing"].includes(prediction.status) && Date.now() - state.startedAt >= VIDEO_DEADLINE_MS) {
       await cancelVideoPrediction(state.predictionId);
-      prediction = await getPredictionState(state.predictionId);
-    }
-    // The author pressed «Отменить генерацию» while the prediction is still running: cancel it at the
-    // provider right away instead of waiting for it to finish — the canceled branch below refunds.
-    if (["starting", "processing"].includes(prediction.status) && (fresh.cancelRequested === true || await isCancelRequested(job.id))) {
-      await cancelVideoPrediction(state.predictionId).catch(() => {});
       prediction = await getPredictionState(state.predictionId);
     }
     state.providerStatus = prediction.status;
@@ -525,6 +530,16 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
       // edits the prompt manually (copy → fix → regenerate) via the scene card.
       await handleFailure(job.id, state, new Error(reason), state);
       return true;
+    }
+    // Succeeded, but the output file is already gone: Replicate keeps outputs ~1 hour after completion and
+    // nobody polled this job in time (no server-side cron — polling runs only while the episode page is
+    // open). Retrying the GET forever is pointless — fail with a refund and a clear Russian explanation.
+    if (prediction.status === "succeeded" && !prediction.url) {
+      const completedAt = prediction.completedAt ? Date.parse(prediction.completedAt) : NaN;
+      if (!Number.isFinite(completedAt) || Date.now() - completedAt > EXPIRED_OUTPUT_GRACE_MS) {
+        await handleFailure(job.id, state, new Error("Готовое видео не было получено вовремя: провайдер уже удалил файл (он хранится около часа после завершения). Кредиты возвращены. Держите вкладку эпизода открытой до конца генерации или вернитесь к ней в течение часа."), state);
+        return true;
+      }
     }
     if (prediction.status === "succeeded" && prediction.url) {
       state.finalizing = true;

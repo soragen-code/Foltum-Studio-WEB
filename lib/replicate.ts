@@ -232,7 +232,10 @@ export async function getPredictionState(id: string): Promise<PredictionState> {
   const p = await getReplicate().predictions.get(id, { signal: AbortSignal.timeout(20_000) });
   const status = p.status as PredictionState["status"];
   const times = { startedAt: p.started_at, completedAt: p.completed_at };
-  if (status === "succeeded") return { status, ...times, url: extractUrl(p.output) };
+  // A succeeded prediction whose output is already gone (Replicate deletes output files about an hour
+  // after completion) is reported WITHOUT a url instead of throwing — callers decide what to do; the
+  // video worker fails the job with a refund rather than retrying the status GET forever.
+  if (status === "succeeded") { let url: string | undefined; try { url = extractUrl(p.output); } catch { url = undefined; } return { status, ...times, url }; }
   if (status === "failed" || status === "canceled") return { status, ...times, error: p.error ? String(p.error) : undefined };
   return { status, ...times };
 }
