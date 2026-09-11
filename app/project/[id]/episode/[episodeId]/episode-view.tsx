@@ -13,6 +13,7 @@ import { desiredExtraFrames, desiredTotalFrames, locationScale, locationScaleLab
 import { CHARACTER_PHOTO_COUNT } from '@/lib/reference-counts'
 import { IMAGE_MODELS, DEFAULT_IMAGE_MODEL, VIDEO_MODEL_LABEL, type ImageModelId } from '@/lib/ai-models'
 import { EpisodeNavGrid } from './episode-nav-grid'
+import { locationExtraLabel } from '@/lib/visual-style'
 
 type EpisodePhase = 'script' | 'references' | 'scenes'
 
@@ -768,7 +769,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                     <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground" title={`Больше кадров для крупных мест`}>{locationScaleLabel(scale)}{want > 0 ? ` · +${want} кадров` : ''}</span>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {(() => { const all = [...base.map((a) => ({ url: a.url as string, label: a.label })), ...extras.map((u, i) => ({ url: u, label: `Доп. кадр ${i + 1}` }))]; const urls = all.map((a) => a.url); return base.length > 0 ? all.map((a, i) => (
+                    {(() => { const all = [...base.map((a) => ({ url: a.url as string, label: a.label })), ...extras.map((u, i) => ({ url: u, label: `${i + 1}. ${locationExtraLabel(i)}` }))]; const urls = all.map((a) => a.url); return base.length > 0 ? all.map((a, i) => (
                       <button key={a.url + i} type="button" onClick={() => openLightbox(urls, i, `${l.name} — ${a.label}`)} className="group relative h-24 w-16 overflow-hidden rounded bg-muted" title={a.label} data-testid="ref-image">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={a.url} alt={`${l.name} — ${a.label}`} className="h-full w-full object-cover" />

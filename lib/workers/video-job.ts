@@ -161,7 +161,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       select: { id: true, number: true, locationDesc: true, lastFrameUrl: true, endState: true, endStateActual: true },
     }) : null;
     const episodeLoc = await prisma.episode.findUnique({ where: { id: scene.episodeId }, select: {
-      location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true } },
+      location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true } },
       season: { select: { project: { select: { isTest: true } } } },
     } });
 

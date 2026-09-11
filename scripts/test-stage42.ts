@@ -21,12 +21,12 @@ const talk = 'ANNA (softly): "You knew from the very start and stayed silent all
 function ruleChecks() {
   for (const [name, rule] of [["START", START_STATE_RULE], ["END", END_STATE_RULE]] as const) {
     ok(/150 words/.test(rule) && /12.?20 sentences/.test(rule), `A: ${name}_STATE_RULE demands 12-20 sentences / >=150 words`);
-    ok(rule.includes("STATIC still frame") && rule.includes("present tense"), `A: ${name}_STATE_RULE demands one static still, present tense`);
+    ok(rule.includes("WORLD") && rule.includes("CAMERA") && rule.includes("present tense") && !/frozen still|no motion/i.test(rule), `A: ${name}_STATE_RULE demands WORLD + CAMERA blocks, present tense, no frozen-still wording (Stage 44)`);
     for (const kw of ["CAMERA", "LIGHTING", "COMPOSITION", "posture", "colour palette", "wardrobe"].map(k => k)) {
       ok(rule.includes(kw), `A: ${name}_STATE_RULE mentions ${kw}`);
     }
   }
-  ok(START_STATE_RULE.includes("CHAIN RULE") && END_STATE_RULE.includes("HAND-OFF RULE"), "A: hand-off / chain rules preserved");
+  ok(START_STATE_RULE.includes("MATCH-CUT RULE") && END_STATE_RULE.includes("HAND-OFF"), "A: match-cut / hand-off rules present (Stage 44)");
 }
 
 // ── B. normalizeEpisodeScript rewrites startState[i] = endState[i-1] verbatim ─────────────────────
@@ -51,7 +51,7 @@ function handoffChecks() {
   for (let i = 1; i < ep.scenes.length; i++) {
     if (ep.scenes[i].startState !== ep.scenes[i - 1].endState) allChained = false;
   }
-  ok(allChained, "B: startState[i] === endState[i-1] for every i>=2 (verbatim hand-off)");
+  ok(allChained, "B: legacy unlabelled states — startState[i] === endState[i-1] for every i>=2 (verbatim hand-off preserved)");
   // endState values themselves are untouched by the hand-off pass.
   ok(ep.scenes[2].endState === "SCRIPTED-END-3: Anna and Mark posed in the office, final frame of scene 3.", "B: endState is not mutated by the hand-off");
 }

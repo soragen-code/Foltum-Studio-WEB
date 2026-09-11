@@ -42,13 +42,13 @@ const loc = { id: "loc", name: "Kitchen", imageUrl: styledUrl("k-wide"), imageRe
 
   const b = buildScenePrompt({ scene, characters: cast, location: loc, previous, provider: "seedance" });
   ok(b.openingState === start && b.endState === end, "A: result carries both states");
-  ok(b.prompt.startsWith(`${OPENING_STATE_PREFIX}${start}\n${END_STATE_PREFIX}${end}\n\n[SHOT TYPE]`), "A: OPENING STATE then END STATE right before the 9-line prompt");
+  ok(b.prompt.startsWith(`${OPENING_STATE_PREFIX}${start}\n`) && b.prompt.indexOf(END_STATE_PREFIX + end) > b.prompt.indexOf(OPENING_STATE_PREFIX) && b.prompt.indexOf("\n\n[SHOT TYPE]") > b.prompt.indexOf(END_STATE_PREFIX), "A: OPENING STATE then END STATE right before the 9-line prompt (Stage 44: directive lines in between)");
   const b2 = buildScenePrompt({ scene, characters: cast, location: loc, previous: { ...previous, endStateActual: actual }, provider: "seedance" });
   ok(b2.openingState === actual && b2.prompt.includes(OPENING_STATE_PREFIX + actual) && !b2.prompt.includes(start) && b2.prompt.includes(END_STATE_PREFIX + end), "A: actual last frame replaces startState, END STATE stays");
   const b3 = buildScenePrompt({ scene: { ...scene, startState: null, endState: null }, characters: cast, location: loc, previous: null, provider: "seedance" });
-  ok(b3.openingState === null && b3.endState === null && !b3.prompt.includes(OPENING_STATE_PREFIX) && !b3.prompt.includes(END_STATE_PREFIX) && b3.prompt.startsWith("[SHOT TYPE]"), "A: no states → no blocks");
+  ok(b3.openingState === null && b3.endState === null && !b3.prompt.includes(OPENING_STATE_PREFIX) && !b3.prompt.includes(END_STATE_PREFIX) && b3.prompt.includes("\n\n[SHOT TYPE]") && !/^OPENING|^END STATE/.test(b3.prompt), "A: no states → no state blocks (Stage 44: only the speech line remains)");
   const b4 = buildScenePrompt({ scene: { ...scene, startState: null }, characters: cast, location: loc, previous: null, provider: "seedance" });
-  ok(b4.prompt.startsWith(END_STATE_PREFIX + end), "A: END STATE alone when there is no opening state");
+  ok(b4.prompt.startsWith(END_STATE_PREFIX + end) && !b4.prompt.includes(OPENING_STATE_PREFIX), "A: END STATE alone when there is no opening state");
   const b5 = buildScenePrompt({ scene: { ...scene, promptOverride: "MY PROMPT" }, characters: cast, location: loc, previous, provider: "seedance" });
   ok(b5.prompt === "MY PROMPT", "A: manual override stays verbatim");
 }
@@ -65,7 +65,7 @@ const loc = { id: "loc", name: "Kitchen", imageUrl: styledUrl("k-wide"), imageRe
   ok(ep.scenes[0].startState === start && ep.scenes.every(s => s.endState === end) && ep.scenes.slice(1).every(s => s.startState === end), "B: normalizeEpisodeScript trims + hands off startState[i]=endState[i-1]");
 
   const sys = episodeScriptSystemPrompt("en", 1);
-  ok(sys.includes('"startState": string, "endState": string') && sys.includes("R10. START / END STATE HAND-OFF") && sys.includes("CHAIN RULE") && sys.includes(START_STATE_RULE), "B: episode script prompt asks for startState + endState with the chain rule");
+  ok(sys.includes('"startState": string, "endState": string') && sys.includes("R10. START / END STATE") && sys.includes("MATCH-CUT RULE") && sys.includes(START_STATE_RULE), "B: episode script prompt asks for startState + endState with the chain rule");
   const rev = sceneReviseSystemPrompt("en");
   ok(rev.includes('"startState": string, "endState": string') && rev.includes(START_STATE_RULE), "B: scene revise prompt asks for startState + endState");
   const audit = episodeContinuityAuditSystemPrompt("en");

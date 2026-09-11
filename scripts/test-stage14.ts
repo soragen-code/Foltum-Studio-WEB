@@ -49,8 +49,8 @@ async function main() {
 
   // --- (B) location scale: Stage 18 → 3 / 6 / 9 angles by scale ---------------
   ok(LOCATION_BASE_FRAMES === 3, "location base angles = 3");
-  ok(LOCATION_TOTAL_MIN === 3 && LOCATION_TOTAL_MAX === 9, "location total ranges 3..9 by scale (Stage 18)");
-  ok(desiredTotalFrames({ name: "Кабинет" }) === 3, "small location → 3 angles total");
+  ok(LOCATION_TOTAL_MIN === 6 && LOCATION_TOTAL_MAX === 9, "location total ranges 6..9 by scale (Stage 44)");
+  ok(desiredTotalFrames({ name: "Кабинет" }) === 6, "small location → 6 angles total (Stage 44 six-shot plan)");
   ok(desiredTotalFrames({ name: "Склад" }) === 6, "big location → 6 angles total");
   ok(desiredTotalFrames({ name: "Ночной город" }) === 9, "huge location → 9 angles total");
   ok(

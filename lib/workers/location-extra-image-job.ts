@@ -7,10 +7,32 @@ import { detectC2paFromUrl } from "@/lib/c2pa";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Stage 44 — max photographs attached to one extra-plate request (master + base angles + extras). */
+export const EXTRA_JOB_IMAGE_INPUT_CAP = 6;
+
+/**
+ * Stage 44 — pure helper: the image_input list for an extra location plate. The master wide shot is
+ * ALWAYS first, followed by the other base angles (reverse, detail) and the extras generated so far,
+ * de-duplicated and capped. Never empty when the master exists.
+ */
+export function extraJobImageInputs(
+  loc: { imageUrl?: string | null; imageReverse?: string | null; imageDetail?: string | null },
+  existingExtras: readonly string[],
+  cap = EXTRA_JOB_IMAGE_INPUT_CAP
+): string[] {
+  const out: string[] = [];
+  for (const u of [loc.imageUrl, loc.imageReverse, loc.imageDetail, ...existingExtras]) {
+    if (u && !out.includes(u)) out.push(u);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
 /**
  * Background job: generate N EXTRA angle/shot references for ONE location, beyond the base 3.
- * Each is generated WITH the stored wide shot (Location.imageUrl) as Seedream image_input so the
- * place, light, weather and materials stay identical — only the framing changes. The new URLs are
+ * Stage 44: each is generated WITH the stored photographs of the place (master wide shot first, then the
+ * other base angles and the extras made so far) as Seedream image_input so the place, light, weather
+ * and materials stay identical — only the camera position changes (six-slot LOCATION_SHOT_PLAN). The new URLs are
  * APPENDED to Location.imageExtra (JSON array). Job type "location_extra_image".
  */
 export async function runLocationExtraImagesJob({ jobId, projectId, locationId, count, imageModel }: { jobId: string; projectId: string; locationId: string; count: number; imageModel?: string }): Promise<void> {
@@ -35,17 +57,16 @@ export async function runLocationExtraImagesJob({ jobId, projectId, locationId, 
         return;
       }
       await updateJob(jobId, { progress: 8 + Math.round((i / Math.max(count, 1)) * 90), message: `Дополнительные ракурсы локации «${loc.name}» (${i + 1}/${count})…` });
-      // Stage 16 (B1): DON'T hard-bind every extra frame to the wide shot — that pins the viewpoint
-      // and yields near-copies. Re-anchor to the base image only on every 3rd frame; the rest rely on
-      // the rich textual location description so the camera genuinely moves while the place stays the same.
+      // Stage 44: EVERY extra plate is generated from the photographs of the place that already exist —
+      // master wide shot first, then the other base angles, then the extras made so far — so the model
+      // re-photographs the SAME place from the planned new position instead of inventing a new one.
       const idx = startIndex + i;
-      const withBaseImage = idx % 3 === 2;
       try {
         const input: { prompt: string; aspect_ratio: string; image_input?: string[] } = {
-          prompt: locationExtraAnglePrompt(visual, loc.name, idx, { withBaseImage }),
+          prompt: locationExtraAnglePrompt(visual, loc.name, idx),
           aspect_ratio: "9:16",
+          image_input: extraJobImageInputs(loc, [...existing, ...added]),
         };
-        if (withBaseImage) input.image_input = [loc.imageUrl];
         const remote = await generateImage(input, { jobId, imageModel });
         const url = await uploadRemoteToS3(remote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-extra-${Date.now()}-${startIndex + i}.png`, "image/png");
         added.push(url);

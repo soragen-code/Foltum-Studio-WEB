@@ -19,7 +19,7 @@
  */
 import { buildNativeAudioPrompt, buildNarrationAudioPrompt } from "@/lib/voiceover";
 import { PACE_DIRECTION, ACTION_PACE_DIRECTION, CONFRONTATION_STAGING_SENTENCE } from "@/lib/season";
-import { styledVisualPrompt, isStyledAsset, locationAngleImages } from "@/lib/visual-style";
+import { styledVisualPrompt, isStyledAsset, locationAngleImages, parseLocationExtra, locationExtraLabel } from "@/lib/visual-style";
 import { normalizeVideoModel, videoModelSlug, type VideoModelId } from "@/lib/ai-models";
 
 /**
@@ -32,6 +32,11 @@ import { normalizeVideoModel, videoModelSlug, type VideoModelId } from "@/lib/ai
  * stays) — characters are never dropped. See buildScenePrompt for the ordering.
  */
 export const REFERENCE_IMAGE_CAP = 30;
+/** Stage 44 — how many extra location angles (Location.imageExtra) may join the three base angles as references. */
+export const LOCATION_EXTRA_REF_CAP = 6;
+/** Stage 44 — the note appended when location references are sent: the characters are INSIDE the photographed place. */
+export const LOCATION_INSIDE_NOTE =
+  "Camera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location references. Only the camera angle changes between shots. These frames are the SAME real place photographed from different positions — the characters are INSIDE this space: floor under their feet, walls/objects beside and behind them, real depth in front and behind; shoot them in wide/full shots within the environment, never as figures placed in front of a picture of the place. They interact with its objects and surfaces; the cuts show the same location from different angles with real depth (foreground, characters, background) — never a flat backdrop.";
 /** @deprecated alias kept for older imports — use REFERENCE_IMAGE_CAP. */
 export const MAX_REFERENCE_IMAGES = REFERENCE_IMAGE_CAP;
 
@@ -81,6 +86,8 @@ export interface ScenePromptLocation {
   imageUrl?: string | null;
   imageReverse?: string | null;
   imageDetail?: string | null;
+  /** Stage 44 — JSON array of extra location angles (Location.imageExtra); sent as references too. */
+  imageExtra?: string | null;
 }
 
 /**
@@ -105,7 +112,13 @@ export function breaksSequence(continuesFrom?: string | null): boolean {
 }
 
 /** Stage 40 — prefix of the OPENING STATE block inserted before the 9-line visual prompt. */
-export const OPENING_STATE_PREFIX = "OPENING STATE (frame 1 — continue exactly from here): ";
+export const OPENING_STATE_PREFIX = "OPENING STATE (frame 1 — the SAME instant and action continue from the previous shot, but from a NEW camera: different angle, shot scale and height — never the previous framing; re-frame the identical moment): ";
+/** Stage 44 — directive appended on every continuous seam: match cut on action, new camera, nobody speaking on frame 1. */
+export const NEW_CAMERA_ON_CUT_LINE =
+  "NEW CAMERA ON THE CUT: this shot opens on the exact same action as the previous shot's final instant, but the camera has cut to a different angle / shot scale / height — never the same framing as the previous shot's end. Nobody is speaking on frame 1 — the first line of this shot starts fresh after the cut.";
+/** Stage 44 — speech must be finished before the final second of every clip (no mid-word cuts). */
+export const SPEECH_BEFORE_CUT_LINE =
+  "All speech is finished before the final second of the clip — nobody is mid-word or mid-sentence at the cut; the last line lands, then the hard cut.";
 /** Stage 41 — prefix of the END STATE block inserted after OPENING STATE, before the 9-line visual prompt. */
 export const END_STATE_PREFIX = "END STATE (last frame — end exactly here): ";
 
@@ -258,9 +271,14 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // both where frame 1 starts and where the last frame must end.
   const openingState = resolveOpeningState(scene, previous);
   const endState = resolveEndState(scene);
+  // Stage 44 — match cut on action: on a continuous seam the opening WORLD is the previous shot's final
+  // instant while the CAMERA is new; the directive line makes that explicit for the video model.
+  const continuousSeam = !!previous && !breaksSequence(scene.continuesFrom) && !!openingState;
   const stateBlocks = [
     openingState ? `${OPENING_STATE_PREFIX}${openingState}` : "",
+    continuousSeam ? NEW_CAMERA_ON_CUT_LINE : "",
     endState ? `${END_STATE_PREFIX}${endState}` : "",
+    SPEECH_BEFORE_CUT_LINE,
   ].filter(Boolean);
   const visualWithOpening = stateBlocks.length
     ? `${stateBlocks.join("\n")}\n\n${stripSlowDirections(visualPrompt)}`
@@ -318,10 +336,15 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const unmentioned = individualsAll.filter(c => !isMentioned(c.name));
   const individuals = [...mentioned, ...unmentioned];
   const locationAngles = location ? locationAngleImages(location) : [];
+  // Stage 44 — the extra angles of the same photographed place are references too (within the cap).
+  const locationExtras = location ? parseLocationExtra(location.imageExtra).slice(0, LOCATION_EXTRA_REF_CAP) : [];
   const effectiveLocation = locationAngles.length ? location : null;
   type Ref = SceneReference & { id: string };
   const characterRefs: Ref[] = individuals.map(c => ({ url: c.imageFront!, kind: "character", id: c.characterId, note: `defines ${c.name}'s photorealistic appearance and identity; use the scene's staging and camera.` }));
-  const locationRefs: Ref[] = locationAngles.map(a => ({ url: a.url, kind: "location", id: effectiveLocation!.id, note: `the location "${effectiveLocation!.name}" — ${a.angle} angle. Same place, same time of day, same light and palette in every shot. Keep the camera inside this location and match this lighting exactly.` }));
+  const locationRefs: Ref[] = [
+    ...locationAngles.map(a => ({ url: a.url, angle: a.angle as string })),
+    ...(effectiveLocation ? locationExtras.map((url, i) => ({ url, angle: locationExtraLabel(i) })) : []),
+  ].map(a => ({ url: a.url, kind: "location" as const, id: effectiveLocation!.id, note: `the location "${effectiveLocation!.name}" — ${a.angle} angle. Same place, same time of day, same light and palette in every shot. Keep the camera inside this location and match this lighting exactly.` }));
   const crowdRefs: Ref[] = crowds.map(c => ({ url: c.imageFront!, kind: "crowd", id: c.characterId, note: `defines the look of the group "${c.name}" (extras): who they are and how they are dressed.` }));
   // Reduced set (individual characters + the wide location angle) kept for diagnostics.
   const fallbackRefs: SceneReference[] = [...characterRefs, ...locationRefs.slice(0, 1)].slice(0, REFERENCE_IMAGE_CAP).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
@@ -354,7 +377,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     // (the images are still sent).
     if (!hasOverride) {
       prompt += "\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
-      if (keptLocation.length) prompt += "\nCamera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location references. Only the camera angle changes between shots. The characters are physically present in this place and interact with its objects and surfaces; the cuts show the same location from different angles with real depth (foreground, characters, background) — never a flat backdrop.";
+      if (keptLocation.length) prompt += "\n" + LOCATION_INSIDE_NOTE;
     }
   } else if (input.textOnlyWhenNoReferences) {
     // Stage 40 — «Тестовая серия» / scenes with no linked characters or location: submit text-only

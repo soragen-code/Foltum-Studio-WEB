@@ -67,32 +67,32 @@ ok(ex0 !== ex1, "A2: the two extra prompts differ");
 ok([front, profile, full, ex0, ex1].every((p) => /fisherman|beard/i.test(p)), "A2: all 5 prompts embed the same appearance (unity)");
 
 // --- A3: location frames scale with size (Stage 18: 3 / 6 / 9) ---------------
-for (const [label, loc, total] of [["small", { name: "Кабинет" }, 3], ["big", { name: "Склад" }, 6], ["huge", { name: "Ночной город" }, 9]] as const) {
+for (const [label, loc, total] of [["small", { name: "Кабинет" }, 6], ["big", { name: "Склад" }, 6], ["huge", { name: "Ночной город" }, 9]] as const) {
   ok(desiredTotalFrames(loc) === total, `A3: ${label} location → ${total} total`);
   ok(desiredExtraFrames(loc) === total - LOCATION_BASE_FRAMES, `A3: ${label} location → ${total - 3} extra`);
 }
 
 // --- B2: ≥15 distinct location camera formulations --------------------------
-ok(LOCATION_EXTRA_VARIANTS.length >= 12, "B2: extra-variant pool covers the 12 extra frames");
+ok(LOCATION_EXTRA_VARIANTS.length === 6, "B2 (Stage 44): fixed six-slot extra plan");
 ok(new Set(LOCATION_EXTRA_VARIANTS).size === LOCATION_EXTRA_VARIANTS.length, "B2: extra variants are all distinct");
 const allFormulations = new Set<string>([...LOCATION_ANGLES.map((a) => a.angle), ...LOCATION_EXTRA_VARIANTS]);
-ok(allFormulations.size >= 15, `B2: ≥15 distinct camera formulations total (${allFormulations.size})`);
+ok(allFormulations.size >= 9, `B2: ≥9 distinct camera formulations total (${allFormulations.size})`);
 // The 12 formulations actually used (indices 0..11) are all distinct.
-const used = Array.from({ length: 12 }, (_, i) => locationExtraAnglePrompt("a wooden cabin interior", "Cabin", i, { withBaseImage: false }));
-ok(new Set(used).size === 12, "B2: the 12 used extra prompts are all distinct");
+const used = Array.from({ length: 6 }, (_, i) => locationExtraAnglePrompt("a wooden cabin interior", "Cabin", i));
+ok(new Set(used).size === 6, "B2: the 6 used extra prompts are all distinct");
 // Spot-check that genuinely different camera language appears across the set.
 const joined = LOCATION_EXTRA_VARIANTS.join(" \n ").toLowerCase();
-for (const kw of ["high", "low angle", "corner", "doorway", "detail", "entrance", "length", "window", "overview", "nook"]) {
+for (const kw of ["high", "low angle", "corner", "doorway", "entrance", "length", "window", "light source"]) {
   ok(joined.includes(kw), `B2: extra variants include a '${kw}' camera formulation`);
 }
 
 // --- B1: loosened base-image binding ----------------------------------------
 const withImg = locationExtraAnglePrompt("a wooden cabin interior", "Cabin", 2, { withBaseImage: true });
 const noImg = locationExtraAnglePrompt("a wooden cabin interior", "Cabin", 0, { withBaseImage: false });
-ok(/reference image/i.test(withImg), "B1: re-anchor frame references the base image");
-ok(!/reference image/i.test(noImg) && /described below/i.test(noImg), "B1: text-only frame does NOT bind to a base image");
-ok([withImg, noImg].every((p) => /DIFFERENT camera position/i.test(p)), "B1: both variants demand a different camera position");
-ok([withImg, noImg].every((p) => /identical|stays identical/i.test(p)), "B1: both variants keep the place identical (consistency preserved)");
+ok(/reference image IS this location, already photographed/i.test(withImg), "B1 (Stage 44): extra frame references the photographed base image");
+ok(/reference image IS this location, already photographed/i.test(noImg), "B1 (Stage 44): every extra frame binds to the base image (withBaseImage ignored)");
+ok([withImg, noImg].every((p) => /another camera position/i.test(p) && /do NOT reproduce the earlier framing/i.test(p)), "B1: both variants demand a different camera position");
+ok([withImg, noImg].every((p) => /Same architecture, materials/i.test(p)), "B1: both variants keep the place identical (consistency preserved)");
 ok([withImg, noImg].every((p) => /no people/i.test(p)), "B1: location plates stay people-free");
 
 console.log(`\nALL STAGE16 CHECKS PASSED (${pass})`);

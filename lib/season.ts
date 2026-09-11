@@ -95,7 +95,7 @@ export const sceneScriptSchema = z.object({
   endState: z.string().min(1),
   /**
    * Stage 41 — REQUIRED scripted START STATE of the scene's FIRST frame (English, 12–20 sentences, ≥150 words, same contract as
-   * endState). Equals the previous scene's endState exactly unless continuesFrom is location-change / new-sequence
+   * endState). Stage 44: WORLD block equals the previous scene's endState WORLD, CAMERA block differs, unless continuesFrom is location-change / new-sequence
    * (then it describes the fresh opening). Opens this scene's prompt as OPENING STATE.
    */
   startState: z.string().min(1),
@@ -225,19 +225,31 @@ export const ONE_LOCATION_RULE =
   "The ONLY exception is a DELIBERATELY SHOWN, MOTIVATED move to another place — and then that scene MUST have \"continuesFrom\": \"location-change\" and SHOW the travel on camera (a character walks out and we follow them to the new place). Absent that shown, motivated move, an unmotivated setting change is a HARD ERROR — treat it exactly like a character teleporting between frames (it breaks the same continuity rule).";
 
 /** Stage 40 — what a scripted "endState" must contain. Shared by the episode script, scene revise and continuity audit prompts. */
-// Stage 42 — the frame-state descriptions must be EXHAUSTIVE (≈5× the old detail). A single static
-// still frame is described in ~12–20 sentences / ≥150 words, covering pose, wardrobe, camera,
-// composition, depth, background, lighting, time/weather, colour palette and props.
-const FRAME_STATE_ASPECTS =
-  "Describe, in full: (1) for EVERY character present — exact position relative to fixed landmarks (door, table, window, wall, bench), body orientation (which way the torso and the face point), full posture (standing / seated / leaning / crouched / mid-step held still), the position of each arm and hand and exactly what is held in them, gaze direction, and facial expression; (2) each character's clothing and its condition (neat, wet, torn, dusty, blood-flecked); (3) the spatial relationship and distance between the characters (who is nearer the camera, who is behind whom, how many steps apart, who faces whom); (4) the CAMERA — shot scale (wide / full / medium / medium close-up), height (eye-level / low / high), angle and lens feel; (5) the COMPOSITION — what sits in each corner and third of the frame and along the foreground / midground / background planes; (6) the background set dressing and the elements of the location; (7) the LIGHTING — source, direction, colour and the shadows it casts; (8) the time of day and the weather / atmosphere (haze, dust, smoke, rain); (9) the overall colour palette; (10) notable props and their exact placement. Write it as ONE frozen still — present tense, no motion, no action unfolding over time, no story interpretation, only what is visible in that single instant.";
+// Stage 42 — the frame-state descriptions must be EXHAUSTIVE (≈5× the old detail): ~12–20 sentences / ≥150 words.
+// Stage 44 — MATCH CUT ON ACTION. Every state is written in TWO labelled blocks: "WORLD:" (the physical
+// instant — people, poses as one moment of CONTINUING motion, wardrobe, props, the detailed place, light,
+// weather, palette) and "CAMERA:" (shot scale, height, angle, lens, composition). On a continuous seam the
+// WORLD of scene N+1's start is IDENTICAL to scene N's end, while the CAMERA is a NEW setup — the cut lands
+// on the same action seen from a different angle, never on a frozen pose repeated in the same framing.
+export const FRAME_STATE_ASPECTS =
+  "Write it in TWO labelled blocks, each on its own line. " +
+  "\"WORLD:\" — the physical instant, independent of where the camera stands: (1) for EVERY character present — exact position relative to fixed landmarks (door, table, window, wall, bench), body orientation (which way the torso and the face point), full posture and the exact phase of the movement they are in (a single instant of continuing motion: a hand halfway to the cup, weight rolling onto the front foot, a head turning) — NOT a frozen pose; the position of each arm and hand and exactly what is held in them, gaze direction and facial expression; (2) each character's clothing and its condition (neat, wet, torn, dusty, blood-flecked); (3) the spatial relationship and distance between the characters (how many steps apart, who faces whom, who is nearer which landmark); (4) the LOCATION in detail — architecture, materials, surfaces, floor, walls, ceiling or sky, the placement of furniture and objects, the zone of the location the characters occupy; (5) the LIGHTING — source, direction, colour and the shadows it casts; (6) the time of day and the weather / atmosphere (haze, dust, smoke, rain); (7) the overall colour palette; (8) notable props and their exact placement. " +
+  "\"CAMERA:\" — the camera setup only: shot scale (wide / full / medium / medium close-up), camera height (eye-level / low / high), angle relative to the characters and the space (frontal / three-quarter / profile / from behind / over-the-shoulder), lens feel (wide-angle / normal / long), and the COMPOSITION — what sits in each third of the frame and along the foreground / midground / background planes. " +
+  "Present tense, only what is visible in that single instant; describe motion as its momentary phase, not as a story unfolding.";
+/** Stage 44 — shared continuity + speech rules for both frame states. */
+const MATCH_CUT_RULE =
+  " MATCH-CUT RULE (continuous seams — every \"continuesFrom\" other than \"location-change\" / \"new-sequence\"): the WORLD block of scene N+1's startState is IDENTICAL to the WORLD block of scene N's endState — the same people at the same spots in the same phase of the same movement, same wardrobe, same props, same place, same light — the action simply CONTINUES across the cut. The CAMERA block MUST be DIFFERENT: change at least TWO of the three parameters (shot scale, camera height, angle) — never repeat the previous framing; the cut is a new camera on the same instant, like a real edit. " +
+  " SPEECH RULE: every line of dialogue belongs ENTIRELY to one scene — the last line of a scene finishes at least ~1 second before the cut, nobody is mid-word or mid-sentence on the final frame, and the next scene opens with a fresh line or a short silent beat, never with the tail of a sentence.";
 export const START_STATE_RULE =
-  "\"startState\" (REQUIRED, ENGLISH, present tense, 12–20 sentences, AT LEAST 150 words) = an exhaustive, pixel-precise description of ONE STATIC still frame — the scene's FIRST FRAME, as if the video were frozen on frame 1. " +
+  "\"startState\" (REQUIRED, ENGLISH, present tense, 12–20 sentences, AT LEAST 150 words, WORLD + CAMERA blocks) = an exhaustive, pixel-precise description of the scene's FIRST FRAME — one instant of continuing action seen from this scene's opening camera. " +
   FRAME_STATE_ASPECTS +
-  " CHAIN RULE: the startState of scene N+1 must match the endState of scene N EXACTLY (same people in the same spots, same wardrobe, same props, same light, same camera) unless its \"continuesFrom\" is \"location-change\" or \"new-sequence\" — only then startState describes the fresh opening of the new sequence.";
+  MATCH_CUT_RULE +
+  " Only when \"continuesFrom\" is \"location-change\" or \"new-sequence\" does the startState describe the fresh opening of a new sequence (own WORLD, own CAMERA).";
 export const END_STATE_RULE =
-  "\"endState\" (REQUIRED, ENGLISH, present tense, 12–20 sentences, AT LEAST 150 words) = an exhaustive, pixel-precise description of ONE STATIC still frame — the scene's FINAL FRAME at the cut, written so the next scene can start from it verbatim. " +
+  "\"endState\" (REQUIRED, ENGLISH, present tense, 12–20 sentences, AT LEAST 150 words, WORLD + CAMERA blocks) = an exhaustive, pixel-precise description of the scene's FINAL FRAME at the cut — one instant of continuing action, written so the next scene can pick up the SAME WORLD instant from a NEW camera. " +
   FRAME_STATE_ASPECTS +
-  " HAND-OFF RULE: scene N+1 BEGINS from scene N's endState — same people in the same spots, same wardrobe, same props, same light — unless its \"continuesFrom\" is \"location-change\" or \"new-sequence\". So write each endState knowing the next scene's [BLOCKING] / [SHOT TYPE] first beat must match it exactly, and write each scene's opening to match the previous endState.";
+  MATCH_CUT_RULE +
+  " HAND-OFF: the WORLD block must note that all speech is finished (mouths closed or mid-breath, the last line already landed). Scene N+1's [BLOCKING] / [SHOT TYPE] first beat continues this exact WORLD instant from a different shot scale / height / angle — unless its \"continuesFrom\" is \"location-change\" or \"new-sequence\".";
 
 const PROMPT_LINES = ["[SHOT TYPE]", "[VISUAL STYLE]", "[LIGHTING]", "[BLOCKING]", "[GAZE]", "[NON-VERBAL]", "[ACTION]", "[CHARACTER]", "[TRANSITION]"];
 
@@ -395,6 +407,86 @@ export function splitOverlongScenes(scenes: SceneScript[]): SceneScript[] {
   return out;
 }
 
+// ---------------------------------------------------------------------------------------------
+// Stage 44 — WORLD / CAMERA frame-state helpers (match cut on action).
+// ---------------------------------------------------------------------------------------------
+
+/** Continuity links that start a fresh sequence (mirror of scene-prompt's SEQUENCE_BREAK_LINKS; kept local to avoid a circular import). */
+const SEAM_BREAK_LINKS = ["location-change", "new-sequence"] as const;
+export const seamBreaks = (continuesFrom?: string | null): boolean =>
+  (SEAM_BREAK_LINKS as readonly string[]).includes((continuesFrom ?? "").trim().toLowerCase());
+
+/**
+ * Split a frame-state text into its WORLD and CAMERA blocks. Labels are matched case-insensitively at a
+ * line start (or at the very start of the text). A state without labels is treated as all-WORLD with an
+ * empty camera (legacy Stage 40–42 states).
+ */
+export function splitState(text: string | null | undefined): { world: string; camera: string } {
+  const src = (text ?? "").trim();
+  if (!src) return { world: "", camera: "" };
+  const re = /(?:^|\n)\s*(WORLD|CAMERA)\s*:\s*/gi;
+  const parts: { label: string; start: number; bodyStart: number }[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src))) parts.push({ label: m[1].toUpperCase(), start: m.index, bodyStart: m.index + m[0].length });
+  if (!parts.length) return { world: src, camera: "" };
+  let world = "";
+  let camera = "";
+  // Text before the first label (rare) belongs to WORLD.
+  const lead = src.slice(0, parts[0].start).trim();
+  if (lead) world = lead;
+  for (let i = 0; i < parts.length; i++) {
+    const body = src.slice(parts[i].bodyStart, i + 1 < parts.length ? parts[i + 1].start : undefined).trim();
+    if (!body) continue;
+    if (parts[i].label === "CAMERA") camera = camera ? `${camera} ${body}` : body;
+    else world = world ? `${world} ${body}` : body;
+  }
+  return { world, camera };
+}
+
+/** Reassemble a labelled state (camera block omitted when empty). */
+export function joinState(world: string, camera: string): string {
+  const w = world.trim();
+  const c = camera.trim();
+  return c ? `WORLD: ${w}\nCAMERA: ${c}` : `WORLD: ${w}`;
+}
+
+const normalizeCameraText = (t: string) => t.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+/**
+ * Deterministic camera setups used when the LLM repeats the previous shot's framing on a continuous seam.
+ * Each entry differs from every other in at least two of (scale, height, angle), so whichever one is
+ * picked relative to the previous camera, the cut lands on a visibly new setup.
+ */
+export const CAMERA_VARIATION: readonly { scale: string; height: string; angle: string; text: string }[] = [
+  { scale: "wide", height: "low", angle: "three-quarter", text: "Wide shot from a LOW camera height (knee level), three-quarter angle across the space — the characters full-figure, the floor plane large in the foreground, the far side of the location filling the background." },
+  { scale: "medium", height: "high", angle: "profile", text: "Medium shot from a HIGH camera height looking down at a 30° tilt, from the side (profile to the characters) — the characters from the waist up with the surface they are using and the objects on it visible below them." },
+  { scale: "full", height: "eye-level", angle: "from behind", text: "Full shot at EYE LEVEL from BEHIND the nearest character, over the shoulder into the space — the character's back in the left third, the other character and the depth of the location in the right two-thirds." },
+  { scale: "medium close-up", height: "low", angle: "frontal", text: "Medium close-up from a LOW camera height, frontal to the character who is about to speak — head and shoulders with the wall / set dressing behind clearly visible, the other character soft in the far background." },
+  { scale: "wide", height: "high", angle: "frontal", text: "Wide shot from a HIGH camera height (a top corner of the space), frontal to the characters — both full-figure small in the frame, the whole zone of the location laid out around them." },
+  { scale: "medium", height: "eye-level", angle: "over-the-shoulder", text: "Medium over-the-shoulder shot at EYE LEVEL, angled 45° to the room — the near character's shoulder in the foreground, the far character mid-frame, the location's objects and depth behind." },
+];
+
+/** Crude classification of the previous camera text so the fallback setup differs in ≥2 of scale / height / angle. */
+function cameraParams(text: string): { scale: string; height: string; angle: string } {
+  const t = text.toLowerCase();
+  const scale = /medium close-?up/.test(t) ? "medium close-up" : /\bmedium\b/.test(t) ? "medium" : /\bfull\b/.test(t) ? "full" : /\bwide\b/.test(t) ? "wide" : "";
+  const height = /\blow\b/.test(t) ? "low" : /\bhigh\b|bird|overhead|top/.test(t) ? "high" : /eye[- ]level/.test(t) ? "eye-level" : "";
+  const angle = /over[- ]the[- ]shoulder/.test(t) ? "over-the-shoulder" : /from behind|behind the/.test(t) ? "from behind" : /profile|from the side/.test(t) ? "profile" : /three[- ]quarter|45/.test(t) ? "three-quarter" : /frontal/.test(t) ? "frontal" : "";
+  return { scale, height, angle };
+}
+
+/** Pick a CAMERA_VARIATION entry that differs from `prevCamera` in ≥2 parameters; `seed` rotates the choice. */
+export function pickDifferentCamera(prevCamera: string, seed = 0): string {
+  const prev = cameraParams(prevCamera);
+  const n = CAMERA_VARIATION.length;
+  for (let k = 0; k < n; k++) {
+    const v = CAMERA_VARIATION[(seed + k) % n];
+    const diff = (v.scale !== prev.scale ? 1 : 0) + (v.height !== prev.height ? 1 : 0) + (v.angle !== prev.angle ? 1 : 0);
+    if (diff >= 2) return v.text;
+  }
+  return CAMERA_VARIATION[seed % n].text;
+}
+
 /** Fix what can be fixed mechanically (numbering, [VISUAL STYLE] / [CHARACTER] lines, duration clamp). */
 export function normalizeEpisodeScript(script: EpisodeScript, characters?: CharacterCard[]): EpisodeScript {
   const repairPrompt = (s: SceneScript) => {
@@ -438,14 +530,39 @@ export function normalizeEpisodeScript(script: EpisodeScript, characters?: Chara
       startState: (s.startState ?? "").trim(),
       };
     });
-  // Stage 42 — deterministic frame hand-off: the start frame of scene N+1 IS the end frame of scene N.
-  // We overwrite each scene's startState with the previous scene's endState verbatim (scene 1 keeps its
-  // own). In parallel mode there is no vision-derived endStateActual, so buildScenePrompt's OPENING STATE
-  // then equals scene.startState === previous.endState — a text-level butt-join between adjacent scenes.
-  // (Chain mode is unaffected: resolveOpeningState still prefers previous.endStateActual there.)
+  // Stage 42/44 — deterministic frame hand-off as a MATCH CUT ON ACTION. On every continuous seam
+  // (continuesFrom is not location-change / new-sequence) the WORLD block of scene N+1's startState is
+  // scene N's endState WORLD verbatim (same instant of the same action, same place, same light), while
+  // the CAMERA block is the LLM's own opening camera — unless it repeats the previous end camera (or is
+  // missing while the previous has one), in which case a deterministic different setup is picked from
+  // CAMERA_VARIATION. Legacy states without labels (both sides) keep the old behaviour: whole text copied.
+  // Location-change / new-sequence scenes keep their own startState. Chain mode is unaffected
+  // (resolveOpeningState still prefers previous.endStateActual there).
   for (let i = 1; i < scenes.length; i++) {
-    const prevEnd = (scenes[i - 1].endState ?? "").trim();
-    if (prevEnd) scenes[i].startState = prevEnd;
+    const prev = scenes[i - 1];
+    const cur = scenes[i];
+    if (seamBreaks(cur.continuesFrom)) continue;
+    // Stage 44 — identical location text on a continuous seam (the place cannot change between frames).
+    if ((prev.locationDesc ?? "").trim()) cur.locationDesc = prev.locationDesc;
+    const prevEnd = (prev.endState ?? "").trim();
+    if (!prevEnd) continue;
+    const pe = splitState(prevEnd);
+    const cs = splitState(cur.startState ?? "");
+    if (!pe.camera && !cs.camera) {
+      // Legacy monolithic states — behave exactly like Stage 42 (verbatim copy).
+      cur.startState = prevEnd;
+      continue;
+    }
+    let camera = cs.camera;
+    if (!camera || normalizeCameraText(camera) === normalizeCameraText(pe.camera)) camera = pickDifferentCamera(pe.camera, i);
+    cur.startState = joinState(pe.world, camera);
+  }
+  // Stage 44 — a talking scene must hold its whole speech plus a beat of silence before the cut
+  // (≥ ceil(words / 2.1) + 2 s), clamped to the model maximum.
+  for (const sc of scenes) {
+    const spoken = sc.sceneKind === "narration" ? (sc.voiceover ?? "") : sc.dialogue;
+    const words = spokenWordCount(spoken);
+    if (words > 0) sc.durationSec = Math.min(SCENE_MAX_SECONDS, Math.max(sc.durationSec, Math.ceil(words / NATURAL_WORDS_PER_SEC) + 2));
   }
   return { ...script, scenes } as EpisodeScript;
 }
@@ -587,7 +704,7 @@ HARD RULES (the script is REJECTED automatically if any is broken):
 R1. The NUMBER OF SCENES follows the drama of this episode's logline (min ${EPISODE_MIN_SCENES}, max ${EPISODE_MAX_SCENES}) — no padding, no filler. Nobody sets a running time: each scene lasts exactly as long as its dialogue needs (15–${SCENE_MAX_SECONDS} s at a natural conversational pace ~2.1 words/s; "durationSec" = round(words / 2.1) + 2, clamped to 15–${SCENE_MAX_SECONDS}). If the dialogue is too long to be spoken naturally within ${SCENE_MAX_SECONDS} s, break it into two consecutive scenes in the same location rather than cramming it into one clip. All scenes happen in/around the episode's key location; scene 1 may open on a wide shot but someone is ALREADY talking in it (UNLESS R7 makes scene 1 an off-screen narration scene).
 R2. AT MOST ${MAX_SILENT_SCENES} scenes in the whole episode may be silent ("[NO DIALOGUE]"). ALL OTHER SCENES contain a real spoken exchange. (A narration scene from R7 does NOT count as silent — it carries an English narration track, not on-camera dialogue.)
 R8. ${ONE_LOCATION_RULE}${narrationRule}
-R10. START / END STATE HAND-OFF: ${END_STATE_RULE} ${START_STATE_RULE}
+R10. START / END STATE — MATCH CUT ON ACTION: ${END_STATE_RULE} ${START_STATE_RULE} In short: on every continuous seam the WORLD is the same and the CAMERA is new — scene N+1 opens on the SAME instant of the SAME action as scene N's final frame, seen from a DIFFERENT angle / shot scale / height, exactly like an editor cutting between two cameras on one continuous take. Repeating the previous framing is an error; changing the place, light, wardrobe, props or the phase of the movement across a continuous seam is an error. Dialogue never straddles a cut: the last line of a scene finishes ≥ ~1 s before the cut and the next scene begins with a fresh line or a short silent beat.
 R9. ACTION SCENES: whenever the beat is a fight, duel, chase, ambush or any physical struggle, the scene has "sceneKind": "action". Its "action" text and its videoPrompt are written as combat choreography, applying this rule INSTEAD of the talking-scene STAGING / FRAMING wording: ${ACTION_STAGING_RULE} An action scene may have only 1–3 SHORT lines (or "[NO DIALOGUE]"), spoken in the pauses between impacts; the R3 sentence minimum does not apply to it.
 R3. A talking scene = a SUBSTANTIVE exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences in total, spread over 3–6 lines where characters answer each other IMMEDIATELY (the story is told THROUGH the dialogue: decisions, accusations, confessions, information, subtext). Replies are quick, people interrupt and overlap; every second of the clip is filled with speech — at least ~35 words per talking scene (≥ 2 words per second of durationSec). Monologue or voice-over does NOT replace dialogue — when two people are in the shot they talk to each other; a lone character may talk on the phone or to someone off-screen. Short one-liners like "I have to know the truth." alone are REJECTED. One line per row, format: NAME (tone cue): "line". Tone cues like (sharply), (whispering), (holding back tears).
     "dialogue" is ALWAYS in ENGLISH — it is what the video model voices.${local ? ` "dialogueLocal" is the same lines translated into ${L}, same line structure and cues (shown to the author as the script text).` : ""}
@@ -596,10 +713,10 @@ R3. A talking scene = a SUBSTANTIVE exchange of ${TALK_MIN_SENTENCES}–${TALK_M
     VICTOR (not looking at her): "I sent the boat because otherwise we'd have lost both of them. You know that, even if you won't admit it."
     ANNA (sharply): "Don't you dare decide who I get to lose. Tomorrow I'm going out to sea myself, and you won't stop me."
 R4. "videoPrompt" and "visualIdentity" are ENTIRELY in ENGLISH (every one of the 9 lines — never ${L}, even though locationDesc/action are in ${L}). "videoPrompt" consists of EXACTLY these 9 lines, each on its own row, in this order, each starting with its bracket tag:
-    [SHOT TYPE]: the CUT LIST inside the clip — 2–4 hard cuts that MIX SHOT SCALES and cover the SPACE, e.g. "0–6s wide establishing shot of the whole workshop, Anna crossing from the door to the bench as she speaks → 6–13s medium two-shot at the bench, the deep room behind them → 13–20s over-the-shoulder on Victor toward the window → 20–26s medium reaction on Anna, corridor receding behind her"; open on a WIDE/ESTABLISHING beat, keep TWO-SHOTS and mediums that show the environment and the distance between characters, use depth (foreground → characters → deep background); vertical 9:16; characters SPEAK on wide/medium shots — NO full-screen face close-up, the face never fills the screen, the tightest cut is a medium close-up with clear environment behind and used only briefly; bodies, hands and the location stay visible in every cut; the two characters are placed NATURALLY in the space (different distances/heights, seated/standing, along a counter or rail, one crossing while the other stays) — never squared off face to face; NO slow pans, NO lingering, NO slow motion
+    [SHOT TYPE]: the CUT LIST inside the clip — 2–4 hard cuts that MIX SHOT SCALES and cover the SPACE, e.g. "0–6s wide establishing shot of the whole workshop, Anna crossing from the door to the bench as she speaks → 6–13s medium two-shot at the bench, the deep room behind them → 13–20s over-the-shoulder on Victor toward the window → 20–26s medium reaction on Anna, corridor receding behind her"; open on a WIDE/ESTABLISHING beat that shows the characters INSIDE the space (floor under their feet, walls and objects around them, real depth behind) and — on a continuous seam — on a shot scale / angle / height DIFFERENT from the previous scene's final camera (the same action, a new camera), keep TWO-SHOTS and mediums that show the environment and the distance between characters, use depth (foreground → characters → deep background); vertical 9:16; characters SPEAK on wide/medium shots — NO full-screen face close-up, the face never fills the screen, the tightest cut is a medium close-up with clear environment behind and used only briefly; bodies, hands and the location stay visible in every cut; the two characters are placed NATURALLY in the space (different distances/heights, seated/standing, along a counter or rail, one crossing while the other stays) — never squared off face to face; NO slow pans, NO lingering, NO slow motion
     [VISUAL STYLE]: the short visualIdentity sentence — the SAME text in every scene
     [LIGHTING]: time of day, light sources, weather — IDENTICAL wording in every scene of the episode (the whole episode is one continuous time; the location references lock the light, only the camera angle changes)
-    [BLOCKING]: where each character stands and MOVES across the location as they talk — the concrete objects, surfaces and ZONES they use and travel between (rises from the crate and crosses to the window, leans on the counter then walks to the door); EACH speaker gets a specific piece of ordinary business tied to those objects (pours a drink, sorts papers, checks a phone), and DIFFERENT zones of the place are used, not one spot
+    [BLOCKING]: where each character stands and MOVES across the location as they talk — the concrete objects, surfaces and ZONES they use and travel between (rises from the crate and crosses to the window, leans on the counter then walks to the door); the first beat continues the movement described in startState WORLD (a match cut on action — the same gesture / step carried on, not restarted), and the characters are physically INSIDE the place interacting with its surfaces and objects — a flat backdrop with figures in front of it is an ERROR; EACH speaker gets a specific piece of ordinary business tied to those objects (pours a drink, sorts papers, checks a phone), and DIFFERENT zones of the place are used, not one spot
     [GAZE]: where each character looks, eye contact and reaction while the other speaks
     [NON-VERBAL]: EXPRESSIVE acting + micro-actions — concrete facial expressions and charged looks (smirks, glares with fury, narrows the eyes), lively hand gestures, breathing, emotional nuance (a catch in the voice, a quiet bitter laugh, controlled intensity), PLUS the physical business each speaker is doing; dramatic physical REACTIONS are allowed when the beat calls for it (raises a hand, swings, grabs by the collar, shoves, recoils from a blow) — stage hard contact in beats without that speaker's spoken line so the lip-sync stays intact
     [ACTION]: the CONCRETE physical action the beat requires, brisk and cinematic — the leads moving THROUGH the location and handling objects in the foreground; AND, when the story calls for it, the real dramatic / physical beats (advances with measured steps, strides in, spins around, swings, strikes the chest, shoves, grabs by the collar, draws or throws a weapon such as a spear or knife, a blow lands, someone falls); AND believable SECONDARY background life making the place alive (passers-by, others at work, vehicles, animals, machines, weather). Write it with concrete verbs, not moods
@@ -627,7 +744,7 @@ S4. "visualIdentity": ONE SHORT English sentence (max 25 words) — photoreal li
 S5. Use ONLY the given character names (Western names, Latin letters, exactly as given). "characters" lists the names visible in the shot (a CROWD group name is listed when the group is in frame). SUPPORTING and MINOR characters present in the episode must actually speak in at least one scene each; crowds may have a short collective line or reactions.
 S6. Dramatize ONLY this episode's logline — a natural continuation of the previous episodes, ending on this episode's cliffhanger (the last scene IS the cliffhanger). Original content only: never reuse names, plots or lines of existing films/series.
 
-Before answering, check: scenes count ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES}; silent scenes ≤ ${MAX_SILENT_SCENES}; each talking scene has ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} English dialogue sentences and ≥ 2 words per second; every fight / physical confrontation promised by the logline is an "action" scene with face-to-face beat-by-beat choreography (R9); every videoPrompt has all 9 tags including [CHARACTER] and a cut list in [SHOT TYPE] that opens wide and mixes shot scales across the space; [BLOCKING] moves characters between different zones and gives each speaker ordinary business; [ACTION] adds secondary background life so the place feels alive; and EACH scene continues seamlessly from the previous one — "presence"/"entrances"/"continuesFrom" are filled and every entrance/exit/move is shown in [BLOCKING]/[ACTION]/[TRANSITION] so nobody teleports or vanishes; EVERY scene has a non-empty English "endState" (12–20 sentences, ≥150 words: pose, wardrobe, camera, composition, depth, background, lighting, time/weather, colour palette and props of the final frame) AND a non-empty English "startState" (the same exhaustive still for frame 1), and each startState equals the previous scene's endState exactly unless continuesFrom is location-change / new-sequence.`;
+Before answering, check: scenes count ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES}; silent scenes ≤ ${MAX_SILENT_SCENES}; each talking scene has ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} English dialogue sentences and ≥ 2 words per second; every fight / physical confrontation promised by the logline is an "action" scene with face-to-face beat-by-beat choreography (R9); every videoPrompt has all 9 tags including [CHARACTER] and a cut list in [SHOT TYPE] that opens wide and mixes shot scales across the space; [BLOCKING] moves characters between different zones and gives each speaker ordinary business; [ACTION] adds secondary background life so the place feels alive; and EACH scene continues seamlessly from the previous one — "presence"/"entrances"/"continuesFrom" are filled and every entrance/exit/move is shown in [BLOCKING]/[ACTION]/[TRANSITION] so nobody teleports or vanishes; EVERY scene has a non-empty English "endState" (12–20 sentences, ≥150 words: pose, wardrobe, camera, composition, depth, background, lighting, time/weather, colour palette and props of the final frame) AND a non-empty English "startState" (the same exhaustive description for frame 1), both written as labelled WORLD: / CAMERA: blocks; on every continuous seam (continuesFrom other than location-change / new-sequence) the startState WORLD equals the previous scene's endState WORLD exactly (same instant of the same action, same place, same light) while the startState CAMERA differs from the previous endState CAMERA in at least two of shot scale / height / angle; every scene's locationDesc on a continuous seam is identical to the previous scene's; and no line of dialogue is split between two scenes — every scene's last line ends before the cut and the next scene opens with a fresh line or a silent beat.`;
 }
 export function episodeScriptUserPrompt(input: {
   synopsis: string;
@@ -758,7 +875,7 @@ export function sceneReviseSystemPrompt(language: IdeaLanguage): string {
   return `You are a film director rewriting ONE shot ("scene", ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS}s, vertical 9:16, AI video model with native speech) of an episode by the author's instruction.
 Return STRICT JSON: {"sceneKind": "dialogue"|"action", "shotType": string, "durationSec": int, "locationDesc": "INT/EXT — place — time" (${L}), "action": string (${L}), "dialogue": string${local ? ', "dialogueLocal": string' : ""}, "videoPrompt": string, "presence": string, "entrances": string, "continuesFrom": string, "startState": string, "endState": string}.
 SCENE KIND: "dialogue" = a normal talking scene; "action" = a fight / duel / chase / physical struggle. If the instruction asks for a fight, an attack, a duel, a chase or any physical confrontation ("make this scene a fight", "they start fighting", "he attacks her") — set "sceneKind": "action" and rewrite the scene as combat choreography: ${ACTION_STAGING_RULE} An action scene keeps only 1–3 short lines (or "[NO DIALOGUE]") spoken in the pauses between impacts, and the talking-scene rules below (sentence count, wide/medium two-shot staging) do NOT apply to it. If the current scene is already an action scene and the instruction does not turn it into a conversation, keep "sceneKind": "action" and its choreography. Otherwise keep "sceneKind": "dialogue".
-RULES: "dialogue" is ALWAYS in ENGLISH (it is what the model voices), one line per row NAME (tone cue): "line"; a talking scene has a substantive exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences (3–6 quick lines, characters answer each other instantly; the story is told through the dialogue), or exactly "[NO DIALOGUE]" for a rare purely visual beat.${local ? ` "dialogueLocal" = the same lines translated into ${L}, same structure and cues.` : ""} durationSec = round(words / 2.1) + 2 clamped to ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS} (≥ 2 words per second — no timing is set by anyone else). Talking scenes stay on wide / medium two-shots / over-the-shoulder — the speaker's face does not have to be visible on every line (staging decides) and it NEVER fills the screen — NO full-screen face close-ups (tightest is a brief medium close-up with environment behind); the two characters are placed naturally in the location, never squared off face to face when they simply talk. ${CONFRONTATION_STAGING_SENTENCE} ${PACE_DIRECTION} ${MODERATION_SAFE_RULE} ${CREATIVE_RULE} ${LOCATION_PRESENCE_RULE} ${SCALE_DEPTH_RULE} ${EVERYDAY_BEHAVIOR_RULE} videoPrompt is ENGLISH, exactly 9 lines [SHOT TYPE] (cut list, 2–4 hard cuts with time ranges)/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL] (expressive acting)/[ACTION]/[CHARACTER]/[TRANSITION] (hard cut); keep [VISUAL STYLE] and [CHARACTER] descriptions identical to the given scene unless the instruction requires otherwise; no spoken text in videoPrompt; never "slowly", "slow motion", "lingering", "long pause". ${CONTINUITY_RULE} This shot must still begin from the PREVIOUS shot's ending and hand off cleanly into the NEXT shot (both are given below): keep the same people in place unless the instruction changes that, and if the revision adds or removes someone or moves the action, SHOW that entrance/exit/move. Fill "presence" (who is where at the start, following the previous shot), "entrances" (who enters/leaves during the shot and how, or "none") and "continuesFrom" (same-location-continuation | character-moves | location-change | new-sequence) to match the neighbouring shots. START / END STATE: ${END_STATE_RULE} ${START_STATE_RULE} Return "startState" = the revised scene's frame 1 (it must still equal the PREVIOUS shot's endState unless continuesFrom is location-change / new-sequence). The revised scene's OPENING must still match the PREVIOUS shot's endState (given below) unless continuesFrom is location-change / new-sequence, and its own "endState" must be updated to describe the NEW final frame — and it must remain consistent with the NEXT shot's opening (if the revision changes where people end up, say so in endState so the next shot can be adjusted). Original content only; Western names, Latin letters, exactly as given.`;
+RULES: "dialogue" is ALWAYS in ENGLISH (it is what the model voices), one line per row NAME (tone cue): "line"; a talking scene has a substantive exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences (3–6 quick lines, characters answer each other instantly; the story is told through the dialogue), or exactly "[NO DIALOGUE]" for a rare purely visual beat.${local ? ` "dialogueLocal" = the same lines translated into ${L}, same structure and cues.` : ""} durationSec = round(words / 2.1) + 2 clamped to ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS} (≥ 2 words per second — no timing is set by anyone else). Talking scenes stay on wide / medium two-shots / over-the-shoulder — the speaker's face does not have to be visible on every line (staging decides) and it NEVER fills the screen — NO full-screen face close-ups (tightest is a brief medium close-up with environment behind); the two characters are placed naturally in the location, never squared off face to face when they simply talk. ${CONFRONTATION_STAGING_SENTENCE} ${PACE_DIRECTION} ${MODERATION_SAFE_RULE} ${CREATIVE_RULE} ${LOCATION_PRESENCE_RULE} ${SCALE_DEPTH_RULE} ${EVERYDAY_BEHAVIOR_RULE} videoPrompt is ENGLISH, exactly 9 lines [SHOT TYPE] (cut list, 2–4 hard cuts with time ranges)/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL] (expressive acting)/[ACTION]/[CHARACTER]/[TRANSITION] (hard cut); keep [VISUAL STYLE] and [CHARACTER] descriptions identical to the given scene unless the instruction requires otherwise; no spoken text in videoPrompt; never "slowly", "slow motion", "lingering", "long pause". ${CONTINUITY_RULE} This shot must still begin from the PREVIOUS shot's ending and hand off cleanly into the NEXT shot (both are given below): keep the same people in place unless the instruction changes that, and if the revision adds or removes someone or moves the action, SHOW that entrance/exit/move. Fill "presence" (who is where at the start, following the previous shot), "entrances" (who enters/leaves during the shot and how, or "none") and "continuesFrom" (same-location-continuation | character-moves | location-change | new-sequence) to match the neighbouring shots. START / END STATE: ${END_STATE_RULE} ${START_STATE_RULE} Return "startState" = the revised scene's frame 1: its WORLD block must still equal the PREVIOUS shot's endState WORLD (same instant of the same action, same place, same light) while its CAMERA block is a DIFFERENT setup (≥ 2 of shot scale / height / angle changed) unless continuesFrom is location-change / new-sequence. The revised scene's OPENING must still continue the PREVIOUS shot's endState WORLD from a new camera (given below) unless continuesFrom is location-change / new-sequence, and its own "endState" must be updated to describe the NEW final frame — and it must remain consistent with the NEXT shot's opening (if the revision changes where people end up, say so in endState so the next shot can be adjusted). Original content only; Western names, Latin letters, exactly as given.`;
 }
 
 /* ───────────── Stage 13 — episode-level continuity audit («Ассембл» final polish) ───────────── */
@@ -816,7 +933,7 @@ export function episodeContinuityAuditSystemPrompt(language: IdeaLanguage): stri
 CRITICAL — UNMOTIVATED LOCATION / SETTING JUMP: the episode has exactly ONE key location and every scene must stay in it (only the zone within it and the camera angle may change). If the SETTING itself changes between scenes without a deliberately shown, motivated move — e.g. a character sits at a table inside a temple in one scene and is suddenly sitting in a field / a different room / outdoors in the next, with no travel shown and the scene NOT marked continuesFrom="location-change" — that is a MUST-FLAG continuity error: set hasIssue=true and rewrite the scene so it happens BACK IN the episode's single key location (the same place as the surrounding scenes, matching the location references). Treat an interior→exterior (or exterior→interior) or any new building/room/landscape that isn't the episode's key location as this error. The corrected videoPrompt MUST place the scene inside the canonical episode location (same place, only zone/camera angle differs), never invent a new setting.
 At every boundary between scene N and scene N+1 (and across the whole chain) ALSO look for: a character who is present or speaking in one scene but has silently VANISHED or TELEPORTED in the next with no shown exit/entrance; someone who suddenly APPEARS already in place without walking in; the physical arrangement (who is where, seated/standing, what they hold) resetting between a continuing same-location pair instead of carrying over; an object / prop / costume that changes or disappears illogically; time-of-day / lighting / weather that jumps without reason; an action left mid-motion at the end of one scene and not continued at the start of the next. ${CONTINUITY_RULE} ${ONE_LOCATION_RULE}
 Return STRICT JSON: {"scenes":[{"number": int, "hasIssue": boolean, "issue": string (short, ${L}, ONLY when hasIssue is true), "correctedVideoPrompt": string (ONLY when hasIssue is true), "correctedStartState": string (ONLY when hasIssue is true), "correctedEndState": string (ONLY when hasIssue is true)}]} — include EVERY scene number exactly once, in order. A scene that already flows correctly: {"number":N,"hasIssue":false}. A scene that breaks continuity: hasIssue=true, "issue" = ONE short sentence naming the seam problem, "correctedVideoPrompt" = the FULL rewritten prompt for THAT scene that fixes the transition — make the entrance / exit / move EXPLICIT in [BLOCKING], [ACTION] and [TRANSITION], and keep positions, props, lighting and time-of-day consistent with the END of the previous scene and the START of the next.
-CORRECTED PROMPT RULES: exactly the 9 lines [SHOT TYPE]/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL]/[ACTION]/[CHARACTER]/[TRANSITION], ENGLISH, NO spoken text inside the videoPrompt, keep [VISUAL STYLE] and [CHARACTER] IDENTICAL to the given scene, preserve the scene's essence, its kind, its dialogue / narration and its duration; a scene marked (action) is a FIGHT / physical confrontation — its corrected prompt stays combat choreography (opponents face each other, beat-by-beat moves per the rule below), it is NEVER rewritten into a conversation: ${ACTION_STAGING_RULE} never "slowly", "slow motion", "lingering", "long pause". ${PACE_DIRECTION} ${MODERATION_SAFE_RULE} ${LOCATION_PRESENCE_RULE} START / END STATE CHAIN: every scene carries "startState" (scripted frame 1) and "endState" (scripted final frame) (${END_STATE_RULE} ${START_STATE_RULE}). Check each seam against them: scene N+1's startState and opening ([SHOT TYPE] first beat, [BLOCKING], presence) must match scene N's endState unless continuesFrom is location-change / new-sequence — a mismatch IS a continuity error. When you correct a scene, ALSO return "correctedStartState" and "correctedEndState" (both REQUIRED whenever hasIssue is true): the updated English start / end states of the corrected scene, consistent with the previous scene's endState and the next scene's opening. Only flag REAL logical breaks — if the whole chain is already consistent, return every scene with hasIssue=false and change nothing. Original content only; Western names, Latin letters.`;
+CORRECTED PROMPT RULES: exactly the 9 lines [SHOT TYPE]/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL]/[ACTION]/[CHARACTER]/[TRANSITION], ENGLISH, NO spoken text inside the videoPrompt, keep [VISUAL STYLE] and [CHARACTER] IDENTICAL to the given scene, preserve the scene's essence, its kind, its dialogue / narration and its duration; a scene marked (action) is a FIGHT / physical confrontation — its corrected prompt stays combat choreography (opponents face each other, beat-by-beat moves per the rule below), it is NEVER rewritten into a conversation: ${ACTION_STAGING_RULE} never "slowly", "slow motion", "lingering", "long pause". ${PACE_DIRECTION} ${MODERATION_SAFE_RULE} ${LOCATION_PRESENCE_RULE} START / END STATE CHAIN: every scene carries "startState" (scripted frame 1) and "endState" (scripted final frame) (${END_STATE_RULE} ${START_STATE_RULE}). Check each seam against them: scene N+1's startState WORLD and opening ([SHOT TYPE] first beat, [BLOCKING], presence) must continue scene N's endState WORLD (same instant of the same action, same people, place, light, props) unless continuesFrom is location-change / new-sequence — a WORLD mismatch IS a continuity error; scene N+1's startState CAMERA must DIFFER from scene N's endState CAMERA (a new angle / scale / height on the same instant) — an identical repeated framing is ALSO an error; and no line of dialogue may straddle the seam (a scene ending mid-sentence is an error). When you correct a scene, ALSO return "correctedStartState" and "correctedEndState" (both REQUIRED whenever hasIssue is true): the updated English start / end states of the corrected scene, consistent with the previous scene's endState and the next scene's opening. Only flag REAL logical breaks — if the whole chain is already consistent, return every scene with hasIssue=false and change nothing. Original content only; Western names, Latin letters.`;
 }
 
 /** The ordered scene chain rendered for the auditor. */

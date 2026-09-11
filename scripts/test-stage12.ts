@@ -118,7 +118,7 @@ ok(cleanStoryText("x".repeat(STORY_MAX_CHARS + 500)).length === STORY_MAX_CHARS,
   // Stage 18: frames scale with location size → small 3 (0 extra), big 6 (3 extra), huge 9 (6 extra).
   ok(desiredExtraFrames({ name: "Лес" }) === 6, "desiredExtraFrames: huge → 6 extra (9 total)");
   ok(desiredExtraFrames({ name: "Склад" }) === 3, "desiredExtraFrames: big → 3 extra (6 total)");
-  ok(desiredExtraFrames({ name: "Кабинет" }) === 0, "desiredExtraFrames: small → 0 extra (3 total)");
+  ok(desiredExtraFrames({ name: "Кабинет" }) === 3, "desiredExtraFrames: small → 3 extra (6 total, Stage 44 six-shot plan)");
   const locList = [{ id: "l1", name: "Маяк" }, { id: "l2", name: "Пирс" }, { id: "l3", name: "Чердак" }];
   const epLocs = episodeLocations({ locationId: "l1", locationName: "Маяк", scenes: [{ locationDesc: "разговор на пирсе" }] }, locList);
   ok(epLocs.some((l: any) => l.id === "l1") && epLocs.some((l: any) => l.id === "l2"), "episodeLocations: bound location + scene-mentioned location");

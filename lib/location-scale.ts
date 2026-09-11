@@ -46,22 +46,23 @@ export function locationScale(loc: { name?: string | null; description?: string 
 /**
  * Stage 18: the number of reference frames scales with the location size again — small
  * places need only the base coverage, large ones need more. Totals by scale:
- *   small (компактная) → 3 frames  (base 3, 0 extra)
+ *   Stage 44: every location gets the full 6-shot plan (base 3 + 6-slot extra plan capped by scale).
+ *   small (компактная) → 6 frames  (base 3, 3 extra)
  *   big   (крупная)     → 6 frames  (base 3, 3 extra)
  *   huge  (очень крупная) → 9 frames (base 3, 6 extra)
  * The base 3 angles (imageUrl/imageReverse/imageDetail) are always generated; the EXTRA count
  * tops the total up to the scale target from distinct camera positions.
  */
 /** Minimum / maximum possible total across scales (small=3 … huge=9). */
-export const LOCATION_TOTAL_MIN = 3
+export const LOCATION_TOTAL_MIN = 6
 export const LOCATION_TOTAL_MAX = 9
 /** Base angles always generated on the Location row (imageUrl + imageReverse + imageDetail). */
 export const LOCATION_BASE_FRAMES = 3
 
-/** Stage 18: total reference frames a location should have, by its estimated scale (3 / 6 / 9). */
+/** Stage 18: total reference frames a location should have, by its estimated scale (Stage 44: 6 / 6 / 9). */
 export function desiredTotalFrames(loc?: { name?: string | null; description?: string | null; visualPrompt?: string | null }): number {
   const scale = loc ? locationScale(loc) : 'small'
-  return scale === 'huge' ? 9 : scale === 'big' ? 6 : 3
+  return scale === 'huge' ? 9 : 6
 }
 
 export function desiredExtraFrames(loc: { name?: string | null; description?: string | null; visualPrompt?: string | null }): number {

@@ -8,6 +8,7 @@ import type { JobInfo } from './use-job-polling'
 import { CancelButton } from './cancel-button'
 import { CHARACTER_REFERENCE_COST } from '@/lib/power-tier'
 import { TIER_LABELS, groupByTier, tierOf, type Tier, type LocationCardData, LocationCard, AddLocationForm } from './cast-and-locations'
+import { locationExtraLabel } from '@/lib/visual-style'
 
 interface RefCharacter extends CharacterCardData {
   imageFront?: string | null
@@ -453,7 +454,7 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                               <div className="mb-2 flex flex-wrap gap-1" data-testid="location-extra-thumbs">
                                 {extras.map((url, i) => (
                                   // eslint-disable-next-line @next/next/no-img-element
-                                  <img key={url} src={url} alt={`${loc.name} — доп. ракурс ${i + 1}`} title={`Доп. ракурс ${i + 1}`} className="h-14 w-8 rounded border border-background object-cover shadow" />
+                                  <img key={url} src={url} alt={`${loc.name} — ${locationExtraLabel(i)}`} title={`${i + 1}. ${locationExtraLabel(i)}`} className="h-14 w-8 rounded border border-background object-cover shadow" />
                                 ))}
                               </div>
                             )}

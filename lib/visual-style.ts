@@ -107,53 +107,51 @@ export function locationAnglePrompt(visualPrompt: string, name = "", angle: Loca
   if (angle === "wide")
     return `${VISUAL_STYLE}\nLocation establishing shot: ${place}. Wide vertical composition, eye-level camera, ${noPeople} ${LIGHT_LOCK}`;
   if (angle === "reverse")
-    return `${VISUAL_STYLE}\nThe SAME location as the reference image, photographed from the opposite side (reverse angle, camera turned ~180°): ${place}. ` +
+    return `${VISUAL_STYLE}\nThe reference image IS this location, already photographed — do not invent new architecture, materials or layout; this is the same photographed place from the opposite side (reverse angle, camera turned ~180°): ${place}. ` +
       `Same architecture, materials, props, time of day, weather and light direction as the reference — only the camera position changed. Eye-level, vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;
-  return `${VISUAL_STYLE}\nThe SAME location as the reference image, medium shot from a 45° side angle at the spot where characters would talk: ${place}. ` +
+  return `${VISUAL_STYLE}\nThe reference image IS this location, already photographed — do not invent new architecture, materials or layout; this is the same photographed place as a medium shot 45° from the side, the action zone where characters would talk: ${place}. ` +
     `Same materials, props, time of day, weather and light direction as the reference — only the framing is closer. Vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;
 }
 
 /**
- * Stage 16 (B2): 15 DISTINCT camera/position formulations for the extra angles of the SAME
- * location (beyond the base 3 = wide/reverse/detail). With the base set that is 18 distinct
- * formulations total; the episode generator uses 12 of these to reach 15 frames per location.
- * Each is a genuinely different viewpoint — different height, side, focal length and part of the
- * space — so the frames are recognizably the SAME place seen from clearly different positions,
- * NOT near-copies of the wide shot. Still NO people (reference plates stay people-free).
+ * Stage 44 — a FIXED six-shot photo plan for the extra angles of the SAME location (beyond the base
+ * 3 = wide / reverse / detail). Each slot names its side, height and zone explicitly so the six frames
+ * are six recognizably different camera positions of ONE photographed place — never near-copies of
+ * the wide shot. Still NO people (reference plates stay people-free).
  */
-export const LOCATION_EXTRA_VARIANTS = [
-  "a high bird's-eye angle looking straight down over the whole space, revealing its full layout and how far it extends",
-  "a very low angle near the floor, foreground objects large and close, the space receding deep behind",
-  "a wide establishing view of a different corner or zone of the place not seen before, revealing more of its depth",
-  "a doorway/threshold view looking through the entrance into the depth of the space (foreground frame, mid-ground, deep background)",
-  "an extreme close-up detail of a characteristic surface, prop or texture of the place (materials, wear, small signs of life)",
-  "a long shot from the far end of the space looking back toward the main entrance, deep depth of field",
-  "an eye-level shot looking straight down the LENGTH of the space, strong leading lines receding into the distance",
-  "a three-quarter angle from a raised position showing two walls or sides meeting at a corner of the place",
-  "a shot aimed toward the main window or light source, backlit, showing how the daylight enters the space",
-  "a shot with the camera's back to the window, the light falling across the front-lit surfaces of the space",
-  "an elevated overview from one upper corner covering most of the floor and the far wall",
-  "a ground-level wide shot from the opposite short side of the space, the far end now closest to camera",
-  "a medium shot of the secondary focal area of the place (the work zone, seating, counter or feature)",
-  "a narrow shot pushing into a tight nook, alcove or passage of the place, compressed framing",
-  "a wide establishing shot from just inside the entrance at standing eye height, taking in the whole room",
+export const LOCATION_SHOT_PLAN = [
+  { key: "top", label: "Сверху", prompt: "a HIGH bird's-eye angle from the top corner of the space looking down over the WHOLE layout — floor plan, every zone and how far the place extends" },
+  { key: "far-edge", label: "С дальнего края", prompt: "a LOW angle (camera near the floor) from the FAR / opposite short edge of the space, the far end now closest to camera, the main zone receding deep behind" },
+  { key: "other-zone", label: "Другая зона", prompt: "an eye-level view from the 90° SIDE of a SEPARATE zone or corner of the place not shown in the previous frames (a secondary area, seating, storage, passage) — revealing more of the same place" },
+  { key: "threshold", label: "От входа", prompt: "a threshold / doorway view from the ENTRANCE at standing eye height, looking through the opening into the depth of the space (foreground frame, mid-ground, deep background)" },
+  { key: "length", label: "Вдоль пространства", prompt: "a long shot at eye level from one END of the space looking straight down its LENGTH, strong leading lines receding to the far wall or horizon" },
+  { key: "light", label: "К источнику света", prompt: "a shot aimed TOWARD the main window / light source from mid-height on the shaded side, backlit, showing how the light enters and falls across the surfaces" },
 ] as const;
+export const LOCATION_EXTRA_LABELS = LOCATION_SHOT_PLAN.map((p) => p.label) as readonly string[];
+/** Russian UI label of extra slot `i` (wraps for legacy locations that still carry more than six extras). */
+export function locationExtraLabel(i: number): string {
+  const n = LOCATION_SHOT_PLAN.length;
+  return LOCATION_SHOT_PLAN[((i % n) + n) % n].label;
+}
+/** @deprecated Stage 16 name — now the six-slot plan texts (kept for older imports). */
+export const LOCATION_EXTRA_VARIANTS = LOCATION_SHOT_PLAN.map((p) => p.prompt) as readonly string[];
+
+/** Stage 44 — the anchor sentence shared by every non-wide location plate. */
+const SAME_PLACE_ANCHOR = "The reference image IS this location, already photographed — do not invent new architecture, materials or layout; this is another camera position of that same photographed place";
 
 /**
- * Stage 16 (B1): by default the extra angles are NOT hard-bound to the wide shot via image_input
- * (that pins the viewpoint and produces near-copies). When `withBaseImage` is false the prompt
- * anchors consistency purely on the rich textual description of the place; when true (a periodic
- * re-anchor frame) it also references the base image. Either way the camera position must change.
+ * Stage 44 — extra plates are ALWAYS generated from the existing photographs of the place (the master
+ * wide shot plus every other angle already made), so the prompt always speaks about "the reference
+ * image". `index` selects the slot of the six-shot plan. (`opts.withBaseImage` is accepted for
+ * backwards compatibility and ignored — the base image is always attached now.)
  */
-export function locationExtraAnglePrompt(visualPrompt: string, name = "", index = 0, opts?: { withBaseImage?: boolean }): string {
+export function locationExtraAnglePrompt(visualPrompt: string, name = "", index = 0, _opts?: { withBaseImage?: boolean }): string {
   const place = sanitizeVideoPrompt(visualPrompt, { keep: [name] }).prompt;
   const noPeople = "no people, no animals, no text, no signs with readable words, no logos. Real physical environment with authentic wear and detail.";
-  const variant = LOCATION_EXTRA_VARIANTS[((index % LOCATION_EXTRA_VARIANTS.length) + LOCATION_EXTRA_VARIANTS.length) % LOCATION_EXTRA_VARIANTS.length];
-  const anchor = opts?.withBaseImage
-    ? "The SAME location as the reference image"
-    : "The SAME specific location described below — keep its architecture, materials, colour palette, props, time of day, weather and light direction identical";
-  return `${VISUAL_STYLE}\n${anchor}, ${variant}: ${place}. ` +
-    `This is a DIFFERENT camera position and viewpoint of that same place — do NOT reproduce the earlier framing. Only the camera position/height/framing changes; the place itself stays identical. Vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;
+  const n = LOCATION_SHOT_PLAN.length;
+  const slot = LOCATION_SHOT_PLAN[((index % n) + n) % n];
+  return `${VISUAL_STYLE}\n${SAME_PLACE_ANCHOR}: ${slot.prompt}: ${place}. ` +
+    `Same architecture, materials, colour palette, props, time of day, weather and light direction as the reference — only the camera position, height and framing change; do NOT reproduce the earlier framing. Vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;
 }
 
 /** Parse the stored imageExtra JSON array into a clean list of styled URLs. */

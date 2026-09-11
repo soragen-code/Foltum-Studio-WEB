@@ -66,7 +66,7 @@ const loc = { id: "loc", name: "Kitchen", imageUrl: styledUrl("k-wide"), imageRe
   ok(sceneScriptSchema.safeParse({ ...base, endState: scripted, startState: scripted }).success, "C: sceneScriptSchema accepts endState");
   ok(!sceneReviseSchema.safeParse({ ...base, durationSec: 20 }).success && sceneReviseSchema.safeParse({ ...base, durationSec: 20, endState: scripted, startState: scripted }).success, "C: sceneReviseSchema requires endState");
   const sys = episodeScriptSystemPrompt("en", 1);
-  ok(sys.includes("R10. START / END STATE HAND-OFF") && sys.includes('"endState"') && sys.includes("FINAL FRAME"), "C: episode prompt carries rule R10 / endState contract");
+  ok(sys.includes("R10. START / END STATE") && sys.includes('"endState"') && sys.includes("FINAL FRAME"), "C: episode prompt carries rule R10 / endState contract");
   const text = renderScriptFromScenes({ number: 1, title: "T" }, ["Yara"], [{ number: 1, shotType: "medium", durationSec: 20, locationDesc: "INT", action: "x", dialogue: "y", endState: scripted }, { number: 2, shotType: "wide", durationSec: 15, locationDesc: "INT", action: "x", dialogue: "y", endState: null }]);
   ok(text.includes(END_STATE_LINE_PREFIX + scripted) && text.split(END_STATE_LINE_PREFIX).length === 2, "C: rendered script prints «Финал кадра:» only for scenes that have an endState");
 }
