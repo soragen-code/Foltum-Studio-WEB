@@ -78,6 +78,38 @@ export interface ScenePromptCharacterLink {
   name: string;
   tier?: string | null;
   imageFront?: string | null;
+  /** Stage 46B-0 — CURRENT saved appearance / age of the live Character row (rebuilds the [CHARACTER] line). */
+  appearance?: string | null;
+  age?: string | null;
+}
+
+/**
+ * Stage 46B-0 — the `[CHARACTER]:` line of a stored Scene.videoPrompt is written ONCE at script time
+ * (LLM or normalizeEpisodeScript) and therefore describes the character version of THAT moment. The
+ * scene job must always describe the CURRENT saved version, so the line is rebuilt here from the live
+ * Character rows (`Name (age): appearance; ...`) every time the prompt is assembled. Characters without
+ * an appearance text contribute nothing; if none has one the stored line is kept as is.
+ */
+export function liveCharacterLine(characters: ScenePromptCharacterLink[]): string | null {
+  const parts = characters
+    .filter(c => (c.appearance ?? "").trim().length > 0)
+    .map(c => `${c.name.trim()}${(c.age ?? "").trim() ? ` (${(c.age ?? "").trim()})` : ""}: ${(c.appearance ?? "").trim().replace(/\s*\n+\s*/g, " ")}`);
+  return parts.length ? `[CHARACTER]: ${parts.join("; ")}` : null;
+}
+
+/**
+ * Replace the stored `[CHARACTER]:` line with the live one. `insertIfMissing` (auto prompts) appends the
+ * line before `[TRANSITION]` / at the end when the stored prompt has none; a manual override is only
+ * touched when it still contains a `[CHARACTER]:` line (the producer's free text is otherwise kept verbatim).
+ */
+export function refreshCharacterLine(prompt: string, characters: ScenePromptCharacterLink[], insertIfMissing = true): string {
+  const line = liveCharacterLine(characters);
+  if (!line) return prompt;
+  const re = /\[CHARACTER\]:[^\n]*/i;
+  if (re.test(prompt)) return prompt.replace(re, line);
+  if (!insertIfMissing) return prompt;
+  const idx = prompt.indexOf("[TRANSITION]");
+  return idx >= 0 ? `${prompt.slice(0, idx)}${line}\n${prompt.slice(idx)}` : `${prompt}\n${line}`;
 }
 
 export interface ScenePromptLocation {
@@ -243,7 +275,8 @@ export function stripSlowDirections(prompt: string): string {
 export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePromptResult {
   const { scene, characters, location, previous } = input;
 
-  const visualPrompt = styledVisualPrompt(scene.videoPrompt ?? "", characters.map(c => c.name));
+  // Stage 46B-0: the [CHARACTER] line always reflects the CURRENT saved character rows, never the script-time copy.
+  const visualPrompt = styledVisualPrompt(refreshCharacterLine(scene.videoPrompt ?? "", characters), characters.map(c => c.name));
   // Speech is ALWAYS English. `dialogueEn` holds the voiced lines; the worker translates legacy
   // non-English scenes once and passes the result via resolvedDialogueEn — the preview never does.
   const targetLanguage = "English";
@@ -296,7 +329,9 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const override = (scene.promptOverride ?? "").trim();
   const hasOverride = override.length > 0;
   if (hasOverride) {
-    prompt = override;
+    // Stage 46B-0: the producer's text is kept verbatim, except a [CHARACTER] line it still carries —
+    // that one is rebuilt from the live character rows too (no line → nothing is added).
+    prompt = refreshCharacterLine(override, characters, false);
   }
   const basePrompt = prompt;
 

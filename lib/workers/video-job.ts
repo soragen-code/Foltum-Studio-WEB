@@ -180,7 +180,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     // preview can never drift from what is actually submitted.
     const built = buildScenePrompt({
       scene,
-      characters: links.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront })),
+      characters: links.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront, appearance: l.character.appearance, age: l.character.age })),
       location: episodeLoc?.location ?? null,
       previous,
       provider: params.provider,
