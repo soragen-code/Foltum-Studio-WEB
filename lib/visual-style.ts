@@ -18,10 +18,7 @@ export function styledVisualPrompt(input: string, names: string[] = []): string 
   return /\[VISUAL STYLE\]:/i.test(clean) ? clean : `[VISUAL STYLE]: ${VISUAL_STYLE}\n${clean}`;
 }
 
-/** What the chained reference image shows: a face close-up (legacy anchor) or a full-length figure (Stage 46A anchor). */
-export type CharacterRefKind = "face" | "full";
-
-export function characterImagePrompt(appearance: string, shot: "front" | "profile" | "full", name = "", tier?: string | null, groupSize?: number | null, chained = false, refKind: CharacterRefKind = "face"): string {
+export function characterImagePrompt(appearance: string, shot: "front" | "profile" | "full", name = "", tier?: string | null, groupSize?: number | null, chained = false): string {
   if (tier === "CROWD") {
     // A crowd group is one reference: the whole group in frame, so Seedance can reuse the same extras.
     const framing = {
@@ -44,17 +41,10 @@ export function characterImagePrompt(appearance: string, shot: "front" | "profil
   // onto that exact identity — only the camera angle/pose changes, never the face, hair or outfit.
   // For the full-body shot the reference is a face CLOSE-UP: its identity is copied, its framing is NOT —
   // otherwise the model inherits the tight crop and returns a medium shot with an oversized head.
-  // Stage 46A: the full-body FRONT shot is now generated FIRST (text-to-image, natural proportions) and is the
-  // identity anchor; the close-ups are chained on it. When a full-length reference is used for another
-  // full-length shot the proportions are simply copied from it (no scale drift).
   const identityLock = chained
     ? shot === "full"
-      ? refKind === "full"
-        ? ` ${FULL_BODY_SAME_FIGURE_NOTE}`
-        : ` ${FULL_BODY_REFERENCE_NOTE}`
-      : refKind === "full"
-        ? ` ${CLOSEUP_FROM_FULL_NOTE}`
-        : " This is the SAME person as the reference image — keep the identical face, facial features, skin tone, hairstyle, hair colour, build, wardrobe, clothing colours and lighting as the reference; ONLY the camera angle and pose change."
+      ? ` ${FULL_BODY_REFERENCE_NOTE}`
+      : " This is the SAME person as the reference image — keep the identical face, facial features, skin tone, hairstyle, hair colour, build, wardrobe, clothing colours and lighting as the reference; ONLY the camera angle and pose change."
     : "";
   // Full-body: the framing comes FIRST and dominates the prompt — the description of the person follows.
   if (shot === "full") {
@@ -117,15 +107,6 @@ export const FULL_BODY_REFERENCE_NOTE =
   "The reference image is a CLOSE-UP of this person's face and is used ONLY for identity — copy the identical face, facial features, skin tone, hairstyle and hair colour and the outfit / wardrobe from it. " +
   "Do NOT copy the reference's framing, crop, head size or head-to-frame scale: the reference is tightly framed on the face, this image must be a distant full-length shot in which the head is a small part of a tall body.";
 
-/** Chained close-up (front / profile) whose reference is the FULL-LENGTH anchor shot of the same person. */
-export const CLOSEUP_FROM_FULL_NOTE =
-  "The reference image is a full-length shot of this person — this image shows the SAME person: identical face, facial features, skin tone, hairstyle, hair colour, wardrobe and lighting as in the reference. " +
-  "Move the camera much closer for this framing; do not change the person.";
-
-/** Chained full-length shot whose reference is ALSO a full-length shot: copy the figure and its proportions exactly. */
-export const FULL_BODY_SAME_FIGURE_NOTE =
-  "The reference image is a full-length shot of this person — reproduce the SAME person with the SAME body proportions, height, build, face, hairstyle and wardrobe; only the camera angle / pose changes.";
-
 /**
  * Stage 16: the 2 EXTRA angles that complete the FIXED 5-photo character set (beyond the
  * 3 base shots face / left-profile / full-front): index 0 = RIGHT profile, index 1 = full-body
@@ -138,11 +119,10 @@ export const CHARACTER_EXTRA_VARIANTS = [
   "FULL-BODY FULL-LENGTH SHOT from directly BEHIND (back view), head to toe: a distant full-length standing figure, camera at chest height about 4–5 metres away, 50mm lens, no wide-angle distortion. The ENTIRE body from the top of the hair to the soles of the shoes is inside the frame with visible floor below the feet and empty space above the head, the figure about 85–90% of the frame height, realistic adult proportions (7.5–8 heads tall, small head about 1/8 of the body height, long legs about half of the total height — NOT chibi, NO oversized head, NO short stubby legs). NOT a close-up, NOT a medium shot — no cropping at the waist, hips or knees. Shows the hairstyle and the outfit from the back, same wardrobe, colours and lighting as the reference; the reference is a face close-up used ONLY for identity — do not copy its framing or scale.",
 ] as const;
 
-export function characterExtraAnglePrompt(appearance: string, name = "", index = 0, refKind: CharacterRefKind = "face"): string {
+export function characterExtraAnglePrompt(appearance: string, name = "", index = 0): string {
   const who = sanitizeVideoPrompt(appearance, { keep: [name] }).prompt;
   const variant = CHARACTER_EXTRA_VARIANTS[((index % CHARACTER_EXTRA_VARIANTS.length) + CHARACTER_EXTRA_VARIANTS.length) % CHARACTER_EXTRA_VARIANTS.length];
-  const note = refKind === "full" ? ` ${FULL_BODY_SAME_FIGURE_NOTE}` : "";
-  return `${VISUAL_STYLE}\nThe SAME person as the reference image: ${who}. ${variant}${note} Neutral unobtrusive background. No text or logos.`;
+  return `${VISUAL_STYLE}\nThe SAME person as the reference image: ${who}. ${variant} Neutral unobtrusive background. No text or logos.`;
 }
 
 /**

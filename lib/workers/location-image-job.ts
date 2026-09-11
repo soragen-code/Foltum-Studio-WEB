@@ -2,15 +2,15 @@ import { prisma } from "@/lib/db";
 import { generateImage, GenerationCanceledError } from "@/lib/replicate";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
-import { locationAnglePrompt, VISUAL_STYLE_ID } from "@/lib/visual-style";
+import { locationAnglePrompt, LOCATION_ANGLES, VISUAL_STYLE_ID } from "@/lib/visual-style";
 import { detectC2paFromUrl } from "@/lib/c2pa";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Background job: a photoreal 9:16 PNG reference SET per location (Seedream, C2PA kept):
- * ONE wide establishing master frame per location (Stage 46A — extra angles are added on demand
- * by the location_extra_image job), uploaded to S3 and written to Location.imageUrl. Job type "location_image".
+ * wide establishing shot + reverse angle + medium angle of the same place with identical light,
+ * uploaded to S3 and written to Location.imageUrl / imageReverse / imageDetail. Job type "location_image".
  */
 export async function runLocationImagesJob({ jobId, projectId, locationIds, imageModel }: { jobId: string; projectId: string; locationIds: string[]; imageModel?: string }): Promise<void> {
   // User cancel: checked before every provider call (inside generateImage, which also cancels the running
@@ -54,8 +54,21 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
         const wideUrl = await uploadRemoteToS3(wideRemote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${stamp}-wide.png`, "image/png");
         await prisma.location.update({ where: { id: loc.id }, data: { imageUrl: wideUrl, imageReverse: null, imageDetail: null, imageExtra: null } }); // new master → the old angles no longer match; re-shot from this frame
         await checkC2pa(loc.id, "wide", wideUrl);
-        // Stage 46A: ONLY the master frame is generated here. Additional angles are requested one at a time
-        // by the author («+ Ракурс» → location_extra_image job), never automatically.
+        // 2) other angles of the SAME place: the wide shot is passed as image_input so light/materials stay identical
+        for (const a of LOCATION_ANGLES.filter((x) => x.angle !== "wide")) {
+          await updateJob(jobId, { progress: pct(), message: `Референс локации «${loc.name}» — ${a.label.toLowerCase()} (${done + 1}/${total})...` });
+          try {
+            const remote = await gen({ prompt: locationAnglePrompt(visual, loc.name, a.angle), aspect_ratio: "9:16", image_input: [wideRemote] });
+            if (await canceled()) throw new GenerationCanceledError();
+            const url = await uploadRemoteToS3(remote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${stamp}-${a.angle}.png`, "image/png");
+            await prisma.location.update({ where: { id: loc.id }, data: { [a.key]: url } });
+            await checkC2pa(loc.id, a.angle, url);
+          } catch (e: any) {
+            if (e instanceof GenerationCanceledError) throw e;
+            // the wide angle alone is still a valid reference — log and continue
+            console.error(`[location-images] ${a.angle} angle failed for ${loc.name}:`, e?.message ?? e);
+          }
+        }
       } catch (e: any) {
         if (e instanceof GenerationCanceledError) { await markCanceled(jobId, CANCEL_MSG); return; }
         failed += 1;
