@@ -123,11 +123,11 @@ function syncTail() {
   ok(r.project.name.startsWith("Yara turns to Theo") && !r.project.name.includes("["), `F: project name auto-derived from the [ACTION] line (${r.project.name})`);
   ok(!isPlaceholderProjectName(r.project.name), "F: derived name is not the placeholder");
   ok(r.episode.title === TEST_EPISODE_TITLE && r.episode.number === 1 && r.episode.status === "script_ready" && r.episode.script.includes(END_STATE_LINE_PREFIX + scripted), "F: one «Тестовая серия» episode with a rendered script incl. end state");
-  ok(r.scene.number === 1 && r.scene.videoPrompt === prompt9 && r.scene.dialogueEn === r.scene.dialogue && r.scene.durationSec === 12 && r.scene.sceneKind === "action" && r.scene.language === "en" && r.scene.status === "pending", "F: single scene carries the prompt verbatim, English lines, clamped duration");
+  ok(r.scene.number === 1 && r.scene.videoPrompt === prompt9 && r.scene.dialogueEn === r.scene.dialogue && r.scene.durationSec === 30 && r.scene.sceneKind === "action" && r.scene.language === "en" && r.scene.status === "pending", "F: single scene carries the prompt verbatim, English lines, fixed 30 s duration (Stage 46A)");
   ok(r.scene.shotType.startsWith("0-5s wide") && r.scene.action === "Yara turns to Theo.", "F: shotType / action lifted from the prompt tags");
   const d = buildTestEpisodeRecords({ prompt: prompt9, durationSec: 99 });
   ok(d.scene.durationSec === 30 && d.scene.dialogue === "[NO DIALOGUE]" && d.scene.endState === null, "F: defaults — duration clamped to 30, silent scene, no endState");
-  ok(buildTestEpisodeRecords({ prompt: prompt9, durationSec: 1 }).scene.durationSec === 5, "F: duration floor 5 s");
+  ok(buildTestEpisodeRecords({ prompt: prompt9, durationSec: 1 }).scene.durationSec === 30, "F: Stage 46A — test scene duration is always 30 s (client value ignored)");
   ok(buildTestEpisodeRecords({ prompt: prompt9, projectTitle: "Кухонный спор" }).project.name === "Кухонный спор", "F: LLM projectTitle wins over prompt-derived name");
   assert.throws(() => buildTestEpisodeRecords({ prompt: "too short" }), "F: short prompt rejected");
   console.log("ok: F: short prompt rejected"); pass++;

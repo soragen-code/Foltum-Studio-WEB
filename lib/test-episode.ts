@@ -31,6 +31,8 @@ export const TEST_PROMPT_MIN_CHARS = 20;
 export const TEST_PROMPT_MAX_CHARS = 6000;
 export const TEST_DURATION_MIN = 5;
 export const TEST_DURATION_MAX = SCENE_MAX_SECONDS;
+/** Stage 46A — every test-episode scene is a fixed 30 s clip (server-enforced, client value ignored). */
+export const TEST_EPISODE_DURATION_SEC = 30;
 
 export const PROMPT_TAGS = ["[SHOT TYPE]", "[VISUAL STYLE]", "[LIGHTING]", "[BLOCKING]", "[GAZE]", "[NON-VERBAL]", "[ACTION]", "[CHARACTER]", "[TRANSITION]"] as const;
 
@@ -138,7 +140,8 @@ export function buildTestEpisodeRecords(input: TestEpisodeInput): TestEpisodeRec
   const locationDesc = (input.locationDesc ?? "").trim() || firstTagLine(prompt, "[VISUAL STYLE]") || "Test location";
   const action = (input.action ?? "").trim() || firstTagLine(prompt, "[ACTION]") || prompt.slice(0, 300);
   const shotType = firstTagLine(prompt, "[SHOT TYPE]") || "medium";
-  const durationSec = clampDuration(input.durationSec ?? 15);
+  // Stage 46A — fixed 30 s regardless of what the client (or the model) suggested.
+  const durationSec = TEST_EPISODE_DURATION_SEC;
   const endState = (input.endState ?? "").trim() || null;
   const startState = (input.startState ?? "").trim() || null;
   const title = (input.title ?? "").trim() || TEST_EPISODE_TITLE;

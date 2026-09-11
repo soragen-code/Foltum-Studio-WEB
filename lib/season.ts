@@ -734,6 +734,10 @@ export function matchLocation<T extends { name: string }>(locations: T[], raw: s
 export const LOCATION_DETAIL_RULE =
   '"locationDetail" is the level of VISUAL DETAILING the shooting of that location needs — i.e. how many distinct camera setups the place must be photographed from for reference. Judge it by: (1) the number of distinct zones / sub-areas the characters actually use, (2) the density of props and objects that must stay consistent between shots, (3) the complexity of staging (fights, chases, many characters moving through the space → high), and (4) how many scenes of the season happen there. It is NOT about physical size: a huge empty desert or an open field is "low"; an ordinary room used for a conversation is "medium"; a small cluttered workshop where a fight happens, or a market/tavern used across many episodes, is "high". When the same location appears in several episodes, give it the same (highest needed) level every time.';
 
+/** Stage 46A — shared PACING rule: a season is a slow-burning TV drama, not a compressed short. */
+export const PACING_RULE =
+  "PACING (slow burn, like an hour-long TV drama): the story moves only SLIGHTLY faster than a one-hour television drama — NEVER like a compressed short film. Characters do NOT get acquainted, fall in love, become allies or turn into enemies within ONE episode — relationships are built over SEVERAL episodes through repeated meetings, doubts and small steps. Each episode contains EXACTLY ONE major plot turn (plus a few small beats around it) and ends on its cliffhanger; it is FORBIDDEN to compress what would naturally be two episodes into one — if the material overflows, leave it for the next episode. Episode 1 is EXPOSITION ONLY: it introduces the world and the characters and lands ONE inciting conflict — no resolutions, no alliances, no romance yet. Spread the arc EVENLY across ALL episodes: the first third of the season must not rush ahead of the rest.";
+
 export function seasonStructureSystemPrompt(language: IdeaLanguage, episodeCount = SEASON_DEFAULT_EPISODES): string {
   return `You are a showrunner planning ONE season of a short-form vertical drama series (9:16 video, each episode = ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES} fast-paced dialogue shots of 15–30 seconds, the whole episode UNDER 2 MINUTES).
 Return STRICT JSON: {"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string}]}.
@@ -745,6 +749,7 @@ RULES:
   • КУЛЬМИНАЦИЯ (the episode just before the finale, or the finale's first half — mark it arcRole "поворот"): the highest-tension confrontation the whole season built toward — the decisive clash where everything is on the line.
   • РАЗВЯЗКА (the LAST episode, arcRole "финал"): the aftermath and resolution — consequences land, the main dramatic question is answered, threads close (a final hook is allowed but the arc resolves).
   Distribute these beats proportionally to ${episodeCount}: the more episodes, the more развитие episodes between завязка and the кульминация; with few episodes, compress развитие but NEVER drop вступление, кульминация or развязка.
+- ${PACING_RULE} Give every one of the ${episodeCount} episodes a comparable share of the story: ONE major turn per episode, evenly distributed — never spend the whole plot in the first third and pad the rest.
 - Each episode has ONE key location. "locationName" MUST be one of the given LOCATIONS, copied verbatim (they already have reference images). Only if the story truly needs a place that is not in the list may you invent a new one (then give it a new name) — at most 2 new locations per season. "locationDesc" is a DETAILED English visual description (2–4 sentences: architecture, materials, textures, props, weather, light, color palette, time of day) usable verbatim by an image/video model — for a listed location, expand its given description. "locationName" is in ${langName(language)}.
 - ${LOCATION_DETAIL_RULE}
 - Use ONLY the given character names (verbatim; a CROWD group name counts as a character). Every episode lists 2–6 characters actually present: the MAIN characters carrying it plus the SUPPORTING characters (family, colleagues, rivals) involved. Across the season EVERY SUPPORTING character appears in at least one episode, MINOR characters and CROWD groups are used where the story plausibly gathers people (family dinners, workplaces, hospitals, streets, court, celebrations).
@@ -755,8 +760,13 @@ RULES:
 - Locations are LARGE, LIVING spaces to be used physically: describe in "locationDesc" a place with several distinct zones the characters move between and the concrete objects, furniture, surfaces and corners they interact with, plus the natural background life of the place (who else is around, what moves, the weather) so it never reads as a flat backdrop. Pick VARIED key locations across the season — interiors and exteriors, private and public, different scales and times of day.
 - All text except "locationDesc" is in ${langName(language)}. Character names stay exactly as given (Western names in Latin letters). Original content: never reuse names, plots or lines of existing films/series.`;
 }
-export function seasonStructureUserPrompt(synopsis: string, characters: CharacterCard[], locations: LocationRef[] = []): string {
-  return `SYNOPSIS:\n${synopsis}\n\nCHARACTERS (with tiers):\n${charactersBlock(characters)}\n\nLOCATIONS (use these names verbatim):\n${locations.length ? locationsBlock(locations) : "(none defined — invent 8–14 diverse locations and reuse them across episodes)"}`;
+export function seasonStructureUserPrompt(synopsis: string, characters: CharacterCard[], locations: LocationRef[] = [], shortSynopsis?: string | null): string {
+  // Stage 46A: the author-approved short synopsis is a MANDATORY outline — the structure must follow its
+  // episode loglines one-to-one (same order, same events), only expanding them into full episodes.
+  const outline = shortSynopsis?.trim()
+    ? `APPROVED SHORT SYNOPSIS (MANDATORY OUTLINE — the author signed this off: keep the premise and make episode N of the structure expand logline N exactly, same order, same central events; do not merge, reorder or replace episodes):\n${shortSynopsis.trim()}\n\n`
+    : "";
+  return `${outline}SYNOPSIS:\n${synopsis}\n\nCHARACTERS (with tiers):\n${charactersBlock(characters)}\n\nLOCATIONS (use these names verbatim):\n${locations.length ? locationsBlock(locations) : "(none defined — invent 8–14 diverse locations and reuse them across episodes)"}`;
 }
 
 export function episodeScriptSystemPrompt(language: IdeaLanguage, episodeNumber = 1): string {
@@ -780,6 +790,7 @@ R1. HARD RUNNING-TIME BUDGET: the WHOLE EPISODE is UNDER 2 MINUTES — the sum o
 R2. AT MOST ${MAX_SILENT_SCENES} scenes in the whole episode may be silent ("[NO DIALOGUE]"). ALL OTHER SCENES contain a real spoken exchange. (A narration scene from R7 does NOT count as silent — it carries an English narration track, not on-camera dialogue.)
 R8. ${ONE_LOCATION_RULE}${narrationRule}
 R10. START / END STATE — MATCH CUT ON ACTION: ${END_STATE_RULE} ${START_STATE_RULE} In short: on every continuous seam the WORLD is the same and the CAMERA is new — scene N+1 opens on the SAME instant of the SAME action as scene N's final frame, seen from a DIFFERENT angle / shot scale / height, exactly like an editor cutting between two cameras on one continuous take. Repeating the previous framing is an error; changing the place, light, wardrobe, props or the phase of the movement across a continuous seam is an error. Dialogue never straddles a cut: the last line of a scene finishes ≥ ~1 s before the cut and the next scene begins with a fresh line or a short silent beat.
+R11. ${PACING_RULE} This episode dramatises ONLY its own logline — one major turn, then the cliffhanger; do not borrow events from the next episodes' loglines.${isFirst ? " As EPISODE 1 it is pure exposition: meet the world and the people, land the single inciting conflict, nothing more." : ""}
 R9. ACTION SCENES: whenever the beat is a fight, duel, chase, ambush or any physical struggle, the scene has "sceneKind": "action". Its "action" text and its videoPrompt are written as combat choreography, applying this rule INSTEAD of the talking-scene STAGING / FRAMING wording: ${ACTION_STAGING_RULE} An action scene may have only 1–3 SHORT lines (or "[NO DIALOGUE]"), spoken in the pauses between impacts; the R3 sentence minimum does not apply to it.
 R3. A talking scene = a SUBSTANTIVE exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences in total, spread over 3–6 lines where characters answer each other IMMEDIATELY (the story is told THROUGH the dialogue: decisions, accusations, confessions, information, subtext). Replies are quick, people interrupt and overlap; every second of the clip is filled with speech — at least ~35 words per talking scene (≥ 2 words per second of durationSec). Monologue or voice-over does NOT replace dialogue — when two people are in the shot they talk to each other; a lone character may talk on the phone or to someone off-screen. Short one-liners like "I have to know the truth." alone are REJECTED. One line per row, format: NAME (tone cue): "line". Tone cues like (sharply), (whispering), (holding back tears).
     "dialogue" is ALWAYS in ENGLISH — it is what the video model voices.${local ? ` "dialogueLocal" is the same lines translated into ${L}, same line structure and cues (shown to the author as the script text).` : ""}
@@ -1050,6 +1061,7 @@ RULES:
 - Use ONLY the given character names verbatim (a new character requested by the author is allowed only if it is present in the CHARACTERS list; otherwise weave the request into the existing cast). "locationName" should be one of the given LOCATIONS (verbatim); a new place only when the story truly needs it.
 - ${LOCATION_DETAIL_RULE}
 - Loglines are 2–3 sentences of concrete dramatic events; cliffhanger = the final beat. Keep continuity: consequences carry over episode to episode.
+- ${PACING_RULE} Changed loglines must keep this pacing.
 - ${CREATIVE_RULE}
 - ${MODERATION_SAFE_RULE}
 - All text except "locationDesc" is in ${langName(language)}; "locationDesc" is a detailed English visual description. Character names stay exactly as given (Western names in Latin letters).`;
@@ -1095,6 +1107,7 @@ export function seasonFullStorySystemPrompt(language: IdeaLanguage, episodeCount
   return `You are a novelist-showrunner writing the COMPLETE, detailed prose story of ONE season of a short-form vertical drama, as a single continuous read for the author to review and edit before any video is made.
 Return STRICT JSON: {"fullStory": string} — the value is ONE long text.
 Tell the WHOLE season across exactly ${episodeCount} episodes, faithful to the given structure (same episode order, titles, loglines, locations and cast), expanding each episode's logline and cliffhanger into full prose.
+${PACING_RULE}
 ${fullStoryFormatRules(language, episodeCount)}`;
 }
 export function seasonFullStoryUserPrompt(input: { synopsis: string; structure: SeasonStructure; characters: CharacterCard[]; locations: LocationRef[] }): string {
@@ -1109,6 +1122,7 @@ RULES:
 - MINIMAL CHANGE: keep the structure and prose the author did NOT ask to change VERBATIM. Only touch what the instruction (or the story consistency it forces) requires — the system regenerates scripts only for episodes whose logline / arc / location / cast changed, so needless edits waste the author's work.
 - EPISODE COUNT: keep ${episodeCount} episodes UNLESS the author explicitly asks to add or remove episodes; then return the new count (allowed range ${SEASON_MIN_EPISODES}–${SEASON_MAX_EPISODES}), renumber episodes 1..N contiguously, and make "episodes" and "fullStory" agree exactly (same number of episode blocks, same titles/order). Episode 1 = завязка, last = финал.
 - Use ONLY the given character names verbatim; "locationName" should be one of the given LOCATIONS (verbatim) unless the story truly needs a new place. Loglines are 2–3 sentences of concrete events; cliffhanger = the final beat.
+- ${PACING_RULE}
 - ${LOCATION_DETAIL_RULE}
 - ${CREATIVE_RULE}
 - ${MODERATION_SAFE_RULE}

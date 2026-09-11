@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
-import { buildTestEpisodeRecords, missingPromptTags, TEST_EPISODE_TITLE, TEST_PROMPT_MAX_CHARS, TEST_PROMPT_MIN_CHARS } from "@/lib/test-episode";
+import { buildTestEpisodeRecords, missingPromptTags, TEST_EPISODE_DURATION_SEC, TEST_EPISODE_TITLE, TEST_PROMPT_MAX_CHARS, TEST_PROMPT_MIN_CHARS } from "@/lib/test-episode";
 import { detectLanguage } from "@/lib/idea";
 
 /**
@@ -27,7 +27,6 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   if (prompt.length < TEST_PROMPT_MIN_CHARS) return NextResponse.json({ error: `Промпт сцены слишком короткий (минимум ${TEST_PROMPT_MIN_CHARS} символов)` }, { status: 400 });
   if (prompt.length > TEST_PROMPT_MAX_CHARS) return NextResponse.json({ error: `Промпт сцены слишком длинный (максимум ${TEST_PROMPT_MAX_CHARS} символов)` }, { status: 400 });
   const str = (k: string) => (typeof body?.[k] === "string" ? (body[k] as string) : null);
-  const durRaw = Number(body?.durationSec);
 
   const project = await prisma.project.findFirst({ where: { id, userId: session.user.id }, select: { id: true, isTest: true, language: true } });
   if (!project) return NextResponse.json({ error: "Проект не найден" }, { status: 404 });
@@ -39,7 +38,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     locationDesc: str("locationDesc"),
     dialogue: str("dialogue"),
     action: str("action"),
-    durationSec: Number.isFinite(durRaw) ? durRaw : null,
+    durationSec: TEST_EPISODE_DURATION_SEC,
     sceneKind: str("sceneKind"),
     endState: str("endState"),
     startState: str("startState"),

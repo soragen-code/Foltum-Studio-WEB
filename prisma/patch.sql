@@ -189,3 +189,6 @@ ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "isTest" BOOLEAN NOT NULL DEFAULT
 
 -- Location reference photo count depends on the required detail level (LLM-set), not on size.
 ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "detailLevel" TEXT;
+
+-- Stage 46A: short synopsis step (premise + one-line logline per episode) approved before the season script.
+ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "shortSynopsis" TEXT;

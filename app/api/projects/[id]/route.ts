@@ -42,3 +42,34 @@ export async function GET(
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
 }
+
+/**
+ * Stage 46A — DELETE /api/projects/[id]: owner-only, removes the project with everything under it.
+ * Seasons/episodes/scenes/characters/locations/artifacts cascade via FK; GenerationJob has no FK
+ * to Project, so its rows are removed explicitly inside the same transaction.
+ */
+export async function DELETE(
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const session = await auth()
+    if (!session?.user?.email) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const user = await prisma.user.findUnique({ where: { email: session.user.email }, select: { id: true } })
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const { id } = await params
+
+    const project = await prisma.project.findFirst({ where: { id, userId: user.id }, select: { id: true } })
+    if (!project) return NextResponse.json({ error: 'Проект не найден' }, { status: 404 })
+
+    const jobs = await prisma.$transaction(async (tx) => {
+      const removed = await tx.generationJob.deleteMany({ where: { projectId: project.id } })
+      await tx.project.delete({ where: { id: project.id } })
+      return removed.count
+    })
+    return NextResponse.json({ ok: true, deletedJobs: jobs })
+  } catch (err: any) {
+    console.error('[DELETE /api/projects/[id]]', err)
+    return NextResponse.json({ error: 'Не удалось удалить проект' }, { status: 500 })
+  }
+}

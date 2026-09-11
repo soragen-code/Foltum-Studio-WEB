@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { Header } from '@/components/header'
-import { Film, Plus, Clapperboard, Clock, ChevronRight, Sparkles, Zap, Crown } from 'lucide-react'
+import { Film, Plus, Clapperboard, Clock, ChevronRight, Sparkles, Zap, Crown, Trash2, Loader2 } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 interface Project {
@@ -32,6 +32,25 @@ const stageLabels: Record<string, string> = {
 export function DashboardClient() {
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
+  // Stage 46A — delete a project from the list: two-step confirm inside the card, then DELETE /api/projects/[id].
+  const [confirmId, setConfirmId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+
+  const deleteProject = async (id: string) => {
+    setDeletingId(id); setDeleteError(null)
+    try {
+      const res = await fetch(`/api/projects/${id}`, { method: 'DELETE' })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d?.error || 'Не удалось удалить проект')
+      setProjects((list) => list.filter((p) => p.id !== id))
+      setConfirmId(null)
+    } catch (e: any) {
+      setDeleteError(e?.message || 'Не удалось удалить проект')
+    } finally {
+      setDeletingId(null)
+    }
+  }
 
   useEffect(() => {
     fetch('/api/projects')
@@ -100,10 +119,10 @@ export function DashboardClient() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: idx * 0.05 }}
                 >
+                  <div className="rounded-xl border border-border bg-card transition hover:border-primary/30" style={{ boxShadow: 'var(--shadow-md)' }} data-testid="project-card">
                   <Link
                     href={`/project/${project?.id}`}
-                    className="group block rounded-xl border border-border bg-card p-5 transition hover:border-primary/30 hover:bg-card/80"
-                    style={{ boxShadow: 'var(--shadow-md)' }}
+                    className="group block p-5 pb-3"
                   >
                     <div className="mb-3 flex items-center justify-between">
                       <div className="flex items-center gap-2">
@@ -133,6 +152,34 @@ export function DashboardClient() {
                       Created {project?.createdAt ? new Date(project.createdAt).toLocaleDateString('en-US', { timeZone: 'UTC' }) : ''}
                     </div>
                   </Link>
+                  <div className="flex flex-wrap items-center justify-end gap-2 px-5 pb-4">
+                    {confirmId === project?.id ? (
+                      <>
+                        <span className="mr-auto text-xs text-destructive" data-testid="project-delete-confirm-text">Удалить проект без возможности восстановления?</span>
+                        <button
+                          type="button"
+                          onClick={() => deleteProject(project.id)}
+                          disabled={deletingId === project.id}
+                          className="inline-flex items-center gap-1 rounded-lg bg-destructive px-3 py-1.5 text-xs font-semibold text-destructive-foreground disabled:opacity-50"
+                          data-testid="project-delete-confirm"
+                        >
+                          {deletingId === project.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />} Да, удалить
+                        </button>
+                        <button type="button" onClick={() => { setConfirmId(null); setDeleteError(null) }} disabled={deletingId === project.id} className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50" data-testid="project-delete-cancel">Отмена</button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => { setConfirmId(project.id); setDeleteError(null) }}
+                        className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:border-destructive/50 hover:text-destructive"
+                        data-testid="project-delete"
+                      >
+                        <Trash2 className="h-3 w-3" /> Удалить
+                      </button>
+                    )}
+                    {deleteError && confirmId === project?.id && <p className="w-full text-right text-xs text-destructive" data-testid="project-delete-error">{deleteError}</p>}
+                  </div>
+                  </div>
                 </motion.div>
               )
             })}

@@ -78,6 +78,8 @@ model Project {
   episodeCount Int?
   synopsis    String?  @db.Text
   synopsisApproved Boolean @default(false)
+  // Stage 46A: approved SHORT synopsis (JSON {premise, episodes[{number, logline}]}) — mandatory outline for the season structure.
+  shortSynopsis String? @db.Text
   charactersApproved Boolean @default(false)
   charactersLocked Boolean @default(false)
   structureApproved Boolean @default(false)

@@ -3,7 +3,7 @@ import { generateImage } from "@/lib/replicate";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 
-import { characterImagePrompt, characterExtraAnglePrompt, VISUAL_STYLE_ID, isChildAppearance } from "@/lib/visual-style";
+import { characterImagePrompt, characterExtraAnglePrompt, VISUAL_STYLE_ID, isChildAppearance, type CharacterRefKind } from "@/lib/visual-style";
 import { detectC2paFromUrl } from "@/lib/c2pa";
 import { checkFullBodyImage, fullBodyPasses, fullBodyScore, fullBodyCorrectionSuffix, type FullBodyCheck } from "@/lib/full-body-check";
 import { CHARACTER_PHOTO_COUNT, REF_BATCH_CONCURRENCY, runWithConcurrency, parseImageArray } from "@/lib/reference-counts";
@@ -107,13 +107,14 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
     // Generate one base shot, upload, persist, verify C2PA and bump progress.
     // Stage 21: `refFront` (when given) is passed as image_input so the shot locks onto the SAME
     // identity as the stored front portrait — profile/full must be the same person as the face shot.
-    const genBaseShot = async (char: (typeof characters)[number], shot: BaseShot, refFront: string | null) => {
+    // Stage 46A: `ref` may be the FULL-BODY anchor (refKind "full") or a face close-up (legacy resume path).
+    const genBaseShot = async (char: (typeof characters)[number], shot: BaseShot, ref: string | null, refKind: CharacterRefKind = "face") => {
       if (await canceled()) return;
-      const chained = shot !== "front" && !!refFront;
+      const chained = !!ref;
       try {
-        const basePrompt = characterImagePrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize, chained);
+        const basePrompt = characterImagePrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize, chained, refKind);
         const gen = (prompt: string) => generateImage(
-          { prompt, aspect_ratio: ASPECT_RATIOS[shot], ...(chained ? { image_input: [refFront!] } : {}) },
+          { prompt, aspect_ratio: ASPECT_RATIOS[shot], ...(chained ? { image_input: [ref!] } : {}) },
           { jobId, characterId: char.id, imageModel }
         );
         let replicateUrl: string;
@@ -143,22 +144,28 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
       }
     };
 
-    // ---- Pass 1a: FRONT portraits first (concurrency across characters), stored as the identity anchor ----
-    const frontTasks = characters.filter((char) => !(char as any).imageFront).map((char) => ({ char }));
-    await runWithConcurrency(frontTasks, REF_BATCH_CONCURRENCY, async ({ char }) => genBaseShot(char, "front", null));
+    // ---- Pass 1a (Stage 46A): FULL-BODY shots first, as the identity anchor ----
+    // Generated text-to-image (no close-up reference pulling the model into big-headed, short-legged
+    // "dwarf" figures) with the proportion guard. Legacy resume: a character that already has a front
+    // portrait but no full shot is chained on that front (old path, still guarded).
+    const fullTasks = characters.filter((char) => !(char as any).imageFull).map((char) => ({ char }));
+    await runWithConcurrency(fullTasks, REF_BATCH_CONCURRENCY, async ({ char }) =>
+      genBaseShot(char, "full", ((char as any).imageFront as string | null) ?? null, "face")
+    );
 
-    // ---- Pass 1b: PROFILE + FULL, each chained on the character's own (now stored) front portrait ----
-    // Chaining on the front image_input locks profile/full to the SAME face/identity so the 3 shots
-    // are recognisably the same person. If a front is missing (its generation failed), fall back to
-    // plain text-to-image for that character's profile/full so the job never crashes.
-    const chainedTasks = characters.flatMap((char) =>
-      (["profile", "full"] as const)
-        .filter((shot) => !(char as any)[SHOT_FIELDS[shot]])
-        .map((shot) => ({ char, shot }))
+    // ---- Pass 1b: FRONT close-up chained on the full-body anchor (same person, camera moved closer) ----
+    const frontTasks = characters.filter((char) => !(char as any).imageFront).map((char) => ({ char }));
+    await runWithConcurrency(frontTasks, REF_BATCH_CONCURRENCY, async ({ char }) =>
+      genBaseShot(char, "front", ((char as any).imageFull as string | null) ?? null, "full")
     );
-    await runWithConcurrency(chainedTasks, REF_BATCH_CONCURRENCY, async ({ char, shot }) =>
-      genBaseShot(char, shot, ((char as any).imageFront as string | null) ?? null)
-    );
+
+    // ---- Pass 1c: PROFILE chained on the front close-up (face identity), falling back to the full anchor ----
+    const profileTasks = characters.filter((char) => !(char as any).imageProfile).map((char) => ({ char }));
+    await runWithConcurrency(profileTasks, REF_BATCH_CONCURRENCY, async ({ char }) => {
+      const front = (char as any).imageFront as string | null;
+      const full = (char as any).imageFull as string | null;
+      return genBaseShot(char, "profile", front ?? full ?? null, front ? "face" : "full");
+    });
 
     // ---- Pass 2: 2 extra angles per character, each chained on the (now stored) front portrait ----
     if (!(await canceled()) && EXTRA_COUNT > 0) {
@@ -170,10 +177,16 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
       await runWithConcurrency(extraTasks, REF_BATCH_CONCURRENCY, async ({ char, index }) => {
         if (await canceled()) return;
         const front = (char as any).imageFront as string | null;
-        if (!front) { done += 1; await bump("Доп. ракурсы"); return; }
+        const full = (char as any).imageFull as string | null;
+        // Even index = right profile (face reference); odd index = full-body BACK — chained on the
+        // full-body anchor so the proportions are copied from a full-length figure, not a close-up.
+        const isFullShot = index % 2 === 1;
+        const ref = isFullShot ? (full ?? front) : (front ?? full);
+        const refKind: CharacterRefKind = ref === full && full ? "full" : "face";
+        if (!ref) { done += 1; await bump("Доп. ракурсы"); return; }
         try {
           const remote = await generateImage(
-            { prompt: characterExtraAnglePrompt(char.appearance ?? "", char.name, index), aspect_ratio: index % 2 === 0 ? "3:4" : "9:16", image_input: [front] },
+            { prompt: characterExtraAnglePrompt(char.appearance ?? "", char.name, index, refKind), aspect_ratio: isFullShot ? "9:16" : "3:4", image_input: [ref] },
             { jobId, characterId: char.id, imageModel }
           );
           const url = await uploadRemoteToS3(remote, `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/extra-${Date.now()}-${index}.png`, "image/png");

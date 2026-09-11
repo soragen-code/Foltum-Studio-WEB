@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, Wand2, ChevronDown, ChevronRight, MapPin, Pencil, ArrowRight, Film, Check, Camera, Images, RefreshCw } from 'lucide-react'
+import { Loader2, Wand2, ChevronDown, ChevronRight, ArrowRight, Film, Check, Camera, Images, RefreshCw } from 'lucide-react'
 import { JOB_POLL_INTERVAL_MS } from './use-job-polling'
 import { CancelButton } from './cancel-button'
 import { IdeaEditor } from './idea-stage'
@@ -192,11 +192,8 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
   const [seasonBusy, setSeasonBusy] = useState(false)
   const [seasonNotice, setSeasonNotice] = useState('')
   const [ideaChanged, setIdeaChanged] = useState<string[]>([])
-  const [open, setOpen] = useState<Record<string, boolean>>({})
-  const [reviseText, setReviseText] = useState<Record<string, string>>({})
-  const [locText, setLocText] = useState<Record<string, string>>({})
-  const [locOpen, setLocOpen] = useState<Record<string, boolean>>({})
-  const [busy, setBusy] = useState<Record<string, string>>({}) // episodeId -> 'revise' | 'location'
+  // Stage 46A — the episode list is a compact collapsible block under the season title (closed by default).
+  const [listOpen, setListOpen] = useState(false)
   const [openingEpisode, setOpeningEpisode] = useState<string | null>(null) // episodeId being navigated to
   // Location references (id → imageUrl); refreshed while a location image job runs.
   const [locImages, setLocImages] = useState<Record<string, string | null>>(() =>
@@ -324,55 +321,11 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
     finally { setSeasonBusy(false) }
   }
 
-  const revise = async (ep: SeasonEpisode, force = false) => {
-    const instruction = reviseText[ep.id]?.trim()
-    if (!instruction) return
-    setBusy((b) => ({ ...b, [ep.id]: 'revise' })); setError(null)
-    try {
-      const res = await fetch(`/api/ai/episodes/${ep.id}/revise`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instruction, force }) })
-      const data = await res.json()
-      if (res.status === 409 && data?.needsForce) {
-        if (confirm(`${data.error}\n\nПродолжить и переписать эпизод?`)) return revise(ep, true)
-        return
-      }
-      if (res.status === 409 && data?.writing) throw new Error(data.error)
-      if (!res.ok) throw new Error(data?.error ?? 'Не удалось переписать эпизод')
-      setReviseText((t) => ({ ...t, [ep.id]: '' }))
-      // The rewrite runs as a season job (reasoning model in OpenAI background mode): the regular
-      // job polling shows its progress; this episode stays busy until the job finishes (see below).
-      if (data?.jobId) setJob({ id: data.jobId, status: 'processing', progress: 1, message: 'Запуск…' })
-      await load()
-    } catch (e: any) {
-      setError(e?.message ?? 'Ошибка')
-      setBusy((b) => { const n = { ...b }; delete n[ep.id]; return n })
-    }
-  }
-  // Release per-episode «revise» busy flags once the season job is no longer active.
-  useEffect(() => {
-    if (jobActive) return
-    setBusy((b) => {
-      if (!Object.values(b).includes('revise')) return b
-      const n = { ...b }; for (const k of Object.keys(n)) if (n[k] === 'revise') delete n[k]; return n
-    })
-  }, [jobActive])
-
-  const reviseLocation = async (ep: SeasonEpisode) => {
-    const instruction = locText[ep.id]?.trim()
-    if (!instruction) return
-    setBusy((b) => ({ ...b, [ep.id]: 'location' })); setError(null)
-    try {
-      const res = await fetch(`/api/ai/episodes/${ep.id}/location/revise`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instruction }) })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data?.error ?? 'Не удалось изменить локацию')
-      setLocText((t) => ({ ...t, [ep.id]: '' })); setLocOpen((o) => ({ ...o, [ep.id]: false }))
-      await load()
-    } catch (e: any) { setError(e?.message ?? 'Ошибка') }
-    finally { setBusy((b) => { const n = { ...b }; delete n[ep.id]; return n }) }
-  }
-
   if (loading) return <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
 
   const writingNo = writingEpisodeNumber(season?.episodes ?? [], jobActive)
+  const sortedEpisodes = [...(season?.episodes ?? [])].sort((a, b) => a.number - b.number)
+  const firstEpisode = sortedEpisodes.find((e) => !!e.script) ?? null
   const seasonLocked = jobActive || starting || seasonBusy
 
   return (
@@ -409,12 +362,61 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
       <div className="rounded-xl border border-border bg-card p-4 sm:p-6">
         <h2 className="font-display text-xl font-bold">Сценарий сезона</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Полный сценарий первого сезона: 6–10 эпизодов, в каждом 6–15 сцен (длину решает драматургия) с полноценными диалогами и раскадровкой для ИИ-экранизации. Эпизоды появляются по мере написания — готовые можно раскрыть и править промптом, не дожидаясь остальных.
+          Полный сценарий первого сезона: 6–10 эпизодов, в каждом 6–15 сцен (длину решает драматургия) с полноценными диалогами и раскадровкой для ИИ-экранизации. Эпизоды появляются по мере написания — готовые можно открыть и править на странице эпизода, не дожидаясь остальных.
         </p>
         {season?.title && (
           <div className="mt-3">
             <div className="font-semibold">{season.title}</div>
             {season.logline && <p className="text-sm text-muted-foreground">{season.logline}</p>}
+          </div>
+        )}
+        {sortedEpisodes.length > 0 && (
+          <div className="mt-3" data-testid="episode-list-block">
+            <button
+              type="button"
+              onClick={() => setListOpen((o) => !o)}
+              className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted"
+              aria-expanded={listOpen}
+              data-testid="episode-list-toggle"
+            >
+              {listOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+              Список серий <span className="text-xs text-muted-foreground">({sortedEpisodes.filter((e) => e.script).length}/{sortedEpisodes.length})</span>
+            </button>
+            {listOpen && (
+              <ul className="mt-2 divide-y divide-border rounded-lg border border-border" data-testid="episode-list">
+                {sortedEpisodes.map((ep) => (
+                  <li key={ep.id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm" data-testid="episode-card">
+                    <span className="text-xs font-semibold uppercase text-muted-foreground">Эп. {ep.number}</span>
+                    <span className="min-w-0 flex-1 truncate font-medium">{ep.title}</span>
+                    <span className="rounded bg-muted px-1.5 py-0.5 text-[11px]" data-testid="episode-status">
+                      {!ep.script && jobActive ? (writingNo === ep.number ? 'пишется...' : 'в очереди') : episodeStatusLabel(ep)}
+                    </span>
+                    {!ep.script && jobActive && writingNo === ep.number && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
+                    {ep.locationId && ep.locationId in locImages && !validUrl(locImages[ep.locationId]) && (
+                      <button
+                        onClick={() => generateLocationRef(ep.locationId as string)}
+                        disabled={!!locGen[ep.locationId]}
+                        className="inline-flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[11px] hover:bg-muted disabled:opacity-50"
+                        title="Локация пока без референса — сгенерировать фотореалистичный кадр (1 кредит)"
+                        data-testid="location-ref-generate"
+                      >
+                        {locGen[ep.locationId] ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
+                        {locGen[ep.locationId] ? 'референс...' : 'Референс локации'}
+                      </button>
+                    )}
+                    {ep.locationId && validUrl(locImages[ep.locationId]) && (
+                      <img src={locImages[ep.locationId] as string} alt={ep.locationName ?? ''} className="h-6 w-6 rounded object-cover ring-1 ring-border" title="Референс локации" data-testid="location-ref-thumb" />
+                    )}
+                    <CharacterAvatars chars={ep.characters} size="h-5 w-5" />
+                    {ep.script && (
+                      <Link href={`/project/${project.id}/episode/${ep.id}`} onClick={() => setOpeningEpisode(ep.id)} aria-disabled={openingEpisode === ep.id} className={`inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs hover:bg-muted ${openingEpisode === ep.id ? 'pointer-events-none opacity-60' : ''}`} data-testid="open-episode">
+                        {openingEpisode === ep.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Film className="h-3 w-3" />} Открыть
+                      </Link>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
         {!season && !jobActive && (
@@ -480,91 +482,20 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
         {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
       </div>
 
-      <div className="space-y-3">
-        {season?.episodes.map((ep) => {
-          const isOpen = !!open[ep.id]
-          const b = busy[ep.id]
-          return (
-            <div key={ep.id} className="rounded-xl border border-border bg-card" data-testid="episode-card">
-              <div className="flex items-start gap-3 p-4">
-                <button onClick={() => setOpen((o) => ({ ...o, [ep.id]: !isOpen }))} className="mt-0.5 shrink-0 text-muted-foreground" aria-label="Раскрыть">
-                  {isOpen ? <ChevronDown className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
-                </button>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-semibold uppercase text-muted-foreground">Эпизод {ep.number}</span>
-                    {ep.arcRole && <span className="rounded bg-muted px-1.5 py-0.5 text-[11px]">{ep.arcRole}</span>}
-                    <span className="rounded bg-muted px-1.5 py-0.5 text-[11px]" data-testid="episode-status">
-                      {!ep.script && jobActive ? (writingNo === ep.number ? 'пишется…' : 'в очереди') : episodeStatusLabel(ep)}
-                    </span>
-                    {!ep.script && jobActive && writingNo === ep.number && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
-                  </div>
-                  <h3 className="mt-1 font-semibold">{ep.title}</h3>
-                  {ep.logline && <p className="mt-1 text-sm text-muted-foreground">{ep.logline}</p>}
-                  <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                    <span className="inline-flex items-center gap-1"><MapPin className="h-3.5 w-3.5" />{ep.locationName || '—'}
-                      <button onClick={() => setLocOpen((o) => ({ ...o, [ep.id]: !o[ep.id] }))} className="ml-1 rounded p-0.5 hover:bg-muted" aria-label="Изменить локацию" data-testid="location-edit"><Pencil className="h-3 w-3" /></button>
-                    </span>
-                    {ep.locationId && ep.locationId in locImages && !validUrl(locImages[ep.locationId]) && (
-                      <button
-                        onClick={() => generateLocationRef(ep.locationId as string)}
-                        disabled={!!locGen[ep.locationId]}
-                        className="inline-flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[11px] hover:bg-muted disabled:opacity-50"
-                        title="Локация появилась в сценарии и пока без референса — сгенерировать фотореалистичный кадр (1 кредит)"
-                        data-testid="location-ref-generate"
-                      >
-                        {locGen[ep.locationId] ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
-                        {locGen[ep.locationId] ? 'референс локации…' : 'Сгенерировать референс локации'}
-                      </button>
-                    )}
-                    {ep.locationId && validUrl(locImages[ep.locationId]) && (
-                      <img src={locImages[ep.locationId] as string} alt={ep.locationName ?? ''} className="h-6 w-6 rounded object-cover ring-1 ring-border" title="Референс локации" data-testid="location-ref-thumb" />
-                    )}
-                    <CharacterAvatars chars={ep.characters} size="h-6 w-6" />
-                    {ep.script && <span>{ep.scenes.length} сцен</span>}
-                  </div>
-                  {locOpen[ep.id] && (
-                    <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-                      <input value={locText[ep.id] ?? ''} onChange={(e) => setLocText((t) => ({ ...t, [ep.id]: e.target.value }))} placeholder="Что изменить в локации…" className="flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-sm" data-testid="location-input" />
-                      <button onClick={() => reviseLocation(ep)} disabled={!!b || !(locText[ep.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="location-submit">
-                        {b === 'location' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Применить
-                      </button>
-                    </div>
-                  )}
-                </div>
-                {ep.script && (
-                  <Link href={`/project/${project.id}/episode/${ep.id}`} onClick={() => setOpeningEpisode(ep.id)} aria-disabled={openingEpisode === ep.id} className={`hidden shrink-0 items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted sm:inline-flex ${openingEpisode === ep.id ? 'pointer-events-none opacity-60' : ''}`} data-testid="open-episode">
-                    {openingEpisode === ep.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Открыть эпизод
-                  </Link>
-                )}
-              </div>
-              {isOpen && (
-                <div className="border-t border-border p-4">
-                  {ep.locationDesc && <p className="mb-3 text-xs text-muted-foreground"><span className="font-semibold">Локация:</span> {ep.locationDesc}</p>}
-                  {ep.script ? <ScriptView text={ep.script} /> : <p className="text-sm text-muted-foreground">{jobActive ? 'Сценарий эпизода ещё пишется — править его можно будет, когда он появится.' : 'Сценарий эпизода ещё не написан.'}</p>}
-                  {ep.script && (
-                    <div className="mt-4 space-y-2">
-                      <label className="text-xs font-semibold text-muted-foreground">Что изменить в эпизоде</label>
-                      <div className="flex flex-col gap-2 sm:flex-row">
-                        <textarea value={reviseText[ep.id] ?? ''} onChange={(e) => setReviseText((t) => ({ ...t, [ep.id]: e.target.value }))} rows={2} placeholder="Например: сделать финал жёстче, добавить конфликт между героями…" className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm" data-testid="episode-revise-input" />
-                        <button onClick={() => revise(ep)} disabled={!!b || !(reviseText[ep.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50" data-testid="episode-revise-submit">
-                          {b === 'revise' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Переписать
-                        </button>
-                      </div>
-                      {b === 'revise' && <p className="text-xs text-muted-foreground">{jobActive && job?.message ? job.message : 'Переписываю сценарий эпизода (обычно 5–10 минут)…'}</p>}
-                    </div>
-                  )}
-                  {ep.script && (
-                    <Link href={`/project/${project.id}/episode/${ep.id}`} onClick={() => setOpeningEpisode(ep.id)} aria-disabled={openingEpisode === ep.id} className={`mt-4 inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted sm:hidden ${openingEpisode === ep.id ? 'pointer-events-none opacity-60' : ''}`}>
-                      {openingEpisode === ep.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Открыть эпизод <ArrowRight className="h-4 w-4" />
-                    </Link>
-                  )}
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
+      {firstEpisode && (
+        <div className="flex justify-end">
+          <Link
+            href={`/project/${project.id}/episode/${firstEpisode.id}`}
+            onClick={() => setOpeningEpisode(firstEpisode.id)}
+            aria-disabled={openingEpisode === firstEpisode.id}
+            className={`inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground ${openingEpisode === firstEpisode.id ? 'pointer-events-none opacity-60' : ''}`}
+            data-testid="go-first-episode"
+          >
+            {openingEpisode === firstEpisode.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />}
+            Перейти к {firstEpisode.number} эпизоду <ArrowRight className="h-4 w-4" />
+          </Link>
+        </div>
+      )}
     </div>
   )
 }

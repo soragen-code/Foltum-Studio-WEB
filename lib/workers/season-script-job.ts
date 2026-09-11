@@ -20,6 +20,13 @@ import { chatJSON, SCRIPT_MODEL, startBackgroundJSON, pollBackgroundJSON, cancel
 import { maxDetailLevel, isLocationDetailLevel } from "@/lib/location-scale";
 import { completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { toCharacterCard, normalizeLanguage, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
+import { parseStoredShortSynopsis, renderShortSynopsis } from "@/lib/short-synopsis";
+
+/** Stage 46A: the stored short synopsis (JSON) rendered as the outline block of the structure prompt. */
+function shortSynopsisOutline(stored: string | null | undefined): string | null {
+  const s = parseStoredShortSynopsis(stored);
+  return s ? renderShortSynopsis(s) : null;
+}
 import {
   seasonStructureSchema,
   seasonFullStorySchema,
@@ -415,7 +422,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
   let message: string;
   let progress: number;
   if (planned.step === "structure") {
-    responseId = await deps.start(seasonStructureSystemPrompt(language, state.episodeCount), seasonStructureUserPrompt(project.synopsis, cards, project.locations), { model: SCRIPT_MODEL, maxTokens: 12000 });
+    responseId = await deps.start(seasonStructureSystemPrompt(language, state.episodeCount), seasonStructureUserPrompt(project.synopsis, cards, project.locations, shortSynopsisOutline(project.shortSynopsis)), { model: SCRIPT_MODEL, maxTokens: 12000 });
     message = "Строю структуру сезона…"; progress = 3;
   } else if (planned.step === "fullStory") {
     responseId = await deps.start(

@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { chatJSON } from "@/lib/ai";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
-import { normalizeTestSceneResult, testSceneSystemPrompt, testSceneUserPrompt, TEST_DURATION_MAX, TEST_DURATION_MIN } from "@/lib/test-episode";
+import { normalizeTestSceneResult, testSceneSystemPrompt, testSceneUserPrompt, TEST_EPISODE_DURATION_SEC } from "@/lib/test-episode";
 import { detectLanguage } from "@/lib/idea";
 
 /**
@@ -22,8 +22,8 @@ export async function POST(request: Request) {
   const idea = typeof body?.idea === "string" ? body.idea.trim() : "";
   if (idea.length < 5) return NextResponse.json({ error: "Опишите идею сцены (минимум 5 символов)" }, { status: 400 });
   if (idea.length > 2000) return NextResponse.json({ error: "Слишком длинная идея (максимум 2000 символов)" }, { status: 400 });
-  const durRaw = Number(body?.durationSec);
-  const durationSec = Number.isFinite(durRaw) && durRaw >= TEST_DURATION_MIN && durRaw <= TEST_DURATION_MAX ? Math.round(durRaw) : null;
+  // Stage 46A — test scenes are always 30 s; the client value is ignored.
+  const durationSec = TEST_EPISODE_DURATION_SEC;
   try {
     const raw = await chatJSON(testSceneSystemPrompt(), testSceneUserPrompt(idea, durationSec), { temperature: 0.8, maxTokens: 2500 });
     const result = normalizeTestSceneResult(raw);
