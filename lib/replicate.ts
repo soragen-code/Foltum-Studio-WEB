@@ -262,8 +262,15 @@ export interface FluxInput {
  * Generate a photorealistic reference image (Seedream 5.0 Lite) via Replicate.
  * Returns the URL of the generated image. Logs each prediction; no paid automatic retries.
  */
-export async function generateImage(input: FluxInput, context: { jobId?: string; characterId?: string; imageModel?: string } = {}): Promise<string> {
-  const { imageModel, ...logContext } = context;
+/** Thrown by generateImage when `shouldCancel` reports a user cancellation mid-prediction. */
+export class GenerationCanceledError extends Error {
+  constructor(message = "Генерация отменена пользователем") { super(message); this.name = "GenerationCanceledError"; }
+}
+
+export async function generateImage(input: FluxInput, context: { jobId?: string; characterId?: string; imageModel?: string; shouldCancel?: () => Promise<boolean> } = {}): Promise<string> {
+  const { imageModel, shouldCancel, ...logContext } = context;
+  // Cancel is checked BEFORE the prediction is created so a canceled job never pays for a new one.
+  if (shouldCancel && (await shouldCancel())) throw new GenerationCanceledError();
   const attempt: GenerationAttempt = {
     ...logContext, attempt: 1, phase: "reference", model: SEEDREAM_MODEL,
     status: "submitting", style: VISUAL_STYLE_ID,
@@ -275,6 +282,13 @@ export async function generateImage(input: FluxInput, context: { jobId?: string;
     attempt.status = "processing"; logAttempt(attempt);
     const started = Date.now();
     while (true) {
+      // User cancel (cancelRequested on the job): stop the provider prediction and bail out — the caller
+      // discards the result, refunds and marks the job canceled.
+      if (shouldCancel && (await shouldCancel())) {
+        await cancelPrediction(attempt.predictionId).catch(() => {});
+        attempt.status = "canceled"; logAttempt(attempt);
+        throw new GenerationCanceledError();
+      }
       const p = await getPredictionState(attempt.predictionId);
       if (p.status === "succeeded" && p.url) {
         attempt.status = "succeeded"; logAttempt(attempt); return p.url;
@@ -284,6 +298,7 @@ export async function generateImage(input: FluxInput, context: { jobId?: string;
       await sleep(2_000);
     }
   } catch (error) {
+    if (error instanceof GenerationCanceledError) throw error;
     attempt.error = safeProviderError(error); attempt.errorKind = classifyProviderError(error);
     attempt.status = attempt.errorKind === "timeout" ? "timeout" : "failed";
     logAttempt(attempt); throw new Error(attempt.error);
@@ -378,6 +393,8 @@ export async function concatVideos(videoUrls: string[]): Promise<string> {
   throw new Error("Unexpected ffmpeg output format");
 }
 
-export async function cancelVideoPrediction(id: string): Promise<void> {
+/** Cancel any Replicate prediction (video or image) by id. */
+export async function cancelPrediction(id: string): Promise<void> {
   await getReplicate().predictions.cancel(id, { signal: AbortSignal.timeout(20_000) });
 }
+export const cancelVideoPrediction = cancelPrediction;

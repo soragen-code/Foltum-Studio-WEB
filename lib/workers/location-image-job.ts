@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { generateImage } from "@/lib/replicate";
+import { generateImage, GenerationCanceledError } from "@/lib/replicate";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { locationAnglePrompt, LOCATION_ANGLES, VISUAL_STYLE_ID } from "@/lib/visual-style";
@@ -13,7 +13,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * uploaded to S3 and written to Location.imageUrl / imageReverse / imageDetail. Job type "location_image".
  */
 export async function runLocationImagesJob({ jobId, projectId, locationIds, imageModel }: { jobId: string; projectId: string; locationIds: string[]; imageModel?: string }): Promise<void> {
+  // User cancel: checked before every provider call (inside generateImage, which also cancels the running
+  // prediction) and again before any result is written. Location data is left untouched; the caller's
+  // refund pass returns the credits for every location whose master frame did not change.
+  const canceled = () => isCancelRequested(jobId);
+  const gen = (input: Parameters<typeof generateImage>[0]) => generateImage(input, { jobId, imageModel, shouldCancel: canceled });
+  const CANCEL_MSG = "Генерация отменена пользователем";
   try {
+    if (await canceled()) { await markCanceled(jobId, CANCEL_MSG); return; }
     const locations = await prisma.location.findMany({ where: { id: { in: locationIds }, projectId }, orderBy: { createdAt: "asc" } });
     const total = locations.length;
     let done = 0;
@@ -41,7 +48,8 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
       try {
         const visual = loc.visualPrompt ?? loc.description ?? loc.name;
         // 1) wide establishing angle — the anchor for the light and the place
-        const wideRemote = await generateImage({ prompt: locationAnglePrompt(visual, loc.name, "wide"), aspect_ratio: "9:16" }, { jobId, imageModel });
+        const wideRemote = await gen({ prompt: locationAnglePrompt(visual, loc.name, "wide"), aspect_ratio: "9:16" });
+        if (await canceled()) throw new GenerationCanceledError(); // discard the result, keep the old master
         const stamp = Date.now();
         const wideUrl = await uploadRemoteToS3(wideRemote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${stamp}-wide.png`, "image/png");
         await prisma.location.update({ where: { id: loc.id }, data: { imageUrl: wideUrl, imageReverse: null, imageDetail: null, imageExtra: null } }); // new master → the old angles no longer match; re-shot from this frame
@@ -50,16 +58,19 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
         for (const a of LOCATION_ANGLES.filter((x) => x.angle !== "wide")) {
           await updateJob(jobId, { progress: pct(), message: `Референс локации «${loc.name}» — ${a.label.toLowerCase()} (${done + 1}/${total})...` });
           try {
-            const remote = await generateImage({ prompt: locationAnglePrompt(visual, loc.name, a.angle), aspect_ratio: "9:16", image_input: [wideRemote] }, { jobId, imageModel });
+            const remote = await gen({ prompt: locationAnglePrompt(visual, loc.name, a.angle), aspect_ratio: "9:16", image_input: [wideRemote] });
+            if (await canceled()) throw new GenerationCanceledError();
             const url = await uploadRemoteToS3(remote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${stamp}-${a.angle}.png`, "image/png");
             await prisma.location.update({ where: { id: loc.id }, data: { [a.key]: url } });
             await checkC2pa(loc.id, a.angle, url);
           } catch (e: any) {
+            if (e instanceof GenerationCanceledError) throw e;
             // the wide angle alone is still a valid reference — log and continue
             console.error(`[location-images] ${a.angle} angle failed for ${loc.name}:`, e?.message ?? e);
           }
         }
       } catch (e: any) {
+        if (e instanceof GenerationCanceledError) { await markCanceled(jobId, CANCEL_MSG); return; }
         failed += 1;
         console.error(`[location-images] failed for ${loc.name}:`, e?.message ?? e);
       }

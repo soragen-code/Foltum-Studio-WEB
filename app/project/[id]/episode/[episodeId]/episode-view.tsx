@@ -106,6 +106,12 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [locBaseJobActive, setLocBaseJobActive] = useState(false)
   const refJobs = useRef<{ char?: string; loc: Record<string, string>; extra: Record<string, string> }>({ loc: {}, extra: {} })
   const refCanceled = useRef(false)
+  // Per-location cancel («Отменить генерацию» on the location card): locations whose generation the
+  // author canceled in the current session — the session loop starts no more angle chunks for them and
+  // they no longer count as pending for the session-end check. Cleared when a new session starts.
+  const locCanceled = useRef<Set<string>>(new Set())
+  const [locCancelAsk, setLocCancelAsk] = useState<string | null>(null) // locationId awaiting cancel confirmation
+  const [locCancelling, setLocCancelling] = useState<Record<string, boolean>>({}) // cancel requested, job not yet terminal
   const [charBusy, setCharBusy] = useState<Record<string, boolean>>({}) // per-character prompt-revise spinner
   const [locBusy, setLocBusy] = useState<Record<string, boolean>>({})   // per-location prompt-revise spinner
   const [charEdit, setCharEdit] = useState<Record<string, string>>({})
@@ -282,6 +288,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         if (!loc) continue
         const want = desiredExtraFrames(loc)
         const have = parseExtra(loc.imageExtra).length
+        if (locCanceled.current.has(loc.id)) continue // canceled by the author — no further angle chunks
         if (want > 0 && validUrl(loc.imageUrl) && have < want && !activeExtraLocs.has(loc.id)) {
           const chunk = Math.min(LOCATION_EXTRA_CHUNK, want - have)
           try {
@@ -300,10 +307,13 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   }, [refSession, refreshRefs, refreshCredits, project.id])
 
   // Stop the reference session once everything is ready (locations-only session: once every location is ready).
-  const refsLocsReady = refLocs.length > 0 && refLocs.every((l) => locBaseReady(l) && locExtraReady(l))
+  // Locations canceled by the author count as settled for the session-end check.
+  const locSettled = (l: any) => locCanceled.current.has(l.id) || (locBaseReady(l) && locExtraReady(l))
+  const refsLocsReady = refLocs.length > 0 && refLocs.every(locSettled)
+  const refsSessionReady = refChars.every(hasAllImages) && refLocs.every(locSettled)
   useEffect(() => {
-    if (refSession && (refsReady || (refScope === 'locations' && refsLocsReady && !locBaseJobActive))) { setRefSession(false); refJobs.current = { loc: {}, extra: {} } }
-  }, [refSession, refsReady, refScope, refsLocsReady, locBaseJobActive])
+    if (refSession && (refsSessionReady || (refScope === 'locations' && refsLocsReady && !locBaseJobActive))) { setRefSession(false); refJobs.current = { loc: {}, extra: {} } }
+  }, [refSession, refsSessionReady, refScope, refsLocsReady, locBaseJobActive])
 
   // Stage 17: self-heal a stuck episode. If references were already initiated in a previous session
   // (some character/location already has a base image) but the mandatory set is NOT complete and no
@@ -322,7 +332,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
    *  The AI image model chosen in the picker (EDIT 1) is threaded into every refs request. */
   const generateAllRefs = async () => {
     setRefModalOpen(false)
-    setError(''); setRefStarting(true); refCanceled.current = false
+    setError(''); setRefStarting(true); refCanceled.current = false; locCanceled.current = new Set()
     refScopeRef.current = 'all'; setRefScope('all')
     const model = imageModelRef.current
     try {
@@ -349,7 +359,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   /** Separate button: (re)generate ONE location's full photo set — the master frame job now, then the
    *  session loop tops up the extra angles from that master. Characters are not touched. */
   const generateLocationRefs = async (locationId: string) => {
-    setError(''); setRefStarting(true); refCanceled.current = false
+    setError(''); setRefStarting(true); refCanceled.current = false; locCanceled.current = new Set()
     refScopeRef.current = 'locations'; setRefScope('locations'); setLocBaseJobActive(true)
     try {
       const res = await fetch(`/api/ai/locations/${locationId}/image`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageModel: imageModelRef.current }) })
@@ -364,10 +374,59 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   }
 
   const cancelRefs = async () => {
-    refCanceled.current = true
+    refCanceled.current = true; autoResumedRef.current = true // don't let the self-heal effect restart what was just canceled
     const ids = [refJobs.current.char, ...Object.values(refJobs.current.loc), ...Object.values(refJobs.current.extra)].filter(Boolean) as string[]
     for (const id of ids) { try { await fetch(`/api/ai/jobs/${id}/cancel`, { method: 'POST' }) } catch {} }
     setRefSession(false); refJobs.current = { loc: {}, extra: {} }
+    void refreshRefs(); void refreshCredits()
+  }
+
+  /** «Отменить генерацию» on ONE location card (confirmed): cancel the active master-frame / extra-angle
+   *  job(s) of this location via the jobs cancel API, stop the session loop for this location, and keep
+   *  the button in «Останавливаю...» until those jobs are terminal (canceled / failed / completed). In a
+   *  «Сгенерировать всё» session the other characters / locations keep going; a locations-only session
+   *  (single-location button) ends because this location was its only work. */
+  const cancelLocationGen = async (locationId: string) => {
+    setLocCancelAsk(null)
+    locCanceled.current.add(locationId)
+    autoResumedRef.current = true // don't let the self-heal effect restart what was just canceled
+    setLocCancelling((p) => ({ ...p, [locationId]: true }))
+    const ids = new Set<string>()
+    if (refJobs.current.loc[locationId]) ids.add(refJobs.current.loc[locationId])
+    if (refJobs.current.extra[locationId]) ids.add(refJobs.current.extra[locationId])
+    // Server truth: jobs started before a reload / by the auto-resume loop are not in refJobs.
+    try {
+      const jr = await fetch(`/api/jobs?projectId=${project.id}&active=1`, { cache: 'no-store' })
+      if (jr.ok) {
+        const jd = await jr.json()
+        for (const j of jd?.jobs ?? []) {
+          if (j?.type !== 'location_image' && j?.type !== 'location_extra_image') continue
+          try {
+            const rd = JSON.parse(j?.resultData ?? '{}')
+            if (rd?.locationId === locationId || (Array.isArray(rd?.locationIds) && rd.locationIds.includes(locationId))) ids.add(j.id)
+          } catch {}
+        }
+      }
+    } catch {}
+    delete refJobs.current.loc[locationId]; delete refJobs.current.extra[locationId]
+    for (const id of ids) { try { await fetch(`/api/ai/jobs/${id}/cancel`, { method: 'POST' }) } catch {} }
+    // Wait (bounded) until every canceled job is terminal so the spinner never outlives the job.
+    const deadline = Date.now() + 4 * 60_000
+    const pending = new Set(ids)
+    while (pending.size && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2500))
+      for (const id of Array.from(pending)) {
+        try {
+          const r = await fetch(`/api/jobs/${id}`, { cache: 'no-store' })
+          if (r.status === 404) { pending.delete(id); continue }
+          const d: JobPollResponse = await r.json()
+          const st = d?.job?.status
+          if (!st || st === 'canceled' || st === 'failed' || st === 'completed') pending.delete(id)
+        } catch {}
+      }
+    }
+    setLocCancelling((p) => { const n = { ...p }; delete n[locationId]; return n })
+    if (refScopeRef.current === 'locations') { setLocBaseJobActive(false); setRefSession(false); refJobs.current = { loc: {}, extra: {} } }
     void refreshRefs(); void refreshCredits()
   }
 
@@ -828,7 +887,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               const want = desiredExtraFrames(l)
               const base = [{ url: l.imageUrl, label: 'Общий план' }, { url: l.imageReverse, label: 'Обратный ракурс' }, { url: l.imageDetail, label: 'Средний план' }].filter((a) => validUrl(a.url))
               const extras = parseExtra(l.imageExtra)
-              const busy = !!locBusy[l.id] || (refSession && (!(locBaseReady(l) && locExtraReady(l)) || (refScope === 'locations' && locBaseJobActive && !!refJobs.current.loc[l.id])))
+              // This location is being generated by the running session (master frame and/or angle chunks).
+              const locGen = refSession && !locCanceled.current.has(l.id) && (!(locBaseReady(l) && locExtraReady(l)) || (refScope === 'locations' && locBaseJobActive && !!refJobs.current.loc[l.id]))
+              const cancelling = !!locCancelling[l.id]
+              const busy = !!locBusy[l.id] || locGen || cancelling
               return (
                 <div key={l.id} className="rounded-lg border border-border/60 p-3" data-testid="ref-location">
                   <div className="flex items-center justify-between gap-2">
@@ -854,17 +916,41 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                     </div>
                   ) : (
                     <>
-                      {/* Separate «Сгенерировать локацию» button: master frame + all angles of THIS location only. */}
-                      <button
-                        onClick={() => generateLocationRefs(l.id)}
-                        disabled={busy || refSession || refStarting}
-                        className="mt-2 inline-flex w-full items-center justify-center gap-1 rounded-lg bg-primary px-2 py-1 text-xs font-medium text-primary-foreground disabled:opacity-50"
-                        data-testid="ref-location-generate"
-                        title={locBaseReady(l) ? 'Снять локацию заново: новый мастер-кадр и все ракурсы' : 'Сгенерировать мастер-кадр и все ракурсы этой локации'}
-                      >
-                        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : locBaseReady(l) ? <RefreshCw className="h-3.5 w-3.5" /> : <Wand2 className="h-3.5 w-3.5" />}
-                        {busy ? 'Генерирую локацию...' : `${locBaseReady(l) ? 'Перегенерировать' : 'Сгенерировать'} локацию (${CHARACTER_REFERENCE_COST * (1 + want)} кр.)`}
-                      </button>
+                      {locGen || cancelling ? (
+                        /* While THIS location is generating the button becomes «Отменить генерацию» (confirmed below),
+                           mirroring the scene-video cancel. */
+                        <button
+                          onClick={() => setLocCancelAsk(l.id)}
+                          disabled={cancelling || locCancelAsk === l.id}
+                          className="mt-2 inline-flex w-full items-center justify-center gap-1 rounded-lg border border-destructive/50 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                          data-testid="ref-location-cancel"
+                          title="Остановить генерацию этой локации"
+                        >
+                          {cancelling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
+                          {cancelling ? 'Останавливаю...' : 'Отменить генерацию'}
+                        </button>
+                      ) : (
+                        /* Separate «Сгенерировать локацию» button: master frame + all angles of THIS location only. */
+                        <button
+                          onClick={() => generateLocationRefs(l.id)}
+                          disabled={busy || refSession || refStarting}
+                          className="mt-2 inline-flex w-full items-center justify-center gap-1 rounded-lg bg-primary px-2 py-1 text-xs font-medium text-primary-foreground disabled:opacity-50"
+                          data-testid="ref-location-generate"
+                          title={locBaseReady(l) ? 'Снять локацию заново: новый мастер-кадр и все ракурсы' : 'Сгенерировать мастер-кадр и все ракурсы этой локации'}
+                        >
+                          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : locBaseReady(l) ? <RefreshCw className="h-3.5 w-3.5" /> : <Wand2 className="h-3.5 w-3.5" />}
+                          {busy ? 'Генерирую локацию...' : `${locBaseReady(l) ? 'Перегенерировать' : 'Сгенерировать'} локацию (${CHARACTER_REFERENCE_COST * (1 + want)} кр.)`}
+                        </button>
+                      )}
+                      {locCancelAsk === l.id && locGen && (
+                        <div className="mt-2 rounded-lg border border-destructive/40 bg-destructive/5 p-2 text-xs" data-testid="ref-location-cancel-confirm">
+                          Остановить генерацию этой локации? Кредиты за несделанные кадры вернутся.
+                          <div className="mt-1.5 flex gap-1.5">
+                            <button onClick={() => cancelLocationGen(l.id)} className="inline-flex items-center gap-1 rounded-lg bg-destructive px-2 py-1 text-destructive-foreground" data-testid="ref-location-cancel-ok"><X className="h-3.5 w-3.5" /> Да, отменить</button>
+                            <button onClick={() => setLocCancelAsk(null)} className="rounded-lg border border-border px-2 py-1" data-testid="ref-location-cancel-keep">Продолжить генерацию</button>
+                          </div>
+                        </div>
+                      )}
                       <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
                         <input value={locEdit[l.id] ?? ''} onChange={(e) => setLocEdit((t) => ({ ...t, [l.id]: e.target.value }))} placeholder="Изменить локацию по промпту…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-location-input" disabled={busy} />
                         <button onClick={() => reviseLocation(l.id)} disabled={busy || !(locEdit[l.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-location-submit" title="Изменить по промпту (после правки референс фиксируется)">
