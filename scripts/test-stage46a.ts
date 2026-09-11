@@ -1,6 +1,7 @@
 /**
  * Stage 46A checks — pacing rule in every season prompt, the approved short synopsis as a mandatory
- * outline for the season structure, fixed 30 s test-episode scenes. Pure assertions, no I/O.
+ * outline for the season structure, fixed 30 s test-episode scenes, and the full-body-first character
+ * reference chain (no more "squashed dwarf" proportions). Pure assertions, no I/O.
  * Run: npx tsx --tsconfig tsconfig.json scripts/test-stage46a.ts
  */
 import assert from "node:assert";
@@ -13,6 +14,7 @@ import {
   renderShortSynopsis, parseStoredShortSynopsis, clampEpisodeCount,
 } from "../lib/short-synopsis";
 import { buildTestEpisodeRecords, TEST_EPISODE_DURATION_SEC } from "../lib/test-episode";
+import { characterImagePrompt, characterExtraAnglePrompt, FULL_BODY_SAME_FIGURE_NOTE, CLOSEUP_FROM_FULL_NOTE } from "../lib/visual-style";
 import { SEASON_MAX_EPISODES, SEASON_MIN_EPISODES } from "../lib/season";
 
 let pass = 0;
@@ -87,6 +89,23 @@ const ok = (c: unknown, m: string) => { assert(c, m); console.log("ok:", m); pas
     assert(r.scene.durationSec === 30, `C: durationSec=${d} → 30`);
   }
   ok(true, "C: buildTestEpisodeRecords forces 30 s for any client value");
+}
+
+// ── D. Character references: full-body anchor first, close-ups derived from it ─────────────────
+{
+  const app = "Tall woman, 34, sharp cheekbones, long dark braid, grey wool coat, worn leather boots";
+  const fullSolo = characterImagePrompt(app, "full", "Mara", "MAIN", 1, false);
+  ok(/full[- ]length|head to toe|feet/i.test(fullSolo) && !fullSolo.includes(CLOSEUP_FROM_FULL_NOTE), "D: text-to-image full-length anchor asks for a head-to-toe figure");
+  const frontFromFull = characterImagePrompt(app, "front", "Mara", "MAIN", 1, true, "full");
+  ok(frontFromFull.includes(CLOSEUP_FROM_FULL_NOTE), "D: chained front close-up from the full-length anchor uses CLOSEUP_FROM_FULL_NOTE");
+  const profileFromFace = characterImagePrompt(app, "profile", "Mara", "MAIN", 1, true, "face");
+  ok(!profileFromFace.includes(CLOSEUP_FROM_FULL_NOTE) && !profileFromFace.includes(FULL_BODY_SAME_FIGURE_NOTE), "D: face→face chain keeps the legacy wording");
+  const fullFromFull = characterImagePrompt(app, "full", "Mara", "MAIN", 1, true, "full");
+  ok(fullFromFull.includes(FULL_BODY_SAME_FIGURE_NOTE) && fullFromFull.includes("SAME body proportions"), "D: full→full chain copies the figure proportions");
+  const backFromFull = characterExtraAnglePrompt(app, "Mara", 1, "full");
+  ok(backFromFull.includes(FULL_BODY_SAME_FIGURE_NOTE), "D: back full-length extra angle anchored on the full-length shot");
+  const rightFromFace = characterExtraAnglePrompt(app, "Mara", 0, "face");
+  ok(!rightFromFace.includes(FULL_BODY_SAME_FIGURE_NOTE), "D: right-profile extra angle anchored on the face reference keeps face wording");
 }
 
 console.log(`\nStage 46A: ${pass} checks passed`);
