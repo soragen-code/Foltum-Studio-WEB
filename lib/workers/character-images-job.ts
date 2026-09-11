@@ -5,6 +5,7 @@ import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from
 
 import { characterImagePrompt, characterExtraAnglePrompt, VISUAL_STYLE_ID } from "@/lib/visual-style";
 import { detectC2paFromUrl } from "@/lib/c2pa";
+import { checkFullBodyImage, fullBodyPasses } from "@/lib/full-body-check";
 import { CHARACTER_PHOTO_COUNT, REF_BATCH_CONCURRENCY, runWithConcurrency, parseImageArray } from "@/lib/reference-counts";
 
 // Stage 18: every character reference has 3 photos — the 3 canonical shots (front, profile,
@@ -20,6 +21,8 @@ const SHOT_FIELDS: Record<BaseShot, "imageFront" | "imageProfile" | "imageFull">
 };
 /** Extra angles on top of the 3 base shots — 0 in Stage 18 (character = 3 photos). */
 const EXTRA_COUNT = Math.max(0, CHARACTER_PHOTO_COUNT - BASE_SHOTS.length);
+/** Appended to the full-body prompt on the single retry after a failed vision check. */
+export const FULL_BODY_RETRY_SUFFIX = " Wider framing — step the camera further back so the shoes and the floor are clearly visible.";
 
 export interface CharacterImagesJobParams {
   jobId: string;
@@ -74,14 +77,27 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
       if (await canceled()) return;
       const chained = shot !== "front" && !!refFront;
       try {
-        const replicateUrl = await generateImage(
-          {
-            prompt: characterImagePrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize, chained),
-            aspect_ratio: ASPECT_RATIOS[shot],
-            ...(chained ? { image_input: [refFront!] } : {}),
-          },
+        const basePrompt = characterImagePrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize, chained);
+        const gen = (prompt: string) => generateImage(
+          { prompt, aspect_ratio: ASPECT_RATIOS[shot], ...(chained ? { image_input: [refFront!] } : {}) },
           { jobId, characterId: char.id, imageModel }
         );
+        let replicateUrl = await gen(basePrompt);
+        // Robustness guard for the full-body shot (people only): the chained face close-up can pull the
+        // model into a hip-cropped medium shot with an oversized head. Vision-check the result and
+        // regenerate ONCE with a wider framing; keep whichever passes (the retry if neither does).
+        // Max 2 generations per character; a failing CHECK never fails the job.
+        if (shot === "full" && char.tier !== "CROWD") {
+          const first = await checkFullBodyImage(replicateUrl);
+          console.log(`[images-job] full-body check for ${char.name} (attempt 1):`, first ? JSON.stringify(first) : "skipped");
+          if (first && !fullBodyPasses(first) && !(await canceled())) {
+            const retryUrl = await gen(basePrompt + FULL_BODY_RETRY_SUFFIX);
+            const second = await checkFullBodyImage(retryUrl);
+            console.log(`[images-job] full-body check for ${char.name} (attempt 2):`, second ? JSON.stringify(second) : "skipped");
+            // The first attempt failed the check, so the retry is kept whether or not it passes.
+            replicateUrl = retryUrl;
+          }
+        }
         const s3Key = `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/${shot}-${Date.now()}.png`;
         const url = await uploadRemoteToS3(replicateUrl, s3Key, "image/png");
         await prisma.character.update({ where: { id: char.id }, data: { [SHOT_FIELDS[shot]]: url } });

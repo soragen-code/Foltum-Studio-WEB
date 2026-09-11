@@ -34,15 +34,45 @@ export function characterImagePrompt(appearance: string, shot: "front" | "profil
   const framing = {
     front: "Close-up front portrait, the face filling the frame, facing the camera directly, eye contact, sharp facial detail.",
     profile: "Left-side profile portrait — camera on the character's LEFT side, showing the left cheek and side of the face in clean profile, soft rim lighting.",
-    full: "Full-body standing portrait from the FRONT, facing the camera, entire figure head to toe, all clothing and silhouette visible.",
+    full: FULL_BODY_FRAMING,
   }[shot];
+  const who = sanitizeVideoPrompt(appearance, { keep: [name] }).prompt;
   // Stage 21: profile/full are generated WITH the front portrait as image_input, so they must lock
   // onto that exact identity — only the camera angle/pose changes, never the face, hair or outfit.
+  // For the full-body shot the reference is a face CLOSE-UP: its identity is copied, its framing is NOT —
+  // otherwise the model inherits the tight crop and returns a medium shot with an oversized head.
   const identityLock = chained
-    ? " This is the SAME person as the reference image — keep the identical face, facial features, skin tone, hairstyle, hair colour, build, wardrobe, clothing colours and lighting as the reference; ONLY the camera angle and pose change."
+    ? shot === "full"
+      ? ` ${FULL_BODY_REFERENCE_NOTE}`
+      : " This is the SAME person as the reference image — keep the identical face, facial features, skin tone, hairstyle, hair colour, build, wardrobe, clothing colours and lighting as the reference; ONLY the camera angle and pose change."
     : "";
-  return `${VISUAL_STYLE}\nCharacter: ${sanitizeVideoPrompt(appearance, { keep: [name] }).prompt}. ${framing}${identityLock} Neutral unobtrusive background. No text or logos.`;
+  // Full-body: the framing comes FIRST and dominates the prompt — the description of the person follows.
+  if (shot === "full") {
+    return `${framing}\n${VISUAL_STYLE}\nCharacter: ${who}.${identityLock} ${FULL_BODY_PROPORTIONS} Neutral unobtrusive background. No text or logos.`;
+  }
+  return `${VISUAL_STYLE}\nCharacter: ${who}. ${framing}${identityLock} Neutral unobtrusive background. No text or logos.`;
 }
+
+/**
+ * Full-body FRONT framing — the head-to-toe reference shot. Stated first and strongly: a distant
+ * full-length figure with visible floor and headroom, never a medium shot cropped at the hips.
+ */
+export const FULL_BODY_FRAMING =
+  "FULL-BODY FULL-LENGTH SHOT, head to toe: a distant full-length standing figure photographed from the FRONT, facing the camera. " +
+  "Camera at chest height about 4–5 metres away, 50mm lens, no wide-angle distortion. " +
+  "The ENTIRE body from the top of the hair to the soles of the shoes is inside the frame, with visible floor below the feet and empty space above the head; " +
+  "the figure fills about 75–85% of the frame height. " +
+  "NOT a close-up, NOT a medium shot, NOT a portrait — no cropping at the waist, hips or knees; both feet and shoes fully visible standing on the floor. " +
+  "Standing straight, symmetric shoulders, relaxed arms at the sides, all clothing and the full silhouette visible.";
+
+/** Realistic body proportions for the full-body shot (appended after the character description). */
+export const FULL_BODY_PROPORTIONS =
+  "Realistic human proportions: the head is about 1/7–1/8 of the total body height, normal-sized head, natural shoulder width and leg length.";
+
+/** Chained full-body shot: the reference image is a face CLOSE-UP — use it for identity only. */
+export const FULL_BODY_REFERENCE_NOTE =
+  "The reference image is a CLOSE-UP of this person's face and is used ONLY for identity — copy the identical face, facial features, skin tone, hairstyle and hair colour, build and wardrobe from it. " +
+  "Do NOT copy the reference's framing, crop or scale: the reference is tightly framed, this image must be a distant full-length shot of the whole body.";
 
 /**
  * Stage 16: the 2 EXTRA angles that complete the FIXED 5-photo character set (beyond the
@@ -53,7 +83,7 @@ export function characterImagePrompt(appearance: string, shot: "front" | "profil
  */
 export const CHARACTER_EXTRA_VARIANTS = [
   "Right-side profile portrait — camera on the character's RIGHT side, showing the right cheek and side of the face in clean profile, same face, hair, wardrobe and lighting as the reference.",
-  "Full-body standing view from directly BEHIND (back view), the whole figure head to toe, showing the hairstyle and the outfit from the back, same wardrobe, colours and lighting as the reference.",
+  "FULL-BODY FULL-LENGTH SHOT from directly BEHIND (back view), head to toe: a distant full-length standing figure, camera at chest height about 4–5 metres away, 50mm lens, no wide-angle distortion. The ENTIRE body from the top of the hair to the soles of the shoes is inside the frame with visible floor below the feet and empty space above the head, the figure about 75–85% of the frame height, realistic proportions (head about 1/7–1/8 of the body height). NOT a close-up, NOT a medium shot — no cropping at the waist, hips or knees. Shows the hairstyle and the outfit from the back, same wardrobe, colours and lighting as the reference; the reference is a face close-up used ONLY for identity — do not copy its framing or scale.",
 ] as const;
 
 export function characterExtraAnglePrompt(appearance: string, name = "", index = 0): string {
