@@ -15,6 +15,7 @@ import { CHARACTER_REFERENCE_COST } from '@/lib/power-tier'
 import { IMAGE_MODELS, DEFAULT_IMAGE_MODEL, VIDEO_MODEL_LABEL, type ImageModelId } from '@/lib/ai-models'
 import { EpisodeNavGrid } from './episode-nav-grid'
 import { locationExtraLabel } from '@/lib/visual-style'
+import { episodeTotalSeconds, EPISODE_MAX_TOTAL_SECONDS } from '@/lib/season'
 
 type EpisodePhase = 'script' | 'references' | 'scenes'
 
@@ -1035,7 +1036,20 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         )}
 
         {/* Scenes */}
-        <h2 className="mt-8 font-display text-xl font-bold">Сцены ({scenes.length})</h2>
+        {/* Stage 45 — running-time budget: the whole episode must stay under 2 minutes. */}
+        {(() => {
+          const total = episodeTotalSeconds(scenes)
+          const over = total > EPISODE_MAX_TOTAL_SECONDS
+          const mmss = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+          return (
+            <div className="mt-8 flex flex-wrap items-baseline gap-x-4 gap-y-1">
+              <h2 className="font-display text-xl font-bold">Сцены ({scenes.length})</h2>
+              <span className={`text-sm ${over ? 'font-semibold text-destructive' : 'text-muted-foreground'}`} title={over ? 'Эпизод длиннее 2 минут — сократите сцены' : 'Лимит эпизода — 2 минуты'}>
+                Общая длительность: {mmss(total)} / {mmss(EPISODE_MAX_TOTAL_SECONDS)}{over ? ' — длиннее 2 минут, сократите сцены' : ''}
+              </span>
+            </div>
+          )
+        })()}
         <div className="mt-3 grid gap-4 md:grid-cols-2">
           {scenes.map((scene) => {
             const gen = !!activeGen[scene.id]

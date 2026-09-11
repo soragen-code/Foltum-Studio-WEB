@@ -105,7 +105,7 @@ const mk = (n: number, opts: { continuesFrom?: (string | undefined)[]; startCame
     ok(!/frozen still|no motion/i.test(r) && /continuing motion/i.test(r), `D: ${n}_STATE_RULE has no frozen-still wording, poses are an instant of continuing motion`);
     ok(/WORLD/.test(r) && /CAMERA/.test(r) && /at least TWO of the three/i.test(r) && /never repeat the previous framing/i.test(r), `D: ${n}_STATE_RULE: same WORLD, camera differs in ≥2 of 3`);
     ok(/mid-word or mid-sentence/i.test(r) && /~1 second before the cut/i.test(r), `D: ${n}_STATE_RULE carries the speech rule`);
-    ok(/150 words/.test(r), `D: ${n}_STATE_RULE keeps the ≥150 words requirement`);
+    ok(/AT LEAST 300 words/.test(r), `D: ${n}_STATE_RULE carries the (Stage 45 doubled) ≥300 words requirement`);
   }
   ok(/architecture, materials, surfaces/i.test(FRAME_STATE_ASPECTS), "D: WORLD block demands a detailed location description");
   const sys = episodeScriptSystemPrompt("en", 1);

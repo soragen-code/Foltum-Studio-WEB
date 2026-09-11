@@ -35,6 +35,8 @@ import {
   ensureEnglishDialogue,
   normalizeEpisodeScript,
   renderEpisodeScriptText,
+  episodeTotalSeconds,
+  EPISODE_MAX_TOTAL_SECONDS,
   SEASON_DEFAULT_EPISODES,
   type EpisodeOutline,
   type EpisodeScript,
@@ -74,6 +76,8 @@ export type SeasonJobState = {
   skipFullStory?: boolean;
   /** Author-requested rewrite of specific (already written) episodes. */
   revise?: { episodeIds: string[]; instruction: string; force?: boolean };
+  /** Stage 45 — advisory notes shown with the final job message (e.g. an episode over the 2-minute budget). */
+  warnings?: string[];
 };
 
 /** Two pollers must not advance the same job at once; a stuck lock expires after this long. */
@@ -402,7 +406,8 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
   if (planned.step === "done") {
     if (season) await prisma.season.update({ where: { id: season.id }, data: { status: "script_ready" } });
     await saveState(jobId, { ...state, step: "done", remaining: 0, total: curTotal, done: true });
-    await completeJob(jobId, { ...state, step: "done", remaining: 0, total: curTotal, done: true, lockedAt: undefined }, "Сценарий сезона готов");
+    const note = state.warnings?.length ? ` · ${state.warnings.join("; ")}` : "";
+    await completeJob(jobId, { ...state, step: "done", remaining: 0, total: curTotal, done: true, lockedAt: undefined }, `Сценарий сезона готов${note}`);
     return;
   }
 
@@ -489,6 +494,12 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
     const outline = outlineFromEpisode(ep);
     // Seedance voices `dialogue` → it must be English; swap swapped fields / translate leftovers (short gpt-4o pass).
     const script = await ensureEnglishDialogue(validateEpisode(raw, ep.number, cards), deps.chatJSON);
+    // Stage 45 — the 2-minute budget is enforced by normalize where speech allows; what is left over is
+    // shown to the author instead of failing the job (no line of dialogue is ever cut to make it fit).
+    const total = episodeTotalSeconds(script.scenes);
+    const overNote = `эпизод ${ep.number} длиннее 2 минут (${total} с) — сократите сцены`;
+    state.warnings = (state.warnings ?? []).filter((w) => !w.startsWith(`эпизод ${ep.number} `));
+    if (total > EPISODE_MAX_TOTAL_SECONDS) state.warnings.push(overNote);
     await persistEpisodeScript(ep.id, outline, script, project.characters.map((c) => ({ id: c.id, name: c.name })), language);
     return loadSeason(projectId);
   }

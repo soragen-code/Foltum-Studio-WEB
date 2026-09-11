@@ -8,7 +8,8 @@ assert(spokenWordCount(talk) > 40, `spoken words = ${spokenWordCount(talk)} (no 
 assert(dialogueSentenceCount(talk) >= 5 && dialogueSentenceCount(talk) <= 7, `dialogue sentences = ${dialogueSentenceCount(talk)}`);
 assert(dialogueSentenceCount("[NO DIALOGUE]") === 0, "silent scene has 0 sentences");
 const ok = normalizeEpisodeScript(episodeScriptSchema.parse({ visualIdentity: "photoreal cinematic", scenes: mk(12) }));
-assert(validateEpisodeScript(ok).length === 0, "12-scene episode valid");
+// Stage 45: a 12-scene talking episode cannot fit the 2-minute budget → only the soft over-budget note remains.
+assert(hardProblems(validateEpisodeScript(ok)).length === 0 && validateEpisodeScript(ok).every((p) => p.startsWith("soft: episode total")), "12-scene episode valid (only the soft 2-minute note)");
 // Stage 4: the script (not the author) decides the length — 6–15 scenes, durationSec derived from dialogue.
 assert(episodeScriptSchema.safeParse({ visualIdentity: "photoreal cinematic", scenes: mk(EPISODE_MIN_SCENES) }).success, `${EPISODE_MIN_SCENES} scenes accepted`);
 assert(!episodeScriptSchema.safeParse({ visualIdentity: "photoreal cinematic", scenes: mk(5) }).success, "5 scenes rejected");
@@ -26,7 +27,8 @@ assert(hardProblems(validateEpisodeScript(shortEp)).length === 0, `short scenes 
 const withLocal = normalizeEpisodeScript(episodeScriptSchema.parse({ visualIdentity: "photoreal cinematic", scenes: mk(6).map((s) => ({ ...s, dialogue: 'ANNA (softly): "You knew from the very start and stayed silent all this time?"\nMARK (sharply): "I stayed silent because otherwise you would have left that winter."\nANNA: "Maybe that would have been more honest than this lie."', dialogueLocal: talk })) }));
 assert(withLocal.scenes[0].dialogueLocal === talk, "dialogueLocal preserved by normalize");
 assert(/ALWAYS in ENGLISH/.test(episodeScriptSystemPrompt("ru")) && /dialogueLocal/.test(episodeScriptSystemPrompt("ru")) && !/dialogueLocal/.test(episodeScriptSystemPrompt("en")), "episode prompt: EN speech + local subtitles only for non-EN");
-assert(/Nobody sets a running time/.test(episodeScriptSystemPrompt("ru")) && /Western names/.test(episodeScriptSystemPrompt("ru")), "episode prompt: no running time asked, Western names");
+// Stage 45: the author still sets no running time per scene, but the episode has a hard 2-minute budget.
+assert(/HARD RUNNING-TIME BUDGET/.test(episodeScriptSystemPrompt("ru")) && /Western names/.test(episodeScriptSystemPrompt("ru")), "episode prompt: 2-minute budget, Western names");
 assert(/natural conversational rhythm/.test(PACE_DIRECTION) && !/NO pauses/.test(PACE_DIRECTION) && /2–4 cuts/.test(PACE_DIRECTION) && episodeScriptSystemPrompt("ru").includes(PACE_DIRECTION), "pace/camera/expression direction in prompt (natural tempo, no speed-forcing)");
 // stage7: масштаб/объём сцен + бытовые действия персонажей в промптах эпизода и трейлера
 assert(/SCALE & DEPTH/.test(SCALE_DEPTH_RULE) && /SPACIOUS/.test(SCALE_DEPTH_RULE) && /WIDE or ESTABLISHING/.test(SCALE_DEPTH_RULE) && /foreground/.test(SCALE_DEPTH_RULE), "SCALE_DEPTH_RULE: spacious, wide/establishing, depth");
