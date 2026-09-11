@@ -3,9 +3,16 @@
  *
  * Used by episode assembly: every scene clip gets a UNIFORM audio track
  * (legacy separate audio if present, otherwise the clip's own audio, otherwise
- * silence), then all clips are concatenated. Doing this locally — instead of
+ * silence), then all clips are joined. Doing this locally — instead of
  * through a remote ffmpeg model — guarantees the final file keeps its audio
  * stream; the previous remote concatenation silently dropped it.
+ *
+ * Stage 43 — DEFAULT join mode is the «seamless hard cut» (`seamlessCutClips`): a plain
+ * editorial cut with an invisible micro-blend on the seam itself (video xfade of
+ * SEAMLESS_BLEND_SEC ≈ 2–3 frames, audio acrossfade of the same length so there is no click
+ * and no gap). The older FILM-bridge (`stitchWithAiBridges`) and visible-dissolve
+ * (`crossfadeClips`) paths are kept but are only used when explicitly requested via
+ * `AssembleOptions.mode`.
  */
 import { execFile } from "child_process";
 import { promises as fs } from "fs";
@@ -344,6 +351,148 @@ async function concatClips(clips: string[], workDir: string, outPath: string): P
 }
 
 /* ------------------------------------------------------------------ */
+/*  Stage 43 — seamless hard cut (default join mode)                    */
+/* ------------------------------------------------------------------ */
+
+/** How consecutive scene clips are joined into an episode. */
+export type StitchMode = "seamless-cut" | "film" | "crossfade" | "concat";
+/** Default: a straight editorial cut with an invisible micro-blend on the seam. */
+export const DEFAULT_STITCH_MODE: StitchMode = "seamless-cut";
+
+/**
+ * Length of the micro-blend on every seam, in seconds — used for BOTH the video `xfade`
+ * and the audio `acrossfade` so the two streams overlap identically and stay in sync.
+ * 0.08s ≈ 2 frames @ 24fps / 2.4 frames @ 30fps: far too short to read as a dissolve, but
+ * enough to soften the single-frame "jerk" of a hard cut and to kill the audio click / gap.
+ * HARD LIMIT: must stay ≤ 0.12s (video) and ≤ 0.08s (audio) — see scripts/test-stage43.ts.
+ */
+export const SEAMLESS_BLEND_SEC = 0.08;
+export const SEAMLESS_BLEND_MAX_VIDEO_SEC = 0.12;
+export const SEAMLESS_BLEND_MAX_AUDIO_SEC = 0.08;
+
+export interface SeamlessCutGraph {
+  /** ffmpeg `-filter_complex` string; outputs are `[vout]` and `[aout]`. */
+  filter: string;
+  /** Blend actually used on every seam (s). */
+  blend: number;
+  /** Expected output duration: sum(clip durations) − (N−1)·blend. */
+  expectedDuration: number;
+  /** Seam positions in the OUTPUT timeline (start of each blend), for markers / music offsets. */
+  seamOffsets: number[];
+  width: number;
+  height: number;
+  fps: number;
+}
+
+/**
+ * Pure builder for the seamless-cut filtergraph (unit-testable, no ffmpeg run).
+ * Every input is normalized to the geometry / fps / timebase of the first clip (xfade needs
+ * identical size, fps and timebase), then N−1 chained `xfade=transition=fade` + `acrossfade`
+ * filters join them with a `blend`-second overlap each. The k-th seam starts at
+ * `sum(d_0..d_{k-1}) − k·blend` in the output.
+ */
+export function buildSeamlessCutGraph(infos: MediaInfo[], blend: number = SEAMLESS_BLEND_SEC): SeamlessCutGraph {
+  const n = infos.length;
+  if (n < 2) throw new Error("buildSeamlessCutGraph needs at least 2 clips");
+  const ref = infos[0];
+  const w = ref.width || 720;
+  const h = ref.height || 1280;
+  const fps = ref.fps > 0 ? Math.round(ref.fps) : 24;
+  // Clamp: never longer than the hard limits, never more than 1/4 of the shortest clip.
+  const minDur = Math.min(...infos.map((i) => i.duration).filter((d) => d > 0));
+  const d = Math.max(
+    0.01,
+    Math.min(blend, SEAMLESS_BLEND_MAX_AUDIO_SEC, SEAMLESS_BLEND_MAX_VIDEO_SEC, (Number.isFinite(minDur) ? minDur : blend) / 4)
+  );
+
+  const parts: string[] = [];
+  for (let i = 0; i < n; i++) {
+    parts.push(
+      `[${i}:v:0]scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
+        `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,setpts=PTS-STARTPTS,fps=${fps},format=yuv420p,settb=AVTB[v${i}]`
+    );
+    parts.push(`[${i}:a:0]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,asetpts=PTS-STARTPTS[a${i}]`);
+  }
+
+  let vPrev = "v0";
+  let aPrev = "a0";
+  let elapsed = infos[0].duration;
+  const seamOffsets: number[] = [];
+  for (let i = 1; i < n; i++) {
+    const offset = Math.max(0, elapsed - d);
+    seamOffsets.push(offset);
+    const vOut = i === n - 1 ? "vout" : `vx${i}`;
+    const aOut = i === n - 1 ? "aout" : `ax${i}`;
+    parts.push(`[${vPrev}][v${i}]xfade=transition=fade:duration=${d.toFixed(3)}:offset=${offset.toFixed(3)}[${vOut}]`);
+    parts.push(`[${aPrev}][a${i}]acrossfade=d=${d.toFixed(3)}:c1=tri:c2=tri[${aOut}]`);
+    vPrev = vOut;
+    aPrev = aOut;
+    elapsed = elapsed + infos[i].duration - d;
+  }
+  return { filter: parts.join(";"), blend: d, expectedDuration: elapsed, seamOffsets, width: w, height: h, fps };
+}
+
+/**
+ * Join uniform clips with a seamless hard cut (see SEAMLESS_BLEND_SEC). Clips keep their full
+ * length except for the `blend` overlap on each seam; no edge afades are applied (the
+ * acrossfade alone removes the click), no bridge frames are synthesized.
+ */
+async function seamlessCutClips(clips: string[], infos: MediaInfo[], outPath: string): Promise<SeamlessCutGraph> {
+  const g = buildSeamlessCutGraph(infos);
+  await runFfmpeg(
+    [
+      ...clips.flatMap((c) => ["-i", c]),
+      "-filter_complex", g.filter,
+      "-map", "[vout]", "-map", "[aout]",
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-r", String(g.fps),
+      "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+      "-movflags", "+faststart",
+      outPath,
+    ],
+    "seamless hard cut"
+  );
+  return g;
+}
+
+/**
+ * Local helper for manual checks on real clips: join a list of mp4 FILES (already on disk)
+ * into `outPath` with the default seamless hard cut. Each clip is first normalized (uniform
+ * AAC audio; a silent track is added when a clip has none), then joined.
+ * Example: npx tsx --tsconfig tsconfig.json -e 'import("./lib/ffmpeg").then(m => m.stitchLocalClipsSeamless(["a.mp4","b.mp4","c.mp4"], "out.mp4").then(r => console.log(r)))'
+ */
+export async function stitchLocalClipsSeamless(
+  files: string[],
+  outPath: string
+): Promise<{ outputPath: string; info: MediaInfo; blend: number; expectedDuration: number; seamOffsets: number[] }> {
+  if (files.length === 0) throw new Error("No clips to stitch");
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "stitch-"));
+  try {
+    const normalized: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const out = path.join(workDir, `clip_${String(i + 1).padStart(3, "0")}.mp4`);
+      await normalizeClip(path.resolve(files[i]), null, out);
+      normalized.push(out);
+    }
+    const infos = await Promise.all(normalized.map((c) => probeMedia(c)));
+    let blend = 0;
+    let expectedDuration = infos.reduce((a, i) => a + i.duration, 0);
+    let seamOffsets: number[] = [];
+    if (normalized.length === 1) {
+      await fs.copyFile(normalized[0], outPath);
+    } else {
+      const g = await seamlessCutClips(normalized, infos, outPath);
+      blend = g.blend;
+      expectedDuration = g.expectedDuration;
+      seamOffsets = g.seamOffsets;
+    }
+    const info = await probeMedia(outPath);
+    return { outputPath: outPath, info, blend, expectedDuration, seamOffsets };
+  } finally {
+    await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  AI-seamless stitching (FILM frame interpolation at every seam)     */
 /* ------------------------------------------------------------------ */
 
@@ -358,7 +507,13 @@ interface SeamBridge {
 export type InterpolateFn = (frame1: Buffer, frame2: Buffer) => Promise<string>;
 
 export interface AssembleOptions {
-  /** Override the frame-interpolation backend (tests inject a mock / throwing fn). */
+  /**
+   * Join mode. Default "seamless-cut" (Stage 43): straight cut + invisible micro-blend, no AI
+   * bridges, no visible dissolves. "film" = legacy FILM bridges (falls back to crossfade/concat),
+   * "crossfade" = visible 0.2s dissolves, "concat" = raw hard cut.
+   */
+  mode?: StitchMode;
+  /** Override the frame-interpolation backend (tests inject a mock / throwing fn). Only used in mode "film". */
   interpolate?: InterpolateFn;
   /** FILM depth: 2^t + 1 frames @ 30fps. Default 3 (≈0.3s bridge). */
   timesToInterpolate?: number;
@@ -550,9 +705,9 @@ async function stitchWithAiBridges(
 
 /**
  * Download all scene clips (+ voiceovers), give every clip a uniform audio track and join
- * them into one seamless episode. Each seam is smoothed with an AI-synthesized FILM bridge
- * (invisible transition); any seam the model can't bridge degrades to a plain cut, and if the
- * whole AI pass yields no bridge the join falls back to the classic crossfade/hard-cut path.
+ * them into one episode. Default mode (Stage 43) is the seamless hard cut — a straight cut
+ * with an invisible ~0.08s video/audio micro-blend on the seam, no AI bridges. Legacy modes
+ * ("film", "crossfade", "concat") are selectable via `opts.mode`.
  * Caller must `fs.rm(result.workDir, { recursive: true })`.
  */
 export async function assembleEpisodeLocally(scenes: SceneClipInput[], opts: AssembleOptions = {}): Promise<AssembleResult> {
@@ -587,18 +742,34 @@ export async function assembleEpisodeLocally(scenes: SceneClipInput[], opts: Ass
   const infos = await Promise.all(normalized.map((c) => probeMedia(c)));
 
   const joinedPath = path.join(workDir, "joined.mp4");
+  const mode: StitchMode = opts.mode ?? DEFAULT_STITCH_MODE;
   if (normalized.length === 1) {
     await fs.copyFile(normalized[0], joinedPath);
-  } else {
-    // Primary: AI-seamless join (FILM bridge at every seam). Best-effort — any failure
-    // (whole pass or "no seam bridged") drops through to the classic crossfade/hard-cut path,
-    // so the assembly ALWAYS completes.
-    let bridged = false;
+  } else if (mode === "seamless-cut") {
+    // DEFAULT (Stage 43): straight cut with an invisible micro-blend on the seam. No FILM call,
+    // no visible dissolve. If the ultra-short xfade fails for any reason → frame-exact concat.
     try {
-      bridged = await stitchWithAiBridges(normalized, infos, workDir, joinedPath, opts);
+      const g = await seamlessCutClips(normalized, infos, joinedPath);
+      console.log(`[ffmpeg] seamless cut: ${normalized.length} clips, blend=${g.blend.toFixed(3)}s, expected=${g.expectedDuration.toFixed(2)}s`);
     } catch (err) {
-      console.warn("[ffmpeg] AI-seamless stitch failed — falling back:", (err as Error).message);
-      bridged = false;
+      console.warn("[ffmpeg] seamless cut failed — falling back to hard concat:", (err as Error).message);
+      await fs.rm(joinedPath, { force: true });
+      await concatClips(normalized, workDir, joinedPath);
+    }
+  } else if (mode === "concat") {
+    await concatClips(normalized, workDir, joinedPath);
+  } else {
+    // Legacy modes — "film": AI-seamless join (FILM bridge at every seam), best-effort; any
+    // failure (whole pass or "no seam bridged") drops through to the crossfade/hard-cut path.
+    // "crossfade": visible 0.2s dissolves. Assembly ALWAYS completes.
+    let bridged = false;
+    if (mode === "film") {
+      try {
+        bridged = await stitchWithAiBridges(normalized, infos, workDir, joinedPath, opts);
+      } catch (err) {
+        console.warn("[ffmpeg] AI-seamless stitch failed — falling back:", (err as Error).message);
+        bridged = false;
+      }
     }
     if (!bridged) {
       await fs.rm(joinedPath, { force: true });

@@ -5,10 +5,10 @@
  *   1. the background «Ассембл» job (episode_assemble) in /api/ai/assemble-episode/polish, and
  *   2. the standalone POST /api/ai/assemble-episode route (kept for backward compat).
  *
- * It downloads every scene clip, muxes voiceovers, joins them with local ffmpeg —
- * smoothing every scene seam with an AI-synthesized FILM frame-interpolation bridge so
- * the episode reads as one continuous take — uploads the result to S3 and stores
- * `episode.videoUrl` + `status='assembled'`.
+ * It downloads every scene clip, muxes voiceovers, joins them with local ffmpeg using the
+ * default seamless hard cut (Stage 43: a straight cut with an invisible ~0.08s video/audio
+ * micro-blend on the seam — no AI bridges, no visible dissolves; nothing is charged for the
+ * join), uploads the result to S3 and stores `episode.videoUrl` + `status='assembled'`.
  */
 import { promises as fs } from "fs";
 import { prisma } from "@/lib/db";
@@ -38,7 +38,7 @@ export async function assembleEpisodeVideo(episodeId: string): Promise<{ videoUr
     if (scenes.some((s) => !validUrl(s.videoUrl)))
       throw new Error("Не все сцены имеют сгенерированное видео");
 
-    // Mux voiceovers + concatenate with local ffmpeg (audio-preserving).
+    // Mux voiceovers + join with local ffmpeg (audio-preserving, default seamless hard cut).
     const result = await assembleEpisodeLocally(
       scenes.map((s) => ({
         videoUrl: s.videoUrl as string,

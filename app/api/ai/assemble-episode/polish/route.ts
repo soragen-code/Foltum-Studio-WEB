@@ -175,7 +175,7 @@ export async function POST(request: Request) {
           message:
             phase === "regen"
               ? `Перегенерация проблемных сцен… ${done}/${total}${failed > 0 ? ` · не удалось ${failed}` : ""}`
-              : "Бесшовная склейка стыков ИИ…",
+              : "Склейка сцен прямым стыком…",
           resultData: buildAssembleResult({ episodeId, phase, issues, done, total, failed }),
         });
 
@@ -183,7 +183,7 @@ export async function POST(request: Request) {
       if (shouldStitchWithoutCharge(selection.length)) {
         await updateJob(jobId, {
           progress: assembleProgress("stitching"),
-          message: "Бесшовная склейка стыков ИИ…",
+          message: "Склейка сцен прямым стыком…",
           resultData: buildAssembleResult({ episodeId, phase: "stitching", issues: [], done: 0, total: 0, failed: 0 }),
         });
         try {
@@ -290,7 +290,7 @@ export async function POST(request: Request) {
       // ── (c) Stitch ─────────────────────────────────────────────────────────────────────────
       await updateJob(jobId, {
         progress: assembleProgress("stitching"),
-        message: "Бесшовная склейка стыков ИИ…",
+        message: "Склейка сцен прямым стыком…",
         resultData: buildAssembleResult({ episodeId, phase: "stitching", issues, done: total, total, failed: 0 }),
       });
       let videoUrl: string;
