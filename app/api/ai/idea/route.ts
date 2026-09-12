@@ -72,52 +72,16 @@ export async function POST(request: Request) {
     }
     if (!result) return NextResponse.json({ error: "AI returned an invalid result: " + lastError }, { status: 502 });
 
-    // Second call: the extended cast (supporting incl. family, minor, crowd groups). Non-fatal —
-    // the producer can always press «Добавить ещё персонажей».
-    let extra: CharacterCard[] = [];
-    let castWarning = "";
-    for (let attempt = 0; attempt < 2 && extra.length === 0; attempt++) {
-      try {
-        const raw = await chatJSON(
-          castExpansionSystemPrompt(result.language),
-          castExpansionUserPrompt(result.synopsis, result.characters),
-          { temperature: 0.8, maxTokens: 6000 }
-        );
-        extra = normalizeCastExpansion(raw, result.characters.map((c) => c.name));
-      } catch (e: any) {
-        castWarning = e?.message ?? String(e);
-        console.warn(`[idea] cast expansion attempt ${attempt + 1} failed:`, castWarning);
-      }
-    }
-    const cast = [...result.characters, ...extra];
-
-    // Fallback: the model sometimes drops "locations" — extract them from the synopsis (non-fatal).
-    if (result.locations.length === 0) {
-      try {
-        const raw = await chatJSON(
-          locationsFromSynopsisSystemPrompt(result.language),
-          `SYNOPSIS:\n${result.synopsis}\n\nCAST:\n${cast.map((c) => `- ${c.name} — ${c.role}`).join("\n")}`,
-          { temperature: 0.7, maxTokens: 3000 }
-        );
-        result.locations = dedupeCast(locationsResultSchema.parse(raw).locations).map(sanitizeLocationCard);
-      } catch (e: any) {
-        console.warn("[idea] locations fallback failed:", e?.message ?? e);
-      }
-    }
-
+    // Stage 59 (step 1 «Идея»): this step ONLY produces the synopsis. The full season cast and
+    // locations are generated later, from the APPROVED synopsis, inside the season-script job — so
+    // we intentionally do NOT create any character/location rows here, and advance the project to
+    // the synopsis step so the wizard auto-renders the synopsis screen next.
     await prisma.$transaction(async (tx) => {
-      await tx.character.deleteMany({ where: { projectId } });
-      for (const c of cast) {
-        await tx.character.create({ data: { projectId, ...characterCardToData(c), status: "draft", imageFront: "", imageProfile: "", imageFull: "" } });
-      }
-      await tx.location.deleteMany({ where: { projectId } });
-      for (const l of result!.locations) {
-        await tx.location.create({ data: { projectId, name: l.name, description: l.description, visualPrompt: l.visualPrompt, visualPromptAuto: l.visualPrompt } });
-      }
       await tx.project.update({
         where: { id: projectId },
         data: {
           idea: ideaForStore, synopsis: result!.synopsis, language: result!.language, synopsisApproved: false,
+          stage: "synopsis",
           // Stage 40: the project is named automatically from the plot (model title → first words of the idea/synopsis).
           name: resolveProjectName(result!.title, fromStory ? storyText : (idea && idea.trim()) ? idea : result!.synopsis),
           ...(episodeCountToStore !== undefined ? { episodeCount: episodeCountToStore } : {}),
@@ -125,10 +89,8 @@ export async function POST(request: Request) {
       });
     }, { timeout: 30_000 });
 
-    const characters = await prisma.character.findMany({ where: { projectId }, orderBy: { createdAt: "asc" } });
-    const locations = await prisma.location.findMany({ where: { projectId }, orderBy: { createdAt: "asc" } });
     const renamed = await prisma.project.findUnique({ where: { id: projectId }, select: { name: true } });
-    return NextResponse.json({ synopsis: result.synopsis, language: result.language, projectName: renamed?.name ?? null, characters, locations, castWarning: extra.length ? "" : castWarning });
+    return NextResponse.json({ synopsis: result.synopsis, language: result.language, projectName: renamed?.name ?? null });
   } catch (err: any) {
     console.error("Idea generation error:", err);
     return NextResponse.json({ error: "Generation failed: " + (err?.message ?? "Unknown error") }, { status: 500 });

@@ -17,8 +17,11 @@ import { motion } from 'framer-motion'
 
 function isNewFlow(project: any): boolean {
   if (!project) return false
+  // Stage 59: durable marker set on creation — the only reliable signal at stage=synopsis/early-structure
+  // (where charactersApproved is still false in the new 4-step flow).
+  if (project.newFlow) return true
   if (project.stage === 'idea' || project.stage === 'references') return true
-  // A new-flow project that already moved on to structure/scenes still has charactersApproved set.
+  // A legacy new-flow project that already moved on to structure/scenes still has charactersApproved set.
   return Boolean(project.charactersApproved)
 }
 

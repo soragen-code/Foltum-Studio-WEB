@@ -168,8 +168,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // Old episodes that already have generated scenes open straight on the scenes step.
   const [phase, setPhase] = useState<EpisodePhase>(() => {
     const anyScene = ((initial.scenes ?? []) as Scene[]).some((s) => validUrl(s.videoUrl))
-    // Open on «Референсы» by default; only jump straight to «Сцены» when the episode already has generated video.
-    return anyScene || validUrl(initial.videoUrl) ? 'scenes' : 'references'
+    // Stage 59 (step 4): tabs are ordered Сценарий → Референсы → Сцены, so an unfilled episode opens on
+    // «Сценарий» by default; only jump straight to «Сцены» when the episode already has generated video.
+    return anyScene || validUrl(initial.videoUrl) ? 'scenes' : 'script'
   })
   const goPhase = (p: EpisodePhase) => { setPhase(p); if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' }) }
 
@@ -830,7 +831,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
 
         {/* Stage 14 (D): guided steps — script → references → scenes */}
         <div className="mt-4 flex flex-wrap items-center gap-2 text-xs" data-testid="phase-steps">
-          {(([['references', '1 · Референсы'], ['script', '2 · Сценарий'], ['scenes', '3 · Сцены']]) as [EpisodePhase, string][]).map(([key, label]) => {
+          {(([['script', '1 · Сценарий'], ['references', '2 · Референсы'], ['scenes', '3 · Сцены']]) as [EpisodePhase, string][]).map(([key, label]) => {
             const reached = key === 'script' || key === 'references' || refsReady || scenes.some((s) => validUrl(s.videoUrl))
             const active = phase === key
             return (
@@ -854,13 +855,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <div className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="phase-script">
             <h2 className="mb-3 font-display text-xl font-bold">Сценарий эпизода</h2>
             <BookScript text={episode.script} scenes={scenes} />
-            {/* Stage 21 navigation — Сценарий is step 2: back to references · forward to scenes. */}
-            <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-              <button onClick={() => goPhase('references')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="script-to-references">
-                <ArrowLeft className="h-4 w-4" /> Референсы
-              </button>
-              <button onClick={() => goPhase('scenes')} disabled={!refsReady} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="script-to-scenes" title={refsReady ? '' : 'Сначала сгенерируйте все референсы эпизода'}>
-                К сценам <ArrowRight className="h-4 w-4" />
+            {/* Stage 59 navigation — Сценарий is step 1: single forward button to references. */}
+            <div className="mt-5 flex flex-wrap items-center justify-end gap-3 border-t border-border pt-4">
+              <button onClick={() => goPhase('references')} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:brightness-110" data-testid="script-to-references">
+                К референсам <ArrowRight className="h-4 w-4" />
               </button>
             </div>
           </div>
@@ -1058,11 +1056,14 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             {refLocs.length === 0 && <p className="text-sm text-muted-foreground">У эпизода нет привязанных локаций.</p>}
           </div>
 
-          {/* Stage 21 navigation — Референсы is step 1: only a forward button to the script.
-              Enabled once all references (characters + locations) are ready. */}
-          <div className="mt-5 flex flex-wrap items-center justify-end gap-3 border-t border-border pt-4">
-            <button onClick={() => goPhase('script')} disabled={!refsReady} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="refs-to-script" title={refsReady ? '' : 'Сначала сгенерируйте все референсы эпизода'}>
-              К сценарию <ArrowRight className="h-4 w-4" />
+          {/* Stage 59 navigation — Референсы is step 2: back to script · forward to scenes.
+              The forward button is enabled once all references (characters + locations) are ready. */}
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+            <button onClick={() => goPhase('script')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="refs-to-script">
+              <ArrowLeft className="h-4 w-4" /> Сценарий
+            </button>
+            <button onClick={() => goPhase('scenes')} disabled={!refsReady} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="refs-to-scenes" title={refsReady ? '' : 'Сначала сгенерируйте все референсы эпизода'}>
+              К сценам <ArrowRight className="h-4 w-4" />
             </button>
           </div>
         </section>
@@ -1072,8 +1073,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         {phase === 'scenes' && (
         <>
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
-          <button onClick={() => goPhase('script')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted" data-testid="back-to-script">
-            <ArrowLeft className="h-4 w-4" /> Сценарий
+          {/* Stage 59 navigation — Сцены is step 3: back to references. */}
+          <button onClick={() => goPhase('references')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted" data-testid="back-to-references">
+            <ArrowLeft className="h-4 w-4" /> Референсы
           </button>
           {/* Stage 39 — «Сгенерировать все сцены»: every pending / failed scene is started at once (parallel). */}
           {!allReady && (

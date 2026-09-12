@@ -51,6 +51,68 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
     finally { setApproving(false) }
   }
 
+  // Stage 59 (step 2 «Синопсис»): in the new 4-step flow the synopsis already exists (written at the
+  // idea step). This screen shows ONLY the synopsis — no "your idea" panel, no cast/locations — with an
+  // optional correction and an «Одобрить синопсис» button that advances to the season-story step.
+  const isNew = Boolean(project?.newFlow)
+
+  if (isNew) {
+    return (
+      <div className="space-y-6">
+        <div className="rounded-xl border border-border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
+          <h2 className="mb-2 font-display text-xl font-bold">Шаг 2 — Синопсис</h2>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Проверьте синопсис сезона. Можно отредактировать его прямо в тексте или попросить ИИ переписать с замечанием. Когда всё устроит — нажмите «Одобрить синопсис», и мы перейдём к сюжету сезона (персонажи, локации и сценарий).
+          </p>
+
+          {error && <div className="mb-4 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
+
+          <textarea
+            rows={12}
+            value={synopsis}
+            onChange={(e) => setSynopsis(e.target.value)}
+            placeholder="Синопсис сезона..."
+            className="mb-4 w-full rounded-lg border border-input bg-background p-3 text-sm leading-relaxed outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
+            data-testid="synopsis-text"
+          />
+
+          <div className="mb-4">
+            <label className="mb-1 block text-sm font-medium">Замечание для переписывания (необязательно)</label>
+            <textarea
+              rows={2}
+              placeholder="Сделать драматичнее, убрать счастливый финал, добавить семейную линию..."
+              value={correctionPrompt}
+              onChange={(e) => setCorrectionPrompt(e.target.value)}
+              className="w-full rounded-lg border border-input bg-background p-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
+              data-testid="synopsis-correction"
+            />
+            {correctionPrompt.trim() && (
+              <button
+                onClick={generate}
+                disabled={generating}
+                className="mt-2 flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
+                data-testid="synopsis-regenerate"
+              >
+                {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+                Переписать синопсис
+              </button>
+            )}
+          </div>
+
+          <button
+            onClick={approve}
+            disabled={approving || generating || !synopsis.trim()}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50 sm:w-auto"
+            data-testid="synopsis-approve"
+          >
+            {approving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+            Одобрить синопсис
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
       <div className="rounded-xl border border-border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>

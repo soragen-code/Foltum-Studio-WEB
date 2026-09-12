@@ -522,10 +522,11 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
       })
       const data = await res.json()
       if (!res.ok) { setError(data?.error ?? 'Не удалось сгенерировать'); return }
-      setResult({ synopsis: data.synopsis ?? '', language: data.language ?? '', characters: data.characters ?? [], locations: data.locations ?? [] })
-      if (data.castWarning) setNotice('Расширенный каст не удалось сгенерировать автоматически — нажмите «Добавить ещё персонажей».')
-      // Stage 46A: no auto-chain into the season script — write the SHORT synopsis for approval first.
-      await generateShortSynopsis()
+      // Stage 59 (step 1 «Идея»): the idea step now produces ONLY the synopsis and the route advances
+      // the project to stage="synopsis". Refresh so the wizard auto-renders the synopsis screen (step 2).
+      // The cast and locations are generated later, at the season-story step, from the approved synopsis.
+      setResult({ synopsis: data.synopsis ?? '', language: data.language ?? '', characters: [], locations: [] })
+      onRefresh()
     } catch (e: any) {
       // Stage 11: the author canceled — the request is abandoned, nothing was saved or charged.
       if (e?.name === 'AbortError') setIdeaCanceled(true)
@@ -565,7 +566,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
           <Lightbulb className="h-5 w-5 text-primary" /> Шаг 1 — Идея
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Опишите свою идею — или выберите режим «Авто», и ИИ сам придумает оригинальную историю по выбранному жанру. Мы напишем синопсис, персонажей и локации, а затем сразу начнём полный сценарий сезона со сценами и диалогами.
+          Опишите свою идею — или выберите режим «Авто», и ИИ сам придумает оригинальную историю по выбранному жанру. На этом шаге мы составим только синопсис сезона: вы одобрите его на следующем шаге, а персонажей, локации и сценарий сгенерируем позже.
         </p>
 
         {/* Mode toggle: своя идея / авто */}
@@ -767,7 +768,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
         </button>}
         {generating && !chaining && (
           <div className="mt-2 flex items-center justify-between gap-2" data-testid="idea-progress">
-            <p className="min-w-0 text-xs text-muted-foreground">Шаг 1 из 2 · обычно 40–90 секунд: синопсис, локации и полный каст (главные, семья и окружение, эпизодические, массовка)...</p>
+            <p className="min-w-0 text-xs text-muted-foreground">Шаг 1 из 4 · обычно 30–60 секунд: составляю синопсис сезона...</p>
             <CancelButton onCancel={cancelIdea} testId="idea-cancel" className="flex-shrink-0" />
           </div>
         )}
@@ -782,72 +783,9 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
         )}
       </div>
 
-      {hasResult && !generating && !chaining && (
-        <>
-          {/* Stage 46A — short synopsis: approve → season script, or rework with a comment. */}
-          <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }} data-testid="short-synopsis">
-            <h2 className="flex items-center gap-2 font-display text-xl font-bold"><FileText className="h-5 w-5 text-primary" /> Краткий синопсис сезона</h2>
-            {shortSynopsis ? (
-              <>
-                <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed" data-testid="short-synopsis-premise">{shortSynopsis.premise}</p>
-                <ol className="mt-3 space-y-1.5 text-sm" data-testid="short-synopsis-episodes">
-                  {shortSynopsis.episodes.map((e) => (
-                    <li key={e.number} className="flex gap-2"><span className="w-6 flex-shrink-0 font-semibold text-muted-foreground">{e.number}.</span><span>{e.logline}</span></li>
-                  ))}
-                </ol>
-                <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-                  <button
-                    onClick={approve}
-                    disabled={busy}
-                    className="flex flex-1 items-center justify-center gap-2 rounded-lg bg-primary py-3 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
-                    data-testid="approve-idea"
-                  >
-                    {approving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                    Одобрить и написать сценарий
-                  </button>
-                  <button
-                    onClick={() => setReworkOpen((v) => !v)}
-                    disabled={busy}
-                    className="flex items-center justify-center gap-2 rounded-lg border border-border px-5 py-3 text-sm font-semibold transition hover:bg-muted disabled:opacity-50"
-                    data-testid="short-synopsis-rework"
-                  >
-                    <Pencil className="h-4 w-4" /> Переделать
-                  </button>
-                </div>
-                {reworkOpen && (
-                  <div className="mt-3 space-y-2" data-testid="short-synopsis-rework-panel">
-                    <textarea
-                      value={reworkComment}
-                      onChange={(e) => setReworkComment(e.target.value)}
-                      placeholder="Что изменить? (необязательно) — например: больше семейной драмы, финал без счастливого конца, героиня не должна уезжать..."
-                      rows={3}
-                      disabled={busy}
-                      className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
-                      data-testid="short-synopsis-comment"
-                    />
-                    <button
-                      onClick={() => generateShortSynopsis(reworkComment)}
-                      disabled={busy}
-                      className="flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
-                      data-testid="short-synopsis-regenerate"
-                    >
-                      {synopsisLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Составить заново
-                    </button>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="mt-3 flex flex-wrap items-center gap-3">
-                <p className="text-sm text-muted-foreground">Краткий синопсис ещё не составлен.</p>
-                <button onClick={() => generateShortSynopsis()} disabled={busy} className="flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50" data-testid="short-synopsis-generate">
-                  {synopsisLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Составить синопсис
-                </button>
-              </div>
-            )}
-          </div>
-          <IdeaEditor key={result.synopsis} project={project} synopsis={result.synopsis} language={result.language} characters={result.characters} locations={result.locations} disabled={busy} />
-        </>
-      )}
+      {/* Stage 59 (step 1 «Идея»): this screen is idea-only. As soon as the synopsis is ready the route
+          advances the project to stage="synopsis" and onRefresh() renders the synopsis screen (step 2),
+          so there is no in-place result card here anymore. */}
     </div>
   )
 }

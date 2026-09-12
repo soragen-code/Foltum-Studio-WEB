@@ -84,6 +84,9 @@ model Project {
   charactersLocked Boolean @default(false)
   structureApproved Boolean @default(false)
   isTest      Boolean  @default(false) // stage 40: «Тестовая серия» — a one-scene sandbox project (no season structure, references optional)
+  // Stage 59: durable "new 4-step flow" marker. New projects set it true; legacy rows stay false (classic flow).
+  // The wizard needs this because at stage=synopsis/early-structure charactersApproved is still false.
+  newFlow     Boolean  @default(false)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

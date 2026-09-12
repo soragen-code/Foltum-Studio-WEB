@@ -72,6 +72,9 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
   const total = season?.episodes.length ?? 0
   const scriptsDone = season?.episodes.filter((e) => e.script).length ?? 0
   const episodeCount = total
+  // Stage 59 (step 3 «Сюжет сезона»): the first episode that already has a script — the entry point into
+  // step 4 (episode creation). Used by the identical «Перейти к первому эпизоду» buttons at top and bottom.
+  const firstEpisode = season?.episodes.find((e) => !!e.script) ?? null
 
   useEffect(() => { load() }, [load])
   useEffect(() => {
@@ -170,6 +173,17 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
           </div>
         )}
 
+        {/* Stage 59 (step 3 → step 4): jump straight to the first ready episode. Identical to the bottom button. */}
+        {firstEpisode && (
+          <Link
+            href={`/project/${project.id}/episode/${firstEpisode.id}`}
+            className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
+            data-testid="go-first-episode-top"
+          >
+            Перейти к первому эпизоду <ArrowRight className="h-4 w-4" />
+          </Link>
+        )}
+
         {!season && !jobActive && (
           <button onClick={start} disabled={starting} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="season-generate">
             {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
@@ -255,6 +269,16 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
             })}
           </div>
           {scriptsDone === total && total > 0 && <p className="mt-3 inline-flex items-center gap-1 text-sm text-primary"><Check className="h-4 w-4" /> Все {total} сценариев готовы</p>}
+          {/* Stage 59 (step 3 → step 4): identical jump-to-first-episode button at the bottom of the list. */}
+          {firstEpisode && (
+            <Link
+              href={`/project/${project.id}/episode/${firstEpisode.id}`}
+              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
+              data-testid="go-first-episode-bottom"
+            >
+              Перейти к первому эпизоду <ArrowRight className="h-4 w-4" />
+            </Link>
+          )}
         </div>
       )}
 

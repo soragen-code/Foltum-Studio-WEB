@@ -218,3 +218,8 @@ ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "videoProvider" TEXT NOT NULL DEF
 
 -- Stage 54: cached JSON snapshot of the episode prop registry (verbatim prop substitution)
 ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "propRegistry" TEXT;
+
+
+
+-- Stage 59: durable "new 4-step flow" marker (idea → synopsis → season story → episodes).
+ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "newFlow" BOOLEAN NOT NULL DEFAULT false;

@@ -19,7 +19,7 @@ import type { GenerationJob } from "@prisma/client";
 import { chatJSON, SCRIPT_MODEL, startBackgroundJSON, pollBackgroundJSON, cancelBackgroundResponse, type BackgroundPollResult } from "@/lib/ai";
 import { maxDetailLevel, isLocationDetailLevel } from "@/lib/location-scale";
 import { completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
-import { toCharacterCard, normalizeLanguage, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
+import { toCharacterCard, normalizeLanguage, seasonCastSystemPrompt, seasonCastUserPrompt, seasonCastResultSchema, characterCardToData, sanitizeCharacterCard, sanitizeLocationCard, dedupeCast, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
 import { parseStoredShortSynopsis, renderShortSynopsis } from "@/lib/short-synopsis";
 
 /** Stage 46A: the stored short synopsis (JSON) rendered as the outline block of the structure prompt. */
@@ -331,10 +331,43 @@ export async function advanceSeasonJob(job: GenerationJob, deps: SeasonJobDeps =
   return prisma.generationJob.findUnique({ where: { id: job.id } });
 }
 
+/**
+ * Stage 59 (step 3 «Сюжет сезона»): in the new 4-step flow the idea step writes ONLY the synopsis, so a
+ * fresh project has no characters/locations when the season job starts. Here we generate the COMPLETE cast
+ * (all tiers) and the season's locations in ONE fast synchronous call from the approved synopsis, then
+ * persist them. Idempotent: if characters already exist (retry / classic flow) it is a no-op. A single
+ * ~30 s chatJSON call comfortably fits inside the job's 60 s advance lock, so it is concurrency-safe.
+ */
+async function generateSeasonCast(projectId: string, synopsis: string, language: IdeaLanguage, deps: SeasonJobDeps): Promise<void> {
+  const raw = await deps.chatJSON(seasonCastSystemPrompt(language), seasonCastUserPrompt(synopsis), { temperature: 0.85, maxTokens: 8000 });
+  const parsed = seasonCastResultSchema.parse(raw);
+  const names = parsed.characters.map((c) => c.name);
+  const characters = dedupeCast(parsed.characters).map((c) => sanitizeCharacterCard(c, names));
+  const locations = dedupeCast(parsed.locations).map(sanitizeLocationCard);
+  await prisma.$transaction(async (tx) => {
+    // Idempotency guard: another poller (or a retry) may have already created the cast.
+    if ((await tx.character.count({ where: { projectId } })) > 0) return;
+    for (const c of characters) {
+      await tx.character.create({ data: { projectId, ...characterCardToData(c), status: "draft", imageFront: "", imageProfile: "", imageFull: "" } });
+    }
+    for (const l of locations) {
+      await tx.location.create({ data: { projectId, name: l.name, description: l.description, visualPrompt: l.visualPrompt, visualPromptAuto: l.visualPrompt } });
+    }
+  }, { timeout: 30_000 });
+}
+
 async function tick(jobId: string, projectId: string, state: SeasonJobState, deps: SeasonJobDeps): Promise<void> {
-  const project = await loadProject(projectId);
+  let project = await loadProject(projectId);
   if (!project?.synopsis) throw new Error("Project synopsis missing");
   const language = normalizeLanguage(project.language, project.synopsis);
+  // Stage 59: generate the season cast + locations from the approved synopsis before the structure step,
+  // when the project has none yet (new 4-step flow). Reload so the freshly-created rows are in scope.
+  if (project.characters.length === 0) {
+    await generateSeasonCast(projectId, project.synopsis, language, deps);
+    const reloaded = await loadProject(projectId);
+    if (!reloaded) throw new Error("Project disappeared after cast generation");
+    project = reloaded;
+  }
   const cards = project.characters.map(toCharacterCard);
   let season = await loadSeason(projectId);
   const countDone = () => season ? season.episodes.filter((e) => e.script).length : 0;

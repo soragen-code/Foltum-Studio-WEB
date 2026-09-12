@@ -293,6 +293,45 @@ ${ORIGINALITY_RULES}`;
 }
 export const locationsResultSchema = z.object({ locations: z.array(locationCardSchema).min(1).max(16) });
 
+/* ------------------------------------------------------------------ */
+/*  Stage 59 — season cast + locations in ONE pass (new 4-step flow)   */
+/*  Generated inside the season-script job from the APPROVED synopsis   */
+/*  (the idea step no longer creates any characters/locations).         */
+/* ------------------------------------------------------------------ */
+
+export const seasonCastResultSchema = z.object({
+  characters: z.array(characterCardSchema).min(2).max(MAX_CAST),
+  locations: z.array(locationCardSchema).min(1).max(16),
+});
+export type SeasonCastResult = z.infer<typeof seasonCastResultSchema>;
+
+/** System prompt: from the approved season synopsis, produce the COMPLETE cast (all tiers) + locations in one call. */
+export function seasonCastSystemPrompt(language: IdeaLanguage): string {
+  const lang = LANGUAGE_NAMES[language] ?? "the story language";
+  return `You are a head writer / casting director and production designer for a short-form vertical drama series.
+
+From the season SYNOPSIS below produce the COMPLETE cast and the season's locations in ONE pass. Return ONLY valid JSON:
+{
+  "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "...", "tier": "MAIN" | "SUPPORTING" | "MINOR" | "CROWD", "groupSize": <int or null> } ],
+  "locations": [ { "name": "...", "description": "...", "visualPrompt": "..." } ]
+}
+Both arrays are REQUIRED ("locations" must contain 8-14 items).
+
+CAST: cover EVERY tier — ${CAST_TARGETS.MAIN} MAIN (the leads carrying the season arc), ${CAST_TARGETS.SUPPORTING} SUPPORTING (recurring characters close to the leads; MUST include the leads' family members with the kinship stated in "role"), ${CAST_TARGETS.MINOR} MINOR (episodic characters with a line or two) and ${CAST_TARGETS.CROWD} CROWD groups. Assign each character the correct "tier". Every character is grounded in the synopsis (a plausible reason to appear), has a unique name and is visually distinct.
+${CHARACTER_FIELD_RULES}
+
+LOCATIONS: 8-14 distinct locations across the season (the leads' homes, workplaces, the central place of the story, transitional public places like streets, cafes, transport, and the finale's place). Diverse in type, scale and time of day; each visually distinct.
+${LOCATION_FIELD_RULES}
+
+LANGUAGE: write name, age, role, personality, firstAppearance and every location "name"/"description" in ${lang}. Only "appearance" and "visualPrompt" are ALWAYS in English.
+
+${ORIGINALITY_RULES}`;
+}
+
+export function seasonCastUserPrompt(synopsis: string): string {
+  return `SYNOPSIS:\n${synopsis.trim()}`;
+}
+
 export function locationFromNameSystemPrompt(language: IdeaLanguage): string {
   const lang = LANGUAGE_NAMES[language] ?? "the story language";
   return `You are a production designer. Given a season synopsis and the name (and optional note) of a location, write its card.

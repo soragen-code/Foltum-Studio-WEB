@@ -51,6 +51,9 @@ export async function POST(request: Request) {
         powerTier: power,
         // New projects start at the "idea" step of the new flow; legacy projects keep their old stages.
         stage: 'idea',
+        // Stage 59: mark the durable 4-step flow so the wizard renders the right screen at every stage
+        // (charactersApproved is still false at synopsis/early-structure, so it cannot be relied on).
+        newFlow: true,
       },
     })
 
