@@ -23,9 +23,11 @@ interface RefCharacter extends CharacterCardData {
 }
 
 const POLL_MS = 3000
-// Stage 53: the full-body front shot (imageFull) is the primary/only auto-generated reference, so it is
-// shown first. Front/profile remain as optional manual slots.
-const SHOT_LABELS = ['В полный рост (референс)', 'Портрет (лицо)', 'Левый профиль']
+// Stage 55: the full-body front shot (imageFull) is the ONLY auto-generated character reference, so the
+// card shows a SINGLE full-body slot. The old front-portrait / profile placeholders were never auto-filled
+// (only imageFull is generated) and are no longer rendered as separate empty slots. Legacy characters that
+// only kept the old front portrait still show it in this one slot.
+const FULL_BODY_LABEL = 'В полный рост (референс)'
 const LOCATION_JOB_TYPE = 'location_image'
 const LOCATION_EXTRA_JOB_TYPE = 'location_extra_image'
 const EXTRA_ANGLES_PER_REQUEST = 3
@@ -627,40 +629,38 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
   )
 }
 
-const CHARACTER_SLOT_SHOTS = ['full', 'front', 'profile'] as const
-
 function ReferenceImages({ char, generating, message, onRegen, shotBusy }: { char: RefCharacter; generating: boolean; message?: string | null; onRegen: (shot: string) => void; shotBusy?: (shot: string) => boolean }) {
-  const images = [char.imageFull, char.imageFront, char.imageProfile]
+  // Stage 55: one standard reference per character — the full-body front (imageFull). It is displayed at
+  // its native vertical 9:16 aspect (not cropped into a 3:4 box, which used to cut off the head and feet and
+  // made the figure look short/cropped). Legacy characters that only kept the old front portrait fall back
+  // to it; the regenerate / download actions always target the full-body shot.
+  const img = validUrl(char.imageFull) ? char.imageFull : char.imageFront
   return (
     <div className="mb-3">
-      <div className="grid grid-cols-3 gap-2">
-        {images.map((img, i) => (
-          <div key={i} className="group relative aspect-[3/4] overflow-hidden rounded-lg bg-muted" title={SHOT_LABELS[i]}>
-            {validUrl(img) ? (
-              <>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={img as string} alt={`${char.name} — ${SHOT_LABELS[i]}`} className="h-full w-full object-cover" data-testid="reference-image" />
-                <FrameToolbar
-                  regen={{ testId: `regen-shot-${CHARACTER_SLOT_SHOTS[i]}`, busy: generating, spinning: !!shotBusy?.(CHARACTER_SLOT_SHOTS[i]), onClick: () => onRegen(CHARACTER_SLOT_SHOTS[i]) }}
-                  download={{ url: img as string, name: referenceFileName('character', char.name, CHARACTER_SLOT_SHOTS[i], img as string) }}
-                />
-              </>
-            ) : generating ? (
-              <div className="flex h-full w-full items-center justify-center" data-testid="reference-spinner">
-                <Loader2 className="h-5 w-5 animate-spin text-primary" />
-              </div>
-            ) : (
-              <div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-muted/50">
-                <ImageOff className="h-5 w-5 text-muted-foreground/40" />
-              </div>
-            )}
-            {generating && validUrl(img) && (
-              <div className="absolute inset-0 flex items-center justify-center bg-background/60">
-                <Loader2 className="h-5 w-5 animate-spin text-primary" />
-              </div>
-            )}
+      <div className="group relative mx-auto aspect-[9/16] w-full max-w-[13rem] overflow-hidden rounded-lg bg-muted" title={FULL_BODY_LABEL}>
+        {validUrl(img) ? (
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={img as string} alt={`${char.name} — ${FULL_BODY_LABEL}`} className="h-full w-full object-contain" data-testid="reference-image" />
+            <FrameToolbar
+              regen={{ testId: 'regen-shot-full', busy: generating, spinning: !!shotBusy?.('full'), onClick: () => onRegen('full') }}
+              download={{ url: img as string, name: referenceFileName('character', char.name, 'full', img as string) }}
+            />
+          </>
+        ) : generating ? (
+          <div className="flex h-full w-full items-center justify-center" data-testid="reference-spinner">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
           </div>
-        ))}
+        ) : (
+          <div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-muted/50">
+            <ImageOff className="h-5 w-5 text-muted-foreground/40" />
+          </div>
+        )}
+        {generating && validUrl(img) && (
+          <div className="absolute inset-0 flex items-center justify-center bg-background/60">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+          </div>
+        )}
       </div>
       {generating && (
         <p className="mt-1.5 flex items-center gap-1 truncate text-[11px] text-muted-foreground" data-testid="reference-status">

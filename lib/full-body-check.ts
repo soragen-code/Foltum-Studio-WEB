@@ -159,9 +159,11 @@ export interface ProportionVerdict {
 }
 
 /**
- * Pure pass/fail on the measured proportions. Thresholds: torsoHeads > 3.5 → elongatedTorso;
- * legsRatio < 0.42 → shortLegs; headsTall > 8.2 → smallHead; plus the model's own flags (any of the four).
- * Any defect → FAIL. `null` (unknown) → ok with an empty defect list (never blocks generation).
+ * Pure pass/fail on the measured proportions. Thresholds (Stage 52, aligned to the ≈7–7.5 heads / 3-head
+ * torso / half-height legs target): torsoHeads > MAX_TORSO_HEADS (3.3) → elongatedTorso;
+ * legsRatio < MIN_LEGS_RATIO (0.44) → shortLegs; headsTall > MAX_HEADS_TALL (7.9) → smallHead; plus the
+ * model's own flags (any of the four). Any defect → FAIL. `null` (unknown) → ok with an empty defect list
+ * (never blocks generation).
  */
 export function evaluateProportions(p: ProportionAssessment | null | undefined): ProportionVerdict {
   if (!p) return { ok: true, defects: [], score: 100 };
