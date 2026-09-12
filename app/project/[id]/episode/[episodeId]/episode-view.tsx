@@ -26,8 +26,8 @@ type EpisodePhase = 'script' | 'references' | 'scenes'
 
 const VIDEO_EXPECTED_SEC = 600
 const REF_POLL_MS = 3500
-// Stage 18: fixed 3-angle set, in stored order (face, left profile, full front).
-const SHOT_LABELS = ['Портрет (лицо)', 'Левый профиль', 'В полный рост (спереди)']
+// Stage 53: full-body front is the primary photo, shown first; front/profile are optional manual slots.
+const SHOT_LABELS = ['В полный рост (референс)', 'Портрет (лицо)', 'Левый профиль']
 // Stage 36 — a reference image the video job actually submitted (job.result.submittedReferences).
 type SubmittedReference = { url: string; kind: string }
 const REFERENCE_KIND_LABELS: Record<string, string> = {
@@ -44,9 +44,10 @@ function parseExtra(imageExtra?: string | null): string[] {
   if (!imageExtra) return []
   try { const a = JSON.parse(imageExtra); return Array.isArray(a) ? a.filter((u): u is string => typeof u === 'string' && u.startsWith('http')) : [] } catch { return [] }
 }
-// Stage 18: a character reference is complete with the 3 base photos (face, left profile, full front).
-const charPhotos = (c: any): string[] => [c?.imageFront, c?.imageProfile, c?.imageFull, ...parseExtra(c?.imageExtra)].filter(validUrl)
-const hasAllImages = (c: any) => validUrl(c?.imageFront) && validUrl(c?.imageProfile) && validUrl(c?.imageFull) && parseExtra(c?.imageExtra).length >= CHAR_EXTRA_MIN
+// Stage 53: a character reference is a single photo — the full-body front shot (imageFull). Legacy
+// characters that only have imageFront fall back to it. Full-body is listed first as the primary photo.
+const charPhotos = (c: any): string[] => [c?.imageFull, c?.imageFront, c?.imageProfile, ...parseExtra(c?.imageExtra)].filter(validUrl)
+const hasAllImages = (c: any) => validUrl(c?.imageFull) || validUrl(c?.imageFront)
 // Stage 18: total generated frames of a location = present base angles + extra angles (target = 3/6/9 by scale).
 const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.imageDetail].filter(validUrl).length + parseExtra(l?.imageExtra).length
 // Stage 17: top up location extras in serverless-safe chunks (a single 12-frame job can overrun the
@@ -881,8 +882,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {refChars.map((c) => {
               const busy = !!charBusy[c.id] || (refSession && refScope === 'characters' && !hasAllImages(c))
-              // 5 photo slots: 3 base shots + 2 extra angles. Clicking any opens the carousel over all of them.
-              const slots = [c.imageFront, c.imageProfile, c.imageFull, ...parseExtra(c.imageExtra)].slice(0, CHARACTER_PHOTO_COUNT)
+              // Stage 53: full-body front (imageFull) is the primary photo shown first, then optional front/profile/extra angles.
+              const slots = [c.imageFull, c.imageFront, c.imageProfile, ...parseExtra(c.imageExtra)].slice(0, CHARACTER_PHOTO_COUNT)
               while (slots.length < CHARACTER_PHOTO_COUNT) slots.push(null)
               const photos = charPhotos(c)
               return (
@@ -895,7 +896,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img src={img as string} alt={`${c.name} — ${SHOT_LABELS[i] ?? 'фото'}`} className="h-full w-full object-cover" />
                             <span className="absolute right-1 top-1 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
-                            {(() => { const shot = i === 0 ? 'front' : i === 1 ? 'profile' : i === 2 ? 'full' : 'extra'; const idx = i >= 3 ? i - 3 : undefined; return (
+                            {(() => { const shot = i === 0 ? 'full' : i === 1 ? 'front' : i === 2 ? 'profile' : 'extra'; const idx = i >= 3 ? i - 3 : undefined; return (
                               <FrameToolbar
                                 regen={{ testId: `regen-shot-${shot}${idx !== undefined ? `-${idx}` : ''}`, busy, spinning: shotIsBusy(c.id, shot, idx), onClick: () => regenShot('character', c.id, shot, idx) }}
                                 download={{ url: img as string, name: referenceFileName('character', c.name, shot, img as string, idx) }}

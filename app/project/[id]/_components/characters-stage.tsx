@@ -16,8 +16,8 @@ function CharacterImages({
   pending?: boolean
 }) {
   const [broken, setBroken] = useState<Record<number, boolean>>({})
-  const images = [char?.imageFront, char?.imageProfile, char?.imageFull]
-  const labels = ['Front', 'Profile', 'Full']
+  const images = [char?.imageFull, char?.imageFront, char?.imageProfile]
+  const labels = ['Full', 'Front', 'Profile']
 
   return (
     <div className="mb-3 grid grid-cols-3 gap-2">

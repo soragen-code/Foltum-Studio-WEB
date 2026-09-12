@@ -54,7 +54,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
     // Free auto-generation covers the MAIN cast only; supporting/minor/crowd references are
     // started from the References stage buttons (charged per character).
-    const pending = project.characters.filter((c) => c.tier === "MAIN" && (!c.imageFront || !c.imageProfile || !c.imageFull));
+    // Stage 53: a character reference is the single full-body photo (imageFull); legacy characters that
+    // only have the old front portrait already count as done (video falls back to imageFront).
+    const pending = project.characters.filter((c) => c.tier === "MAIN" && !c.imageFull && !c.imageFront);
     if (pending.length === 0) return NextResponse.json({ success: true, jobId: null });
 
     const job = await prisma.generationJob.create({

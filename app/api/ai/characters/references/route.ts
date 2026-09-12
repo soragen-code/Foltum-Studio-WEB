@@ -9,14 +9,16 @@ import { parseBody, charactersReferencesSchema } from "@/lib/validations";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runCharacterImagesJob } from "@/lib/workers/character-images-job";
 import { CHARACTER_REFERENCE_COST } from "@/lib/power-tier";
-import { CHARACTER_PHOTO_COUNT, parseImageArray } from "@/lib/reference-counts";
 import { normalizeImageModel } from "@/lib/ai-models";
 
-/** Extra angles required beyond the 3 base shots — 0 in Stage 18 (character = 3 photos). */
-const CHARACTER_EXTRA_COUNT = Math.max(0, CHARACTER_PHOTO_COUNT - 3);
-const missingBase = (c: { imageFront: string | null; imageProfile: string | null; imageFull: string | null }) =>
-  !c.imageFront || !c.imageProfile || !c.imageFull;
-const missingExtra = (c: { imageExtra: string | null }) => parseImageArray(c.imageExtra).length < CHARACTER_EXTRA_COUNT;
+/**
+ * Stage 53: a character reference is a SINGLE photo — the full-body front shot (imageFull). A character
+ * needs generation when it has no anchor at all; legacy characters that still have the old front portrait
+ * (imageFront) already count as done (video falls back to imageFront). Profiles/extras are never
+ * auto-generated any more, so there is no free extra-only top-up pass.
+ */
+const missingBase = (c: { imageFront: string | null; imageFull: string | null }) =>
+  !c.imageFull && !c.imageFront;
 
 /**
  * POST /api/ai/characters/references  { projectId, tiers?: [...], characterIds?: [...] }
@@ -44,23 +46,17 @@ export async function POST(request: Request) {
     const active = await prisma.generationJob.findFirst({ where: { projectId, type: "characters", status: { in: ["pending", "processing"] } }, orderBy: { createdAt: "desc" } });
     if (active) return NextResponse.json({ jobId: active.id, resumed: true, count: 0 });
 
-    // Stage 17: a character reference is only complete with the full 5-photo set (3 base + 2 extra
-    // angles). Previously `pending` matched only characters missing a BASE shot — so a character that
-    // had all 3 base shots but was interrupted before its extras were generated (a serverless timeout
-    // during the extra pass) could NEVER be finished: re-running did nothing and the gate stayed
-    // blocked forever. Now we resume ANY incomplete character. Characters missing a base shot are
-    // CHARGED (fresh set); characters that only lack extra angles are already paid for, so they ride
-    // along for FREE (the job is idempotent and skips shots that already exist).
+    // Stage 53: a character reference is a single photo (imageFull). Generate for every character that
+    // has no anchor yet; each is charged one CHARACTER_REFERENCE_COST. The job is idempotent (a character
+    // that already has imageFull is skipped), so a resumed run only fills the gaps.
     const scope = project.characters.filter((c) =>
       (!tiers || tiers.includes(c.tier as any)) &&
       (!characterIds || characterIds.includes(c.id))
     );
     const needBase = scope.filter(missingBase);
-    const needExtraOnly = scope.filter((c) => !missingBase(c) && missingExtra(c));
-    const jobCharacterIds = [...needBase, ...needExtraOnly].map((c) => c.id);
+    const jobCharacterIds = needBase.map((c) => c.id);
     if (jobCharacterIds.length === 0) return NextResponse.json({ jobId: null, count: 0 });
 
-    // Only characters that need a full (re)generation are charged; extra-only top-ups are free.
     const cost = needBase.length * CHARACTER_REFERENCE_COST;
     if ((user.credits ?? 0) < cost)
       return NextResponse.json({ error: `Недостаточно кредитов: нужно ${cost} (${needBase.length} × ${CHARACTER_REFERENCE_COST}), на балансе ${user.credits ?? 0}` }, { status: 402 });
@@ -77,9 +73,10 @@ export async function POST(request: Request) {
     runInBackground(async () => {
       await runCharacterImagesJob({ jobId: job.id, projectId, characterIds: jobCharacterIds, imageModel: normalizeImageModel(imageModel) });
       try {
-        // Refund only the CHARGED characters that got nothing at all.
-        const after = await prisma.character.findMany({ where: { id: { in: needBase.map((c) => c.id) } }, select: { id: true, name: true, imageFront: true, imageProfile: true, imageFull: true } });
-        const none = after.filter((c) => !c.imageFront && !c.imageProfile && !c.imageFull);
+        // Refund the CHARGED characters whose full-body photo never landed (Stage 53: imageFull is the
+        // single generated shot; keep imageFront in the fallback so a legacy resume isn't refunded).
+        const after = await prisma.character.findMany({ where: { id: { in: needBase.map((c) => c.id) } }, select: { id: true, name: true, imageFront: true, imageFull: true } });
+        const none = after.filter((c) => !c.imageFull && !c.imageFront);
         if (none.length) {
           const refund = none.length * CHARACTER_REFERENCE_COST;
           await prisma.user.update({ where: { id: user.id }, data: { credits: { increment: refund } } });

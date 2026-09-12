@@ -23,7 +23,9 @@ interface RefCharacter extends CharacterCardData {
 }
 
 const POLL_MS = 3000
-const SHOT_LABELS = ['Портрет (лицо)', 'Левый профиль', 'В полный рост']
+// Stage 53: the full-body front shot (imageFull) is the primary/only auto-generated reference, so it is
+// shown first. Front/profile remain as optional manual slots.
+const SHOT_LABELS = ['В полный рост (референс)', 'Портрет (лицо)', 'Левый профиль']
 const LOCATION_JOB_TYPE = 'location_image'
 const LOCATION_EXTRA_JOB_TYPE = 'location_extra_image'
 const EXTRA_ANGLES_PER_REQUEST = 3
@@ -63,8 +65,10 @@ function jobLocationIds(j: JobInfo & { resultData?: string | null }): string[] {
 function validUrl(u?: string | null) {
   return typeof u === 'string' && u.startsWith('http') && u.length > 10
 }
+// Stage 53: a character reference is a single photo — the full-body front shot (imageFull). A character
+// is "ready" once it has that anchor; legacy characters that only kept the old front portrait count too.
 function hasAllImages(c: RefCharacter) {
-  return validUrl(c.imageFront) && validUrl(c.imageProfile) && validUrl(c.imageFull)
+  return validUrl(c.imageFull) || validUrl(c.imageFront)
 }
 function hasAnyImage(c: RefCharacter) {
   return validUrl(c.imageFront) || validUrl(c.imageProfile) || validUrl(c.imageFull)
@@ -623,10 +627,10 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
   )
 }
 
-const CHARACTER_SLOT_SHOTS = ['front', 'profile', 'full'] as const
+const CHARACTER_SLOT_SHOTS = ['full', 'front', 'profile'] as const
 
 function ReferenceImages({ char, generating, message, onRegen, shotBusy }: { char: RefCharacter; generating: boolean; message?: string | null; onRegen: (shot: string) => void; shotBusy?: (shot: string) => boolean }) {
-  const images = [char.imageFront, char.imageProfile, char.imageFull]
+  const images = [char.imageFull, char.imageFront, char.imageProfile]
   return (
     <div className="mb-3">
       <div className="grid grid-cols-3 gap-2">

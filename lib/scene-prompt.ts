@@ -29,15 +29,16 @@ import { normalizeVideoModel, videoModelSlug, type VideoModelId } from "@/lib/ai
  * NEVER sent any more (it was the recurring moderation trigger and made characters drift);
  * continuity between scenes now rests on the script text alone (presence / entrances / continuesFrom).
  * Stage 51: reverted to the known-good 46B-0 selection after 46B-1/46B-2/49/50 regressed Seedance
- * moderation with E005 ("flagged as sensitive"). Each individual sends EXACTLY ONE photo to video —
- * the styled FRONT portrait (imageFront) — then ALL styled location angles (base + extras), then the
- * crowds (front only). The profile, the full body and the extra character angles are NEVER sent to
- * video: they stay on the character card for regen/download only. Real Replicate runs proved this
- * exact set (single front face per character + all location angles) is what PASSED moderation on
- * 11-09 23:13; sending several character photos at once (face+profile+full+extras, added in
- * 46B-1/46B-2) is what triggered E005. If the set exceeds the cap the trim order is: crowds → extra
- * location angles; the one-per-character front refs and the base location angles are never dropped.
- * See buildScenePrompt.
+ * moderation with E005 ("flagged as sensitive"). Each individual sends EXACTLY ONE photo to video.
+ * Stage 53: that one photo is now the styled FULL-BODY FRONT photo (imageFull) — the sole visual
+ * anchor so the character looks in-scene EXACTLY like the reference; legacy characters that only have
+ * the old front portrait fall back to imageFront (imageFull ?? imageFront). Then ALL styled location
+ * angles (base + extras), then the crowds (their one anchor). The profile and the extra character
+ * angles are NEVER sent to video: they stay on the character card for regen/download only. The rule
+ * that PASSED moderation on 11-09 23:13 is still ONE photo per character (sending several at once —
+ * face+profile+full+extras, added in 46B-1/46B-2 — is what triggered E005); Stage 53 only swaps WHICH
+ * single photo that is. If the set exceeds the cap the trim order is: crowds → extra location angles;
+ * the one-per-character refs and the base location angles are never dropped. See buildScenePrompt.
  */
 export const REFERENCE_IMAGE_CAP = 30;
 /** Stage 44 — how many extra location angles (Location.imageExtra) may join the three base angles as references. */
@@ -364,11 +365,12 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // Stage 36 — reference mode for EVERY scene. Ordered set (Stage 51 — reverted to the known-good
   // 46B-0 selection after 46B-1/46B-2/49/50 regressed Seedance moderation with E005):
   //   1. ALL individual (non-CROWD) characters linked to THIS scene (SceneCharacter is written per
-  //      scene by the season worker) that have a styled front portrait — no character cap. Characters
+  //      scene by the season worker) that have a styled anchor photo — no character cap. Characters
   //      named in this scene's dialogue / videoPrompt are ranked first, then the rest of the linked
   //      list in its original order (deterministic). Each individual contributes EXACTLY ONE photo to
-  //      video: the styled FRONT portrait (imageFront). The profile, the full body and the extra angles
-  //      are NEVER sent to video — they remain on the character card for regen/download/generation only;
+  //      video: the styled FULL-BODY FRONT photo (imageFull), falling back to the legacy front portrait
+  //      (imageFront) for characters generated before Stage 53. The profile and the extra angles are
+  //      NEVER sent to video — they remain on the character card for regen/download/generation only;
   //   2. ALL styled location angles (wide first — locationAngleImages' own order), then the extra
   //      location angles, each with its own note;
   //   3. crowd groups linked to the scene (front only).
@@ -381,7 +383,10 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // extras, added in 46B-1/46B-2) is what triggered E005 ("flagged as sensitive"). Trim order when the
   // set exceeds REFERENCE_IMAGE_CAP: crowds first, then extra location angles (the wide angle is kept),
   // never the characters.
-  const styled = characters.filter(c => isStyledAsset(c.imageFront));
+  // Stage 53 — the single video anchor per character is the full-body front photo (imageFull); legacy
+  // characters that only have the old front portrait fall back to imageFront so nothing breaks.
+  const anchorUrl = (c: ScenePromptCharacterLink) => (isStyledAsset(c.imageFull) ? c.imageFull! : c.imageFront!);
+  const styled = characters.filter(c => isStyledAsset(c.imageFull) || isStyledAsset(c.imageFront));
   const individualsAll = styled.filter(c => c.tier !== "CROWD");
   const crowds = styled.filter(c => c.tier === "CROWD");
   const mentionText = `${scene.videoPrompt ?? ""}\n${dialogue}\n${scene.voiceover ?? ""}`.toLowerCase();
@@ -397,12 +402,12 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const locationExtras = location ? parseLocationExtra(location.imageExtra).slice(0, LOCATION_EXTRA_REF_CAP) : [];
   const effectiveLocation = locationAngles.length ? location : null;
   type Ref = SceneReference & { id: string };
-  const characterRefs: Ref[] = individuals.map(c => ({ url: c.imageFront!, kind: "character", id: c.characterId, note: `defines ${c.name}'s photorealistic appearance and identity; use the scene's staging and camera.` }));
+  const characterRefs: Ref[] = individuals.map(c => ({ url: anchorUrl(c), kind: "character", id: c.characterId, note: `defines ${c.name}'s photorealistic appearance and identity; use the scene's staging and camera.` }));
   const locationRefs: Ref[] = [
     ...locationAngles.map(a => ({ url: a.url, angle: a.angle as string })),
     ...(effectiveLocation ? locationExtras.map((url, i) => ({ url, angle: locationExtraLabel(i) })) : []),
   ].map(a => ({ url: a.url, kind: "location" as const, id: effectiveLocation!.id, note: `the location "${effectiveLocation!.name}" — ${a.angle} angle. Same place, same time of day, same light and palette in every shot. Keep the camera inside this location and match this lighting exactly.` }));
-  const crowdRefs: Ref[] = crowds.map(c => ({ url: c.imageFront!, kind: "crowd", id: c.characterId, note: `defines the look of the group "${c.name}" (extras): who they are and how they are dressed.` }));
+  const crowdRefs: Ref[] = crowds.map(c => ({ url: anchorUrl(c), kind: "crowd", id: c.characterId, note: `defines the look of the group "${c.name}" (extras): who they are and how they are dressed.` }));
   // Reduced set (individual characters + the wide location angle) kept for diagnostics.
   const fallbackRefs: SceneReference[] = [...characterRefs, ...locationRefs.slice(0, 1)].slice(0, REFERENCE_IMAGE_CAP).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
   const skipReferences = !!scene.skipReferences;

@@ -1,6 +1,7 @@
 /**
  * Stage 49 unit tests (no live API / DB): explicit ADULT AGE wording in character portrait / shot prompts
- * (derived from the character card age) + the FRONT face portrait is the identity anchor generated first.
+ * (derived from the character card age) + (Stage 53) the full-body FRONT (imageFull) is the sole
+ * auto-generated shot, produced standalone text-to-image.
  *   npx tsx --tsconfig tsconfig.json scripts/test-stage49.ts
  */
 import assert from "node:assert";
@@ -86,16 +87,15 @@ const CLAIRE = "Claire Johnson is in her late 20s, Caucasian, shoulder-length au
   }
 }
 
-// ---------------------------------------------------------------- 5. FRONT face portrait is the identity anchor (generated first, standalone)
+// ---------------------------------------------------------------- 5. Stage 53: the ONLY auto-generated shot is the full-body FRONT (imageFull), standalone text-to-image
 {
   const src = readFileSync(join(__dirname, "..", "lib", "workers", "character-images-job.ts"), "utf8");
-  const iFront = src.indexOf('genBaseShot(char, "front", null, "face")');
-  const iFull = src.indexOf('genBaseShot(char, "full", ((char as any).imageFront');
-  ok("front is generated standalone (ref=null, text-to-image anchor)", iFront > 0);
-  ok("full-body chains on the front face anchor", iFull > 0);
-  ok("front pass runs BEFORE the full-body pass (front-first ordering)", iFront < iFull);
-  // The full shot no longer chains on a pre-existing full frame as its own anchor.
-  ok("no full-first anchor (full is not the text-to-image anchor)", !src.includes('genBaseShot(char, "full", null'));
+  ok("full-body front is generated standalone (ref=null, text-to-image anchor)", src.includes('genBaseShot(char, "full", null, "face")'));
+  ok("a single full-body pass drives the job (fullTasks)", /const fullTasks = characters\.filter/.test(src) && (src.match(/genBaseShot\(char,/g) || []).length === 1);
+  // No front / profile / extra shots are auto-generated any more — those are user-triggered on the card.
+  ok("no front auto-pass", !src.includes('genBaseShot(char, "front"'));
+  ok("no profile auto-pass", !src.includes('genBaseShot(char, "profile"'));
+  ok("no chained full anchor (full is text-to-image, not face-chained)", !src.includes('genBaseShot(char, "full", ((char as any).imageFront'));
 }
 
 console.log(`\nStage 49: ALL ${n} ASSERTIONS PASSED`);

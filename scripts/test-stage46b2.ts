@@ -1,4 +1,4 @@
-/** Stage 46B-2 unit tests (no live API): single front photo per character as Seedance reference (Stage 51 revert to 46B-0), order + trimming, shot route body schemas. */
+/** Stage 46B-2 unit tests (no live API): single full-body front photo per character as Seedance reference (Stage 53; fallback imageFront), order + trimming, shot route body schemas. */
 import assert from "node:assert";
 import { buildScenePrompt, REFERENCE_IMAGE_CAP } from "../lib/scene-prompt";
 import { VISUAL_STYLE_ID } from "../lib/visual-style";
@@ -12,7 +12,7 @@ const scene = { id: "s1", number: 1, videoPrompt: "[CHARACTER]: Anna. [ACTION]: 
 const loc = { id: "loc", name: "Kitchen", imageUrl: styledUrl("k-wide"), imageReverse: styledUrl("k-rev"), imageDetail: styledUrl("k-det"), imageExtra: null };
 const build = (characters: any[], location: any = loc) => buildScenePrompt({ scene, characters, location, previous: null, provider: "seedance" });
 
-// 1. Stage 51 (46B-0): one individual with every photo (front, profile, full, extras) sends ONLY the front.
+// 1. Stage 53: one individual with every photo (front, profile, full, extras) sends ONLY the full-body front.
 const anna = {
   characterId: "anna", name: "Anna", tier: "MAIN", appearance: "red dress", age: "34",
   imageFront: styledUrl("anna-front"), imageProfile: styledUrl("anna-profile"), imageFull: styledUrl("anna-full"),
@@ -21,40 +21,40 @@ const anna = {
 {
   const b = build([anna]);
   const u = b.referenceImages;
-  ok("only the front is sent (profile/full/extras never sent)", u[0] === anna.imageFront && !u.includes(anna.imageFull) && !u.includes(anna.imageProfile) && !u.includes(styledUrl("anna-x0")) && !u.includes(styledUrl("anna-x1")));
+  ok("only the full-body front is sent (front/profile/extras never sent)", u[0] === anna.imageFull && !u.includes(anna.imageFront) && !u.includes(anna.imageProfile) && !u.includes(styledUrl("anna-x0")) && !u.includes(styledUrl("anna-x1")));
   ok("location follows the single character ref", u[1] === loc.imageUrl && u[2] === loc.imageReverse && u[3] === loc.imageDetail && u.length === 4);
   ok("[Image1] identity note", /\[Image1\] defines Anna's photorealistic appearance and identity; use the scene's staging and camera\./.test(b.prompt));
   ok("character ref has kind character", b.retryRefs[0].kind === "character");
   ok("characterIds diagnostics list Anna exactly once", (b.reference as any).characterIds.filter((id: string) => id === "anna").length === 1);
 }
 
-// 2. Crowd: front only, after the location (unchanged by Stage 51).
+// 2. Crowd: full-body front only (imageFull), after the location.
 {
   const crowd = { characterId: "g", name: "Guests", tier: "CROWD", imageFront: styledUrl("g-front"), imageProfile: styledUrl("g-profile"), imageFull: styledUrl("g-full"), imageExtra: JSON.stringify([styledUrl("g-x0")]), appearance: "guests", age: null };
   const b = build([anna, crowd]);
   const u = b.referenceImages;
-  ok("crowd sends front only", u.includes(styledUrl("g-front")) && !u.includes(styledUrl("g-profile")) && !u.includes(styledUrl("g-full")) && !u.includes(styledUrl("g-x0")));
-  ok("crowd is last (after character + location)", u[u.length - 1] === styledUrl("g-front"));
+  ok("crowd sends full-body front only", u.includes(styledUrl("g-full")) && !u.includes(styledUrl("g-front")) && !u.includes(styledUrl("g-profile")) && !u.includes(styledUrl("g-x0")));
+  ok("crowd is last (after character + location)", u[u.length - 1] === styledUrl("g-full"));
 }
 
-// 3. Styled gating: the front is the only character ref; drop the character when the front is not styled.
+// 3. Styled gating: the full-body front is the character anchor (fallback front); drop the character when no styled photo exists.
 {
   const mark = { characterId: "mark", name: "Mark", tier: "MAIN", imageFront: styledUrl("m-front"), imageFull: styledUrl("m-full"), appearance: "suit", age: "40" };
   const b = build([mark]);
-  ok("front is the only character ref (full never sent)", b.referenceImages[0] === mark.imageFront && !b.referenceImages.includes(mark.imageFull) && b.referenceImages[1] === loc.imageUrl);
+  ok("full-body front is the only character ref (front never sent)", b.referenceImages[0] === mark.imageFull && !b.referenceImages.includes(mark.imageFront) && b.referenceImages[1] === loc.imageUrl);
   const bare = build([{ characterId: "z", name: "Zed", tier: "MAIN", imageFront: styledUrl("z-front"), appearance: "x", age: null }], null);
-  ok("front only, no location → single character ref", bare.referenceImages.length === 1 && bare.referenceImages[0] === styledUrl("z-front"));
+  ok("legacy front only (no full) → single character ref via fallback", bare.referenceImages.length === 1 && bare.referenceImages[0] === styledUrl("z-front"));
   ok("character ref uses the identity note", /\[Image1\] defines Zed's photorealistic appearance and identity/.test(bare.prompt));
   const proto = "htt" + "ps:/" + "/"; // avoid a bare literal; RAW_URL is deliberately NOT a styled asset
   const RAW_URL = `${proto}unstyled.example/raw.png`;
   const unstyledFront = build([{ ...mark, imageFront: RAW_URL }], null);
-  ok("unstyled front → character dropped (zero refs)", unstyledFront.referenceImages.length === 0 && !unstyledFront.referenceImages.includes(RAW_URL));
+  ok("unstyled front but styled full → kept via full anchor", unstyledFront.referenceImages.length === 1 && unstyledFront.referenceImages[0] === mark.imageFull && !unstyledFront.referenceImages.includes(RAW_URL));
   const noneStyled = build([{ characterId: "u", name: "U", tier: "MAIN", imageFront: RAW_URL, imageFull: RAW_URL, appearance: "x", age: null }], null);
   ok("no styled photo at all → character dropped (zero refs)", noneStyled.referenceImages.length === 0);
 }
 
-// 4. Stage 51 trimming: one front ref per character, all base location angles kept; room fills location
-//    extras → crowds; trim order crowds → location extras. Front refs never trimmed until the cap itself.
+// 4. Stage 53 trimming: one full-body front ref per character, all base location angles kept; room fills
+//    location extras → crowds; trim order crowds → location extras. Char refs never trimmed until the cap itself.
 {
   const ind = (i: number) => ({
     characterId: `c${i}`, name: `C${i}`, tier: "MAIN", appearance: "x", age: null,
@@ -68,23 +68,23 @@ const anna = {
   const many20 = Array.from({ length: 20 }, (_, i) => ind(i));
   const a = build([...many20, ...crowds], locWithExtras).referenceImages;
   ok("A: cap respected", a.length === 30);
-  ok("A: only front char refs (no profile/full/extra)", many20.every(c => a.includes(c.imageFront) && !a.includes(c.imageFull) && !a.includes(c.imageProfile)) && !a.some(x => /c\d+-x\d/.test(x)));
+  ok("A: only full-body char refs (no front/profile/extra)", many20.every(c => a.includes(c.imageFull) && !a.includes(c.imageFront) && !a.includes(c.imageProfile)) && !a.some(x => /c\d+-x\d/.test(x)));
   ok("A: base location angles kept", a.includes(loc.imageUrl) && a.includes(loc.imageReverse) && a.includes(loc.imageDetail));
   ok("A: location extras kept", a.filter(x => /k-x\d/.test(x)).length === 3);
   ok("A: all 4 crowds fit", a.filter(x => /\/g\d\.jpg$/.test(x)).length === 4);
-  ok("A: order chars → location base → location extras → crowds", a[0] === styledUrl("c0-f") && a[20] === loc.imageUrl && a[23] === styledUrl("k-x0") && a[26] === styledUrl("g0"));
+  ok("A: order chars → location base → location extras → crowds", a[0] === styledUrl("c0-full") && a[20] === loc.imageUrl && a[23] === styledUrl("k-x0") && a[26] === styledUrl("g0"));
 
   // B: 26 chars + 3 base = 29; room 1 → 1 location extra, 0 crowds (crowds trimmed before location extras).
   const many26 = Array.from({ length: 26 }, (_, i) => ind(i));
   const bR = build([...many26, ...crowds], locWithExtras).referenceImages;
   ok("B: cap respected", bR.length === 30);
-  ok("B: all 26 front refs kept", many26.every(c => bR.includes(c.imageFront)));
+  ok("B: all 26 full-body refs kept", many26.every(c => bR.includes(c.imageFull)));
   ok("B: crowds trimmed before location extras", !bR.some(x => /\/g\d\.jpg$/.test(x)) && bR.filter(x => /k-x\d/.test(x)).length === 1);
 
-  // C: 31 chars alone exceed the cap → 30 front refs, no room for location or crowds.
+  // C: 31 chars alone exceed the cap → 30 full-body refs, no room for location or crowds.
   const many31 = Array.from({ length: 31 }, (_, i) => ind(i));
   const cR = build([...many31, ...crowds], locWithExtras).referenceImages;
-  ok("C: cap respected, char front refs fill it", cR.length === 30 && cR.every(x => /c\d+-f\.jpg$/.test(x)));
+  ok("C: cap respected, char full-body refs fill it", cR.length === 30 && cR.every(x => /c\d+-full\.jpg$/.test(x)));
 }
 
 // 5. Route body schemas.

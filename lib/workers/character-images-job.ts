@@ -5,13 +5,15 @@ import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from
 
 import { VISUAL_STYLE_ID, isChildAppearance, type CharacterRefKind } from "@/lib/visual-style";
 // Stage 46D: prompt wrappers that append the full-body proportion rule to every full-length frame.
-import { characterShotPrompt, characterExtraShotPrompt } from "@/lib/full-body-prompt";
+import { characterShotPrompt } from "@/lib/full-body-prompt";
 import { detectC2paFromUrl } from "@/lib/c2pa";
 import { checkFullBodyImage, fullBodyPasses, fullBodyScore, fullBodyCorrectionSuffix, evaluateProportions, type FullBodyCheck, type ProportionDefect } from "@/lib/full-body-check";
-import { CHARACTER_PHOTO_COUNT, REF_BATCH_CONCURRENCY, runWithConcurrency, parseImageArray } from "@/lib/reference-counts";
+import { REF_BATCH_CONCURRENCY, runWithConcurrency } from "@/lib/reference-counts";
 
-// Stage 18: every character reference has 3 photos — the 3 canonical shots (front, profile,
-// full). No extra angles are generated (EXTRA_COUNT resolves to 0).
+// Stage 53: a character reference is a SINGLE photo — the full-body FRONT shot (imageFull). The front
+// portrait, the profile and the extra angles are no longer auto-generated; they are only produced when
+// the user asks for them from the character card (POST /api/ai/characters/[id]/shot). BASE_SHOTS still
+// lists all three slots so genBaseShot/SHOT_FIELDS stay reusable by that manual route's shared code.
 const BASE_SHOTS = ["front", "profile", "full"] as const;
 type BaseShot = (typeof BASE_SHOTS)[number];
 const ASPECT_RATIOS: Record<BaseShot, string> = { front: "3:4", profile: "3:4", full: "9:16" };
@@ -21,8 +23,6 @@ const SHOT_FIELDS: Record<BaseShot, "imageFront" | "imageProfile" | "imageFull">
   profile: "imageProfile",
   full: "imageFull",
 };
-/** Extra angles on top of the 3 base shots — 0 in Stage 18 (character = 3 photos). */
-const EXTRA_COUNT = Math.max(0, CHARACTER_PHOTO_COUNT - BASE_SHOTS.length);
 /** Max generations of the full-body shot per character (1 + up to 2 corrective retries). */
 export const FULL_BODY_MAX_ATTEMPTS = 3;
 /** @deprecated kept for older imports — the retry now uses fullBodyCorrectionSuffix (names the exact problem). */
@@ -75,11 +75,13 @@ export interface CharacterImagesJobParams {
 type C2paCheck = { characterId: string; shot: string; ok: boolean; signatures: string[]; bytes: number };
 
 /**
- * Background job: generates the 5 reference photos per character — the 3 canonical shots
- * plus 2 extra angles chained on the front portrait. Up to REF_BATCH_CONCURRENCY (20)
- * Replicate requests run in flight at once; the rest queue and start as slots free up.
- * Every stored photo's C2PA / content-credentials metadata is verified. Idempotent: shots
- * that already exist are skipped, so a resumed/retried job only fills the gaps.
+ * Stage 53 — background job: generates ONE reference photo per character — the full-body FRONT shot
+ * (imageFull), the single visual anchor the video pipeline sends to Seedance (see scene-prompt.ts). It
+ * is produced text-to-image (no face-chain) and passes the framing + proportion guard. The old front
+ * portrait, the profile and the extra angles are NOT auto-generated any more — they are only produced
+ * on demand from the character card (POST /api/ai/characters/[id]/shot). Up to REF_BATCH_CONCURRENCY
+ * (20) Replicate requests run in flight; every stored photo's C2PA metadata is verified. Idempotent:
+ * a character that already has imageFull is skipped, so a resumed/retried job only fills the gaps.
  */
 export async function runCharacterImagesJob({ jobId, projectId, characterIds, imageModel }: CharacterImagesJobParams): Promise<void> {
   try {
@@ -88,23 +90,17 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
       orderBy: { createdAt: "asc" },
     });
 
-    const total = characters.length * CHARACTER_PHOTO_COUNT;
+    // Stage 53: exactly one auto-generated photo per character — the full-body front (imageFull).
+    const total = characters.length;
     let done = 0;
     let failed = 0;
     let c2paMissing = 0;
     const c2paChecks: C2paCheck[] = [];
     // Stage 46D: full-body frames kept despite failing the proportion guard (logged in the job result, no schema change).
     const proportionsWarnings: { characterId: string; name: string; defects: ProportionDefect[] }[] = [];
-    // In-memory view of each character's already-persisted extra angles, so concurrent
-    // extra-shot tasks append without clobbering each other.
-    const extraByChar = new Map<string, string[]>();
-    for (const c of characters) extraByChar.set(c.id, parseImageArray(c.imageExtra));
 
-    // Count photos that already exist (idempotent resume) toward "done".
-    for (const c of characters) {
-      for (const shot of BASE_SHOTS) if ((c as any)[SHOT_FIELDS[shot]]) done += 1;
-      done += Math.min(EXTRA_COUNT, extraByChar.get(c.id)?.length ?? 0);
-    }
+    // Count the full-body photos that already exist (idempotent resume) toward "done".
+    for (const c of characters) if ((c as any).imageFull) done += 1;
 
     const pct = () => 5 + Math.round((done / Math.max(total, 1)) * 95);
     const bump = async (label: string) => { await updateJob(jobId, { progress: pct(), message: `${label} (${done}/${total})` }); };
@@ -153,69 +149,15 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
       }
     };
 
-    // ---- Pass 1a (Stage 49): FRONT face portrait FIRST, as the standalone identity anchor ----
-    // Generated text-to-image (no reference) so the face defines the character's identity and reads at the
-    // stated adult age — the front portrait is what Seedance scene generation uses as the face reference,
-    // so it must NOT be a close-up cropped out of a full-body frame (that reads younger and trips E005).
-    const frontTasks = characters.filter((char) => !(char as any).imageFront).map((char) => ({ char }));
-    await runWithConcurrency(frontTasks, REF_BATCH_CONCURRENCY, async ({ char }) =>
-      genBaseShot(char, "front", null, "face")
-    );
-
-    // ---- Pass 1b: FULL-BODY chained on the FRONT face anchor (same identity, camera stepped back) ----
-    // The proportion guard still runs; the full shot copies the identity from the front portrait.
+    // ---- Stage 53: the ONLY auto-generated shot — the full-body FRONT photo (imageFull) ----
+    // Produced text-to-image (ref=null → no face-chain) so the single stored photo IS the full-body
+    // front the user sees in the scene, then run through the framing + proportion guard inside
+    // genBaseShot (shot === "full" && tier !== "CROWD"). The front portrait, the profile and the extra
+    // angles are NOT generated here any more — they are user-triggered on the character card.
     const fullTasks = characters.filter((char) => !(char as any).imageFull).map((char) => ({ char }));
     await runWithConcurrency(fullTasks, REF_BATCH_CONCURRENCY, async ({ char }) =>
-      genBaseShot(char, "full", ((char as any).imageFront as string | null) ?? null, "face")
+      genBaseShot(char, "full", null, "face")
     );
-
-    // ---- Pass 1c: PROFILE chained on the FRONT face anchor (face identity), falling back to the full shot ----
-    const profileTasks = characters.filter((char) => !(char as any).imageProfile).map((char) => ({ char }));
-    await runWithConcurrency(profileTasks, REF_BATCH_CONCURRENCY, async ({ char }) => {
-      const front = (char as any).imageFront as string | null;
-      const full = (char as any).imageFull as string | null;
-      return genBaseShot(char, "profile", front ?? full ?? null, front ? "face" : "full");
-    });
-
-    // ---- Pass 2: 2 extra angles per character, each chained on the (now stored) front portrait ----
-    if (!(await canceled()) && EXTRA_COUNT > 0) {
-      const extraTasks = characters.flatMap((char) => {
-        const have = extraByChar.get(char.id)?.length ?? 0;
-        const need = Math.max(0, EXTRA_COUNT - have);
-        return Array.from({ length: need }, (_, k) => ({ char, index: have + k }));
-      });
-      await runWithConcurrency(extraTasks, REF_BATCH_CONCURRENCY, async ({ char, index }) => {
-        if (await canceled()) return;
-        const front = (char as any).imageFront as string | null;
-        const full = (char as any).imageFull as string | null;
-        // Even index = right profile (face reference); odd index = full-body BACK — chained on the
-        // full-body anchor so the proportions are copied from a full-length figure, not a close-up.
-        const isFullShot = index % 2 === 1;
-        const ref = isFullShot ? (full ?? front) : (front ?? full);
-        const refKind: CharacterRefKind = ref === full && full ? "full" : "face";
-        if (!ref) { done += 1; await bump("Доп. ракурсы"); return; }
-        try {
-          const remote = await generateImage(
-            { prompt: characterExtraShotPrompt(char.appearance ?? "", char.name, index, refKind, char.promptOverride, char.age), aspect_ratio: isFullShot ? "9:16" : "3:4", image_input: [ref] },
-            { jobId, characterId: char.id, imageModel }
-          );
-          const url = await uploadRemoteToS3(remote, `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/extra-${Date.now()}-${index}.png`, "image/png");
-          const arr = extraByChar.get(char.id) ?? [];
-          arr.push(url);
-          extraByChar.set(char.id, arr);
-          await prisma.character.update({ where: { id: char.id }, data: { imageExtra: JSON.stringify(arr) } });
-          const c2pa = await detectC2paFromUrl(url);
-          c2paChecks.push({ characterId: char.id, shot: `extra-${index}`, ok: c2pa.ok, signatures: c2pa.signatures, bytes: c2pa.bytes });
-          if (!c2pa.ok) { c2paMissing += 1; console.warn(`[images-job] C2PA MISSING on extra-${index} for ${char.name} (${url})`); }
-        } catch (e: any) {
-          failed += 1;
-          console.error(`[images-job] extra-${index} failed for ${char.name}:`, e?.message ?? e);
-        } finally {
-          done += 1;
-          await bump("Доп. ракурсы");
-        }
-      });
-    }
 
     if (await canceled()) { await markCanceled(jobId, `Отменено — готово ${done} из ${total} фото`); return; }
 
