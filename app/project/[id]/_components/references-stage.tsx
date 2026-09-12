@@ -206,6 +206,31 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
     finally { setBulk('') }
   }
 
+  // ---- Stage 46B-2: per-photo «Перегенерировать» (one frame = CHARACTER_REFERENCE_COST), polled until done ----
+  const [shotBusy, setShotBusy] = useState<Record<string, boolean>>({}) // key `${entityId}:${slot}`
+  const shotKey = (entityId: string, slot: string, index?: number) => `${entityId}:${slot}${index !== undefined ? `-${index}` : ''}`
+  const regenShot = async (kind: 'character' | 'location', entityId: string, slot: string, index?: number) => {
+    const key = shotKey(entityId, slot, index)
+    if (shotBusy[key]) return
+    setError(''); setShotBusy((b) => ({ ...b, [key]: true }))
+    try {
+      const body = kind === 'character' ? { shot: slot, index } : { slot, index }
+      const res = await fetch(`/api/ai/${kind === 'character' ? 'characters' : 'locations'}/${entityId}/shot`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) { setError(data?.error ?? 'Не удалось перегенерировать фото'); return }
+      for (let i = 0; i < 400 && data?.jobId && mounted.current; i++) {
+        await new Promise((r) => setTimeout(r, 3000))
+        const jr = await fetch(`/api/jobs/${data.jobId}`, { cache: 'no-store' }).catch(() => null)
+        if (!jr || !jr.ok) continue
+        const jd = await jr.json().catch(() => ({}))
+        const st = jd?.job?.status
+        if (st === 'completed') break
+        if (st === 'failed' || st === 'canceled') { setError(jd?.job?.error ?? 'Перегенерация фото не удалась'); break }
+      }
+      await tick()
+    } catch { setError('Ошибка сети') } finally { setShotBusy((b) => { const n = { ...b }; delete n[key]; return n }) }
+  }
+
   const generateLocation = async (locationId: string) => {
     setError('')
     const res = await fetch(`/api/ai/locations/${locationId}/image`, { method: 'POST' })
@@ -372,7 +397,7 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                   key={c.id}
                   char={c}
                   busy={!!gen}
-                  extra={<ReferenceImages char={c} generating={!!gen} message={gen && gen !== 'local' ? gen.message : null} />}
+                  extra={<ReferenceImages char={c} generating={!!gen} message={gen && gen !== 'local' ? gen.message : null} onRegen={(shot) => regenShot('character', c.id, shot)} shotBusy={(shot) => !!shotBusy[shotKey(c.id, shot)]} />}
                   footer={<AppearanceEditor characterId={c.id} disabled={!!gen} onSubmit={changeAppearance} />}
                 />
               )
@@ -404,10 +429,13 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                   busy={!!gen}
                   onRevise={reviseLocation}
                   media={
-                    <div className="relative mb-3 aspect-[9/16] max-h-64 w-full overflow-hidden rounded-lg bg-muted">
+                    <div className="group relative mb-3 aspect-[9/16] max-h-64 w-full overflow-hidden rounded-lg bg-muted">
                       {has ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={loc.imageUrl as string} alt={loc.name} className="h-full w-full object-cover" data-testid="location-image" />
+                        <>
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={loc.imageUrl as string} alt={loc.name} className="h-full w-full object-cover" data-testid="location-image" />
+                          <RegenBtn testId="regen-shot-master" busy={!!gen || !!activeExtra[loc.id]} spinning={!!shotBusy[shotKey(loc.id, 'master')]} onClick={() => regenShot('location', loc.id, 'master')} />
+                        </>
                       ) : gen ? (
                         <div className="flex h-full w-full items-center justify-center" data-testid="location-spinner">
                           <Loader2 className="h-5 w-5 animate-spin text-primary" />
@@ -420,9 +448,12 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                       )}
                       {has && (validUrl(loc.imageReverse) || validUrl(loc.imageDetail)) && (
                         <div className="absolute bottom-1 right-1 flex gap-1" data-testid="location-angles">
-                          {[{ url: loc.imageReverse, label: 'Обратный ракурс' }, { url: loc.imageDetail, label: 'Средний план' }].filter((a) => validUrl(a.url)).map((a) => (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img key={a.label} src={a.url as string} alt={`${loc.name} — ${a.label}`} title={a.label} className="h-14 w-8 rounded border border-background object-cover shadow" />
+                          {[{ url: loc.imageReverse, label: 'Обратный ракурс', slot: 'reverse' }, { url: loc.imageDetail, label: 'Средний план', slot: 'detail' }].filter((a) => validUrl(a.url)).map((a) => (
+                            <span key={a.label} className="group relative block">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={a.url as string} alt={`${loc.name} — ${a.label}`} title={a.label} className="h-14 w-8 rounded border border-background object-cover shadow" />
+                              <RegenBtn testId={`regen-shot-${a.slot}`} busy={!!gen || !!activeExtra[loc.id]} spinning={!!shotBusy[shotKey(loc.id, a.slot)]} onClick={() => regenShot('location', loc.id, a.slot)} />
+                            </span>
                           ))}
                         </div>
                       )}
@@ -453,8 +484,11 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                             {extras.length > 0 && (
                               <div className="mb-2 flex flex-wrap gap-1" data-testid="location-extra-thumbs">
                                 {extras.map((url, i) => (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img key={url} src={url} alt={`${loc.name} — ${locationExtraLabel(i)}`} title={`${i + 1}. ${locationExtraLabel(i)}`} className="h-14 w-8 rounded border border-background object-cover shadow" />
+                                  <span key={url} className="group relative block">
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img src={url} alt={`${loc.name} — ${locationExtraLabel(i)}`} title={`${i + 1}. ${locationExtraLabel(i)}`} className="h-14 w-8 rounded border border-background object-cover shadow" />
+                                    <RegenBtn testId={`regen-shot-extra-${i}`} busy={!!gen || busyExtra} spinning={!!shotBusy[shotKey(loc.id, 'extra', i)]} onClick={() => regenShot('location', loc.id, 'extra', i)} />
+                                  </span>
                                 ))}
                               </div>
                             )}
@@ -502,16 +536,38 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
   )
 }
 
-function ReferenceImages({ char, generating, message }: { char: RefCharacter; generating: boolean; message?: string | null }) {
+/** Stage 46B-2: small overlay button on a photo — RefreshCw + tooltip «Перегенерировать», per-slot spinner. */
+function RegenBtn({ testId, busy, spinning, onClick }: { testId: string; busy: boolean; spinning: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label="Перегенерировать"
+      title="Перегенерировать (1 кредит)"
+      disabled={busy || spinning}
+      data-testid={testId}
+      onClick={(e) => { e.stopPropagation(); onClick() }}
+      className={`absolute left-1 top-1 rounded bg-black/50 p-0.5 transition hover:bg-black/70 disabled:opacity-30 ${spinning ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+    >
+      {spinning ? <Loader2 className="h-3 w-3 animate-spin text-white" /> : <RefreshCw className="h-3 w-3 text-white" />}
+    </button>
+  )
+}
+
+const CHARACTER_SLOT_SHOTS = ['front', 'profile', 'full'] as const
+
+function ReferenceImages({ char, generating, message, onRegen, shotBusy }: { char: RefCharacter; generating: boolean; message?: string | null; onRegen?: (shot: string) => void; shotBusy?: (shot: string) => boolean }) {
   const images = [char.imageFront, char.imageProfile, char.imageFull]
   return (
     <div className="mb-3">
       <div className="grid grid-cols-3 gap-2">
         {images.map((img, i) => (
-          <div key={i} className="relative aspect-[3/4] overflow-hidden rounded-lg bg-muted" title={SHOT_LABELS[i]}>
+          <div key={i} className="group relative aspect-[3/4] overflow-hidden rounded-lg bg-muted" title={SHOT_LABELS[i]}>
             {validUrl(img) ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={img as string} alt={`${char.name} — ${SHOT_LABELS[i]}`} className="h-full w-full object-cover" data-testid="reference-image" />
+              <>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={img as string} alt={`${char.name} — ${SHOT_LABELS[i]}`} className="h-full w-full object-cover" data-testid="reference-image" />
+                {onRegen && <RegenBtn testId={`regen-shot-${CHARACTER_SLOT_SHOTS[i]}`} busy={generating} spinning={!!shotBusy?.(CHARACTER_SLOT_SHOTS[i])} onClick={() => onRegen(CHARACTER_SLOT_SHOTS[i])} />}
+              </>
             ) : generating ? (
               <div className="flex h-full w-full items-center justify-center" data-testid="reference-spinner">
                 <Loader2 className="h-5 w-5 animate-spin text-primary" />

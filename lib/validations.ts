@@ -203,3 +203,25 @@ export async function parseBody<T extends z.ZodTypeAny>(request: Request, schema
   }
   return { ok: true, data: result.data };
 }
+
+// ---------------------------------------------------------------------------
+// Stage 46B-2: per-photo «Перегенерировать» on the references step
+// ---------------------------------------------------------------------------
+
+/** POST /api/ai/characters/[id]/shot — regenerate ONE reference photo of a character. */
+export const characterShotSchema = z.object({
+  shot: z.enum(["front", "profile", "full", "extra"]),
+  /** Position inside imageExtra (required for shot="extra"). */
+  index: z.number().int().min(0).max(9).optional(),
+  imageModel: z.string().max(100).optional(),
+});
+export type CharacterShotInput = z.infer<typeof characterShotSchema>;
+
+/** POST /api/ai/locations/[id]/shot — regenerate ONE reference frame of a location. */
+export const locationShotSchema = z.object({
+  slot: z.enum(["master", "reverse", "detail", "extra"]),
+  /** Position inside imageExtra (required for slot="extra"). */
+  index: z.number().int().min(0).max(19).optional(),
+  imageModel: z.string().max(100).optional(),
+});
+export type LocationShotInput = z.infer<typeof locationShotSchema>;

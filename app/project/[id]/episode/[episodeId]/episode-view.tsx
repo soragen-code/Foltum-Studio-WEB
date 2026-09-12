@@ -244,6 +244,47 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     } catch { return }
   }, [project.id, episode.id])
 
+  // ---- Stage 46B-2: per-photo «Перегенерировать» (one frame = CHARACTER_REFERENCE_COST), polled until done ----
+  const [shotBusy, setShotBusy] = useState<Record<string, boolean>>({}) // key `${entityId}:${slot}`
+  const regenShot = useCallback(async (kind: 'character' | 'location', entityId: string, slot: string, index?: number) => {
+    const key = `${entityId}:${slot}${index !== undefined ? `-${index}` : ''}`
+    if (shotBusy[key]) return
+    setError(''); setShotBusy((b) => ({ ...b, [key]: true }))
+    try {
+      const body = kind === 'character' ? { shot: slot, index, imageModel: imageModelRef.current } : { slot, index, imageModel: imageModelRef.current }
+      const res = await fetch(`/api/ai/${kind === 'character' ? 'characters' : 'locations'}/${entityId}/shot`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) { setError(d?.error ?? 'Не удалось перегенерировать фото'); return }
+      if (typeof d?.creditsRemaining === 'number') setCredits(d.creditsRemaining)
+      // Poll the single-shot job until it reaches a terminal state, then pull the fresh references.
+      for (let i = 0; i < 400 && d?.jobId; i++) {
+        await new Promise((r) => setTimeout(r, 3000))
+        const jr = await fetch(`/api/jobs/${d.jobId}`, { cache: 'no-store' }).catch(() => null)
+        if (!jr || !jr.ok) continue
+        const jd = await jr.json().catch(() => ({}))
+        const st = jd?.job?.status
+        if (st === 'completed') break
+        if (st === 'failed' || st === 'canceled') { setError(jd?.job?.error ?? 'Перегенерация фото не удалась'); break }
+      }
+      await refreshRefs()
+    } catch { setError('Ошибка сети') } finally { setShotBusy((b) => { const n = { ...b }; delete n[key]; return n }) }
+  }, [shotBusy, refreshRefs])
+  const shotIsBusy = (entityId: string, slot: string, index?: number) => !!shotBusy[`${entityId}:${slot}${index !== undefined ? `-${index}` : ''}`]
+  /** Small overlay button on a photo slot — RefreshCw + tooltip «Перегенерировать»; nested inside the photo button, so a span. */
+  const RegenBtn = ({ testId, busy, spinning, onClick }: { testId: string; busy: boolean; spinning: boolean; onClick: () => void }) => (
+    <span
+      role="button"
+      aria-label="Перегенерировать"
+      title="Перегенерировать (1 кредит)"
+      aria-disabled={busy || spinning}
+      data-testid={testId}
+      onClick={(e) => { e.stopPropagation(); e.preventDefault(); if (!busy && !spinning) onClick() }}
+      className={`absolute left-1 top-1 rounded bg-black/50 p-0.5 transition ${spinning ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} ${busy && !spinning ? 'pointer-events-none opacity-30' : 'hover:bg-black/70'}`}
+    >
+      {spinning ? <Loader2 className="h-3 w-3 animate-spin text-white" /> : <RefreshCw className="h-3 w-3 text-white" />}
+    </span>
+  )
+
   // Stage 17: mirror the current character/location lists into refs so the poll effect below can read
   // them WITHOUT listing them in its dependency array. refreshRefs() replaces these arrays on every
   // tick (new object references), so if the effect depended on them it would tear down and restart on
@@ -810,6 +851,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img src={img as string} alt={`${c.name} — ${SHOT_LABELS[i] ?? 'фото'}`} className="h-full w-full object-cover" />
                             <span className="absolute right-1 top-1 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
+                            {(() => { const shot = i === 0 ? 'front' : i === 1 ? 'profile' : i === 2 ? 'full' : 'extra'; const idx = i >= 3 ? i - 3 : undefined; return (
+                              <RegenBtn testId={`regen-shot-${shot}${idx !== undefined ? `-${idx}` : ''}`} busy={busy} spinning={shotIsBusy(c.id, shot, idx)} onClick={() => regenShot('character', c.id, shot, idx)} />
+                            ) })()}
                           </>
                         ) : busy ? (
                           <div className="flex h-full w-full items-center justify-center"><Loader2 className="h-4 w-4 animate-spin text-primary" /></div>
@@ -838,7 +882,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <div className="mt-2 grid gap-4 sm:grid-cols-2">
             {refLocs.map((l) => {
               const detail = locationDetailLevel(l)
-              const base = [{ url: l.imageUrl, label: 'Общий план' }, { url: l.imageReverse, label: 'Обратный ракурс' }, { url: l.imageDetail, label: 'Средний план' }].filter((a) => validUrl(a.url))
+              const base = [{ url: l.imageUrl, label: 'Общий план', slot: 'master' }, { url: l.imageReverse, label: 'Обратный ракурс', slot: 'reverse' }, { url: l.imageDetail, label: 'Средний план', slot: 'detail' }].filter((a) => validUrl(a.url))
               const extras = parseExtra(l.imageExtra)
               // This location has a running master-frame / extra-angle job (server truth; before the first tick — the job we just started).
               const locGen = refSession && !locCanceled.current.has(l.id) && (locActive.has(l.id) || (!tickSeen && (!!refJobs.current.loc[l.id] || !!refJobs.current.extra[l.id])))
@@ -851,11 +895,12 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                     <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground" title="Рекомендуемое число кадров зависит от требуемой детализации локации; добавляйте ракурсы по «+» при необходимости" data-testid="location-detail-badge">детализация: {locationDetailLabel(detail)} · рекомендуется {desiredTotalFrames(l)}</span>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {(() => { const all = [...base.map((a) => ({ url: a.url as string, label: a.label })), ...extras.map((u, i) => ({ url: u, label: `${i + 1}. ${locationExtraLabel(i)}` }))]; const urls = all.map((a) => a.url); return base.length > 0 ? all.map((a, i) => (
+                    {(() => { const all = [...base.map((a) => ({ url: a.url as string, label: a.label, slot: a.slot, idx: undefined as number | undefined })), ...extras.map((u, i) => ({ url: u, label: `${i + 1}. ${locationExtraLabel(i)}`, slot: 'extra', idx: i }))]; const urls = all.map((a) => a.url); return base.length > 0 ? all.map((a, i) => (
                       <button key={a.url + i} type="button" onClick={() => openLightbox(urls, i, `${l.name} — ${a.label}`)} className="group relative h-24 w-16 overflow-hidden rounded bg-muted" title={a.label} data-testid="ref-image">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={a.url} alt={`${l.name} — ${a.label}`} className="h-full w-full object-cover" />
                         <span className="absolute right-0.5 top-0.5 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
+                        <RegenBtn testId={`regen-shot-${a.slot}${a.idx !== undefined ? `-${a.idx}` : ''}`} busy={busy} spinning={shotIsBusy(l.id, a.slot, a.idx)} onClick={() => regenShot('location', l.id, a.slot, a.idx)} />
                       </button>
                     )) : busy ? (
                       <div className="flex h-24 w-16 items-center justify-center rounded bg-muted"><Loader2 className="h-4 w-4 animate-spin text-primary" /></div>

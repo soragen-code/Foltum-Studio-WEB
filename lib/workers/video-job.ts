@@ -201,7 +201,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     const lookPrevious = previous && look.texts.openingState ? { ...previous, endStateActual: null, endState: null } : previous;
     const built = buildScenePrompt({
       scene: lookScene,
-      characters: links.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront, imageFull: l.character.imageFull, appearance: l.character.appearance, age: l.character.age })),
+      characters: links.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront, imageProfile: l.character.imageProfile, imageFull: l.character.imageFull, imageExtra: l.character.imageExtra, appearance: l.character.appearance, age: l.character.age })),
       location: episodeLoc?.location ?? null,
       previous: lookPrevious,
       provider: params.provider,
