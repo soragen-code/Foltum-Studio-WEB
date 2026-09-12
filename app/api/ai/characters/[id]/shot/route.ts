@@ -11,7 +11,9 @@ import { runInBackground, completeJob, failJob } from "@/lib/jobs";
 import { generateImage } from "@/lib/replicate";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { generateFullBodyWithGuard } from "@/lib/workers/character-images-job";
-import { characterImagePrompt, characterExtraAnglePrompt, VISUAL_STYLE_ID, isChildAppearance, type CharacterRefKind } from "@/lib/visual-style";
+import { VISUAL_STYLE_ID, isChildAppearance, type CharacterRefKind } from "@/lib/visual-style";
+// Stage 46D: full-length frames (shot=full, full-body extras) carry the proportion rule; close-ups do not.
+import { characterShotPrompt, characterExtraShotPrompt } from "@/lib/full-body-prompt";
 import { parseImageArray } from "@/lib/reference-counts";
 import { CHARACTER_REFERENCE_COST } from "@/lib/power-tier";
 
@@ -116,7 +118,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           if (!ref) throw new Error("No base photo to chain the extra angle on");
           const refKind: CharacterRefKind = ref === full && full ? "full" : "face";
           remote = await generateImage(
-            { prompt: characterExtraAnglePrompt(appearance, char.name, index!, refKind), aspect_ratio: isFullShot ? "9:16" : "3:4", image_input: [ref] },
+            { prompt: characterExtraShotPrompt(appearance, char.name, index!, refKind), aspect_ratio: isFullShot ? "9:16" : "3:4", image_input: [ref] },
             ctx
           );
           s3Key = `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/extra-${Date.now()}-${index}.png`;
@@ -129,10 +131,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           else if (shot === "profile") { ref = front ?? full ?? null; refKind = front ? "face" : "full"; }
           else if (shot === "full") { ref = front ?? null; refKind = "face"; }
           const chained = !!ref;
-          const basePrompt = characterImagePrompt(appearance, shot, char.name, char.tier, char.groupSize, chained, refKind);
+          const basePrompt = characterShotPrompt(appearance, shot, char.name, char.tier, char.groupSize, chained, refKind);
           const gen = (prompt: string) => generateImage({ prompt, aspect_ratio: ASPECT[shot], ...(chained ? { image_input: [ref!] } : {}) }, ctx);
           if (shot === "full" && char.tier !== "CROWD") {
-            remote = (await generateFullBodyWithGuard(basePrompt, gen, { child: isChildAppearance(appearance), label: char.name })).url;
+            // Framing + Stage 46D proportion guard (one vision call per attempt, bounded retries); the best
+            // candidate is kept when all attempts fail and its remaining defects are logged.
+            const r = await generateFullBodyWithGuard(basePrompt, gen, { child: isChildAppearance(appearance), label: char.name });
+            remote = r.url;
+            if (r.proportionsWarning?.length) console.warn(`[characters/shot] proportionsWarning for ${char.name}/full:`, JSON.stringify(r.proportionsWarning));
           } else {
             remote = await gen(basePrompt);
           }

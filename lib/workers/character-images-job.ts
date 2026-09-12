@@ -3,9 +3,11 @@ import { generateImage } from "@/lib/replicate";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 
-import { characterImagePrompt, characterExtraAnglePrompt, VISUAL_STYLE_ID, isChildAppearance, type CharacterRefKind } from "@/lib/visual-style";
+import { VISUAL_STYLE_ID, isChildAppearance, type CharacterRefKind } from "@/lib/visual-style";
+// Stage 46D: prompt wrappers that append the full-body proportion rule to every full-length frame.
+import { characterShotPrompt, characterExtraShotPrompt } from "@/lib/full-body-prompt";
 import { detectC2paFromUrl } from "@/lib/c2pa";
-import { checkFullBodyImage, fullBodyPasses, fullBodyScore, fullBodyCorrectionSuffix, type FullBodyCheck } from "@/lib/full-body-check";
+import { checkFullBodyImage, fullBodyPasses, fullBodyScore, fullBodyCorrectionSuffix, evaluateProportions, type FullBodyCheck, type ProportionDefect } from "@/lib/full-body-check";
 import { CHARACTER_PHOTO_COUNT, REF_BATCH_CONCURRENCY, runWithConcurrency, parseImageArray } from "@/lib/reference-counts";
 
 // Stage 18: every character reference has 3 photos — the 3 canonical shots (front, profile,
@@ -27,16 +29,19 @@ export const FULL_BODY_MAX_ATTEMPTS = 3;
 export const FULL_BODY_RETRY_SUFFIX = " Wider framing — step the camera further back so the shoes and the floor are clearly visible.";
 
 /**
- * Generate the full-body shot with the proportion guard: vision-check each attempt and, when it fails
- * (dwarf-like proportions / cropped body), regenerate with an escalated corrective prompt naming the exact
- * problem — up to FULL_BODY_MAX_ATTEMPTS generations. Returns the first passing attempt, or the BEST
- * failing one so the character never ends up without an image. A failing/skipped CHECK keeps the image.
+ * Generate the full-body shot with the framing + proportion guard: ONE vision check per attempt decides
+ * both framing (cropped body / dwarf figure) and Stage 46D proportions (elongated torso, short legs, small
+ * head, inconsistent volume); when it fails, regenerate with an escalated corrective prompt naming the exact
+ * problem — up to FULL_BODY_MAX_ATTEMPTS generations in total (framing and proportion retries share the
+ * budget). Returns the first passing attempt, or the BEST failing one (fewest / least severe defects,
+ * framing OK preferred) so the character never ends up without an image — with `proportionsWarning`
+ * listing the remaining defects (logged; no DB change). A failing/skipped CHECK keeps the image.
  */
 export async function generateFullBodyWithGuard(
   basePrompt: string,
   gen: (prompt: string) => Promise<string>,
   opts: { child?: boolean; label?: string; check?: (url: string) => Promise<FullBodyCheck | null>; canceled?: () => Promise<boolean>; maxAttempts?: number } = {}
-): Promise<{ url: string; check: FullBodyCheck | null; attempts: number; passed: boolean }> {
+): Promise<{ url: string; check: FullBodyCheck | null; attempts: number; passed: boolean; proportionsWarning?: ProportionDefect[] }> {
   const check = opts.check ?? checkFullBodyImage;
   const max = opts.maxAttempts ?? FULL_BODY_MAX_ATTEMPTS;
   let best: { url: string; check: FullBodyCheck | null; score: number } | null = null;
@@ -54,8 +59,9 @@ export async function generateFullBodyWithGuard(
     last = c;
     if (opts.canceled && (await opts.canceled())) break;
   }
-  console.warn(`[images-job] full-body for ${opts.label ?? "character"} failed the proportion check after ${max} attempts — keeping the best one`);
-  return { url: best!.url, check: best!.check, attempts: max, passed: false };
+  const defects = evaluateProportions(best!.check?.proportions).defects;
+  console.warn(`[images-job] full-body for ${opts.label ?? "character"} failed the framing/proportion check after ${max} attempts — keeping the best one`, JSON.stringify({ proportionsWarning: defects, issues: best!.check?.issues ?? [] }));
+  return { url: best!.url, check: best!.check, attempts: max, passed: false, proportionsWarning: defects };
 }
 
 export interface CharacterImagesJobParams {
@@ -87,6 +93,8 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
     let failed = 0;
     let c2paMissing = 0;
     const c2paChecks: C2paCheck[] = [];
+    // Stage 46D: full-body frames kept despite failing the proportion guard (logged in the job result, no schema change).
+    const proportionsWarnings: { characterId: string; name: string; defects: ProportionDefect[] }[] = [];
     // In-memory view of each character's already-persisted extra angles, so concurrent
     // extra-shot tasks append without clobbering each other.
     const extraByChar = new Map<string, string[]>();
@@ -112,7 +120,7 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
       if (await canceled()) return;
       const chained = !!ref;
       try {
-        const basePrompt = characterImagePrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize, chained, refKind);
+        const basePrompt = characterShotPrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize, chained, refKind);
         const gen = (prompt: string) => generateImage(
           { prompt, aspect_ratio: ASPECT_RATIOS[shot], ...(chained ? { image_input: [ref!] } : {}) },
           { jobId, characterId: char.id, imageModel }
@@ -125,6 +133,7 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
         if (shot === "full" && char.tier !== "CROWD") {
           const r = await generateFullBodyWithGuard(basePrompt, gen, { child: isChildAppearance(char.appearance ?? ""), label: char.name, canceled });
           replicateUrl = r.url;
+          if (r.proportionsWarning?.length) proportionsWarnings.push({ characterId: char.id, name: char.name, defects: r.proportionsWarning });
         } else {
           replicateUrl = await gen(basePrompt);
         }
@@ -186,7 +195,7 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
         if (!ref) { done += 1; await bump("Доп. ракурсы"); return; }
         try {
           const remote = await generateImage(
-            { prompt: characterExtraAnglePrompt(char.appearance ?? "", char.name, index, refKind), aspect_ratio: isFullShot ? "9:16" : "3:4", image_input: [ref] },
+            { prompt: characterExtraShotPrompt(char.appearance ?? "", char.name, index, refKind), aspect_ratio: isFullShot ? "9:16" : "3:4", image_input: [ref] },
             { jobId, characterId: char.id, imageModel }
           );
           const url = await uploadRemoteToS3(remote, `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/extra-${Date.now()}-${index}.png`, "image/png");
@@ -211,7 +220,7 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
 
     await completeJob(
       jobId,
-      { total, failed, c2paOk: c2paMissing === 0, c2paMissing, c2paChecks },
+      { total, failed, c2paOk: c2paMissing === 0, c2paMissing, c2paChecks, ...(proportionsWarnings.length ? { proportionsWarnings } : {}) },
       failed > 0 ? `Готово — не удалось ${failed} из ${total} фото` : "Все фото персонажей готовы"
     );
   } catch (err: any) {

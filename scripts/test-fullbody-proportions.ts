@@ -58,7 +58,7 @@ function unit() {
   const s2 = fullBodyCorrectionSuffix({ ...ok, proportionsOk: false, headsTall: 5.2, issues: ["oversized head", "short legs"] }, 2);
   assert.match(s2, /oversized head/);
   assert.match(s2, /short stubby legs/);
-  assert.match(s2, /8 heads tall/);
+  assert.match(s2, /7\.5 heads tall \(never 8 or more\)/, "Stage 46D: the dwarf correction no longer asks for 8 heads (that trips the small-head threshold)");
   assert.doesNotMatch(s2, /Step the camera further back/);
   const s3 = fullBodyCorrectionSuffix({ ...ok, proportionsOk: false, headsTall: 5.2, issues: [] }, 3);
   assert.match(s3, /5\.2 heads tall/);
@@ -114,6 +114,12 @@ async function unitGuard() {
   const r2 = await generateFullBodyWithGuard("BASE", async (p) => { prompts.push(p); return `u${++n}`; }, { check: async (u) => bad(heads[Number(u.slice(1)) - 1]) });
   assert.equal(prompts.length, 3); assert.equal(r2.url, "u2"); assert.equal(r2.passed, false);
   assert.match(prompts[2], /attempt 3/);
+  // Stage 46D: framing OK but proportions stretched → retried with the proportion fix, passes on attempt 2
+  n = 0; prompts.length = 0;
+  const stretched: FullBodyCheck = { ...good, proportions: { headsTall: 8.6, torsoHeads: 4.1, legsRatio: 0.4, flags: { elongatedTorso: true, shortLegs: true, smallHead: true, inconsistentVolume: true }, notes: "" } };
+  const r5 = await generateFullBodyWithGuard("BASE", async (p) => { prompts.push(p); return `u${++n}`; }, { check: async (u) => (u === "u1" ? stretched : good) });
+  assert.equal(r5.url, "u2"); assert.equal(r5.passed, true); assert.equal(r5.proportionsWarning, undefined);
+  assert.match(prompts[1], /PROPORTION FIX \(the previous attempt had: elongatedTorso, shortLegs, smallHead, inconsistentVolume\)/);
   // check unavailable → keep first, no retries
   n = 0; prompts.length = 0;
   const r3 = await generateFullBodyWithGuard("BASE", async () => `u${++n}`, { check: async () => null });
