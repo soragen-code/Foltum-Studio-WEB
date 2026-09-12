@@ -127,4 +127,17 @@ const ok = (name: string, cond: boolean) => { assert.ok(cond, name); n++; };
   ok("frameDelete: bad slot / negative index", !locationFrameDeleteSchema.safeParse({ slot: "x" }).success && !locationFrameDeleteSchema.safeParse({ slot: "extra", index: -1 }).success);
 }
 
+// ---- Stage 46E-1: static UI checks (reset character prompt on card, delete frame without confirm) ----
+{
+  const { readFileSync } = require("node:fs") as typeof import("node:fs");
+  const refs = readFileSync("app/project/[id]/_components/references-stage.tsx", "utf8");
+  const ep = readFileSync("app/project/[id]/episode/[episodeId]/episode-view.tsx", "utf8");
+  const tb = readFileSync("app/project/[id]/_components/frame-toolbar.tsx", "utf8");
+  ok("references-stage: char-prompt-reset button", refs.includes('data-testid="char-prompt-reset"') && refs.includes("resetCharacterPrompt"));
+  ok("episode-view: char-prompt-reset button", ep.includes('data-testid="char-prompt-reset"') && ep.includes("resetCharacterPrompt"));
+  ok("char reset sends prompt:''", refs.includes("JSON.stringify({ prompt: '' })") && ep.includes("JSON.stringify({ prompt: '' })"));
+  ok("frame-toolbar: no confirm step", !tb.includes("Удалить кадр?") && !tb.includes("-confirm") && !tb.includes("setAsk"));
+  ok("frame-toolbar: delete calls onClick directly", tb.includes("await del.onClick()"));
+}
+
 console.log(`stage46e: ${n} checks passed`);

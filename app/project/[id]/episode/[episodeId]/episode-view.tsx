@@ -290,6 +290,20 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     setRefLocs((prev) => prev.map((l) => (l.id === locationId ? { ...l, visualPrompt: d.prompt, visualPromptAuto: d.autoPrompt } : l)))
   }, [])
   const [locResetting, setLocResetting] = useState<Record<string, boolean>>({})
+  // Stage 46E-1: reset character prompt override straight from the card (no modal)
+  const [charResetting, setCharResetting] = useState<Record<string, boolean>>({})
+  const resetCharacterPrompt = useCallback(async (characterId: string) => {
+    setError('')
+    setCharResetting((prev) => ({ ...prev, [characterId]: true }))
+    try {
+      const res = await fetch(`/api/ai/characters/${characterId}/prompt`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: '' }) })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) { setError(d?.error ?? 'Не удалось сбросить промпт'); return }
+      setRefChars((prev) => prev.map((c) => (c.id === characterId ? { ...c, promptOverride: null } : c)))
+    } finally {
+      setCharResetting((prev) => ({ ...prev, [characterId]: false }))
+    }
+  }, [])
   const locHasPromptOverride = (l: any) => l?.visualPromptAuto != null && String(l.visualPrompt ?? '').trim() !== String(l.visualPromptAuto ?? '').trim()
 
   // Stage 17: mirror the current character/location lists into refs so the poll effect below can read
@@ -881,6 +895,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                           <FileText className="h-3.5 w-3.5" /> Промпт
                         </button>
                         <DownloadAllButton kind="character" id={c.id} count={photos.length} />
+                        {!!(c.promptOverride && String(c.promptOverride).trim()) && (
+                          <button type="button" disabled={busy || !!charResetting[c.id]} onClick={() => resetCharacterPrompt(c.id)} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="char-prompt-reset" title="Убрать ручной промпт и вернуть автоматический">
+                            {charResetting[c.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Сбросить промпт на авто
+                          </button>
+                        )}
                         {!!(c.promptOverride && String(c.promptOverride).trim()) && <span className="rounded bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="character-prompt-override">Промпт изменён вручную</span>}
                       </div>
                       <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">

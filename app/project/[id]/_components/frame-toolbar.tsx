@@ -13,7 +13,7 @@ export interface FrameToolbarProps {
   regen: { testId: string; busy: boolean; spinning: boolean; onClick: () => void }
   /** Download through the owner-checked proxy (`/api/files/download?url=…&name=…`). */
   download?: { url: string; name: string }
-  /** Delete with an inline one-tap confirm. `disabledTitle` is shown when the frame cannot be removed (min 1 / generating). */
+  /** Delete immediately (no confirm step, Stage 46E-1) with a spinner while pending. `disabledTitle` is shown when the frame cannot be removed (min 1 / generating). */
   del?: { onClick: () => Promise<void> | void; disabled?: boolean; disabledTitle?: string; testId: string }
 }
 
@@ -35,25 +35,10 @@ export function triggerDownload(href: string, name?: string) {
 const ROW = 'inline-flex w-full cursor-pointer items-center justify-center gap-1 rounded bg-black/60 px-1 py-0.5 text-[10px] font-medium leading-none text-white transition hover:bg-black/80'
 
 export function FrameToolbar({ regen, download, del }: FrameToolbarProps) {
-  const [ask, setAsk] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const stop = (e: React.SyntheticEvent) => { e.stopPropagation(); e.preventDefault() }
   const regenOff = regen.busy || regen.spinning
   const delOff = !!del?.disabled || deleting || regen.spinning
-
-  if (del && ask) {
-    return (
-      <span className="absolute inset-x-1 bottom-1 flex flex-col gap-0.5" onClick={stop} data-testid={`${del.testId}-confirm`}>
-        <span className="rounded bg-black/70 px-1 py-0.5 text-center text-[10px] font-medium leading-none text-white">Удалить кадр?</span>
-        <span className="flex gap-0.5">
-          <span role="button" aria-label="Да, удалить" data-testid={`${del.testId}-yes`} className={`${ROW} bg-red-600/90 hover:bg-red-600`} onClick={async (e) => { stop(e); if (deleting) return; setDeleting(true); try { await del.onClick() } finally { setDeleting(false); setAsk(false) } }}>
-            {deleting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />} Да
-          </span>
-          <span role="button" aria-label="Нет" data-testid={`${del.testId}-no`} className={ROW} onClick={(e) => { stop(e); setAsk(false) }}>Нет</span>
-        </span>
-      </span>
-    )
-  }
 
   return (
     <span className="absolute inset-x-1 bottom-1 flex flex-col gap-0.5" onClick={stop} data-testid="frame-toolbar">
@@ -88,10 +73,10 @@ export function FrameToolbar({ regen, download, del }: FrameToolbarProps) {
           title={delOff ? (del.disabledTitle ?? 'Сейчас нельзя удалить') : 'Удалить кадр'}
           aria-disabled={delOff}
           data-testid={del.testId}
-          onClick={(e) => { stop(e); if (!delOff) setAsk(true) }}
+          onClick={async (e) => { stop(e); if (delOff) return; setDeleting(true); try { await del.onClick() } finally { setDeleting(false) } }}
           className={`${ROW} ${delOff ? 'pointer-events-none opacity-40' : 'hover:bg-red-700/80'}`}
         >
-          <Trash2 className="h-3 w-3 flex-shrink-0" /> <span className="truncate">Удалить</span>
+          {deleting ? <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin" /> : <Trash2 className="h-3 w-3 flex-shrink-0" />} <span className="truncate">Удалить</span>
         </span>
       )}
     </span>

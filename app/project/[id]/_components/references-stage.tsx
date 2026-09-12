@@ -2,7 +2,7 @@
 
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Loader2, Wand2, ArrowRight, ImageOff, Users, RefreshCw, MapPin, Camera, FileText } from 'lucide-react'
+import { Loader2, Wand2, ArrowRight, ImageOff, Users, RefreshCw, MapPin, Camera, FileText, RotateCcw } from 'lucide-react'
 import { FrameToolbar, DownloadAllButton } from './frame-toolbar'
 import { PromptModal, CHARACTER_PROMPT_DESCRIPTION, LOCATION_PROMPT_DESCRIPTION } from './prompt-modal'
 import { referenceFileName } from '@/lib/download-name'
@@ -253,6 +253,20 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
     if (!res.ok) { setError(data?.error ?? 'Не удалось сбросить промпт'); return }
     setLocations((prev) => prev.map((l) => (l.id === locationId ? { ...l, visualPrompt: data.prompt, visualPromptAuto: data.autoPrompt } : l)))
   }
+  // Stage 46E-1: reset character prompt override straight from the card (no modal)
+  const [charResetting, setCharResetting] = useState<Record<string, boolean>>({})
+  const resetCharacterPrompt = async (characterId: string) => {
+    setError('')
+    setCharResetting((prev) => ({ ...prev, [characterId]: true }))
+    try {
+      const res = await fetch(`/api/ai/characters/${characterId}/prompt`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: '' }) })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) { setError(data?.error ?? 'Не удалось сбросить промпт'); return }
+      setCharacters((prev) => prev.map((c) => (c.id === characterId ? { ...c, promptOverride: null } : c)))
+    } finally {
+      setCharResetting((prev) => ({ ...prev, [characterId]: false }))
+    }
+  }
   const locationFrameCount = (loc: LocationCardData) => [loc.imageUrl, loc.imageReverse, loc.imageDetail].filter(validUrl).length + parseExtra(loc.imageExtra).length
   const characterFrameCount = (c: RefCharacter) => [c.imageFront, c.imageProfile, c.imageFull].filter(validUrl).length + parseExtra(c.imageExtra).length
 
@@ -431,6 +445,11 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                           <FileText className="h-3.5 w-3.5" /> Промпт
                         </button>
                         <DownloadAllButton kind="character" id={c.id} count={characterFrameCount(c)} />
+                        {!!(c.promptOverride && c.promptOverride.trim()) && (
+                          <button type="button" disabled={!!gen || !!charResetting[c.id]} onClick={() => resetCharacterPrompt(c.id)} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="char-prompt-reset" title="Убрать ручной промпт и вернуть автоматический">
+                            {charResetting[c.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Сбросить промпт на авто
+                          </button>
+                        )}
                         {!!(c.promptOverride && c.promptOverride.trim()) && <span className="rounded bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="character-prompt-override">Промпт изменён вручную</span>}
                       </div>
                     </>
