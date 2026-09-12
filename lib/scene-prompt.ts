@@ -21,6 +21,7 @@ import { buildNativeAudioPrompt, buildNarrationAudioPrompt } from "@/lib/voiceov
 import { PACE_DIRECTION, ACTION_PACE_DIRECTION, CONFRONTATION_STAGING_SENTENCE } from "@/lib/season";
 import { styledVisualPrompt, isStyledAsset, locationAngleImages, parseLocationExtra, locationExtraLabel } from "@/lib/visual-style";
 import { normalizeVideoModel, videoModelSlug, type VideoModelId } from "@/lib/ai-models";
+import { matchPropsInText, type PropRegistryEntry } from "@/lib/prop-registry";
 
 /**
  * Stage 36: hard cap on reference images per submission — the provider maximum for Seedance 2.5
@@ -215,6 +216,13 @@ export interface BuildScenePromptInput {
    * text-only instead of generating a new-scene Flux still (test episodes, reference-less projects).
    */
   textOnlyWhenNoReferences?: boolean;
+  /**
+   * Stage 54 — the episode's PROP REGISTRY (variant B). The full list of the episode's key recurring
+   * props with their canonical English descriptions; the builder substitutes the description of every
+   * prop whose name appears in THIS scene VERBATIM into the «CLOTHING & PROPS» section, so a prop
+   * (e.g. a blue tin) looks identical in every scene. Empty / omitted = no shared props.
+   */
+  props?: PropRegistryEntry[];
 }
 
 /**
@@ -284,6 +292,82 @@ export function stripSlowDirections(prompt: string): string {
 }
 
 /**
+ * Stage 54 — labels of the deterministic sections injected into every auto prompt (English, fixed).
+ */
+export const SCENE_SECTION = {
+  referenceMap: "REFERENCE MAP",
+  people: "PEOPLE IN FRAME",
+  props: "CLOTHING & PROPS",
+  negatives: "NEGATIVES",
+} as const;
+
+/**
+ * Stage 54 — PEOPLE COUNTER, the main "how many are on screen" signal. Built from the ACTUAL scene
+ * cast (SceneCharacter → Character): every non-crowd link is one named person; crowd-tier links are a
+ * single background group, never named individually. Empty when the scene has no cast at all (b-roll),
+ * so it never claims a false "0 people". Absent people are never listed.
+ */
+export function buildPeopleCounter(individuals: { name: string }[], hasCrowd: boolean): string {
+  const names = individuals.map(c => (c.name ?? "").trim()).filter(Boolean);
+  const n = names.length;
+  if (n === 0 && !hasCrowd) return "";
+  if (n === 0 && hasCrowd) return `${SCENE_SECTION.people}: only a background crowd (extras) is visible — no named individuals in frame.`;
+  const head = n === 1
+    ? `In frame exactly one person: ${names[0]}.`
+    : `In frame exactly ${n} people: ${names.join(", ")}.`;
+  const tail = hasCrowd
+    ? " Plus a background crowd (extras) behind them; no other named individuals in frame."
+    : " No other people in frame.";
+  return `${SCENE_SECTION.people}: ${head}${tail}`;
+}
+
+/**
+ * Stage 54 — compact REFERENCE MAP at the top: which attached image is who, so the model binds
+ * identity before it reads the action. Characters come first and are exactly one image each (Stage 53),
+ * so their Image indices are exact; the remaining images are the location angles (+ crowd), described
+ * without over-committing to indices the cap could shift. Only "same place, same light" is asserted
+ * about the location — its full description stays on the reference photo and is NEVER re-typed here.
+ */
+export function buildReferenceMap(individuals: { name: string }[], locationName: string | null, crowds: { name: string }[]): string {
+  const parts = individuals
+    .map((c, i) => ({ nm: (c.name ?? "").trim(), i }))
+    .filter(x => x.nm)
+    .map(x => `Image${x.i + 1} = ${x.nm}`);
+  const tail: string[] = [];
+  if (locationName) tail.push(`the location "${locationName}" from several angles (same place, same light — only the camera angle changes between shots)`);
+  crowds.forEach(c => { const nm = (c.name ?? "").trim(); if (nm) tail.push(`the crowd "${nm}" (extras)`); });
+  if (!parts.length && !tail.length) return "";
+  const head = parts.length ? `${parts.join(", ")} (each character's single full-body reference, in this order)` : "";
+  const rest = tail.length ? `${head ? "; then " : "the remaining reference images are "}${tail.join(", then ")}` : "";
+  return `${SCENE_SECTION.referenceMap}: ${head}${rest}.`;
+}
+
+/**
+ * Stage 54 — the «CLOTHING & PROPS» section: the canonical descriptions of the props that appear in
+ * this scene, substituted VERBATIM from the episode registry so the same object reads identically in
+ * every scene. Empty when the scene shows none of the registry props.
+ */
+export function buildPropsSection(matched: readonly PropRegistryEntry[]): string {
+  const parts = matched.map(p => (p.description ?? "").trim().replace(/\s*\n+\s*/g, " ")).filter(Boolean);
+  if (!parts.length) return "";
+  const joined = parts.join("; ");
+  return `${SCENE_SECTION.props}: ${joined}${joined.endsWith(".") ? "" : "."}`;
+}
+
+/**
+ * Stage 54 — the fixed NEGATIVES block appended to every auto prompt (never to a manual override).
+ * The base list is identical on every clip; the music / lip-movement lines are added only for an
+ * off-screen-narration scene (a voiceover with no on-camera speaker).
+ */
+export function buildNegatives(isNarration: boolean): string {
+  const base = "no logos, no brand marks, no on-screen text, no subtitles or captions, no watermark, no split screen, no distorted anatomy; no other people in frame than described above";
+  const extra = isNarration
+    ? "; no background music over the narration; no character's lips move to the off-screen narration"
+    : "";
+  return `${SCENE_SECTION.negatives}: ${base}${extra}.`;
+}
+
+/**
  * Assemble the final Seedance prompt for a scene. Pure and deterministic: identical inputs always
  * produce the identical prompt, with no side effects and no real reference URLs in the text.
  */
@@ -302,6 +386,47 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     ? input.resolvedDialogueEn
     : ((scene.dialogueEn ?? "").trim() || scene.dialogue || "");
   const dialogue = isNarration ? "" : resolved;
+
+  // Stage 51/53 — reference SELECTION (single full-body anchor per character, all location angles,
+  // crowds). Moved up in Stage 54 so the REFERENCE MAP / PEOPLE / PROPS sections can name what is sent.
+  // The selection logic itself is UNCHANGED (see the strategy note further down).
+  const anchorUrl = (c: ScenePromptCharacterLink) => (isStyledAsset(c.imageFull) ? c.imageFull! : c.imageFront!);
+  const styled = characters.filter(c => isStyledAsset(c.imageFull) || isStyledAsset(c.imageFront));
+  const individualsAll = styled.filter(c => c.tier !== "CROWD");
+  const crowds = styled.filter(c => c.tier === "CROWD");
+  const mentionText = `${scene.videoPrompt ?? ""}\n${dialogue}\n${scene.voiceover ?? ""}`.toLowerCase();
+  const isMentioned = (name: string) => {
+    const n = name.trim().toLowerCase();
+    return n.length > 0 && mentionText.includes(n);
+  };
+  const mentioned = individualsAll.filter(c => isMentioned(c.name));
+  const unmentioned = individualsAll.filter(c => !isMentioned(c.name));
+  const individuals = [...mentioned, ...unmentioned];
+  const locationAngles = location ? locationAngleImages(location) : [];
+  // Stage 44 — the extra angles of the same photographed place are references too (within the cap).
+  const locationExtras = location ? parseLocationExtra(location.imageExtra).slice(0, LOCATION_EXTRA_REF_CAP) : [];
+  const effectiveLocation = locationAngles.length ? location : null;
+  type Ref = SceneReference & { id: string };
+  const characterRefs: Ref[] = individuals.map(c => ({ url: anchorUrl(c), kind: "character", id: c.characterId, note: `defines ${c.name}'s photorealistic appearance and identity; use the scene's staging and camera.` }));
+  const locationRefs: Ref[] = [
+    ...locationAngles.map(a => ({ url: a.url, angle: a.angle as string })),
+    ...(effectiveLocation ? locationExtras.map((url, i) => ({ url, angle: locationExtraLabel(i) })) : []),
+  ].map(a => ({ url: a.url, kind: "location" as const, id: effectiveLocation!.id, note: `the location "${effectiveLocation!.name}" — ${a.angle} angle. Same place, same time of day, same light and palette in every shot. Keep the camera inside this location and match this lighting exactly.` }));
+  const crowdRefs: Ref[] = crowds.map(c => ({ url: anchorUrl(c), kind: "crowd", id: c.characterId, note: `defines the look of the group "${c.name}" (extras): who they are and how they are dressed.` }));
+  // Reduced set (individual characters + the wide location angle) kept for diagnostics.
+  const fallbackRefs: SceneReference[] = [...characterRefs, ...locationRefs.slice(0, 1)].slice(0, REFERENCE_IMAGE_CAP).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
+
+  // Stage 54 — deterministic sectioned signals injected into the auto prompt (see helpers above):
+  //  • REFERENCE MAP  — which attached image is who (identity binding before the action);
+  //  • PEOPLE IN FRAME — the exact people counter from the ACTUAL cast (main "how many" signal);
+  //  • CLOTHING & PROPS — the episode registry props shown in THIS scene, substituted VERBATIM;
+  //  • NEGATIVES — the fixed do-not block (appended after the body).
+  const matchedProps = matchPropsInText(input.props ?? [], mentionText);
+  const referenceMap = buildReferenceMap(individuals, effectiveLocation ? effectiveLocation.name : null, crowds);
+  const peopleCounter = buildPeopleCounter(characters.filter(c => c.tier !== "CROWD"), characters.some(c => c.tier === "CROWD"));
+  const propsSection = buildPropsSection(matchedProps);
+  const structureBlock = [referenceMap, peopleCounter, propsSection].filter(Boolean).join("\n");
+  const negativesBlock = buildNegatives(isNarration);
 
   // Stage 38: an "action" scene (fight / duel / chase / physical struggle) gets the combat pace &
   // staging block INSTEAD of the talking-scene PACE_DIRECTION; a dialogue scene gets PACE_DIRECTION
@@ -328,8 +453,13 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     endState ? `${END_STATE_PREFIX}${endState}` : "",
     SPEECH_BEFORE_CUT_LINE,
   ].filter(Boolean);
-  const visualWithOpening = stateBlocks.length
-    ? `${stateBlocks.join("\n")}\n\n${stripSlowDirections(visualPrompt)}`
+  // Stage 54 — the deterministic structure block (reference map + people counter + clothing&props)
+  // sits AFTER the state blocks and BEFORE the reused 9-tag body, so the prompt still opens with the
+  // OPENING/END STATE prefixes (Stage 40/41) and the body still begins with "\n\n[SHOT TYPE]".
+  const statesJoined = stateBlocks.length ? stateBlocks.join("\n") : "";
+  const preBody = [statesJoined, structureBlock].filter(Boolean).join("\n\n");
+  const visualWithOpening = preBody
+    ? `${preBody}\n\n${stripSlowDirections(visualPrompt)}`
     : stripSlowDirections(visualPrompt);
   // Sanitize visual descriptions BEFORE adding speech: never rewrite scripted dialogue / narration.
   let prompt = isNarration
@@ -345,8 +475,13 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const hasOverride = override.length > 0;
   if (hasOverride) {
     // Stage 46B-0: the producer's text is kept verbatim, except a [CHARACTER] line it still carries —
-    // that one is rebuilt from the live character rows too (no line → nothing is added).
+    // that one is rebuilt from the live character rows too (no line → nothing is added). A manual
+    // override is authored end-to-end, so Stage 54's fixed NEGATIVES block is NOT appended to it.
     prompt = refreshCharacterLine(override, characters, false);
+  } else {
+    // Stage 54 — the fixed do-not block closes the auto-assembled prompt (after the AUDIO TRACK and the
+    // pace direction), covering logos/watermarks/subtitles/extra people plus the narration-only bits.
+    prompt = `${prompt}\n\n${negativesBlock}`;
   }
   const basePrompt = prompt;
 
@@ -385,31 +520,9 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // never the characters.
   // Stage 53 — the single video anchor per character is the full-body front photo (imageFull); legacy
   // characters that only have the old front portrait fall back to imageFront so nothing breaks.
-  const anchorUrl = (c: ScenePromptCharacterLink) => (isStyledAsset(c.imageFull) ? c.imageFull! : c.imageFront!);
-  const styled = characters.filter(c => isStyledAsset(c.imageFull) || isStyledAsset(c.imageFront));
-  const individualsAll = styled.filter(c => c.tier !== "CROWD");
-  const crowds = styled.filter(c => c.tier === "CROWD");
-  const mentionText = `${scene.videoPrompt ?? ""}\n${dialogue}\n${scene.voiceover ?? ""}`.toLowerCase();
-  const isMentioned = (name: string) => {
-    const n = name.trim().toLowerCase();
-    return n.length > 0 && mentionText.includes(n);
-  };
-  const mentioned = individualsAll.filter(c => isMentioned(c.name));
-  const unmentioned = individualsAll.filter(c => !isMentioned(c.name));
-  const individuals = [...mentioned, ...unmentioned];
-  const locationAngles = location ? locationAngleImages(location) : [];
-  // Stage 44 — the extra angles of the same photographed place are references too (within the cap).
-  const locationExtras = location ? parseLocationExtra(location.imageExtra).slice(0, LOCATION_EXTRA_REF_CAP) : [];
-  const effectiveLocation = locationAngles.length ? location : null;
-  type Ref = SceneReference & { id: string };
-  const characterRefs: Ref[] = individuals.map(c => ({ url: anchorUrl(c), kind: "character", id: c.characterId, note: `defines ${c.name}'s photorealistic appearance and identity; use the scene's staging and camera.` }));
-  const locationRefs: Ref[] = [
-    ...locationAngles.map(a => ({ url: a.url, angle: a.angle as string })),
-    ...(effectiveLocation ? locationExtras.map((url, i) => ({ url, angle: locationExtraLabel(i) })) : []),
-  ].map(a => ({ url: a.url, kind: "location" as const, id: effectiveLocation!.id, note: `the location "${effectiveLocation!.name}" — ${a.angle} angle. Same place, same time of day, same light and palette in every shot. Keep the camera inside this location and match this lighting exactly.` }));
-  const crowdRefs: Ref[] = crowds.map(c => ({ url: anchorUrl(c), kind: "crowd", id: c.characterId, note: `defines the look of the group "${c.name}" (extras): who they are and how they are dressed.` }));
-  // Reduced set (individual characters + the wide location angle) kept for diagnostics.
-  const fallbackRefs: SceneReference[] = [...characterRefs, ...locationRefs.slice(0, 1)].slice(0, REFERENCE_IMAGE_CAP).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
+  // Stage 54 — the reference SELECTION above (anchorUrl / individuals / crowds / characterRefs /
+  // locationRefs / crowdRefs / fallbackRefs) was hoisted to just after `dialogue` so the sectioned
+  // REFERENCE MAP / PEOPLE / PROPS text can name exactly what is attached; the logic is unchanged.
   const skipReferences = !!scene.skipReferences;
 
   if (skipReferences) {

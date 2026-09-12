@@ -214,3 +214,7 @@ ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "visualPromptAuto" TEXT;
 
 -- Stage 47: per-episode video provider (seedance | kling)
 ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "videoProvider" TEXT NOT NULL DEFAULT 'seedance';
+
+
+-- Stage 54: cached JSON snapshot of the episode prop registry (verbatim prop substitution)
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "propRegistry" TEXT;

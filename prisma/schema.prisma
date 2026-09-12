@@ -174,6 +174,7 @@ model Episode {
   chainRunActive Boolean @default(false) // stage 40: a «Сгенерировать все» chain run is in progress — the worker starts the next pending scene after each finished one
   chainRunNote  String?  @db.Text // stage 40: why the last chain run stopped («Цепочка остановлена на сцене N: …»), null while running / after a clean finish
   videoProvider String   @default("seedance") // stage 47: per-episode video provider — "seedance" (Seedance 2.5 via Replicate, default) | "kling" (Kling 3.0 Omni, multi-image reference)
+  propRegistry  String?  @db.Text // stage 54: cached JSON snapshot of the episode PROP REGISTRY ({hash, props:[{id,name,description}]}) — auto-extracted from the script, re-built when the hash changes, substituted VERBATIM into each scene's CLOTHING & PROPS section. DATA cache, not a behaviour toggle.
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

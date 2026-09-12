@@ -13,6 +13,7 @@ import { getBucketConfig } from "@/lib/aws-config";
 import { VISUAL_STYLE_ID } from "@/lib/visual-style";
 import { buildScenePrompt, resolveOpeningState, type SceneReference } from "@/lib/scene-prompt";
 import { rewriteSceneLook, parseLookCache } from "@/lib/character-look";
+import { buildPropRegistry, parsePropRegistry } from "@/lib/prop-registry";
 import { GenerationAttempt, safeProviderError, classifyProviderError, logAttempt, safeDiagnosticInput } from "@/lib/generation-diagnostics";
 import { updateJob, heartbeatJob, runInBackground, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { moderationHints } from "@/lib/sanitize-prompt";
@@ -169,6 +170,9 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       select: { id: true, number: true, locationDesc: true, lastFrameUrl: true, endState: true, endStateActual: true },
     }) : null;
     const episodeLoc = await prisma.episode.findUnique({ where: { id: scene.episodeId }, select: {
+      id: true,
+      script: true, // Stage 54: source text the prop registry is extracted from
+      propRegistry: true, // Stage 54: cached registry JSON ({hash, props}) reused across the episode's scenes
       location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true } },
       season: { select: { project: { select: { isTest: true } } } },
       videoProvider: true, // Stage 47: seedance | kling, read once at job start
@@ -211,6 +215,20 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     };
     // The rewritten opening state replaces the previous scene's stored states so resolveOpeningState picks it.
     const lookPrevious = previous && look.texts.openingState ? { ...previous, endStateActual: null, endState: null } : previous;
+    // Stage 54: EPISODE PROP REGISTRY — canonical descriptions of the key recurring props, extracted once
+    // from the episode script and cached on Episode.propRegistry (keyed by a hash of the script, exactly
+    // like Scene.lookCache). The first scene of the episode that regenerates extracts it; every later
+    // scene reuses the cache. Best-effort: on any failure the registry is empty and scenes fall back to
+    // their own text. matchPropsInText inside buildScenePrompt then substitutes each shown prop VERBATIM.
+    let episodeProps: { id: string; name: string; description: string }[] = [];
+    if (episodeLoc?.id) {
+      const propBuild = await buildPropRegistry(episodeLoc.script ?? "", parsePropRegistry(episodeLoc.propRegistry));
+      if (propBuild.warning) console.warn(`[video-job] ${sceneId}: ${propBuild.warning}`);
+      episodeProps = propBuild.registry.props;
+      if (!propBuild.fromCache) {
+        await prisma.episode.update({ where: { id: episodeLoc.id }, data: { propRegistry: JSON.stringify(propBuild.registry) } }).catch(() => {});
+      }
+    }
     const built = buildScenePrompt({
       scene: lookScene,
       characters: links.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront, imageProfile: l.character.imageProfile, imageFull: l.character.imageFull, imageExtra: l.character.imageExtra, appearance: l.character.appearance, age: l.character.age })),
@@ -218,6 +236,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       previous: lookPrevious,
       provider: params.provider,
       resolvedDialogueEn: dialogueEn,
+      props: episodeProps, // Stage 54: canonical episode props, substituted VERBATIM per scene
       // Stage 40: a test episode has no linked characters/location → plain text-to-video, no Flux still.
       textOnlyWhenNoReferences: Boolean(episodeLoc?.season?.project?.isTest),
     });
