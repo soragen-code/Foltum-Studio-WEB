@@ -120,7 +120,7 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
       if (await canceled()) return;
       const chained = !!ref;
       try {
-        const basePrompt = characterShotPrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize, chained, refKind);
+        const basePrompt = characterShotPrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize, chained, refKind, char.promptOverride);
         const gen = (prompt: string) => generateImage(
           { prompt, aspect_ratio: ASPECT_RATIOS[shot], ...(chained ? { image_input: [ref!] } : {}) },
           { jobId, characterId: char.id, imageModel }
@@ -195,7 +195,7 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
         if (!ref) { done += 1; await bump("Доп. ракурсы"); return; }
         try {
           const remote = await generateImage(
-            { prompt: characterExtraShotPrompt(char.appearance ?? "", char.name, index, refKind), aspect_ratio: isFullShot ? "9:16" : "3:4", image_input: [ref] },
+            { prompt: characterExtraShotPrompt(char.appearance ?? "", char.name, index, refKind, char.promptOverride), aspect_ratio: isFullShot ? "9:16" : "3:4", image_input: [ref] },
             { jobId, characterId: char.id, imageModel }
           );
           const url = await uploadRemoteToS3(remote, `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/extra-${Date.now()}-${index}.png`, "image/png");

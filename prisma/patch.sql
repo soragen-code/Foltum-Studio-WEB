@@ -207,3 +207,7 @@ UPDATE "Season" SET "episodeCount" = (SELECT count(*) FROM "Episode" e WHERE e."
 -- Stage 46B-1: live character look cache + stale marker per scene
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "lookCache" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "lookStale" BOOLEAN NOT NULL DEFAULT false;
+
+-- Stage 46E: character manual prompt override + location auto-prompt snapshot
+ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "promptOverride" TEXT;
+ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "visualPromptAuto" TEXT;

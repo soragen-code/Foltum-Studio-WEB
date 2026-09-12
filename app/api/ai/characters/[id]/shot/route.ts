@@ -118,7 +118,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           if (!ref) throw new Error("No base photo to chain the extra angle on");
           const refKind: CharacterRefKind = ref === full && full ? "full" : "face";
           remote = await generateImage(
-            { prompt: characterExtraShotPrompt(appearance, char.name, index!, refKind), aspect_ratio: isFullShot ? "9:16" : "3:4", image_input: [ref] },
+            { prompt: characterExtraShotPrompt(appearance, char.name, index!, refKind, char.promptOverride), aspect_ratio: isFullShot ? "9:16" : "3:4", image_input: [ref] },
             ctx
           );
           s3Key = `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/extra-${Date.now()}-${index}.png`;
@@ -131,7 +131,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           else if (shot === "profile") { ref = front ?? full ?? null; refKind = front ? "face" : "full"; }
           else if (shot === "full") { ref = front ?? null; refKind = "face"; }
           const chained = !!ref;
-          const basePrompt = characterShotPrompt(appearance, shot, char.name, char.tier, char.groupSize, chained, refKind);
+          const basePrompt = characterShotPrompt(appearance, shot, char.name, char.tier, char.groupSize, chained, refKind, char.promptOverride);
           const gen = (prompt: string) => generateImage({ prompt, aspect_ratio: ASPECT[shot], ...(chained ? { image_input: [ref!] } : {}) }, ctx);
           if (shot === "full" && char.tier !== "CROWD") {
             // Framing + Stage 46D proportion guard (one vision call per attempt, bounded retries); the best

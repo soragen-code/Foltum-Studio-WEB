@@ -4,6 +4,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Header } from '@/components/header'
 import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Copy, Check, FileText, RotateCcw, Save, Plus } from 'lucide-react'
+import { FrameToolbar, DownloadAllButton } from '@/app/project/[id]/_components/frame-toolbar'
+import { PromptModal, CHARACTER_PROMPT_DESCRIPTION, LOCATION_PROMPT_DESCRIPTION } from '@/app/project/[id]/_components/prompt-modal'
+import { referenceFileName } from '@/lib/download-name'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
@@ -270,21 +273,24 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     } catch { setError('Ошибка сети') } finally { setShotBusy((b) => { const n = { ...b }; delete n[key]; return n }) }
   }, [shotBusy, refreshRefs])
   const shotIsBusy = (entityId: string, slot: string, index?: number) => !!shotBusy[`${entityId}:${slot}${index !== undefined ? `-${index}` : ''}`]
-  /** Small overlay button on a photo slot — RefreshCw + tooltip «Перегенерировать»; nested inside the photo button, so a span. */
-  const RegenBtn = ({ testId, busy, spinning, onClick }: { testId: string; busy: boolean; spinning: boolean; onClick: () => void }) => (
-    <span
-      role="button"
-      aria-label="Перегенерировать"
-      title="Перегенерировать (1 кредит)"
-      aria-disabled={busy || spinning}
-      data-testid={testId}
-      onClick={(e) => { e.stopPropagation(); e.preventDefault(); if (!busy && !spinning) onClick() }}
-      className={`absolute inset-x-1 bottom-1 inline-flex cursor-pointer items-center justify-center gap-1 rounded bg-black/60 px-1.5 py-1 text-[10px] font-medium leading-none text-white transition ${busy && !spinning ? 'pointer-events-none opacity-40' : 'hover:bg-black/80'}`}
-    >
-      {spinning ? <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin" /> : <RefreshCw className="h-3 w-3 flex-shrink-0" />}
-      <span className="truncate">Перегенерировать</span>
-    </span>
-  )
+  // ---- Stage 46E: prompt modal (characters + locations), delete location frame, reset location prompt ----
+  const [promptFor, setPromptFor] = useState<{ kind: 'character' | 'location'; id: string; name: string } | null>(null)
+  const deleteFrame = useCallback(async (locationId: string, slot: string, index?: number) => {
+    setError('')
+    const res = await fetch(`/api/ai/locations/${locationId}/frame`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slot, index }) })
+    const d = await res.json().catch(() => ({}))
+    if (!res.ok) { setError(d?.error ?? 'Не удалось удалить кадр'); return }
+    if (d?.location) setRefLocs((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...d.location } : l)))
+  }, [])
+  const resetLocationPrompt = useCallback(async (locationId: string) => {
+    setError('')
+    const res = await fetch(`/api/ai/locations/${locationId}/prompt`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reset: true }) })
+    const d = await res.json().catch(() => ({}))
+    if (!res.ok) { setError(d?.error ?? 'Не удалось сбросить промпт'); return }
+    setRefLocs((prev) => prev.map((l) => (l.id === locationId ? { ...l, visualPrompt: d.prompt, visualPromptAuto: d.autoPrompt } : l)))
+  }, [])
+  const [locResetting, setLocResetting] = useState<Record<string, boolean>>({})
+  const locHasPromptOverride = (l: any) => l?.visualPromptAuto != null && String(l.visualPrompt ?? '').trim() !== String(l.visualPromptAuto ?? '').trim()
 
   // Stage 17: mirror the current character/location lists into refs so the poll effect below can read
   // them WITHOUT listing them in its dependency array. refreshRefs() replaces these arrays on every
@@ -853,7 +859,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                             <img src={img as string} alt={`${c.name} — ${SHOT_LABELS[i] ?? 'фото'}`} className="h-full w-full object-cover" />
                             <span className="absolute right-1 top-1 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
                             {(() => { const shot = i === 0 ? 'front' : i === 1 ? 'profile' : i === 2 ? 'full' : 'extra'; const idx = i >= 3 ? i - 3 : undefined; return (
-                              <RegenBtn testId={`regen-shot-${shot}${idx !== undefined ? `-${idx}` : ''}`} busy={busy} spinning={shotIsBusy(c.id, shot, idx)} onClick={() => regenShot('character', c.id, shot, idx)} />
+                              <FrameToolbar
+                                regen={{ testId: `regen-shot-${shot}${idx !== undefined ? `-${idx}` : ''}`, busy, spinning: shotIsBusy(c.id, shot, idx), onClick: () => regenShot('character', c.id, shot, idx) }}
+                                download={{ url: img as string, name: referenceFileName('character', c.name, shot, img as string, idx) }}
+                              />
                             ) })()}
                           </>
                         ) : busy ? (
@@ -866,6 +875,14 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   </div>
                   <div className="mt-2 truncate text-sm font-medium">{c.name} <span className="font-normal text-muted-foreground">· {photos.length}/{CHARACTER_PHOTO_COUNT} фото</span></div>
                   {c.role && <div className="truncate text-xs text-muted-foreground">{c.role}</div>}
+                      {/* Stage 46E: prompt view/edit + download all */}
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <button type="button" onClick={() => setPromptFor({ kind: 'character', id: c.id, name: c.name })} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs" data-testid="character-prompt" title="Посмотреть, скопировать или изменить промпт персонажа">
+                          <FileText className="h-3.5 w-3.5" /> Промпт
+                        </button>
+                        <DownloadAllButton kind="character" id={c.id} count={photos.length} />
+                        {!!(c.promptOverride && String(c.promptOverride).trim()) && <span className="rounded bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="character-prompt-override">Промпт изменён вручную</span>}
+                      </div>
                       <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
                         <input value={charEdit[c.id] ?? ''} onChange={(e) => setCharEdit((t) => ({ ...t, [c.id]: e.target.value }))} placeholder="Изменить по промпту…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-character-input" disabled={busy} />
                         <button onClick={() => reviseCharacter(c.id)} disabled={busy || !(charEdit[c.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-character-submit" title="Изменить по промпту">
@@ -897,17 +914,39 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {(() => { const all = [...base.map((a) => ({ url: a.url as string, label: a.label, slot: a.slot, idx: undefined as number | undefined })), ...extras.map((u, i) => ({ url: u, label: `${i + 1}. ${locationExtraLabel(i)}`, slot: 'extra', idx: i }))]; const urls = all.map((a) => a.url); return base.length > 0 ? all.map((a, i) => (
-                      <button key={a.url + i} type="button" onClick={() => openLightbox(urls, i, `${l.name} — ${a.label}`)} className="group relative h-24 w-16 overflow-hidden rounded bg-muted" title={a.label} data-testid="ref-image">
+                      <button key={a.url + i} type="button" onClick={() => openLightbox(urls, i, `${l.name} — ${a.label}`)} className="group relative h-40 w-24 overflow-hidden rounded bg-muted" title={a.label} data-testid="ref-image">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src={a.url} alt={`${l.name} — ${a.label}`} className="h-full w-full object-cover" />
                         <span className="absolute right-0.5 top-0.5 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
-                        <RegenBtn testId={`regen-shot-${a.slot}${a.idx !== undefined ? `-${a.idx}` : ''}`} busy={busy} spinning={shotIsBusy(l.id, a.slot, a.idx)} onClick={() => regenShot('location', l.id, a.slot, a.idx)} />
+                        <FrameToolbar
+                          regen={{ testId: `regen-shot-${a.slot}${a.idx !== undefined ? `-${a.idx}` : ''}`, busy, spinning: shotIsBusy(l.id, a.slot, a.idx), onClick: () => regenShot('location', l.id, a.slot, a.idx) }}
+                          download={{ url: a.url, name: referenceFileName('location', l.name, a.slot, a.url, a.idx) }}
+                          del={{ testId: `delete-shot-${a.slot}${a.idx !== undefined ? `-${a.idx}` : ''}`, onClick: () => deleteFrame(l.id, a.slot, a.idx), disabled: busy || all.length <= 1, disabledTitle: all.length <= 1 ? 'Минимум один кадр' : 'Дождитесь окончания генерации' }}
+                        />
                       </button>
                     )) : busy ? (
-                      <div className="flex h-24 w-16 items-center justify-center rounded bg-muted"><Loader2 className="h-4 w-4 animate-spin text-primary" /></div>
+                      <div className="flex h-40 w-24 items-center justify-center rounded bg-muted"><Loader2 className="h-4 w-4 animate-spin text-primary" /></div>
                     ) : (
-                      <div className="flex h-24 w-16 items-center justify-center rounded bg-muted"><ImageOff className="h-4 w-4 text-muted-foreground/40" /></div>
+                      <div className="flex h-40 w-24 items-center justify-center rounded bg-muted"><ImageOff className="h-4 w-4 text-muted-foreground/40" /></div>
                     ) })()}
+                  </div>
+                  {/* Stage 46E: prompt tools + download all */}
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5" data-testid="location-prompt-tools">
+                    <button type="button" onClick={() => setPromptFor({ kind: 'location', id: l.id, name: l.name })} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs" data-testid="location-prompt" title="Посмотреть, скопировать или изменить визуальный промпт локации">
+                      <FileText className="h-3.5 w-3.5" /> Промпт
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy || !!locResetting[l.id]}
+                      onClick={async () => { setLocResetting((m) => ({ ...m, [l.id]: true })); try { await resetLocationPrompt(l.id) } finally { setLocResetting((m) => { const n = { ...m }; delete n[l.id]; return n }) } }}
+                      className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50"
+                      data-testid="location-prompt-reset"
+                      title="Вернуть первоначальный промпт локации, написанный ИИ"
+                    >
+                      {locResetting[l.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Сбросить промпт на авто
+                    </button>
+                    <DownloadAllButton kind="location" id={l.id} count={locationFrames(l)} />
+                    {locHasPromptOverride(l) && <span className="rounded bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="location-prompt-override">Промпт изменён вручную</span>}
                   </div>
                       {locGen || cancelling ? (
                         /* While THIS location is generating the button becomes «Отменить генерацию» (confirmed below),
@@ -1286,6 +1325,23 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             </div>
           </div>
         </div>
+      )}
+
+      {/* Stage 46E — character / location prompt modal (shared component). */}
+      {promptFor && (
+        <PromptModal
+          title={promptFor.kind === 'character' ? `Промпт персонажа · ${promptFor.name}` : `Промпт локации · ${promptFor.name}`}
+          description={promptFor.kind === 'character' ? CHARACTER_PROMPT_DESCRIPTION : LOCATION_PROMPT_DESCRIPTION}
+          endpoint={`/api/ai/${promptFor.kind === 'character' ? 'characters' : 'locations'}/${promptFor.id}/prompt`}
+          resetBody={promptFor.kind === 'character' ? { prompt: '' } : { reset: true }}
+          alwaysShowReset={promptFor.kind === 'location'}
+          testId={promptFor.kind === 'character' ? 'character-prompt-modal' : 'location-prompt-modal'}
+          onClose={() => setPromptFor(null)}
+          onChange={({ prompt, hasOverride }) => {
+            if (promptFor.kind === 'character') setRefChars((prev) => prev.map((c) => (c.id === promptFor.id ? { ...c, promptOverride: hasOverride ? prompt : null } : c)))
+            else setRefLocs((prev) => prev.map((l) => (l.id === promptFor.id ? { ...l, visualPrompt: prompt, visualPromptAuto: hasOverride ? l.visualPromptAuto ?? null : prompt } : l)))
+          }}
+        />
       )}
 
       {/* Stage 31 — "Смотреть промпт" modal: view / copy / manually override the scene's final prompt. */}

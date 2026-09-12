@@ -473,7 +473,7 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
         // Bind the episode to an existing project Location (reference image); unknown names become new Locations without an image.
         let loc = matchLocation(locs, e.locationName);
         if (!loc) {
-          const created = await tx.location.create({ data: { projectId, name: e.locationName, description: e.locationName, visualPrompt: e.locationDesc, detailLevel: e.locationDetail } });
+          const created = await tx.location.create({ data: { projectId, name: e.locationName, description: e.locationName, visualPrompt: e.locationDesc, visualPromptAuto: e.locationDesc, detailLevel: e.locationDetail } });
           loc = { id: created.id, name: created.name, detailLevel: created.detailLevel };
           locs.push(loc);
         } else {

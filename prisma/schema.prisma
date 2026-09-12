@@ -104,6 +104,7 @@ model Character {
   role        String?
   personality String?  @db.Text
   appearance  String?  @db.Text
+  promptOverride String? @db.Text // stage 46E: manual character prompt — when non-empty it replaces the appearance base for ALL reference shots; null = auto
   age         String?  // free-form ("34", "около 40")
   firstAppearance String? @db.Text // where/how the character first appears in the season
   status      String   @default("draft") // draft, approved, references_ready
@@ -191,6 +192,7 @@ model Location {
   name         String
   description  String?  @db.Text // project-language description shown in UI
   visualPrompt String?  @db.Text // English visual prompt for the reference image (no people)
+  visualPromptAuto String? @db.Text // stage 46E: the LLM-written visual prompt as first produced — «reset to auto» restores it; null for legacy rows
   imageUrl     String?  // PNG reference — wide establishing angle
   imageReverse String?  // same place, reverse angle (generated from imageUrl as reference → identical light)
   imageDetail  String?  // same place, medium/detail angle

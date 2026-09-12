@@ -2,7 +2,10 @@
 
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Loader2, Wand2, ArrowRight, ImageOff, Users, RefreshCw, MapPin, Camera } from 'lucide-react'
+import { Loader2, Wand2, ArrowRight, ImageOff, Users, RefreshCw, MapPin, Camera, FileText } from 'lucide-react'
+import { FrameToolbar, DownloadAllButton } from './frame-toolbar'
+import { PromptModal, CHARACTER_PROMPT_DESCRIPTION, LOCATION_PROMPT_DESCRIPTION } from './prompt-modal'
+import { referenceFileName } from '@/lib/download-name'
 import { CharacterCard, type CharacterCardData } from './idea-stage'
 import type { JobInfo } from './use-job-polling'
 import { CancelButton } from './cancel-button'
@@ -14,6 +17,9 @@ interface RefCharacter extends CharacterCardData {
   imageFront?: string | null
   imageProfile?: string | null
   imageFull?: string | null
+  imageExtra?: string | null
+  /** Stage 46E: manual character prompt (null = auto). */
+  promptOverride?: string | null
 }
 
 const POLL_MS = 3000
@@ -231,6 +237,25 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
     } catch { setError('Ошибка сети') } finally { setShotBusy((b) => { const n = { ...b }; delete n[key]; return n }) }
   }
 
+  // ---- Stage 46E: prompt modal (characters + locations), delete frame, reset location prompt, downloads ----
+  const [promptFor, setPromptFor] = useState<{ kind: 'character' | 'location'; id: string; name: string } | null>(null)
+  const deleteFrame = async (locationId: string, slot: string, index?: number) => {
+    setError('')
+    const res = await fetch(`/api/ai/locations/${locationId}/frame`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slot, index }) })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) { setError(data?.error ?? 'Не удалось удалить кадр'); return }
+    if (data?.location) setLocations((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...data.location } : l)))
+  }
+  const resetLocationPrompt = async (locationId: string) => {
+    setError('')
+    const res = await fetch(`/api/ai/locations/${locationId}/prompt`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reset: true }) })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) { setError(data?.error ?? 'Не удалось сбросить промпт'); return }
+    setLocations((prev) => prev.map((l) => (l.id === locationId ? { ...l, visualPrompt: data.prompt, visualPromptAuto: data.autoPrompt } : l)))
+  }
+  const locationFrameCount = (loc: LocationCardData) => [loc.imageUrl, loc.imageReverse, loc.imageDetail].filter(validUrl).length + parseExtra(loc.imageExtra).length
+  const characterFrameCount = (c: RefCharacter) => [c.imageFront, c.imageProfile, c.imageFull].filter(validUrl).length + parseExtra(c.imageExtra).length
+
   const generateLocation = async (locationId: string) => {
     setError('')
     const res = await fetch(`/api/ai/locations/${locationId}/image`, { method: 'POST' })
@@ -397,7 +422,19 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                   key={c.id}
                   char={c}
                   busy={!!gen}
-                  extra={<ReferenceImages char={c} generating={!!gen} message={gen && gen !== 'local' ? gen.message : null} onRegen={(shot) => regenShot('character', c.id, shot)} shotBusy={(shot) => !!shotBusy[shotKey(c.id, shot)]} />}
+                  extra={
+                    <>
+                      <ReferenceImages char={c} generating={!!gen} message={gen && gen !== 'local' ? gen.message : null} onRegen={(shot) => regenShot('character', c.id, shot)} shotBusy={(shot) => !!shotBusy[shotKey(c.id, shot)]} />
+                      {/* Stage 46E: prompt view/edit + download all */}
+                      <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                        <button type="button" onClick={() => setPromptFor({ kind: 'character', id: c.id, name: c.name })} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs" data-testid="character-prompt" title="Посмотреть, скопировать или изменить промпт персонажа">
+                          <FileText className="h-3.5 w-3.5" /> Промпт
+                        </button>
+                        <DownloadAllButton kind="character" id={c.id} count={characterFrameCount(c)} />
+                        {!!(c.promptOverride && c.promptOverride.trim()) && <span className="rounded bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="character-prompt-override">Промпт изменён вручную</span>}
+                      </div>
+                    </>
+                  }
                   footer={<AppearanceEditor characterId={c.id} disabled={!!gen} onSubmit={changeAppearance} />}
                 />
               )
@@ -428,13 +465,20 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                   loc={loc}
                   busy={!!gen}
                   onRevise={reviseLocation}
+                  hasPromptOverride={loc.visualPromptAuto != null && (loc.visualPrompt ?? '').trim() !== (loc.visualPromptAuto ?? '').trim()}
+                  onOpenPrompt={() => setPromptFor({ kind: 'location', id: loc.id, name: loc.name })}
+                  onResetPrompt={() => resetLocationPrompt(loc.id)}
                   media={
                     <div className="group relative mb-3 aspect-[9/16] max-h-64 w-full overflow-hidden rounded-lg bg-muted">
                       {has ? (
                         <>
                           {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img src={loc.imageUrl as string} alt={loc.name} className="h-full w-full object-cover" data-testid="location-image" />
-                          <RegenBtn testId="regen-shot-master" busy={!!gen || !!activeExtra[loc.id]} spinning={!!shotBusy[shotKey(loc.id, 'master')]} onClick={() => regenShot('location', loc.id, 'master')} />
+                          <FrameToolbar
+                            regen={{ testId: 'regen-shot-master', busy: !!gen || !!activeExtra[loc.id], spinning: !!shotBusy[shotKey(loc.id, 'master')], onClick: () => regenShot('location', loc.id, 'master') }}
+                            download={{ url: loc.imageUrl as string, name: referenceFileName('location', loc.name, 'master', loc.imageUrl as string) }}
+                            del={{ testId: 'delete-shot-master', onClick: () => deleteFrame(loc.id, 'master'), disabled: !!gen || !!activeExtra[loc.id] || locationFrameCount(loc) <= 1, disabledTitle: locationFrameCount(loc) <= 1 ? 'Минимум один кадр' : 'Дождитесь окончания генерации' }}
+                          />
                         </>
                       ) : gen ? (
                         <div className="flex h-full w-full items-center justify-center" data-testid="location-spinner">
@@ -446,22 +490,28 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                       {gen && has && (
                         <div className="absolute inset-0 flex items-center justify-center bg-background/60"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div>
                       )}
-                      {has && (validUrl(loc.imageReverse) || validUrl(loc.imageDetail)) && (
-                        <div className="absolute bottom-1 right-1 flex gap-1" data-testid="location-angles">
-                          {[{ url: loc.imageReverse, label: 'Обратный ракурс', slot: 'reverse' }, { url: loc.imageDetail, label: 'Средний план', slot: 'detail' }].filter((a) => validUrl(a.url)).map((a) => (
-                            <span key={a.label} className="group relative block">
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img src={a.url as string} alt={`${loc.name} — ${a.label}`} title={a.label} className="h-14 w-8 rounded border border-background object-cover shadow" />
-                              <RegenBtn testId={`regen-shot-${a.slot}`} busy={!!gen || !!activeExtra[loc.id]} spinning={!!shotBusy[shotKey(loc.id, a.slot)]} onClick={() => regenShot('location', loc.id, a.slot)} />
-                            </span>
-                          ))}
-                        </div>
-                      )}
                     </div>
                   }
                   footer={
                     <div className="mt-3 border-t border-border pt-3">
+                      {has && (validUrl(loc.imageReverse) || validUrl(loc.imageDetail)) && (
+                        /* Stage 46E: angle frames as full tiles with an always-visible toolbar (regen / download / delete). */
+                        <div className="mb-3 flex flex-wrap gap-2" data-testid="location-angles">
+                          {[{ url: loc.imageReverse, label: 'Обратный ракурс', slot: 'reverse' }, { url: loc.imageDetail, label: 'Средний план', slot: 'detail' }].filter((a) => validUrl(a.url)).map((a) => (
+                            <span key={a.label} className="relative block h-40 w-24 overflow-hidden rounded bg-muted" title={a.label}>
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={a.url as string} alt={`${loc.name} — ${a.label}`} className="h-full w-full object-cover" />
+                              <FrameToolbar
+                                regen={{ testId: `regen-shot-${a.slot}`, busy: !!gen || !!activeExtra[loc.id], spinning: !!shotBusy[shotKey(loc.id, a.slot)], onClick: () => regenShot('location', loc.id, a.slot) }}
+                                download={{ url: a.url as string, name: referenceFileName('location', loc.name, a.slot, a.url as string) }}
+                                del={{ testId: `delete-shot-${a.slot}`, onClick: () => deleteFrame(loc.id, a.slot), disabled: !!gen || !!activeExtra[loc.id] || locationFrameCount(loc) <= 1, disabledTitle: locationFrameCount(loc) <= 1 ? 'Минимум один кадр' : 'Дождитесь окончания генерации' }}
+                              />
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       <div className="flex flex-wrap items-center gap-2">
+                        <DownloadAllButton kind="location" id={loc.id} count={locationFrameCount(loc)} />
                         <button
                           type="button"
                           onClick={() => generateLocation(loc.id)}
@@ -482,12 +532,16 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                         return (
                           <div className="mt-3 border-t border-border/60 pt-3" data-testid="location-extra">
                             {extras.length > 0 && (
-                              <div className="mb-2 flex flex-wrap gap-1" data-testid="location-extra-thumbs">
+                              <div className="mb-2 flex flex-wrap gap-2" data-testid="location-extra-thumbs">
                                 {extras.map((url, i) => (
-                                  <span key={url} className="group relative block">
+                                  <span key={url} className="relative block h-40 w-24 overflow-hidden rounded bg-muted" title={`${i + 1}. ${locationExtraLabel(i)}`}>
                                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img src={url} alt={`${loc.name} — ${locationExtraLabel(i)}`} title={`${i + 1}. ${locationExtraLabel(i)}`} className="h-14 w-8 rounded border border-background object-cover shadow" />
-                                    <RegenBtn testId={`regen-shot-extra-${i}`} busy={!!gen || busyExtra} spinning={!!shotBusy[shotKey(loc.id, 'extra', i)]} onClick={() => regenShot('location', loc.id, 'extra', i)} />
+                                    <img src={url} alt={`${loc.name} — ${locationExtraLabel(i)}`} className="h-full w-full object-cover" />
+                                    <FrameToolbar
+                                      regen={{ testId: `regen-shot-extra-${i}`, busy: !!gen || busyExtra, spinning: !!shotBusy[shotKey(loc.id, 'extra', i)], onClick: () => regenShot('location', loc.id, 'extra', i) }}
+                                      download={{ url, name: referenceFileName('location', loc.name, 'extra', url, i) }}
+                                      del={{ testId: `delete-shot-extra-${i}`, onClick: () => deleteFrame(loc.id, 'extra', i), disabled: !!gen || busyExtra || locationFrameCount(loc) <= 1, disabledTitle: locationFrameCount(loc) <= 1 ? 'Минимум один кадр' : 'Дождитесь окончания генерации' }}
+                                    />
                                   </span>
                                 ))}
                               </div>
@@ -518,6 +572,22 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
         )}
       </section>
 
+      {promptFor && (
+        <PromptModal
+          title={promptFor.kind === 'character' ? `Промпт персонажа · ${promptFor.name}` : `Промпт локации · ${promptFor.name}`}
+          description={promptFor.kind === 'character' ? CHARACTER_PROMPT_DESCRIPTION : LOCATION_PROMPT_DESCRIPTION}
+          endpoint={`/api/ai/${promptFor.kind === 'character' ? 'characters' : 'locations'}/${promptFor.id}/prompt`}
+          resetBody={promptFor.kind === 'character' ? { prompt: '' } : { reset: true }}
+          alwaysShowReset={promptFor.kind === 'location'}
+          testId={promptFor.kind === 'character' ? 'character-prompt-modal' : 'location-prompt-modal'}
+          onClose={() => setPromptFor(null)}
+          onChange={({ prompt, hasOverride }) => {
+            if (promptFor.kind === 'character') setCharacters((prev) => prev.map((c) => (c.id === promptFor.id ? { ...c, promptOverride: hasOverride ? prompt : null } : c)))
+            else setLocations((prev) => prev.map((l) => (l.id === promptFor.id ? { ...l, visualPrompt: prompt, visualPromptAuto: hasOverride ? l.visualPromptAuto ?? null : prompt } : l)))
+          }}
+        />
+      )}
+
       {!optional && <button
         onClick={continueToScript}
         disabled={continuing || readyCount === 0}
@@ -536,27 +606,9 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
   )
 }
 
-/** Stage 46B-2: small overlay button on a photo — RefreshCw + tooltip «Перегенерировать», per-slot spinner. */
-function RegenBtn({ testId, busy, spinning, onClick }: { testId: string; busy: boolean; spinning: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      aria-label="Перегенерировать"
-      title="Перегенерировать (1 кредит)"
-      disabled={busy || spinning}
-      data-testid={testId}
-      onClick={(e) => { e.stopPropagation(); onClick() }}
-      className="absolute inset-x-1 bottom-1 inline-flex items-center justify-center gap-1 rounded bg-black/60 px-1.5 py-1 text-[10px] font-medium leading-none text-white transition hover:bg-black/80 disabled:opacity-40"
-    >
-      {spinning ? <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin" /> : <RefreshCw className="h-3 w-3 flex-shrink-0" />}
-      <span className="truncate">Перегенерировать</span>
-    </button>
-  )
-}
-
 const CHARACTER_SLOT_SHOTS = ['front', 'profile', 'full'] as const
 
-function ReferenceImages({ char, generating, message, onRegen, shotBusy }: { char: RefCharacter; generating: boolean; message?: string | null; onRegen?: (shot: string) => void; shotBusy?: (shot: string) => boolean }) {
+function ReferenceImages({ char, generating, message, onRegen, shotBusy }: { char: RefCharacter; generating: boolean; message?: string | null; onRegen: (shot: string) => void; shotBusy?: (shot: string) => boolean }) {
   const images = [char.imageFront, char.imageProfile, char.imageFull]
   return (
     <div className="mb-3">
@@ -567,7 +619,10 @@ function ReferenceImages({ char, generating, message, onRegen, shotBusy }: { cha
               <>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={img as string} alt={`${char.name} — ${SHOT_LABELS[i]}`} className="h-full w-full object-cover" data-testid="reference-image" />
-                {onRegen && <RegenBtn testId={`regen-shot-${CHARACTER_SLOT_SHOTS[i]}`} busy={generating} spinning={!!shotBusy?.(CHARACTER_SLOT_SHOTS[i])} onClick={() => onRegen(CHARACTER_SLOT_SHOTS[i])} />}
+                <FrameToolbar
+                  regen={{ testId: `regen-shot-${CHARACTER_SLOT_SHOTS[i]}`, busy: generating, spinning: !!shotBusy?.(CHARACTER_SLOT_SHOTS[i]), onClick: () => onRegen(CHARACTER_SLOT_SHOTS[i]) }}
+                  download={{ url: img as string, name: referenceFileName('character', char.name, CHARACTER_SLOT_SHOTS[i], img as string) }}
+                />
               </>
             ) : generating ? (
               <div className="flex h-full w-full items-center justify-center" data-testid="reference-spinner">

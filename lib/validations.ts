@@ -225,3 +225,21 @@ export const locationShotSchema = z.object({
   imageModel: z.string().max(100).optional(),
 });
 export type LocationShotInput = z.infer<typeof locationShotSchema>;
+
+// ---- Stage 46E ----
+/** PUT /api/ai/characters/[id]/prompt — manual character prompt ('' = back to auto). */
+export const characterPromptSchema = z.object({
+  prompt: z.string().max(20_000),
+});
+/** PUT /api/ai/locations/[id]/prompt — direct visual-prompt set, or { reset: true } to restore the auto prompt. */
+export const locationPromptSchema = z
+  .object({
+    prompt: z.string().max(20_000).optional(),
+    reset: z.boolean().optional(),
+  })
+  .refine((v) => v.reset === true || typeof v.prompt === "string", { message: "prompt or reset is required" });
+/** DELETE /api/ai/locations/[id]/frame — remove ONE reference frame (at least one must remain). */
+export const locationFrameDeleteSchema = z.object({
+  slot: z.enum(["master", "reverse", "detail", "extra"]),
+  index: z.number().int().min(0).max(19).optional(),
+});

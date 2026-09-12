@@ -79,7 +79,7 @@ export async function POST(request: Request) {
       if (!ep) continue;
       let loc = matchLocation(locs, e.locationName);
       if (!loc) {
-        const created = await tx.location.create({ data: { projectId, name: e.locationName, description: e.locationName, visualPrompt: e.locationDesc, detailLevel: e.locationDetail } });
+        const created = await tx.location.create({ data: { projectId, name: e.locationName, description: e.locationName, visualPrompt: e.locationDesc, visualPromptAuto: e.locationDesc, detailLevel: e.locationDetail } });
         loc = { id: created.id, name: created.name, detailLevel: created.detailLevel }; locs.push(loc);
       } else {
         // Reused location: raise its required detail level if the new structure needs more (never downgrade).

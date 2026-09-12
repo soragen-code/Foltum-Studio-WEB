@@ -46,7 +46,7 @@ export async function POST(request: Request) {
       } catch (e: any) { lastError = e?.message ?? String(e); }
     }
     if (!card) return NextResponse.json({ error: "AI returned an invalid result: " + lastError }, { status: 502 });
-    const location = await prisma.location.create({ data: { projectId, name: card.name || name, description: card.description, visualPrompt: card.visualPrompt } });
+    const location = await prisma.location.create({ data: { projectId, name: card.name || name, description: card.description, visualPrompt: card.visualPrompt, visualPromptAuto: card.visualPrompt } });
     return NextResponse.json({ location });
   } catch (err: any) {
     console.error("Location add error:", err);

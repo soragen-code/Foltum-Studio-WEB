@@ -112,7 +112,7 @@ export async function POST(request: Request) {
       }
       await tx.location.deleteMany({ where: { projectId } });
       for (const l of result!.locations) {
-        await tx.location.create({ data: { projectId, name: l.name, description: l.description, visualPrompt: l.visualPrompt } });
+        await tx.location.create({ data: { projectId, name: l.name, description: l.description, visualPrompt: l.visualPrompt, visualPromptAuto: l.visualPrompt } });
       }
       await tx.project.update({
         where: { id: projectId },

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Loader2, Wand2, Pencil, X, MapPin, Users } from 'lucide-react'
+import { Loader2, Wand2, Pencil, X, MapPin, Users, FileText, RotateCcw } from 'lucide-react'
 
 /** Cast tiers (mirrors lib/idea.ts CHARACTER_TIERS — kept client-side to avoid pulling server deps). */
 export const TIERS = ['MAIN', 'SUPPORTING', 'MINOR', 'CROWD'] as const
@@ -25,6 +25,8 @@ export interface LocationCardData {
   name: string
   description?: string | null
   visualPrompt?: string | null
+  /** Stage 46E: the LLM-written prompt as first produced («reset to auto» target); null for legacy rows. */
+  visualPromptAuto?: string | null
   imageUrl?: string | null
   /** Stage 3b: extra angles of the same place, same light (reverse + medium). */
   imageReverse?: string | null
@@ -52,13 +54,21 @@ export function LocationCard({
   onRevise,
   media,
   footer,
+  hasPromptOverride,
+  onOpenPrompt,
+  onResetPrompt,
 }: {
   loc: LocationCardData
   busy?: boolean
   onRevise?: (locationId: string, instruction: string) => Promise<void>
   media?: React.ReactNode
   footer?: React.ReactNode
+  /** Stage 46E: prompt tools — «Промпт» (view / edit) and «Сбросить промпт на авто»; badge when the live prompt differs from auto. */
+  hasPromptOverride?: boolean
+  onOpenPrompt?: () => void
+  onResetPrompt?: () => Promise<void>
 }) {
+  const [resetting, setResetting] = useState(false)
   const [editing, setEditing] = useState(false)
   const [instruction, setInstruction] = useState('')
   const [saving, setSaving] = useState(false)
@@ -99,6 +109,28 @@ export function LocationCard({
         <div><dt className="inline font-medium text-foreground">Описание: </dt><dd className="inline">{loc.description || '—'}</dd></div>
         <div><dt className="inline font-medium text-foreground">Визуал (EN): </dt><dd className="inline">{loc.visualPrompt || '—'}</dd></div>
       </dl>
+      {(onOpenPrompt || onResetPrompt) && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5" data-testid="location-prompt-tools">
+          {onOpenPrompt && (
+            <button type="button" onClick={onOpenPrompt} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs" data-testid="location-prompt" title="Посмотреть, скопировать или изменить визуальный промпт локации">
+              <FileText className="h-3.5 w-3.5" /> Промпт
+            </button>
+          )}
+          {onResetPrompt && (
+            <button
+              type="button"
+              disabled={busy || resetting}
+              onClick={async () => { setResetting(true); try { await onResetPrompt() } finally { setResetting(false) } }}
+              className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50"
+              data-testid="location-prompt-reset"
+              title="Вернуть первоначальный промпт локации, написанный ИИ"
+            >
+              {resetting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Сбросить промпт на авто
+            </button>
+          )}
+          {hasPromptOverride && <span className="rounded bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="location-prompt-override">Промпт изменён вручную</span>}
+        </div>
+      )}
       {editing && onRevise && (
         <div className="mt-3 space-y-2 rounded-lg border border-border bg-background p-3">
           <textarea
