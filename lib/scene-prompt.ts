@@ -28,13 +28,16 @@ import { normalizeVideoModel, videoModelSlug, type VideoModelId } from "@/lib/ai
  * styled location angle and the linked crowd groups. Stage 38: the previous scene's last frame is
  * NEVER sent any more (it was the recurring moderation trigger and made characters drift);
  * continuity between scenes now rests on the script text alone (presence / entrances / continuesFrom).
- * Stage 50: each individual sends EXACTLY ONE photo to video — the styled FULL-BODY photo (imageFull),
- * falling back to the front only when no styled full body exists — then the location angles, then the
- * crowds (front only). The front-face portrait, the profile and the extra angles are NEVER sent to
- * video: real Replicate runs proved the front-face close-up is what trips Seedance moderation E005,
- * while the full-body photo passes and already conveys face, build, proportions and current clothing.
- * If the set exceeds the cap the trim order is: crowds → extra location angles; the one-per-character
- * full-body refs and the base location angles are never dropped. See buildScenePrompt.
+ * Stage 51: reverted to the known-good 46B-0 selection after 46B-1/46B-2/49/50 regressed Seedance
+ * moderation with E005 ("flagged as sensitive"). Each individual sends EXACTLY ONE photo to video —
+ * the styled FRONT portrait (imageFront) — then ALL styled location angles (base + extras), then the
+ * crowds (front only). The profile, the full body and the extra character angles are NEVER sent to
+ * video: they stay on the character card for regen/download only. Real Replicate runs proved this
+ * exact set (single front face per character + all location angles) is what PASSED moderation on
+ * 11-09 23:13; sending several character photos at once (face+profile+full+extras, added in
+ * 46B-1/46B-2) is what triggered E005. If the set exceeds the cap the trim order is: crowds → extra
+ * location angles; the one-per-character front refs and the base location angles are never dropped.
+ * See buildScenePrompt.
  */
 export const REFERENCE_IMAGE_CAP = 30;
 /** Stage 44 — how many extra location angles (Location.imageExtra) may join the three base angles as references. */
@@ -358,65 +361,47 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   let newSceneReferenceNote: string | undefined;
   const previousFrameSceneId: string | null = null;
 
-  // Stage 36 — reference mode for EVERY scene. Stage 50 — reference set per scene:
+  // Stage 36 — reference mode for EVERY scene. Ordered set (Stage 51 — reverted to the known-good
+  // 46B-0 selection after 46B-1/46B-2/49/50 regressed Seedance moderation with E005):
   //   1. ALL individual (non-CROWD) characters linked to THIS scene (SceneCharacter is written per
-  //      scene by the season worker) that have a styled reference photo — no character cap. Characters
+  //      scene by the season worker) that have a styled front portrait — no character cap. Characters
   //      named in this scene's dialogue / videoPrompt are ranked first, then the rest of the linked
   //      list in its original order (deterministic). Each individual contributes EXACTLY ONE photo to
-  //      video: the styled FULL-BODY photo (imageFull). The front-face portrait, the profile and the
-  //      extra angles are NEVER sent to video. Fallback: a character with no styled full body (older
-  //      characters that only have a front) sends its front so it is not left with zero references;
+  //      video: the styled FRONT portrait (imageFront). The profile, the full body and the extra angles
+  //      are NEVER sent to video — they remain on the character card for regen/download/generation only;
   //   2. ALL styled location angles (wide first — locationAngleImages' own order), then the extra
   //      location angles, each with its own note;
-  //   3. crowd groups linked to the scene (front only — crowds have no full-body shot).
+  //   3. crowd groups linked to the scene (front only).
   //   Stage 38: the previous scene's last frame is NOT sent any more (neither as first-frame `image`
   //   nor as a "previous_frame" reference) — it was the recurring moderation trigger and made
   //   characters drift. Continuity rests on the script text (presence / entrances / continuesFrom).
-  // Stage 50 rationale: real Replicate runs (scripts/_exp/stage48-results.json) proved the character
-  // FRONT-face portrait is what trips Seedance moderation E005 ("flagged as sensitive") — every scene
-  // using the beauty-cropped face fails in ~5s, while the full-body photo alone PASSES and already
-  // conveys face, build, proportions and current clothing. So video now references the full body only.
-  // Trim order when the set exceeds REFERENCE_IMAGE_CAP: crowds first, then extra location angles.
-  // The one-per-character full-body refs and the base location angles are never dropped.
-  const nonCrowd = characters.filter(c => c.tier !== "CROWD");
-  const crowds = characters.filter(c => c.tier === "CROWD" && isStyledAsset(c.imageFront));
+  // Stage 51 rationale: this exact set (single front face per character + ALL location angles) is the
+  // configuration that PASSED Seedance moderation on 11-09 23:13 (see /tmp/ok.json and the "OLD" probe
+  // in scripts/_exp/stage48-results.json). Sending several character photos at once (face+profile+full+
+  // extras, added in 46B-1/46B-2) is what triggered E005 ("flagged as sensitive"). Trim order when the
+  // set exceeds REFERENCE_IMAGE_CAP: crowds first, then extra location angles (the wide angle is kept),
+  // never the characters.
+  const styled = characters.filter(c => isStyledAsset(c.imageFront));
+  const individualsAll = styled.filter(c => c.tier !== "CROWD");
+  const crowds = styled.filter(c => c.tier === "CROWD");
   const mentionText = `${scene.videoPrompt ?? ""}\n${dialogue}\n${scene.voiceover ?? ""}`.toLowerCase();
   const isMentioned = (name: string) => {
     const n = name.trim().toLowerCase();
     return n.length > 0 && mentionText.includes(n);
   };
-  // Stage 50: pick the ONE video reference per individual — the styled full body, else the styled front
-  // (fallback for older characters without a full body). Characters with neither are dropped.
-  const videoRefOf = (c: ScenePromptCharacterLink): { url: string; fallback: boolean } | null => {
-    if (isStyledAsset(c.imageFull)) return { url: c.imageFull!, fallback: false };
-    if (isStyledAsset(c.imageFront)) return { url: c.imageFront!, fallback: true };
-    return null;
-  };
-  const individualsAll = nonCrowd
-    .map(c => ({ c, ref: videoRefOf(c) }))
-    .filter((x): x is { c: ScenePromptCharacterLink; ref: { url: string; fallback: boolean } } => x.ref !== null);
-  const mentioned = individualsAll.filter(x => isMentioned(x.c.name));
-  const unmentioned = individualsAll.filter(x => !isMentioned(x.c.name));
+  const mentioned = individualsAll.filter(c => isMentioned(c.name));
+  const unmentioned = individualsAll.filter(c => !isMentioned(c.name));
   const individuals = [...mentioned, ...unmentioned];
   const locationAngles = location ? locationAngleImages(location) : [];
   // Stage 44 — the extra angles of the same photographed place are references too (within the cap).
   const locationExtras = location ? parseLocationExtra(location.imageExtra).slice(0, LOCATION_EXTRA_REF_CAP) : [];
   const effectiveLocation = locationAngles.length ? location : null;
   type Ref = SceneReference & { id: string };
-  // Stage 50: each individual contributes exactly ONE mandatory ref — the full-body photo (or the front
-  // as a fallback). The full-body note defines identity too; the fallback front note is face-only.
-  const characterRefs: Ref[] = individuals.map(({ c, ref }) => ({
-    url: ref.url,
-    kind: "character",
-    id: c.characterId,
-    note: ref.fallback
-      ? `defines ${c.name}'s face and identity; use the scene's staging and camera.`
-      : `defines ${c.name}: face, full-body build, proportions and current clothing; use the scene's staging and camera.`,
-  }));
-  const toLocRef = (a: { url: string; angle: string }): Ref => ({ url: a.url, kind: "location" as const, id: effectiveLocation!.id, note: `the location "${effectiveLocation!.name}" — ${a.angle} angle. Same place, same time of day, same light and palette in every shot. Keep the camera inside this location and match this lighting exactly.` });
-  const locationBaseRefs: Ref[] = locationAngles.map(a => toLocRef({ url: a.url, angle: a.angle as string }));
-  const locationExtraRefs: Ref[] = effectiveLocation ? locationExtras.map((url, i) => toLocRef({ url, angle: locationExtraLabel(i) })) : [];
-  const locationRefs: Ref[] = [...locationBaseRefs, ...locationExtraRefs];
+  const characterRefs: Ref[] = individuals.map(c => ({ url: c.imageFront!, kind: "character", id: c.characterId, note: `defines ${c.name}'s photorealistic appearance and identity; use the scene's staging and camera.` }));
+  const locationRefs: Ref[] = [
+    ...locationAngles.map(a => ({ url: a.url, angle: a.angle as string })),
+    ...(effectiveLocation ? locationExtras.map((url, i) => ({ url, angle: locationExtraLabel(i) })) : []),
+  ].map(a => ({ url: a.url, kind: "location" as const, id: effectiveLocation!.id, note: `the location "${effectiveLocation!.name}" — ${a.angle} angle. Same place, same time of day, same light and palette in every shot. Keep the camera inside this location and match this lighting exactly.` }));
   const crowdRefs: Ref[] = crowds.map(c => ({ url: c.imageFront!, kind: "crowd", id: c.characterId, note: `defines the look of the group "${c.name}" (extras): who they are and how they are dressed.` }));
   // Reduced set (individual characters + the wide location angle) kept for diagnostics.
   const fallbackRefs: SceneReference[] = [...characterRefs, ...locationRefs.slice(0, 1)].slice(0, REFERENCE_IMAGE_CAP).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
@@ -428,17 +413,13 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     reference = { mode: "text_only", sceneId: scene.id };
     referenceKind = "text_only";
   } else if (characterRefs.length || locationRefs.length || crowdRefs.length) {
-    // Stage 50: the mandatory part is the one-per-character full-body (or fallback front) refs plus the
-    // base location angles — never trimmed. The remaining room is filled in keep priority (reverse of
-    // the trim order): extra location angles → crowds.
-    const mandatoryBase = Math.min(locationBaseRefs.length, Math.max(0, REFERENCE_IMAGE_CAP - characterRefs.length));
-    const keptLocationBase = locationBaseRefs.slice(0, mandatoryBase);
-    let room = Math.max(0, REFERENCE_IMAGE_CAP - characterRefs.length - keptLocationBase.length);
-    const keptLocationExtras = locationExtraRefs.slice(0, room);
-    room -= keptLocationExtras.length;
+    // Stage 51 (46B-0 known-good): the mandatory part is the one-per-character front refs — never
+    // trimmed. The remaining room is filled: location angles (wide first, then extras) → crowds.
+    const mandatory = characterRefs.length;
+    let room = Math.max(0, REFERENCE_IMAGE_CAP - mandatory);
+    const keptLocation = locationRefs.slice(0, room);
+    room -= keptLocation.length;
     const keptCrowds = crowdRefs.slice(0, room);
-    const keptLocation: Ref[] = [...keptLocationBase, ...keptLocationExtras];
-    // Final order for Seedance: one full-body ref per character, then location, then crowds.
     const refs: Ref[] = [...characterRefs, ...keptLocation, ...keptCrowds].slice(0, REFERENCE_IMAGE_CAP);
     referenceImages = refs.map(r => r.url);
     retryRefs = refs.map(r => ({ url: r.url, kind: r.kind, note: r.note }));

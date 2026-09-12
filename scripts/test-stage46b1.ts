@@ -1,4 +1,4 @@
-/** Stage 46B-1 unit tests (no live API): look cache hash, look-result validator, front+full references, cap trimming, look-neutral frame prompt. */
+/** Stage 46B-1 unit tests (no live API): look cache hash, look-result validator, single front reference per character (Stage 51 revert to 46B-0), cap trimming, look-neutral frame prompt. */
 import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import { lookHash, validateLookResult, hasAllTagsInOrder, rewriteSceneLook, PROMPT_TAGS, type LookTexts } from "../lib/character-look";
@@ -54,8 +54,9 @@ ok("too-short / missing state falls back to the original state", shortState.star
   const r7 = await rewriteSceneLook([{ ...anna, appearance: "" }], original, null, llmOk);
   ok("no appearance → no call, original text", r7.texts === original && calls === 2);
 
-  // 4. Stage 50: individuals send ONLY the full body (front-face never sent); fallback to front when
-  //    no full body; crowds front only; order character full-body → location → crowds.
+  // 4. Stage 51 (46B-0 known-good): individuals send EXACTLY ONE photo — the front portrait
+  //    (imageFront); the full body / profile / extras are never sent to video; crowds front only;
+  //    order character front → location (all angles) → crowds.
   const scene = { id: "s1", number: 1, videoPrompt: prompt9, sceneKind: null, voiceover: null, dialogue: 'ANNA: "Now."', dialogueEn: 'ANNA: "Now."', language: "en", locationDesc: "Kitchen", continuesFrom: "new-sequence", startState: "", endState: "" };
   const loc = { id: "loc", name: "Kitchen", imageUrl: styledUrl("k-wide"), imageReverse: styledUrl("k-rev"), imageDetail: styledUrl("k-det"), imageExtra: null };
   const chars = [
@@ -65,20 +66,21 @@ ok("too-short / missing state falls back to the original state", shortState.star
   ];
   const b = buildScenePrompt({ scene, characters: chars, location: loc, previous: null, provider: "seedance" });
   const urls = b.referenceImages;
-  ok("Anna sends full body only (front never sent)", urls[0] === styledUrl("anna-full") && !urls.includes(styledUrl("anna-front")));
-  ok("Mark falls back to front (no full body)", urls[1] === styledUrl("mark-front"));
+  ok("Anna sends front only (full never sent)", urls[0] === styledUrl("anna-front") && !urls.includes(styledUrl("anna-full")));
+  ok("Mark sends front", urls[1] === styledUrl("mark-front"));
   ok("crowd sends front only", urls.includes(styledUrl("crowd-front")) && !urls.includes(styledUrl("crowd-full")));
   ok("location refs follow character refs", urls[2] === styledUrl("k-wide"));
-  ok("[Image1] Anna = full identity note", /\[Image1\] defines Anna: face, full-body build, proportions and current clothing/.test(b.prompt));
-  ok("[Image2] Mark = face/identity fallback note", /\[Image2\] defines Mark's face and identity/.test(b.prompt));
+  ok("all base location angles sent", urls.includes(styledUrl("k-wide")) && urls.includes(styledUrl("k-rev")) && urls.includes(styledUrl("k-det")));
+  ok("[Image1] Anna = identity note", /\[Image1\] defines Anna's photorealistic appearance and identity/.test(b.prompt));
+  ok("[Image2] Mark = identity note", /\[Image2\] defines Mark's photorealistic appearance and identity/.test(b.prompt));
   ok("crowd note unchanged", /defines the look of the group "Guests"/.test(b.prompt));
 
-  // 5. Stage 50 cap trimming: one full-body ref per character never trimmed, crowds trimmed first
+  // 5. Stage 51 cap trimming: one front ref per character never trimmed, crowds trimmed first
   const many = Array.from({ length: 14 }, (_, i) => ({ characterId: `c${i}`, name: `C${i}`, tier: "MAIN", imageFront: styledUrl(`c${i}-f`), imageFull: styledUrl(`c${i}-full`), appearance: "x", age: null }));
   const crowds = Array.from({ length: 10 }, (_, i) => ({ characterId: `g${i}`, name: `G${i}`, tier: "CROWD", imageFront: styledUrl(`g${i}`), appearance: "y", age: null }));
   const big = buildScenePrompt({ scene, characters: [...many, ...crowds], location: loc, previous: null, provider: "seedance" });
   ok("cap respected", big.referenceImages.length <= REFERENCE_IMAGE_CAP && REFERENCE_IMAGE_CAP === 30);
-  ok("14 full-body character refs all kept, fronts never sent", many.every(c => big.referenceImages.includes(c.imageFull) && !big.referenceImages.includes(c.imageFront)));
+  ok("14 front character refs all kept, fulls never sent", many.every(c => big.referenceImages.includes(c.imageFront) && !big.referenceImages.includes(c.imageFull)));
   ok("crowds fit in the remaining room after 14 chars + 3 location angles", big.referenceImages.filter(u => u.includes("/g")).length === 10);
 
   // 6. look-neutral last-frame description

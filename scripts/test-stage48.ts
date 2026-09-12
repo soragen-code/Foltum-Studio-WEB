@@ -121,13 +121,13 @@ async function main() {
     previous: null, provider: null, resolvedDialogueEn: "",
   });
   const kinds = built.retryRefs.map((r) => r.kind);
-  // Stage 50: the character contributes ONLY the full-body photo — the front-face portrait (which trips
-  // Seedance E005), the profile and the extra angle are never sent to video.
-  ok("refs: full body is Image1", built.referenceImages[0] === FULL);
-  ok("refs: front-face portrait never sent", !built.referenceImages.includes(FACE));
+  // Stage 51 (46B-0 known-good): the character contributes ONLY the front portrait — the profile, the
+  // full body and the extra angle are never sent to video (sending several photos trips Seedance E005).
+  ok("refs: front portrait is Image1", built.referenceImages[0] === FACE);
+  ok("refs: full body never sent", !built.referenceImages.includes(FULL));
   ok("refs: profile / extra never sent", !built.referenceImages.includes(PROFILE) && !built.referenceImages.includes(EXTRA));
   ok("refs: characters precede the location", kinds.indexOf("location") > kinds.lastIndexOf("character"));
-  ok("refs: full-body photo is included", built.referenceImages.includes(FULL));
+  ok("refs: front portrait is included", built.referenceImages.includes(FACE));
   ok("refs: total within the cap", built.referenceImages.length <= MAX_REFERENCE_IMAGES);
   ok("refs: Kling cap keeps the same head order", capKlingReferences(built.referenceImages)[0] === built.referenceImages[0] && capKlingReferences(built.referenceImages).length <= KLING_MAX_REFERENCE_IMAGES);
 
