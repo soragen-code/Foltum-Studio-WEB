@@ -445,11 +445,9 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                           <FileText className="h-3.5 w-3.5" /> Промпт
                         </button>
                         <DownloadAllButton kind="character" id={c.id} count={characterFrameCount(c)} />
-                        {!!(c.promptOverride && c.promptOverride.trim()) && (
-                          <button type="button" disabled={!!gen || !!charResetting[c.id]} onClick={() => resetCharacterPrompt(c.id)} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="char-prompt-reset" title="Убрать ручной промпт и вернуть автоматический">
+                        <button type="button" disabled={!!gen || !!charResetting[c.id]} onClick={() => resetCharacterPrompt(c.id)} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="char-prompt-reset" title="Убрать ручной промпт и вернуть автоматический">
                             {charResetting[c.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Сбросить промпт на авто
                           </button>
-                        )}
                         {!!(c.promptOverride && c.promptOverride.trim()) && <span className="rounded bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="character-prompt-override">Промпт изменён вручную</span>}
                       </div>
                     </>
