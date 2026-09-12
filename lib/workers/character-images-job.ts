@@ -120,7 +120,7 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
       if (await canceled()) return;
       const chained = !!ref;
       try {
-        const basePrompt = characterShotPrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize, chained, refKind, char.promptOverride);
+        const basePrompt = characterShotPrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize, chained, refKind, char.promptOverride, char.age);
         const gen = (prompt: string) => generateImage(
           { prompt, aspect_ratio: ASPECT_RATIOS[shot], ...(chained ? { image_input: [ref!] } : {}) },
           { jobId, characterId: char.id, imageModel }
@@ -153,22 +153,23 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
       }
     };
 
-    // ---- Pass 1a (Stage 46A): FULL-BODY shots first, as the identity anchor ----
-    // Generated text-to-image (no close-up reference pulling the model into big-headed, short-legged
-    // "dwarf" figures) with the proportion guard. Legacy resume: a character that already has a front
-    // portrait but no full shot is chained on that front (old path, still guarded).
+    // ---- Pass 1a (Stage 49): FRONT face portrait FIRST, as the standalone identity anchor ----
+    // Generated text-to-image (no reference) so the face defines the character's identity and reads at the
+    // stated adult age — the front portrait is what Seedance scene generation uses as the face reference,
+    // so it must NOT be a close-up cropped out of a full-body frame (that reads younger and trips E005).
+    const frontTasks = characters.filter((char) => !(char as any).imageFront).map((char) => ({ char }));
+    await runWithConcurrency(frontTasks, REF_BATCH_CONCURRENCY, async ({ char }) =>
+      genBaseShot(char, "front", null, "face")
+    );
+
+    // ---- Pass 1b: FULL-BODY chained on the FRONT face anchor (same identity, camera stepped back) ----
+    // The proportion guard still runs; the full shot copies the identity from the front portrait.
     const fullTasks = characters.filter((char) => !(char as any).imageFull).map((char) => ({ char }));
     await runWithConcurrency(fullTasks, REF_BATCH_CONCURRENCY, async ({ char }) =>
       genBaseShot(char, "full", ((char as any).imageFront as string | null) ?? null, "face")
     );
 
-    // ---- Pass 1b: FRONT close-up chained on the full-body anchor (same person, camera moved closer) ----
-    const frontTasks = characters.filter((char) => !(char as any).imageFront).map((char) => ({ char }));
-    await runWithConcurrency(frontTasks, REF_BATCH_CONCURRENCY, async ({ char }) =>
-      genBaseShot(char, "front", ((char as any).imageFull as string | null) ?? null, "full")
-    );
-
-    // ---- Pass 1c: PROFILE chained on the front close-up (face identity), falling back to the full anchor ----
+    // ---- Pass 1c: PROFILE chained on the FRONT face anchor (face identity), falling back to the full shot ----
     const profileTasks = characters.filter((char) => !(char as any).imageProfile).map((char) => ({ char }));
     await runWithConcurrency(profileTasks, REF_BATCH_CONCURRENCY, async ({ char }) => {
       const front = (char as any).imageFront as string | null;
@@ -195,7 +196,7 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
         if (!ref) { done += 1; await bump("Доп. ракурсы"); return; }
         try {
           const remote = await generateImage(
-            { prompt: characterExtraShotPrompt(char.appearance ?? "", char.name, index, refKind, char.promptOverride), aspect_ratio: isFullShot ? "9:16" : "3:4", image_input: [ref] },
+            { prompt: characterExtraShotPrompt(char.appearance ?? "", char.name, index, refKind, char.promptOverride, char.age), aspect_ratio: isFullShot ? "9:16" : "3:4", image_input: [ref] },
             { jobId, characterId: char.id, imageModel }
           );
           const url = await uploadRemoteToS3(remote, `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/extra-${Date.now()}-${index}.png`, "image/png");

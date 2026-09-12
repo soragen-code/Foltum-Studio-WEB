@@ -16,8 +16,60 @@ import {
   FULL_BODY_FRAMING,
   FULL_BODY_PROPORTIONS,
   FULL_BODY_PROPORTIONS_CHILD,
+  isChildAppearance,
   type CharacterRefKind,
 } from "@/lib/visual-style";
+
+// ---------------------------------------------------------------------------------------------------
+// Stage 49 — explicit ADULT AGE wording in every portrait / shot prompt.
+//
+// Since Stage 46A the face was a close-up cropped from the full-body frame; the regenerated portraits read
+// visually much younger than the character's stated age and Seedance rejected every scene using them with
+// E005 ("flagged as sensitive" — a "possible minor" trigger). We now state the character's card age as adult
+// wording ("an adult woman, 28 years old") at the front of the description so the image model anchors on an
+// adult. This is a clarification only — no content is filtered, softened or removed.
+// ---------------------------------------------------------------------------------------------------
+
+function detectGenderNoun(appearance: string): "woman" | "man" | null {
+  const a = ` ${appearance.toLowerCase()} `;
+  const female = /(?:^|[^a-zа-яё])(she|her|hers|woman|women|female|girl|lady|mother|sister|daughter|wife|actress|queen|женщин|девушк|девочк|мать|сестр|дочь|жена)/;
+  const male = /(?:^|[^a-zа-яё])(he|him|his|man|men|male|guy|father|brother|son|husband|king|мужчин|парень|мальчик|отец|брат|сын|муж)/;
+  if (female.test(a)) return "woman";
+  if (male.test(a)) return "man";
+  return null;
+}
+
+function parseAgeNumber(age?: string | null): number | null {
+  if (!age) return null;
+  const m = String(age).match(/\d{1,3}/);
+  if (!m) return null;
+  const n = Number(m[0]);
+  return Number.isFinite(n) && n > 0 && n < 120 ? n : null;
+}
+
+/**
+ * Adult-age clause derived from the character card. Returns null for a genuine child (age-appropriate
+ * wording is kept) or a stated minor age; otherwise an explicit adult phrase using the card age (and the
+ * gender inferred from the appearance) or a safe "late 20s" default when the age is missing/unparseable.
+ */
+export function adultAgeClause(age: string | null | undefined, appearance = ""): string | null {
+  if (isChildAppearance(appearance)) return null; // a real child keeps child proportions/wording
+  const noun = detectGenderNoun(appearance);
+  const n = parseAgeNumber(age);
+  if (n !== null && n < 18) return null; // an explicitly stated minor — never fabricate an adult age
+  // Stage 49: emphasise mature, fully-grown adult facial features so the close-up face portrait does not
+  // read visually younger than the stated age (the Seedance moderation "possible minor" E005 trigger).
+  const mature = "with mature, fully-grown adult facial features";
+  if (n !== null) return noun ? `a fully grown adult ${noun}, ${n} years old, ${mature}` : `a fully grown adult, ${n} years old, ${mature}`;
+  return noun ? `a fully grown adult ${noun} in their late 20s, ${mature}` : `a fully grown adult in their late 20s, ${mature}`;
+}
+
+/** Prepend the adult-age clause (capitalised, as its own sentence) to the character description. */
+export function withAdultAge(who: string, age: string | null | undefined, appearance: string): string {
+  const clause = adultAgeClause(age, appearance);
+  if (!clause) return who;
+  return `${clause.charAt(0).toUpperCase()}${clause.slice(1)}. ${who}`;
+}
 
 export const FULL_BODY_PROPORTIONS_RULE =
   "BODY PROPORTION RULE (strict, natural realistic human anatomy): total height about 7 to 7.5 heads (never 8 or more — the head must NOT be undersized); " +
@@ -53,16 +105,21 @@ export function characterShotPrompt(
   groupSize?: number | null,
   chained = false,
   refKind: CharacterRefKind = "face",
-  baseOverride?: string | null
+  baseOverride?: string | null,
+  age?: string | null
 ): string {
-  const who = resolveCharacterBase(appearance, baseOverride);
+  const who0 = resolveCharacterBase(appearance, baseOverride);
+  // Stage 49: the caller opts in by passing `age` (even null); the adult clause is skipped for crowds and
+  // when `age` is undefined (keeps every legacy call — and its tests — byte-identical to the old prompt).
+  const who = age !== undefined && tier !== "CROWD" ? withAdultAge(who0, age, appearance) : who0;
   const base = characterImagePrompt(who, shot, name, tier, groupSize, chained, refKind);
   return isFullBodyShot(shot) && tier !== "CROWD" ? withFullBodyProportionsRule(base) : base;
 }
 
 /** Extra-angle prompt with the proportion rule on the full-length slots only (right profile stays as is). */
-export function characterExtraShotPrompt(appearance: string, name = "", index = 0, refKind: CharacterRefKind = "face", baseOverride?: string | null): string {
-  const who = resolveCharacterBase(appearance, baseOverride);
+export function characterExtraShotPrompt(appearance: string, name = "", index = 0, refKind: CharacterRefKind = "face", baseOverride?: string | null, age?: string | null): string {
+  const who0 = resolveCharacterBase(appearance, baseOverride);
+  const who = age !== undefined ? withAdultAge(who0, age, appearance) : who0;
   const base = characterExtraAnglePrompt(who, name, index, refKind);
   return isFullBodyExtraIndex(index) ? withFullBodyProportionsRule(base) : base;
 }
