@@ -76,20 +76,24 @@ export const FULL_BODY_FRAMING =
   "Standing straight, symmetric shoulders, relaxed arms at the sides, all clothing and the full silhouette visible.";
 
 /**
- * Realistic ADULT body proportions for the full-body shot (appended after the character description).
- * Stage 52: the earlier wording ("7.5–8 heads tall, head SMALL ~1/8, long torso") over-corrected the old
- * chibi problem into the OPPOSITE defect — a vertically STRETCHED figure with an elongated torso, short-
- * looking legs and an undersized head. It is now reconciled with the proportion rule / vision guard
- * (both target ≈ 7–7.5 heads, natural-size head): balanced, natural adult proportions with explicit
- * negatives against BOTH stretching and squashing, and against distorted / extra limbs.
+ * Realistic ADULT anatomy / proportions for the full-body shot (added after the character description).
+ * Stage 58: this is now the SINGLE source of the full-length proportion wording — `FULL_BODY_PROPORTIONS_RULE`
+ * (lib/full-body-prompt.ts) is an alias of this constant, so the earlier DUPLICATE block (the inline
+ * proportions PLUS a near-identical appended "rule") that pushed the composed prompt past the image
+ * provider's 4000-character hard limit (HTTP 422) is gone — the idempotent wrapper now appends nothing when
+ * this block is already present. It merges both former blocks losslessly: ≈7–7.5 heads, natural-size head,
+ * legs = exactly half the height with the hip line at the vertical midpoint (long clothing must not shorten
+ * the legs), ~3-head torso, one consistent build, correct anatomy, a strictly frontal hip-height camera with
+ * no foreshortening, and the explicit negatives against short/stubby legs, a high hip line and stretching.
  */
 export const FULL_BODY_PROPORTIONS =
-  "ANATOMY / PROPORTIONS (critical): natural, realistic adult human proportions — the figure is about 7 to 7.5 heads tall (never 8 or more); " +
-  "the head is a NATURAL size for the body (about one seventh to one eighth of the total height), neither oversized nor shrunken; " +
-  "the legs (from the hip joint / crotch to the soles) are EXACTLY HALF of the total body height — long adult legs, so the crotch / hip line sits at the vertical MIDPOINT of the whole figure (never higher); a long coat, dress or robe must NOT make the legs look short or push the apparent hip line above the midpoint; the torso is a NATURAL length — shoulders to hip about 3 head-heights, NOT elongated or vertically stretched; " +
-  "shoulders about 2–2.5 head-widths wide; ONE consistent build — torso, arms and legs share the same volume, no bloated midsection next to thin limbs. " +
-  "Standing straight and upright in a neutral frontal pose, arms relaxed at the sides, feet flat on the ground, the whole figure head-to-toe inside the frame with nothing cropped and correct human anatomy (two arms, two legs, five fingers per hand, no extra, missing, fused or warped limbs). " +
-  "NO vertical stretching or squashing, NO elongated torso, NO short stubby legs, NO legs shorter than half of the height, NO high hip line, NO squat / stocky / dwarfish build, NO long torso with short legs, NO oversized OR undersized head, NO distorted or extra limbs, NOT chibi, NOT dwarf-like, NOT child-like, NOT a caricature — a real, naturally proportioned adult with long legs photographed head to toe.";
+  "ANATOMY / PROPORTIONS (critical, natural realistic adult human anatomy): the figure is about 7 to 7.5 heads tall (never 8 or more — the head must NOT be undersized) and the head is a NATURAL size for the body; " +
+  "the legs (hip joint / crotch to the soles) are EXACTLY HALF of the total height — long adult legs, so the hip / crotch line sits at the vertical MIDPOINT of the whole figure (never higher), and a long coat, dress or robe must NOT make the legs look short or raise the apparent hip line above the midpoint; " +
+  "the torso is NOT elongated (shoulders to hip about 3 head-heights), ONE consistent build across the whole body — torso, arms and legs share the same volume (no bloated midsection with thin arms or shins); " +
+  "correct human anatomy — two arms, two legs, five fingers per hand, no extra, missing, fused, duplicated or warped limbs; " +
+  "the person stands straight and upright in a neutral frontal pose, arms relaxed at the sides, feet flat on the floor, the ENTIRE figure head to toe inside the frame with nothing cropped; " +
+  "camera at hip height, neutral 50mm-equivalent lens, perfectly level and straight-on — no low angle, no high angle, no wide-angle distortion and no perspective foreshortening or compression of the legs, no vertical stretching or squashing of the figure. " +
+  "NO short stubby legs, NO legs shorter than half the height, NO high hip line, NO squat / dwarfish build, NO oversized OR undersized head, NOT chibi, NOT child-like, NOT a caricature — a real, naturally proportioned adult with long legs photographed head to toe.";
 
 /** Child / young-teen variant — a child character keeps age-appropriate proportions instead of adult ones. */
 export const FULL_BODY_PROPORTIONS_CHILD =

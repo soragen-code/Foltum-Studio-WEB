@@ -71,13 +71,46 @@ export function withAdultAge(who: string, age: string | null | undefined, appear
   return `${clause.charAt(0).toUpperCase()}${clause.slice(1)}. ${who}`;
 }
 
-export const FULL_BODY_PROPORTIONS_RULE =
-  "BODY PROPORTION RULE (strict, natural realistic human anatomy): total height about 7 to 7.5 heads (never 8 or more — the head must NOT be undersized); " +
-  "legs (hip joint to sole) are EXACTLY HALF of the total height — long adult legs, so the hip / crotch line sits at the vertical MIDPOINT of the whole figure (never higher), and a long coat, dress or robe must NOT make the legs look short or raise the apparent hip line above the midpoint (no short, stubby or foreshortened legs, no high hip line, no squat or dwarfish build); the torso is NOT elongated: shoulders to hip is about 3 head-heights, no stretched midsection; " +
-  "the head is natural size for the body; ONE consistent build across the whole body — torso, arms and legs share the same volume and thickness (no bloated midsection with thin arms or shins); " +
-  "correct human anatomy — two arms, two legs, five fingers per hand, no extra, missing, fused, duplicated or warped limbs, no twisted or deformed body; " +
-  "the person stands straight and upright in a neutral frontal pose, arms relaxed at the sides, feet flat on the floor, the ENTIRE figure from the crown of the head to the soles of the feet inside the frame with nothing cropped; " +
-  "camera at hip height, neutral 50mm-equivalent lens, perfectly level and straight-on — no low angle, no high angle, no wide-angle distortion and no perspective foreshortening or compression of the legs, no vertical stretching or squashing of the figure.";
+// Stage 58: the full-length proportion "rule" is now the SAME text as the inline adult proportions block
+// (single source of truth in lib/visual-style.ts). Aliasing them removes the near-duplicate second copy that
+// pushed the composed full-body prompt past the image provider's 4000-char hard limit (HTTP 422). Because the
+// two strings are now identical, `withFullBodyProportionsRule` (idempotent) appends nothing to a prompt that
+// already carries the inline block — the adult full-body shot ends up with exactly ONE proportion block —
+// while child and back-view frames (which carry a different inline block, or none) still get it appended.
+export const FULL_BODY_PROPORTIONS_RULE = FULL_BODY_PROPORTIONS;
+
+/**
+ * Stage 58 — hard cap on the character-prompt length sent to the image provider. Seedream rejects any prompt
+ * longer than 4000 characters with HTTP 422, which nulled the character's full-body photo. 3900 leaves a small
+ * margin under that limit. After the Stage 58 de-duplication a typical full-body prompt is comfortably under
+ * this; the cap is a safety net for an unusually long appearance / manual override or a stacked retry suffix.
+ */
+export const PROMPT_MAX_CHARS = 3900;
+
+/**
+ * Guarantee a prompt never exceeds the provider limit. The load-bearing tail — the proportion / anatomy block
+ * and everything after it (the trailing background line and any appended corrective suffix) — is kept intact;
+ * only the free-text character description is shortened, and always from its END, so the framing, the E005
+ * adult-age clause (both at the very start) and the full proportion wording are preserved. A prompt already
+ * within the limit is returned byte-for-byte unchanged.
+ */
+export function clampPromptToLimit(prompt: string, max = PROMPT_MAX_CHARS): string {
+  if (prompt.length <= max) return prompt;
+  // Split at the FIRST proportion block so the whole tail (proportions + background line + any suffix) is kept.
+  let tailStart = -1;
+  for (const block of [FULL_BODY_PROPORTIONS_CHILD, FULL_BODY_PROPORTIONS]) {
+    const i = prompt.indexOf(block);
+    if (i >= 0 && (tailStart < 0 || i < tailStart)) tailStart = i;
+  }
+  if (tailStart < 0) return prompt.slice(0, max); // no known block — last-resort hard cap
+  const tail = prompt.slice(tailStart);
+  if (tail.length >= max) return tail.slice(0, max); // pathological: even the tail alone is over the cap
+  const head = prompt.slice(0, tailStart);
+  const room = max - tail.length;
+  // head.length > room here (otherwise the whole prompt would fit); trim the description tail off the head.
+  const trimmedHead = head.slice(0, room).replace(/\s+\S*$/, " ");
+  return trimmedHead + tail;
+}
 
 /** Which shots of the character set are full-length (and therefore get the proportion rule). */
 export function isFullBodyShot(shot: "front" | "profile" | "full"): boolean {
@@ -115,7 +148,9 @@ export function characterShotPrompt(
   // when `age` is undefined (keeps every legacy call — and its tests — byte-identical to the old prompt).
   const who = age !== undefined && tier !== "CROWD" ? withAdultAge(who0, age, appearance) : who0;
   const base = characterImagePrompt(who, shot, name, tier, groupSize, chained, refKind);
-  return isFullBodyShot(shot) && tier !== "CROWD" ? withFullBodyProportionsRule(base) : base;
+  // Stage 58: clamp only the full-length prompt (the one that carries the long proportion block); a normal-length
+  // prompt is returned unchanged, so close-ups, crowds and typical full-body prompts stay byte-identical.
+  return isFullBodyShot(shot) && tier !== "CROWD" ? clampPromptToLimit(withFullBodyProportionsRule(base)) : base;
 }
 
 /** Extra-angle prompt with the proportion rule on the full-length slots only (right profile stays as is). */
@@ -123,7 +158,7 @@ export function characterExtraShotPrompt(appearance: string, name = "", index = 
   const who0 = resolveCharacterBase(appearance, baseOverride);
   const who = age !== undefined ? withAdultAge(who0, age, appearance) : who0;
   const base = characterExtraAnglePrompt(who, name, index, refKind);
-  return isFullBodyExtraIndex(index) ? withFullBodyProportionsRule(base) : base;
+  return isFullBodyExtraIndex(index) ? clampPromptToLimit(withFullBodyProportionsRule(base)) : base;
 }
 
 // ---------------------------------------------------------------------------------------------------

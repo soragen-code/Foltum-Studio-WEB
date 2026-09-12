@@ -5,7 +5,7 @@ import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from
 
 import { VISUAL_STYLE_ID, isChildAppearance, type CharacterRefKind } from "@/lib/visual-style";
 // Stage 46D: prompt wrappers that append the full-body proportion rule to every full-length frame.
-import { characterShotPrompt } from "@/lib/full-body-prompt";
+import { characterShotPrompt, clampPromptToLimit } from "@/lib/full-body-prompt";
 import { detectC2paFromUrl } from "@/lib/c2pa";
 import { checkFullBodyImage, fullBodyPasses, fullBodyScore, fullBodyCorrectionSuffix, evaluateProportions, type FullBodyCheck, type ProportionDefect } from "@/lib/full-body-check";
 import { REF_BATCH_CONCURRENCY, runWithConcurrency } from "@/lib/reference-counts";
@@ -117,8 +117,11 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
       const chained = !!ref;
       try {
         const basePrompt = characterShotPrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize, chained, refKind, char.promptOverride, char.age);
+        // Stage 58: clamp the FINAL prompt (including any corrective retry suffix appended by the guard) so it
+        // never exceeds the image provider's 4000-char hard limit (Seedream returns HTTP 422 otherwise, which
+        // previously nulled the full-body photo). A prompt already within the limit is passed through unchanged.
         const gen = (prompt: string) => generateImage(
-          { prompt, aspect_ratio: ASPECT_RATIOS[shot], ...(chained ? { image_input: [ref!] } : {}) },
+          { prompt: clampPromptToLimit(prompt), aspect_ratio: ASPECT_RATIOS[shot], ...(chained ? { image_input: [ref!] } : {}) },
           { jobId, characterId: char.id, imageModel }
         );
         let replicateUrl: string;
