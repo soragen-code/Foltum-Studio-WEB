@@ -7,6 +7,7 @@ import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshC
 import { FrameToolbar, DownloadAllButton } from '@/app/project/[id]/_components/frame-toolbar'
 import { PromptModal, CHARACTER_PROMPT_DESCRIPTION, LOCATION_PROMPT_DESCRIPTION } from '@/app/project/[id]/_components/prompt-modal'
 import { referenceFileName } from '@/lib/download-name'
+import { VIDEO_PROVIDERS, VIDEO_PROVIDER_LABEL, normalizeVideoProvider, videoModelBadge, type VideoProvider } from '@/lib/video-provider'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
@@ -51,7 +52,7 @@ const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.ima
 // Stage 17: top up location extras in serverless-safe chunks (a single 12-frame job can overrun the
 // serverless window and get killed — chunking + re-firing guarantees the target is actually reached).
 
-type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; lookStale?: boolean | null; status: string; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
+type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; lookStale?: boolean | null; videoModel?: string | null; status: string; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null }
 
 export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits }: { episode: any; project: any; siblings?: Sibling[]; credits: number }) {
@@ -628,6 +629,28 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // (parallel) mode. The server-side chain run path is kept intact and still reported here if active.
   const [chainRunActive, setChainRunActive] = useState<boolean>(!!initial.chainRunActive)
   const [chainRunNote, setChainRunNote] = useState<string | null>(initial.chainRunNote ?? null)
+  // Stage 47 — per-episode video model: Seedance 2.5 (default) | Kling 3.0. Saved immediately; the
+  // worker reads it at job start, so the switch is locked while any scene is generating.
+  const [videoProvider, setVideoProvider] = useState<VideoProvider>(normalizeVideoProvider(initial.videoProvider))
+  const [providerSaving, setProviderSaving] = useState(false)
+  const changeVideoProvider = useCallback(async (next: VideoProvider) => {
+    if (next === videoProvider || providerSaving) return
+    setProviderSaving(true); setError(null)
+    const prev = videoProvider
+    setVideoProvider(next)
+    try {
+      const res = await fetch(`/api/ai/episodes/${episode.id}/video-provider`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ videoProvider: next }) })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error || 'Не удалось сохранить модель видео')
+      setVideoProvider(normalizeVideoProvider(data.videoProvider))
+      setEpisode((e: any) => ({ ...e, videoProvider: normalizeVideoProvider(data.videoProvider) }))
+    } catch (e: any) {
+      setVideoProvider(prev)
+      setError(e.message || 'Не удалось сохранить модель видео')
+    } finally {
+      setProviderSaving(false)
+    }
+  }, [videoProvider, providerSaving, episode.id])
   // While a chain run is active the server starts the next scene itself (after the previous one is
   // published) — pick up every newly started job so its card shows progress, and read the run status.
   useEffect(() => {
@@ -1053,6 +1076,23 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           </button>
           <span className="text-xs text-muted-foreground" data-testid="batch-status">{scenes.filter((s) => validUrl(s.videoUrl)).length} из {scenes.length} сцен готово{generatingCount > 0 ? ` · генерируется: ${generatingCount}` : ''}{isAssembled ? ' · эпизод собран' : ''}</span>
           {chainRunActive && <span className="inline-flex items-center gap-1 text-xs text-primary" data-testid="chain-run-active"><Loader2 className="h-3 w-3 animate-spin" /> Цепочка идёт: сцены генерируются по очереди</span>}
+          {/* Stage 47 — video model switch (always visible, labelled buttons). */}
+          <div className="flex w-full flex-wrap items-center gap-2" data-testid="video-provider-switch">
+            <span className="text-sm font-medium">Модель видео:</span>
+            <div className="inline-flex overflow-hidden rounded-lg border border-border">
+              {VIDEO_PROVIDERS.map((p) => (
+                <button key={p} type="button" onClick={() => changeVideoProvider(p)} disabled={providerSaving || generatingCount > 0 || chainRunActive}
+                  className={`px-3 py-2 text-sm font-medium disabled:opacity-50 ${videoProvider === p ? 'bg-primary text-primary-foreground' : 'bg-card hover:bg-muted'}`}
+                  data-testid={`video-provider-${p}`} data-active={videoProvider === p ? 'true' : 'false'} aria-pressed={videoProvider === p}>
+                  {VIDEO_PROVIDER_LABEL[p]}
+                </button>
+              ))}
+            </div>
+            {providerSaving && <Loader2 className="h-4 w-4 animate-spin text-primary" data-testid="video-provider-saving" />}
+            <span className="text-xs text-muted-foreground">
+              {generatingCount > 0 || chainRunActive ? 'Смена модели доступна после завершения генерации' : videoProvider === 'kling' ? 'Kling 3.0: 720p, клип 3–15 с, до 7 референсов' : 'Seedance 2.5: по умолчанию, клип до 30 с'}
+            </span>
+          </div>
           <p className="w-full text-xs text-muted-foreground" data-testid="scenes-hint">
             Все сцены стартуют сразу, стыковка между сценами — по сценарному описанию финального кадра предыдущей сцены («Финал кадра»). <b>Сгенерировать все сцены:</b> запускает все ещё не готовые сцены сразу (кредиты списываются за каждую сцену).{' '}
             <b>Собрать:</b> склеивает готовые ролики всех сцен в один эпизод без перегенерации — доступно, когда все сцены готовы. Качество серии (480p/720p/1080p, 30/60 кадров/с) и фоновая музыка выбираются при сборке.
@@ -1109,6 +1149,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       {scene.sceneKind === 'narration' && <span className="ml-2 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary align-middle" data-testid="narration-badge">Закадровый голос</span>}
                       {scene.sceneKind === 'action' && <span className="ml-2 rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-600 align-middle" data-testid="scene-kind-action">Экшен</span>}
                       <span className="text-xs font-normal text-muted-foreground"> · ~{scene.durationSec ?? 15}с</span>
+                      {(validUrl(scene.videoUrl) || gen) && <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground align-middle" data-testid="scene-provider-badge">{videoModelBadge(scene.videoModel)}</span>}
                     </div>
                     {scene.lookStale && validUrl(scene.videoUrl) && (
                       <div className="mt-1 inline-flex items-center rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-700" data-testid="scene-look-stale">Облик персонажа изменён — перегенерируйте</div>
@@ -1124,6 +1165,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                     <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center" data-testid="scene-spinner">
                       <Loader2 className="h-8 w-8 animate-spin text-primary" />
                       <div className="text-xs text-muted-foreground">{job?.message ?? 'В очереди…'}</div>
+                      {job?.result?.providerNote && <div className="text-[11px] text-amber-500" data-testid="kling-duration-note">{job.result.providerNote}</div>}
                       {job && <JobProgressBar job={job} expectedTotalSec={VIDEO_EXPECTED_SEC} className="w-full" />}
                     </div>
                   ) : validUrl(scene.videoUrl) ? (

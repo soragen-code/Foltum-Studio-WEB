@@ -211,3 +211,6 @@ ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "lookStale" BOOLEAN NOT NULL DEFAUL
 -- Stage 46E: character manual prompt override + location auto-prompt snapshot
 ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "promptOverride" TEXT;
 ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "visualPromptAuto" TEXT;
+
+-- Stage 47: per-episode video provider (seedance | kling)
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "videoProvider" TEXT NOT NULL DEFAULT 'seedance';

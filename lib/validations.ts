@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { badRequest } from "@/lib/api-errors";
+import { VIDEO_PROVIDERS } from "@/lib/video-provider";
 
 /* ------------------------------------------------------------------ */
 /*  Primitives                                                         */
@@ -242,4 +243,9 @@ export const locationPromptSchema = z
 export const locationFrameDeleteSchema = z.object({
   slot: z.enum(["master", "reverse", "detail", "extra"]),
   index: z.number().int().min(0).max(19).optional(),
+});
+
+/** PATCH /api/ai/episodes/[id]/video-provider — Stage 47: Seedance 2.5 (default) or Kling 3.0. */
+export const videoProviderSchema = z.object({
+  videoProvider: z.enum(VIDEO_PROVIDERS),
 });
