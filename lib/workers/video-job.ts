@@ -5,7 +5,8 @@ import { translateDialogue, detectSpokenLanguage } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
 import { extractLastFrameBuffer } from "@/lib/ffmpeg";
 import { normalizeVideoModel, videoModelSlug } from "@/lib/ai-models";
-import { startKlingVideo, getKlingTaskState, cancelKlingTask, clampKlingDuration, klingDurationNote, capKlingReferences, KLING_MODEL_NAME, KLING_RESOLUTION } from "@/lib/kling";
+import { startKlingVideo, getKlingTaskState, cancelKlingTask, clampKlingDuration, klingDurationNote, capKlingReferences, fitKlingPrompt, KLING_MODEL_NAME, KLING_RESOLUTION } from "@/lib/kling";
+import { chat } from "@/lib/ai";
 import { normalizeVideoProvider, type VideoProvider } from "@/lib/video-provider";
 import type { PredictionState } from "@/lib/replicate";
 import { getBucketConfig } from "@/lib/aws-config";
@@ -62,6 +63,9 @@ export interface VideoJobState {
   provider?: VideoProvider;
   /** Stage 47: provider-specific notice for the UI, e.g. «Kling: длительность ограничена 15 с». */
   providerNote?: string;
+  /** Stage 48: the Kling-fitted (≤3000 chars) prompt actually submitted; undefined for Seedance. */
+  klingPrompt?: string;
+  klingPromptChars?: { original: number; submitted: number; truncated: boolean };
   /** Everything needed to resubmit the same scene with a softer prompt. */
   retry?: ModerationRetryInput;
   /* --- Stage 33/36: what was ACTUALLY submitted, for honest moderation diagnostics --- */
@@ -270,6 +274,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     const useKling = normalizeVideoProvider(episodeLoc?.videoProvider) === "kling";
     let predictionId: string;
     let attempt: GenerationAttempt;
+    let klingPrompt: string | undefined; // Stage 48: set only on the Kling branch
     let submitMessage: string;
     // Extra state persisted alongside the prediction (moderation auto-recovery).
     const pipelineExtra: Partial<VideoJobState> = {};
@@ -318,11 +323,17 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     if (useKling) {
       // Kling 3.0 Omni: duration 3–15 s (clamped, noted for the UI), at most 7 reference images (same [ImageN] order).
       const klingRefs = capKlingReferences(referenceImages);
-      predictionId = await startKlingVideo({ prompt, referenceImages: klingRefs, durationSeconds: clipDuration });
+      // Stage 48: Kling caps the prompt at 3072 chars → shorten (LLM, then sentence-boundary cut) to 3000.
+      // Only shortening — no censoring/softening. The full prompt stays in `basePrompt`/scene text.
+      const fit = await fitKlingPrompt(prompt, (system, user) => chat(system, user, { temperature: 0.2, maxTokens: 2000 }), { imageCount: klingRefs.length });
+      klingPrompt = fit.prompt;
+      predictionId = await startKlingVideo({ prompt: klingPrompt, referenceImages: klingRefs, durationSeconds: clipDuration });
       pipelineExtra.provider = "kling";
       pipelineExtra.videoModel = KLING_MODEL_NAME;
-      const note = klingDurationNote(clipDuration);
-      if (note) pipelineExtra.providerNote = note;
+      pipelineExtra.klingPrompt = klingPrompt;
+      pipelineExtra.klingPromptChars = { original: fit.originalChars, submitted: klingPrompt.length, truncated: fit.truncated };
+      const notes = [klingDurationNote(clipDuration), fit.note].filter((n): n is string => !!n);
+      if (notes.length) pipelineExtra.providerNote = notes.join("; ");
       // Scene badge shows the real model while the clip is still rendering (finalize re-persists it on success).
       await prisma.scene.update({ where: { id: sceneId }, data: { videoModel: KLING_MODEL_NAME } }).catch(() => {});
     } else {
@@ -339,7 +350,8 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     pipelineExtra.moderationRetries = 0;
     // What was ACTUALLY submitted — handleFailure builds its moderation message from this, never
     // from the scene's stored text (which may differ from a manual override).
-    pipelineExtra.submittedPrompt = prompt;
+    // For Kling this is the compressed text that actually went out (Stage 48), so «Смотреть промпт» is truthful.
+    pipelineExtra.submittedPrompt = klingPrompt ?? prompt;
     pipelineExtra.hasOverride = built.hasOverride;
     pipelineExtra.referenceKind = built.referenceKind;
     pipelineExtra.refCounts = refCounts;
