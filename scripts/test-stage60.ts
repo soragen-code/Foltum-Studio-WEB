@@ -101,6 +101,12 @@ const creepEarly = smoothedProgress({ serverProgress: 0, status: 'processing', p
 const creepLate = smoothedProgress({ serverProgress: 0, status: 'processing', prevShown: creepEarly, elapsedSec: 120 })
 check('time creep advances with elapsed time', creepLate > creepEarly && creepEarly > 0)
 
+// The real bug: the server holds a flat 40% for the whole render. The bar must keep creeping
+// ABOVE that plateau instead of freezing on it.
+const plateauEarly = smoothedProgress({ serverProgress: 40, status: 'processing', prevShown: 0, elapsedSec: 10, expectedTotalSec: 600 })
+const plateauLate = smoothedProgress({ serverProgress: 40, status: 'processing', prevShown: plateauEarly, elapsedSec: 200, expectedTotalSec: 600 })
+check('does not freeze on the server 40% plateau (creeps above it)', plateauEarly > 40 && plateauLate > plateauEarly)
+
 // ---------------------------------------------------------------------------
 console.log('C) location generation decoupled from character generation')
 

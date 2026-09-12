@@ -141,11 +141,14 @@ export function smoothedProgress({
   const prev = Math.max(0, Math.min(100, prevShown || 0))
   if (status === 'completed') return 100
   if (status === 'failed' || status === 'canceled') return prev
-  // Time-based creep: asymptotically approaches `cap`, so the bar always inches forward even
-  // when the server progress is stuck, but slows down as it nears the cap.
-  const timeCreep = cap * (1 - Math.exp(-Math.max(0, elapsedSec) / (Math.max(1, expectedTotalSec) * 0.6)))
+  // The server reports coarse, stage-based checkpoints — e.g. a flat 40 % for the whole render
+  // (Seedance emits no per-frame percent). Treat each checkpoint as a floor, then keep creeping
+  // FROM that floor toward `cap` on a time curve, so the bar is always inching forward and never
+  // sits frozen on a plateau. When the server later jumps to a higher stage (upload/verify) the
+  // floor rises with it and the creep continues from there.
   const base = Math.max(0, Math.min(cap, serverProgress || 0))
-  const target = Math.min(cap, Math.max(base, timeCreep))
+  const creep = base + (cap - base) * (1 - Math.exp(-Math.max(0, elapsedSec) / (Math.max(1, expectedTotalSec) * 0.6)))
+  const target = Math.min(cap, Math.max(base, creep))
   return Math.max(prev, target)
 }
 
