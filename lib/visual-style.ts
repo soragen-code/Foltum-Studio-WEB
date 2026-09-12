@@ -69,7 +69,7 @@ export function characterImagePrompt(appearance: string, shot: "front" | "profil
  */
 export const FULL_BODY_FRAMING =
   "FULL-BODY FULL-LENGTH SHOT, head to toe: a distant full-length standing figure photographed from the FRONT, facing the camera. " +
-  "Camera at chest height about 4–5 metres away, 50mm lens, no wide-angle distortion. " +
+  "Camera at hip height about 4–5 metres away, 50mm lens, perfectly level and strictly frontal — no low angle, no high angle, no wide-angle distortion and no perspective foreshortening or compression of the legs. " +
   "The ENTIRE body from the top of the hair to the soles of the shoes is inside the frame, with a little floor below the feet and a little empty space above the head; " +
   "the standing figure fills about 85–90% of the frame height (tall vertical 9:16 frame — the whole figure occupies almost the full frame height, WITHOUT stretching or distorting the body's natural proportions). " +
   "NOT a close-up, NOT a medium shot, NOT a portrait — no cropping at the waist, hips or knees; both feet and shoes fully visible standing flat on the floor. " +
@@ -86,10 +86,10 @@ export const FULL_BODY_FRAMING =
 export const FULL_BODY_PROPORTIONS =
   "ANATOMY / PROPORTIONS (critical): natural, realistic adult human proportions — the figure is about 7 to 7.5 heads tall (never 8 or more); " +
   "the head is a NATURAL size for the body (about one seventh to one eighth of the total height), neither oversized nor shrunken; " +
-  "the legs (from hip to sole) are about HALF of the total body height; the torso is a NATURAL length — shoulders to hip about 3 head-heights, NOT elongated or vertically stretched; " +
+  "the legs (from the hip joint / crotch to the soles) are EXACTLY HALF of the total body height — long adult legs, so the crotch / hip line sits at the vertical MIDPOINT of the whole figure (never higher); a long coat, dress or robe must NOT make the legs look short or push the apparent hip line above the midpoint; the torso is a NATURAL length — shoulders to hip about 3 head-heights, NOT elongated or vertically stretched; " +
   "shoulders about 2–2.5 head-widths wide; ONE consistent build — torso, arms and legs share the same volume, no bloated midsection next to thin limbs. " +
   "Standing straight and upright in a neutral frontal pose, arms relaxed at the sides, feet flat on the ground, the whole figure head-to-toe inside the frame with nothing cropped and correct human anatomy (two arms, two legs, five fingers per hand, no extra, missing, fused or warped limbs). " +
-  "NO vertical stretching or squashing, NO elongated torso, NO short stubby legs, NO oversized OR undersized head, NO distorted or extra limbs, NOT chibi, NOT dwarf-like, NOT child-like, NOT a caricature — a real, naturally proportioned adult photographed head to toe.";
+  "NO vertical stretching or squashing, NO elongated torso, NO short stubby legs, NO legs shorter than half of the height, NO high hip line, NO squat / stocky / dwarfish build, NO long torso with short legs, NO oversized OR undersized head, NO distorted or extra limbs, NOT chibi, NOT dwarf-like, NOT child-like, NOT a caricature — a real, naturally proportioned adult with long legs photographed head to toe.";
 
 /** Child / young-teen variant — a child character keeps age-appropriate proportions instead of adult ones. */
 export const FULL_BODY_PROPORTIONS_CHILD =

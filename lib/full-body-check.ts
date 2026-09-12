@@ -29,8 +29,10 @@ export const CHILD_MIN_HEADS_TALL = 5;
 // target stated in the prompt, leaving less room for a vertically stretched figure to slip through.
 /** Shoulders-to-hip longer than this many head-heights = elongated torso (natural ≈ 3). */
 export const MAX_TORSO_HEADS = 3.3;
-/** Legs shorter than this fraction of the total height = short legs (natural ≈ 0.45–0.5). */
-export const MIN_LEGS_RATIO = 0.44;
+/** Legs shorter than this fraction of the total height = short legs (natural ≈ 0.47–0.5).
+ * Stage 57: raised 0.44 → 0.46 to catch the "short-legged / high hip line" figures
+ * (legsRatio ≈ 0.44–0.45) that previously slipped through while still allowing a natural ≥ 0.47. */
+export const MIN_LEGS_RATIO = 0.46;
 /** A figure taller than this many heads has an undersized head (natural adult ≈ 7–7.5). */
 export const MAX_HEADS_TALL = 7.9;
 
@@ -70,8 +72,8 @@ export const FULL_BODY_CHECK_SYSTEM_PROMPT =
   "You are a strict anatomy and framing inspector for character reference photos. You inspect a single photograph of ONE standing person. " +
   "First MEASURE: estimate the height of the head (top of hair to chin), the total height of the figure (top of hair to soles), the torso length (shoulder line to hip joint / crotch) and the leg length (hip joint to soles). " +
   "Compute headsTall = total / head, torsoHeads = torso / head, legsRatio = legs / total. " +
-  "A real adult is about 7–7.5 heads tall, torso about 3 heads, legs about half of the total height, with ONE consistent build (torso, arms and legs of matching volume). " +
-  "A figure of 6 heads or less with a big head and short legs is a chibi / dwarf caricature and is WRONG; a figure of 7.9+ heads with a tiny head, a stretched torso of 3.3+ heads or legs under 44% of the height is a vertically STRETCHED figure and is ALSO WRONG. " +
+  "A real adult is about 7–7.5 heads tall, torso about 3 heads, legs about half of the total height with the hip joint / crotch line at the vertical MIDPOINT of the figure, with ONE consistent build (torso, arms and legs of matching volume). " +
+  "A figure of 6 heads or less with a big head and short legs is a chibi / dwarf caricature and is WRONG; a figure with legs under 46% of the total height, or with the hip / crotch line ABOVE the vertical midpoint, is short-legged / squat with a HIGH HIP LINE and is WRONG (a long coat, dress or robe does NOT excuse short-looking legs — measure to the hip joint under the clothing); a figure of 7.9+ heads with a tiny head or a stretched torso of 3.3+ heads is a vertically STRETCHED figure and is ALSO WRONG. " +
   "ALSO check anatomy: any distorted, deformed or twisted body, or extra / missing / duplicated / fused limbs, hands or fingers, is WRONG. " +
   "And check FRAMING: any part of the figure cut off by an edge (head, hands, hips, legs or feet) is WRONG. " +
   "Return ONLY a JSON object with these fields: " +
@@ -80,9 +82,9 @@ export const FULL_BODY_CHECK_SYSTEM_PROMPT =
   '"headsTall" (number, one decimal) — your measured head-heights estimate; ' +
   '"torsoHeads" (number, one decimal) — torso length in head-heights; ' +
   '"legsRatio" (number, two decimals) — legs / total height; ' +
-  '"flags" (object) — {"elongatedTorso": boolean (torso visibly longer than natural, stretched midsection), "shortLegs": boolean (legs clearly under half of the height), "smallHead": boolean (head undersized for the body), "inconsistentVolume": boolean (torso / arms / legs do not match one build — e.g. bloated midsection with thin arms or shins)}; ' +
+  '"flags" (object) — {"elongatedTorso": boolean (torso visibly longer than natural, stretched midsection), "shortLegs": boolean (legs clearly under half of the height, or the hip / crotch line sits above the vertical midpoint — a high hip line), "smallHead": boolean (head undersized for the body), "inconsistentVolume": boolean (torso / arms / legs do not match one build — e.g. bloated midsection with thin arms or shins)}; ' +
   '"proportionsOk" (boolean) — true only if the proportions are realistic for the person\'s apparent age, the anatomy is correct (no distortion, no extra / missing / fused limbs or fingers) and none of the flags is set; ' +
-  '"issues" (array of short strings) — every concrete problem found, using these labels where they apply: "oversized head", "short legs", "short torso", "elongated torso", "small head", "inconsistent volume", "stocky/compressed body", "cropped body", "feet cut off", "distorted anatomy", "deformed body", "extra limb", "missing limb", "fused limbs", "extra fingers", "child-like proportions"; empty array if none; ' +
+  '"issues" (array of short strings) — every concrete problem found, using these labels where they apply: "oversized head", "short legs", "high hip line", "short torso", "elongated torso", "small head", "inconsistent volume", "stocky/compressed body", "cropped body", "feet cut off", "distorted anatomy", "deformed body", "extra limb", "missing limb", "fused limbs", "extra fingers", "child-like proportions"; empty array if none; ' +
   '"notes" (string) — one short sentence of remarks, or empty. ' +
   "Be critical and measure before judging. No prose, no markdown — JSON only.";
 
@@ -181,7 +183,7 @@ export function evaluateProportions(p: ProportionAssessment | null | undefined):
 
 const PROPORTION_FIX_TEXT: Record<ProportionDefect, string> = {
   elongatedTorso: "shorten the torso — shoulders to hip about 3 head-heights, no stretched midsection",
-  shortLegs: "lengthen the legs to half of the total body height",
+  shortLegs: "lengthen the legs to EXACTLY half of the total body height with the hip / crotch line at the vertical midpoint of the figure — long adult legs, not short or stubby, and do not let a long coat or dress raise the apparent hip line",
   smallHead: "enlarge the head to natural size — the figure is about 7 to 7.5 heads tall, not more",
   inconsistentVolume: "keep arm, leg and torso thickness consistent with one build — no bloated midsection next to thin limbs",
 };
@@ -193,10 +195,10 @@ const PROPORTION_FIX_TEXT: Record<ProportionDefect, string> = {
 export function buildProportionFixPrompt(defects: readonly ProportionDefect[]): string {
   const uniq = PROPORTION_DEFECTS.filter((d) => defects.includes(d));
   if (!uniq.length) return "";
-  return ` PROPORTION FIX (the previous attempt had: ${uniq.join(", ")}): ${uniq.map((d) => PROPORTION_FIX_TEXT[d]).join("; ")}. Camera at chest height, neutral 50mm lens, no vertical stretching.`;
+  return ` PROPORTION FIX (the previous attempt had: ${uniq.join(", ")}): ${uniq.map((d) => PROPORTION_FIX_TEXT[d]).join("; ")}. Camera at hip height, neutral 50mm lens, level and straight-on, no low angle and no perspective foreshortening of the legs, no vertical stretching.`;
 }
 
-const PROPORTION_ISSUE_RE = /oversized head|big head|large head|short legs|stubby|short torso|stocky|compressed|dwarf|chibi/i;
+const PROPORTION_ISSUE_RE = /oversized head|big head|large head|short legs|stubby|high hip line|short torso|stocky|compressed|squat|dwarf|chibi/i;
 /** Stage 52: distorted / extra-limb findings fail for EVERY character (adult and child alike). */
 const DISTORTION_ISSUE_RE = /distort|deform|extra (?:limb|arm|leg|finger|hand)|missing (?:limb|arm|leg|hand)|duplicated|fused|mangled|twisted|melted|warped/i;
 
@@ -240,7 +242,7 @@ export function fullBodyCorrectionSuffix(c: FullBodyCheck | null, attempt: numbe
     if (!c.fullBody) problems.push("the body was cropped");
     if (!c.feetVisible) problems.push("the feet were cut off");
     const hasHead = c.issues.some((i) => /oversized head|big head|large head/.test(i));
-    const hasLegs = c.issues.some((i) => /short legs|stubby/.test(i));
+    const hasLegs = c.issues.some((i) => /short legs|stubby|high hip line/.test(i));
     const hasTorso = c.issues.some((i) => /short torso|stocky|compressed/.test(i));
     const hasDistortion = c.issues.some((i) => DISTORTION_ISSUE_RE.test(i));
     if (hasDistortion) problems.push("distorted anatomy (extra, missing, fused or warped limbs)");

@@ -138,8 +138,25 @@ function unitStage55() {
   assert.equal(verdict.ok, false, "legsRatio 0.40 < MIN_LEGS_RATIO fails");
   assert.ok(verdict.defects.includes("shortLegs"));
   assert.equal(fullBodyPasses(shortLegs), false, "measured short legs fails the guard");
-  // thresholds are aligned to the ≈7–7.5 heads / 3-head torso / half-height legs target (Stage 52)
-  assert.ok(MAX_TORSO_HEADS === 3.3 && MIN_LEGS_RATIO === 0.44 && MAX_HEADS_TALL === 7.9);
+  // thresholds are aligned to the ≈7–7.5 heads / 3-head torso / half-height legs target (Stage 52; Stage 57 legs 0.44→0.46)
+  assert.ok(MAX_TORSO_HEADS === 3.3 && MIN_LEGS_RATIO === 0.46 && MAX_HEADS_TALL === 7.9);
+  // Stage 57: leg-length emphasis in the prompt — legs = exactly half of the height, hip line at the vertical
+  // midpoint, long adult legs, a long coat must not shorten them, and explicit negatives against short legs / high hip line.
+  assert.match(FULL_BODY_PROPORTIONS, /EXACTLY HALF of the total body height/i);
+  assert.match(FULL_BODY_PROPORTIONS, /vertical MIDPOINT/i);
+  assert.match(FULL_BODY_PROPORTIONS, /long adult legs/i);
+  assert.match(FULL_BODY_PROPORTIONS, /long coat, dress or robe must NOT make the legs look short/i);
+  assert.match(FULL_BODY_PROPORTIONS, /NO high hip line/i);
+  assert.match(FULL_BODY_PROPORTIONS_RULE, /EXACTLY HALF of the total height/i);
+  assert.match(FULL_BODY_PROPORTIONS_RULE, /vertical MIDPOINT/i);
+  assert.match(FULL_BODY_PROPORTIONS_RULE, /no perspective foreshortening or compression of the legs/i);
+  // Stage 57 guard: the tightened MIN_LEGS_RATIO (0.46) now catches a borderline short-legged figure (legsRatio 0.45).
+  const borderline: FullBodyCheck = { ...ok, proportions: { headsTall: 7.2, torsoHeads: 3.0, legsRatio: 0.45, flags: { elongatedTorso: false, shortLegs: false, smallHead: false, inconsistentVolume: false }, notes: "" } };
+  assert.equal(evaluateProportions(borderline.proportions).ok, false, "legsRatio 0.45 now fails at MIN_LEGS_RATIO 0.46");
+  assert.ok(evaluateProportions(borderline.proportions).defects.includes("shortLegs"));
+  assert.equal(fullBodyPasses(borderline), false, "borderline short legs (0.45) fails the guard");
+  // Stage 57 guard: a "high hip line" issue label fails the adult guard.
+  assert.equal(fullBodyPasses({ ...ok, issues: ["high hip line"] }), false, "high hip line finding fails");
   console.log("unit stage55: ok");
 }
 
