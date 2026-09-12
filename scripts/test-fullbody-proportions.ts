@@ -82,8 +82,10 @@ function unit() {
   assert.ok(adult.startsWith(FULL_BODY_FRAMING));
   assert.ok(adult.includes(FULL_BODY_PROPORTIONS));
   assert.ok(adult.includes(FULL_BODY_REFERENCE_NOTE));
-  assert.match(adult, /7\.5–8 heads tall/);
+  assert.match(adult, /7 to 7\.5 heads tall/);
   assert.match(adult, /NOT chibi/);
+  assert.doesNotMatch(adult, /7\.5–8 heads tall/, "Stage 52: the contradictory 7.5–8 / small-head wording is gone");
+  assert.match(adult, /NATURAL size for the body/, "Stage 52: head is natural size, not 'SMALL ~1/8'");
   assert.match(adult, /85–90% of the frame height/);
   assert.match(adult, /Do NOT copy the reference's framing, crop, head size or head-to-frame scale/);
   const child = characterImagePrompt("A 9-year-old boy with freckles", "full", "Tim", null, null, true);

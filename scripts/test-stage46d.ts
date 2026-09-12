@@ -42,15 +42,15 @@ const natural: ProportionAssessment = { headsTall: 7.3, torsoHeads: 3.0, legsRat
 
 // ---------------------------------------------------------------- 2. thresholds at the boundaries
 {
-  ok("thresholds exported as specified", MAX_TORSO_HEADS === 3.5 && MIN_LEGS_RATIO === 0.42 && MAX_HEADS_TALL === 8.2);
+  ok("thresholds exported as specified (Stage 52 tightened)", MAX_TORSO_HEADS === 3.3 && MIN_LEGS_RATIO === 0.44 && MAX_HEADS_TALL === 7.9);
   ok("natural figure passes", evaluateProportions(natural).ok && evaluateProportions(natural).score === 100);
-  ok("torsoHeads 3.5 exactly → ok", evaluateProportions({ ...natural, torsoHeads: 3.5 }).ok);
-  ok("torsoHeads 3.51 → elongatedTorso", evaluateProportions({ ...natural, torsoHeads: 3.51 }).defects.join() === "elongatedTorso");
-  ok("legsRatio 0.42 exactly → ok", evaluateProportions({ ...natural, legsRatio: 0.42 }).ok);
-  ok("legsRatio 0.419 → shortLegs", evaluateProportions({ ...natural, legsRatio: 0.419 }).defects.join() === "shortLegs");
+  ok("torsoHeads 3.3 exactly → ok", evaluateProportions({ ...natural, torsoHeads: 3.3 }).ok);
+  ok("torsoHeads 3.31 → elongatedTorso", evaluateProportions({ ...natural, torsoHeads: 3.31 }).defects.join() === "elongatedTorso");
+  ok("legsRatio 0.44 exactly → ok", evaluateProportions({ ...natural, legsRatio: 0.44 }).ok);
+  ok("legsRatio 0.439 → shortLegs", evaluateProportions({ ...natural, legsRatio: 0.439 }).defects.join() === "shortLegs");
   ok("legsRatio 0 (unmeasured) → not shortLegs", evaluateProportions({ ...natural, legsRatio: 0 }).ok);
-  ok("headsTall 8.2 exactly → ok", evaluateProportions({ ...natural, headsTall: 8.2 }).ok);
-  ok("headsTall 8.21 → smallHead", evaluateProportions({ ...natural, headsTall: 8.21 }).defects.join() === "smallHead");
+  ok("headsTall 7.9 exactly → ok", evaluateProportions({ ...natural, headsTall: 7.9 }).ok);
+  ok("headsTall 7.91 → smallHead", evaluateProportions({ ...natural, headsTall: 7.91 }).defects.join() === "smallHead");
   ok("model's inconsistentVolume flag alone → defect, FAIL", (() => { const v = evaluateProportions({ ...natural, flags: { ...noFlags, inconsistentVolume: true } }); return !v.ok && v.defects.join() === "inconsistentVolume"; })());
   ok("model's elongatedTorso flag with natural numbers → still a defect", !evaluateProportions({ ...natural, flags: { ...noFlags, elongatedTorso: true } }).ok);
   const worst = evaluateProportions({ headsTall: 8.6, torsoHeads: 4.1, legsRatio: 0.4, flags: { elongatedTorso: true, shortLegs: true, smallHead: true, inconsistentVolume: true }, notes: "" });
@@ -69,6 +69,11 @@ const framingOk: FullBodyCheck = { fullBody: true, feetVisible: true, proportion
   ok("framing ok but small head (8.6 heads) → FAIL", !fullBodyPasses({ ...framingOk, headsTall: 8.6, proportions: { ...natural, headsTall: 8.6 } }));
   ok("framing ok, proportions unknown → pass (vision failure must not block)", fullBodyPasses({ ...framingOk, proportions: null }) && fullBodyPasses({ ...framingOk, proportions: undefined }));
   ok("child: small-head threshold still applies", !fullBodyPasses({ ...framingOk, headsTall: 8.6, proportions: { ...natural, headsTall: 8.6 } }, { child: true }));
+  // Stage 52: distorted / extra-limb findings fail for adult AND child, even with natural measurements + proportionsOk
+  ok("distorted anatomy issue → FAIL (adult)", !fullBodyPasses({ ...framingOk, issues: ["distorted anatomy"] }));
+  ok("extra-limb issue → FAIL (adult)", !fullBodyPasses({ ...framingOk, issues: ["extra limb"] }));
+  ok("fused-limbs issue → FAIL (child too)", !fullBodyPasses({ ...framingOk, issues: ["fused limbs"] }, { child: true }));
+  ok("deformed body issue → FAIL", !fullBodyPasses({ ...framingOk, issues: ["deformed body"] }));
 
   const cropped: FullBodyCheck = { ...framingOk, fullBody: false, feetVisible: false, proportions: natural };
   const oneDefect: FullBodyCheck = { ...framingOk, proportionsOk: false, proportions: { ...natural, torsoHeads: 3.7 } };
@@ -99,6 +104,9 @@ const framingOk: FullBodyCheck = { fullBody: true, feetVisible: true, proportion
   const dwarf = fullBodyCorrectionSuffix({ fullBody: true, feetVisible: true, proportionsOk: false, headsTall: 5.2, issues: ["oversized head", "short legs"] }, 2);
   ok("suffix: dwarf figure → still TALLER correction, no PROPORTION FIX block, never asks for 8+ heads", /TALLER and slimmer/.test(dwarf) && !/PROPORTION FIX/.test(dwarf) && /never 8 or more/.test(dwarf));
   ok("suffix: attempt 3 escalates", /Step the camera further back/.test(fullBodyCorrectionSuffix(framingOk, 3)));
+  // Stage 52: a distorted-anatomy finding is named explicitly in the correction
+  const distorted = fullBodyCorrectionSuffix({ ...framingOk, proportionsOk: false, issues: ["distorted anatomy", "extra limb"] }, 2);
+  ok("suffix: distorted anatomy named in the correction", /distorted anatomy \(extra, missing, fused or warped limbs\)/.test(distorted));
 }
 
 // ---------------------------------------------------------------- 5. vision request asks for both framing and proportions in ONE call
@@ -107,7 +115,8 @@ const framingOk: FullBodyCheck = { fullBody: true, feetVisible: true, proportion
   const text = JSON.stringify(req.messages);
   ok("one request: framing fields", /fullBody/.test(text) && /feetVisible/.test(text));
   ok("one request: proportion fields", /torsoHeads/.test(text) && /legsRatio/.test(text) && /inconsistentVolume/.test(text) && /notes/.test(text));
-  ok("system prompt names the stretched-figure failure", /8\+ heads/.test(FULL_BODY_CHECK_SYSTEM_PROMPT) && /3\.5\+ heads/.test(FULL_BODY_CHECK_SYSTEM_PROMPT) && /42%/.test(FULL_BODY_CHECK_SYSTEM_PROMPT));
+  ok("system prompt names the stretched-figure failure (Stage 52 tightened numbers)", /7\.9\+ heads/.test(FULL_BODY_CHECK_SYSTEM_PROMPT) && /3\.3\+ heads/.test(FULL_BODY_CHECK_SYSTEM_PROMPT) && /44%/.test(FULL_BODY_CHECK_SYSTEM_PROMPT));
+  ok("system prompt also names distorted anatomy / cropped framing (Stage 52)", /distorted, deformed or twisted/.test(FULL_BODY_CHECK_SYSTEM_PROMPT) && /extra \/ missing \/ duplicated \/ fused limbs/.test(FULL_BODY_CHECK_SYSTEM_PROMPT) && /cut off by an edge/.test(FULL_BODY_CHECK_SYSTEM_PROMPT));
   ok("high-detail image attached", /"detail":"high"/.test(text));
 }
 
@@ -117,6 +126,8 @@ const framingOk: FullBodyCheck = { fullBody: true, feetVisible: true, proportion
   ok("rule text: heads / legs / torso / head / volume / camera", /7 to 7\.5 heads/.test(FULL_BODY_PROPORTIONS_RULE) && /HALF of the total height/.test(FULL_BODY_PROPORTIONS_RULE)
     && /about 3 head-heights/.test(FULL_BODY_PROPORTIONS_RULE) && /NOT be undersized/.test(FULL_BODY_PROPORTIONS_RULE) && /ONE consistent build/.test(FULL_BODY_PROPORTIONS_RULE)
     && /chest height/.test(FULL_BODY_PROPORTIONS_RULE) && /50mm/.test(FULL_BODY_PROPORTIONS_RULE) && /no wide-angle distortion/.test(FULL_BODY_PROPORTIONS_RULE) && /vertical stretching/.test(FULL_BODY_PROPORTIONS_RULE));
+  ok("rule text (Stage 52): neutral frontal pose, uncropped whole figure, correct anatomy / no extra limbs", /neutral frontal pose/.test(FULL_BODY_PROPORTIONS_RULE)
+    && /nothing cropped/.test(FULL_BODY_PROPORTIONS_RULE) && /correct human anatomy/.test(FULL_BODY_PROPORTIONS_RULE) && /no extra, missing, fused, duplicated or warped limbs/.test(FULL_BODY_PROPORTIONS_RULE));
 
   const full = characterShotPrompt(app, "full", "Mara", null, null, false);
   ok("full (text-to-image) includes the rule", full.includes(FULL_BODY_PROPORTIONS_RULE));

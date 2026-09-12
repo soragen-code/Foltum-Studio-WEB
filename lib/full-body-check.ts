@@ -24,12 +24,15 @@ export const ADULT_MIN_HEADS_TALL = 6.5;
 export const CHILD_MIN_HEADS_TALL = 5;
 
 // ---- Stage 46D proportion thresholds (any breach = defect = FAIL) ----
+// Stage 52: tightened after a real full-body reference (stretched torso / short-looking legs) still passed
+// the older, laxer thresholds — they are now aligned with the ≈ 7–7.5 heads / 3-head torso / half-height legs
+// target stated in the prompt, leaving less room for a vertically stretched figure to slip through.
 /** Shoulders-to-hip longer than this many head-heights = elongated torso (natural ≈ 3). */
-export const MAX_TORSO_HEADS = 3.5;
+export const MAX_TORSO_HEADS = 3.3;
 /** Legs shorter than this fraction of the total height = short legs (natural ≈ 0.45–0.5). */
-export const MIN_LEGS_RATIO = 0.42;
+export const MIN_LEGS_RATIO = 0.44;
 /** A figure taller than this many heads has an undersized head (natural adult ≈ 7–7.5). */
-export const MAX_HEADS_TALL = 8.2;
+export const MAX_HEADS_TALL = 7.9;
 
 export type ProportionDefect = "elongatedTorso" | "shortLegs" | "smallHead" | "inconsistentVolume";
 export const PROPORTION_DEFECTS: readonly ProportionDefect[] = ["elongatedTorso", "shortLegs", "smallHead", "inconsistentVolume"];
@@ -68,7 +71,9 @@ export const FULL_BODY_CHECK_SYSTEM_PROMPT =
   "First MEASURE: estimate the height of the head (top of hair to chin), the total height of the figure (top of hair to soles), the torso length (shoulder line to hip joint / crotch) and the leg length (hip joint to soles). " +
   "Compute headsTall = total / head, torsoHeads = torso / head, legsRatio = legs / total. " +
   "A real adult is about 7–7.5 heads tall, torso about 3 heads, legs about half of the total height, with ONE consistent build (torso, arms and legs of matching volume). " +
-  "A figure of 6 heads or less with a big head and short legs is a chibi / dwarf caricature and is WRONG; a figure of 8+ heads with a tiny head, a stretched torso of 3.5+ heads or legs under 42% of the height is a vertically STRETCHED figure and is ALSO WRONG. " +
+  "A figure of 6 heads or less with a big head and short legs is a chibi / dwarf caricature and is WRONG; a figure of 7.9+ heads with a tiny head, a stretched torso of 3.3+ heads or legs under 44% of the height is a vertically STRETCHED figure and is ALSO WRONG. " +
+  "ALSO check anatomy: any distorted, deformed or twisted body, or extra / missing / duplicated / fused limbs, hands or fingers, is WRONG. " +
+  "And check FRAMING: any part of the figure cut off by an edge (head, hands, hips, legs or feet) is WRONG. " +
   "Return ONLY a JSON object with these fields: " +
   '"fullBody" (boolean) — true only if the ENTIRE body is inside the frame from the top of the head to the feet (false if cropped at the waist, hips, thighs, knees or ankles); ' +
   '"feetVisible" (boolean) — true only if both feet / shoes are fully visible and not cut off by the bottom edge; ' +
@@ -76,8 +81,8 @@ export const FULL_BODY_CHECK_SYSTEM_PROMPT =
   '"torsoHeads" (number, one decimal) — torso length in head-heights; ' +
   '"legsRatio" (number, two decimals) — legs / total height; ' +
   '"flags" (object) — {"elongatedTorso": boolean (torso visibly longer than natural, stretched midsection), "shortLegs": boolean (legs clearly under half of the height), "smallHead": boolean (head undersized for the body), "inconsistentVolume": boolean (torso / arms / legs do not match one build — e.g. bloated midsection with thin arms or shins)}; ' +
-  '"proportionsOk" (boolean) — true only if the proportions are realistic for the person\'s apparent age with none of the flags set; ' +
-  '"issues" (array of short strings) — every concrete problem found, using these labels where they apply: "oversized head", "short legs", "short torso", "elongated torso", "small head", "inconsistent volume", "stocky/compressed body", "cropped body", "feet cut off", "child-like proportions"; empty array if none; ' +
+  '"proportionsOk" (boolean) — true only if the proportions are realistic for the person\'s apparent age, the anatomy is correct (no distortion, no extra / missing / fused limbs or fingers) and none of the flags is set; ' +
+  '"issues" (array of short strings) — every concrete problem found, using these labels where they apply: "oversized head", "short legs", "short torso", "elongated torso", "small head", "inconsistent volume", "stocky/compressed body", "cropped body", "feet cut off", "distorted anatomy", "deformed body", "extra limb", "missing limb", "fused limbs", "extra fingers", "child-like proportions"; empty array if none; ' +
   '"notes" (string) — one short sentence of remarks, or empty. ' +
   "Be critical and measure before judging. No prose, no markdown — JSON only.";
 
@@ -90,7 +95,7 @@ export function buildFullBodyCheckRequest(imageUrl: string): VisionRequest {
     messages: [
       { role: "system", content: FULL_BODY_CHECK_SYSTEM_PROMPT },
       { role: "user", content: [
-        { type: "text", text: 'Measure this figure. Is it a true head-to-toe full-length shot with natural proportions (no stretched torso, no short legs, no undersized head, one consistent build)? Answer as JSON {"fullBody":boolean,"feetVisible":boolean,"headsTall":number,"torsoHeads":number,"legsRatio":number,"flags":{"elongatedTorso":boolean,"shortLegs":boolean,"smallHead":boolean,"inconsistentVolume":boolean},"proportionsOk":boolean,"issues":string[],"notes":string}.' },
+        { type: "text", text: 'Measure this figure. Is it a true head-to-toe full-length shot, uncropped, with natural proportions (no stretched torso, no short legs, no undersized head, one consistent build) and correct anatomy (no distorted, extra, missing or fused limbs)? Answer as JSON {"fullBody":boolean,"feetVisible":boolean,"headsTall":number,"torsoHeads":number,"legsRatio":number,"flags":{"elongatedTorso":boolean,"shortLegs":boolean,"smallHead":boolean,"inconsistentVolume":boolean},"proportionsOk":boolean,"issues":string[],"notes":string}.' },
         { type: "image_url", image_url: { url: imageUrl, detail: "high" } },
       ] },
     ],
@@ -190,17 +195,20 @@ export function buildProportionFixPrompt(defects: readonly ProportionDefect[]): 
 }
 
 const PROPORTION_ISSUE_RE = /oversized head|big head|large head|short legs|stubby|short torso|stocky|compressed|dwarf|chibi/i;
+/** Stage 52: distorted / extra-limb findings fail for EVERY character (adult and child alike). */
+const DISTORTION_ISSUE_RE = /distort|deform|extra (?:limb|arm|leg|finger|hand)|missing (?:limb|arm|leg|hand)|duplicated|fused|mangled|twisted|melted|warped/i;
 
 /**
  * Pass / fail verdict. `child` selects the child threshold (a child character legitimately has a larger
  * head-to-body ratio). Fails on: cropped body, feet cut off, model verdict proportionsOk=false, measured
  * headsTall below the age threshold (when the model gave a measurement), any oversized-head / short-legs
- * finding in `issues`, or (Stage 46D) any measured proportion defect.
+ * finding in `issues`, any distorted / extra-limb finding (Stage 52), or (Stage 46D) any measured proportion defect.
  */
 export function fullBodyPasses(c: FullBodyCheck | null, opts: { child?: boolean } = {}): boolean {
   if (!c || !c.fullBody || !c.feetVisible || !c.proportionsOk) return false;
   const minHeads = opts.child ? CHILD_MIN_HEADS_TALL : ADULT_MIN_HEADS_TALL;
   if (c.headsTall > 0 && c.headsTall < minHeads) return false;
+  if (c.issues.some((i) => DISTORTION_ISSUE_RE.test(i))) return false;
   if (!opts.child && c.issues.some((i) => PROPORTION_ISSUE_RE.test(i))) return false;
   if (!evaluateProportions(c.proportions).ok) return false;
   return true;
@@ -232,10 +240,12 @@ export function fullBodyCorrectionSuffix(c: FullBodyCheck | null, attempt: numbe
     const hasHead = c.issues.some((i) => /oversized head|big head|large head/.test(i));
     const hasLegs = c.issues.some((i) => /short legs|stubby/.test(i));
     const hasTorso = c.issues.some((i) => /short torso|stocky|compressed/.test(i));
+    const hasDistortion = c.issues.some((i) => DISTORTION_ISSUE_RE.test(i));
+    if (hasDistortion) problems.push("distorted anatomy (extra, missing, fused or warped limbs)");
     if (hasHead) problems.push("an oversized head");
     if (hasLegs) problems.push("short stubby legs");
     if (hasTorso) problems.push("a short compressed torso");
-    if (!hasHead && !hasLegs && !hasTorso && verdict.ok && (!c.proportionsOk || (c.headsTall > 0 && c.headsTall < (opts.child ? CHILD_MIN_HEADS_TALL : ADULT_MIN_HEADS_TALL))))
+    if (!hasHead && !hasLegs && !hasTorso && !hasDistortion && verdict.ok && (!c.proportionsOk || (c.headsTall > 0 && c.headsTall < (opts.child ? CHILD_MIN_HEADS_TALL : ADULT_MIN_HEADS_TALL))))
       problems.push(`dwarf-like proportions (only about ${c.headsTall > 0 ? c.headsTall.toFixed(1) : "5"} heads tall)`);
   }
   // A stretched figure (Stage 46D defects) needs the opposite correction from a dwarf one — never ask for

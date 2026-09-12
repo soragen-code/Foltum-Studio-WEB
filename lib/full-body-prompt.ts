@@ -75,6 +75,8 @@ export const FULL_BODY_PROPORTIONS_RULE =
   "BODY PROPORTION RULE (strict, natural realistic human anatomy): total height about 7 to 7.5 heads (never 8 or more — the head must NOT be undersized); " +
   "legs (hip joint to sole) are about HALF of the total height — not shorter; the torso is NOT elongated: shoulders to hip is about 3 head-heights, no stretched midsection; " +
   "the head is natural size for the body; ONE consistent build across the whole body — torso, arms and legs share the same volume and thickness (no bloated midsection with thin arms or shins); " +
+  "correct human anatomy — two arms, two legs, five fingers per hand, no extra, missing, fused, duplicated or warped limbs, no twisted or deformed body; " +
+  "the person stands straight and upright in a neutral frontal pose, arms relaxed at the sides, feet flat on the floor, the ENTIRE figure from the crown of the head to the soles of the feet inside the frame with nothing cropped; " +
   "camera at chest height, neutral 50mm-equivalent lens, straight-on, no wide-angle distortion, no vertical stretching or squashing of the figure.";
 
 /** Which shots of the character set are full-length (and therefore get the proportion rule). */

@@ -71,24 +71,31 @@ export const FULL_BODY_FRAMING =
   "FULL-BODY FULL-LENGTH SHOT, head to toe: a distant full-length standing figure photographed from the FRONT, facing the camera. " +
   "Camera at chest height about 4–5 metres away, 50mm lens, no wide-angle distortion. " +
   "The ENTIRE body from the top of the hair to the soles of the shoes is inside the frame, with a little floor below the feet and a little empty space above the head; " +
-  "the standing figure fills about 85–90% of the frame height (tall vertical 9:16 frame — the body is TALL and stretches almost the whole frame). " +
+  "the standing figure fills about 85–90% of the frame height (tall vertical 9:16 frame — the whole figure occupies almost the full frame height, WITHOUT stretching or distorting the body's natural proportions). " +
   "NOT a close-up, NOT a medium shot, NOT a portrait — no cropping at the waist, hips or knees; both feet and shoes fully visible standing flat on the floor. " +
   "Standing straight, symmetric shoulders, relaxed arms at the sides, all clothing and the full silhouette visible.";
 
 /**
  * Realistic ADULT body proportions for the full-body shot (appended after the character description).
- * The chained face close-up tends to pull the model into a big-headed, short-legged "chibi" figure, so the
- * proportions are spelled out in heads-tall terms with explicit negatives.
+ * Stage 52: the earlier wording ("7.5–8 heads tall, head SMALL ~1/8, long torso") over-corrected the old
+ * chibi problem into the OPPOSITE defect — a vertically STRETCHED figure with an elongated torso, short-
+ * looking legs and an undersized head. It is now reconciled with the proportion rule / vision guard
+ * (both target ≈ 7–7.5 heads, natural-size head): balanced, natural adult proportions with explicit
+ * negatives against BOTH stretching and squashing, and against distorted / extra limbs.
  */
 export const FULL_BODY_PROPORTIONS =
-  "ANATOMY / PROPORTIONS (critical): realistic adult human proportions — the figure is 7.5–8 heads tall; the head is SMALL relative to the body (about 1/8 of the total height); " +
-  "long legs — the legs (from hip to sole) are about HALF of the total body height; natural long torso; shoulders about 2–2.5 head-widths wide; feet flat on the ground. " +
-  "NOT chibi, NOT a stylized short or stocky figure, NO oversized head, NO short stubby legs, NO dwarf-like, NO child-like proportions, NO caricature — a tall, naturally proportioned adult.";
+  "ANATOMY / PROPORTIONS (critical): natural, realistic adult human proportions — the figure is about 7 to 7.5 heads tall (never 8 or more); " +
+  "the head is a NATURAL size for the body (about one seventh to one eighth of the total height), neither oversized nor shrunken; " +
+  "the legs (from hip to sole) are about HALF of the total body height; the torso is a NATURAL length — shoulders to hip about 3 head-heights, NOT elongated or vertically stretched; " +
+  "shoulders about 2–2.5 head-widths wide; ONE consistent build — torso, arms and legs share the same volume, no bloated midsection next to thin limbs. " +
+  "Standing straight and upright in a neutral frontal pose, arms relaxed at the sides, feet flat on the ground, the whole figure head-to-toe inside the frame with nothing cropped and correct human anatomy (two arms, two legs, five fingers per hand, no extra, missing, fused or warped limbs). " +
+  "NO vertical stretching or squashing, NO elongated torso, NO short stubby legs, NO oversized OR undersized head, NO distorted or extra limbs, NOT chibi, NOT dwarf-like, NOT child-like, NOT a caricature — a real, naturally proportioned adult photographed head to toe.";
 
 /** Child / young-teen variant — a child character keeps age-appropriate proportions instead of adult ones. */
 export const FULL_BODY_PROPORTIONS_CHILD =
   "ANATOMY / PROPORTIONS (critical): realistic proportions for a child of the stated age (about 6–7 heads tall, naturally larger head-to-body ratio than an adult, legs a bit under half of the total height), feet flat on the ground. " +
-  "NOT chibi, NOT a caricature, NO grotesquely oversized head, NO stubby legs — a real child photographed head to toe.";
+  "Standing straight in a neutral frontal pose, the whole figure head-to-toe inside the frame with nothing cropped and correct human anatomy (two arms, two legs, no extra, missing, fused or warped limbs). " +
+  "NO vertical stretching or squashing, NOT chibi, NOT a caricature, NO grotesquely oversized head, NO stubby legs, NO distorted or extra limbs — a real child photographed head to toe.";
 
 /**
  * Heuristic: does the appearance text describe a child / young teen (≤ 14)? Adults get the adult
@@ -135,7 +142,7 @@ export const FULL_BODY_SAME_FIGURE_NOTE =
  */
 export const CHARACTER_EXTRA_VARIANTS = [
   "Right-side profile portrait — camera on the character's RIGHT side, showing the right cheek and side of the face in clean profile, same face, hair, wardrobe and lighting as the reference.",
-  "FULL-BODY FULL-LENGTH SHOT from directly BEHIND (back view), head to toe: a distant full-length standing figure, camera at chest height about 4–5 metres away, 50mm lens, no wide-angle distortion. The ENTIRE body from the top of the hair to the soles of the shoes is inside the frame with visible floor below the feet and empty space above the head, the figure about 85–90% of the frame height, realistic adult proportions (7.5–8 heads tall, small head about 1/8 of the body height, long legs about half of the total height — NOT chibi, NO oversized head, NO short stubby legs). NOT a close-up, NOT a medium shot — no cropping at the waist, hips or knees. Shows the hairstyle and the outfit from the back, same wardrobe, colours and lighting as the reference; the reference is a face close-up used ONLY for identity — do not copy its framing or scale.",
+  "FULL-BODY FULL-LENGTH SHOT from directly BEHIND (back view), head to toe: a distant full-length standing figure, camera at chest height about 4–5 metres away, 50mm lens, no wide-angle distortion. The ENTIRE body from the top of the hair to the soles of the shoes is inside the frame with visible floor below the feet and empty space above the head, the figure about 85–90% of the frame height, natural realistic adult proportions (about 7 to 7.5 heads tall, natural-size head, legs about half of the total height, torso NOT elongated or vertically stretched — NOT chibi, NO oversized OR undersized head, NO short stubby legs, NO distorted or extra limbs). NOT a close-up, NOT a medium shot — no cropping at the waist, hips or knees. Shows the hairstyle and the outfit from the back, same wardrobe, colours and lighting as the reference; the reference is a face close-up used ONLY for identity — do not copy its framing or scale.",
 ] as const;
 
 export function characterExtraAnglePrompt(appearance: string, name = "", index = 0, refKind: CharacterRefKind = "face"): string {
