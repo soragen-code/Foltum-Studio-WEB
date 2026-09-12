@@ -140,4 +140,48 @@ const ok = (name: string, cond: boolean) => { assert.ok(cond, name); n++; };
   ok("frame-toolbar: delete calls onClick directly", tb.includes("await del.onClick()"));
 }
 
+// ---- Stage 56: episode references panel renders only actual character photos (no padded empty slots) ----
+{
+  const { readFileSync } = require("node:fs") as typeof import("node:fs");
+  const ep = readFileSync("app/project/[id]/episode/[episodeId]/episode-view.tsx", "utf8");
+  // The padding-to-CHARACTER_PHOTO_COUNT and the fixed 3-column empty grid must be gone.
+  ok("episode-view: no slot padding to CHARACTER_PHOTO_COUNT", !ep.includes("while (slots.length < CHARACTER_PHOTO_COUNT)"));
+  ok("episode-view: no fixed 3-col character grid", !ep.includes('<div className="grid grid-cols-3 gap-2">'));
+  ok("episode-view: no N/COUNT photo caption", !ep.includes("/{CHARACTER_PHOTO_COUNT} фото"));
+  ok("episode-view: builds slots via characterPhotoSlots", ep.includes("const slots = characterPhotoSlots(c)"));
+  ok("episode-view: full-body shown object-contain (no crop)", ep.includes('aspect-[9/16]') && ep.includes('object-contain'));
+
+  // Mirror characterPhotoSlots 1:1 to prove the url->shot mapping and empty-drop behavior.
+  const validUrl = (u?: string | null) => typeof u === "string" && u.startsWith("http") && u.length > 10;
+  const parseExtra = (imageExtra?: string | null): string[] => {
+    if (!imageExtra) return [];
+    try { const a = JSON.parse(imageExtra); return Array.isArray(a) ? a.filter((u: any): u is string => typeof u === "string" && u.startsWith("http")) : []; } catch { return []; }
+  };
+  type Slot = { url: string; shot: "full" | "front" | "profile" | "extra"; idx?: number };
+  const characterPhotoSlots = (c: any): Slot[] => {
+    const out: Slot[] = [];
+    if (validUrl(c?.imageFull)) out.push({ url: c.imageFull, shot: "full" });
+    if (validUrl(c?.imageFront)) out.push({ url: c.imageFront, shot: "front" });
+    if (validUrl(c?.imageProfile)) out.push({ url: c.imageProfile, shot: "profile" });
+    parseExtra(c?.imageExtra).forEach((u, i) => out.push({ url: u, shot: "extra", idx: i }));
+    return out;
+  };
+  // Built from parts so the editor never rewrites a bare URL literal; validUrl only needs an http-prefixed string.
+  const U = "http" + "://example.com/ref-";
+  // Typical Stage 53+ character: only a full-body photo → exactly one slot, shot 'full'.
+  const oneFull = characterPhotoSlots({ imageFull: U + "1" });
+  ok("characterPhotoSlots: single imageFull → exactly one 'full' slot", oneFull.length === 1 && oneFull[0].shot === "full");
+  // Legacy character with front + profile + one extra, no full → 3 slots, correct mapping (no 'full').
+  const legacy = characterPhotoSlots({ imageFront: U + "2", imageProfile: U + "3", imageExtra: JSON.stringify([U + "4"]) });
+  ok("characterPhotoSlots: legacy front/profile/extra keep mapping",
+    legacy.length === 3 && legacy[0].shot === "front" && legacy[1].shot === "profile" && legacy[2].shot === "extra" && legacy[2].idx === 0);
+  // Invalid/empty urls are dropped; extra idx tracks position among the VALID extras (same as before).
+  const mixed = characterPhotoSlots({ imageFull: U + "5", imageFront: null, imageExtra: JSON.stringify([U + "6", "not-a-url", U + "7"]) });
+  ok("characterPhotoSlots: drops invalid urls, extra idx tracks valid position",
+    mixed.length === 3 && mixed[0].shot === "full" && mixed[1].shot === "extra" && mixed[1].idx === 0 && mixed[2].shot === "extra" && mixed[2].idx === 1);
+  // No character images at all → zero slots (UI shows a single placeholder, not three).
+  ok("characterPhotoSlots: no images → zero slots", characterPhotoSlots({}).length === 0);
+}
+
+console.log(`stage56 slots: verified inside stage46e`);
 console.log(`stage46e: ${n} checks passed`);

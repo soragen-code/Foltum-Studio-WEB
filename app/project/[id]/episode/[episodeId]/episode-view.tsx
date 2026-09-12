@@ -46,7 +46,19 @@ function parseExtra(imageExtra?: string | null): string[] {
 }
 // Stage 53: a character reference is a single photo — the full-body front shot (imageFull). Legacy
 // characters that only have imageFront fall back to it. Full-body is listed first as the primary photo.
-const charPhotos = (c: any): string[] => [c?.imageFull, c?.imageFront, c?.imageProfile, ...parseExtra(c?.imageExtra)].filter(validUrl)
+// Stage 56: build the list of a character's ACTUAL reference photos as {url, shot, idx?, label}
+// objects, preserving the correct url->shot mapping so per-shot regen/download target the right slot.
+// Invalid/empty urls are dropped — the UI renders only real photos, with no padded placeholder slots.
+export type CharPhotoSlot = { url: string; shot: 'full' | 'front' | 'profile' | 'extra'; idx?: number; label: string }
+export function characterPhotoSlots(c: any): CharPhotoSlot[] {
+  const out: CharPhotoSlot[] = []
+  if (validUrl(c?.imageFull)) out.push({ url: c.imageFull, shot: 'full', label: SHOT_LABELS[0] })
+  if (validUrl(c?.imageFront)) out.push({ url: c.imageFront, shot: 'front', label: SHOT_LABELS[1] })
+  if (validUrl(c?.imageProfile)) out.push({ url: c.imageProfile, shot: 'profile', label: SHOT_LABELS[2] })
+  parseExtra(c?.imageExtra).forEach((u, i) => out.push({ url: u, shot: 'extra', idx: i, label: `Ракурс ${i + 1}` }))
+  return out
+}
+const charPhotos = (c: any): string[] => characterPhotoSlots(c).map((s) => s.url)
 const hasAllImages = (c: any) => validUrl(c?.imageFull) || validUrl(c?.imageFront)
 // Stage 18: total generated frames of a location = present base angles + extra angles (target = 3/6/9 by scale).
 const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.imageDetail].filter(validUrl).length + parseExtra(l?.imageExtra).length
@@ -882,36 +894,33 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {refChars.map((c) => {
               const busy = !!charBusy[c.id] || (refSession && refScope === 'characters' && !hasAllImages(c))
-              // Stage 53: full-body front (imageFull) is the primary photo shown first, then optional front/profile/extra angles.
-              const slots = [c.imageFull, c.imageFront, c.imageProfile, ...parseExtra(c.imageExtra)].slice(0, CHARACTER_PHOTO_COUNT)
-              while (slots.length < CHARACTER_PHOTO_COUNT) slots.push(null)
-              const photos = charPhotos(c)
+              // Stage 56: render ONLY the character's actual reference photos (usually one full-body imageFull),
+              // with no padded empty placeholder slots. Each slot keeps its true url->shot mapping so
+              // per-shot regen/download target the right image; the 9:16 photo is shown object-contain (no crop).
+              const slots = characterPhotoSlots(c)
+              const photos = slots.map((s) => s.url)
               return (
                 <div key={c.id} className="rounded-lg border border-border/60 p-3" data-testid="ref-character">
-                  <div className="grid grid-cols-3 gap-2">
-                    {slots.map((img, i) => (
-                      <button key={i} type="button" onClick={() => validUrl(img) && openLightbox(photos, photos.indexOf(img as string), `${c.name} — ${SHOT_LABELS[i] ?? 'фото'}`)} className="group relative aspect-[3/4] overflow-hidden rounded bg-muted" title={SHOT_LABELS[i]} data-testid="ref-image">
-                        {validUrl(img) ? (
-                          <>
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={img as string} alt={`${c.name} — ${SHOT_LABELS[i] ?? 'фото'}`} className="h-full w-full object-cover" />
-                            <span className="absolute right-1 top-1 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
-                            {(() => { const shot = i === 0 ? 'full' : i === 1 ? 'front' : i === 2 ? 'profile' : 'extra'; const idx = i >= 3 ? i - 3 : undefined; return (
-                              <FrameToolbar
-                                regen={{ testId: `regen-shot-${shot}${idx !== undefined ? `-${idx}` : ''}`, busy, spinning: shotIsBusy(c.id, shot, idx), onClick: () => regenShot('character', c.id, shot, idx) }}
-                                download={{ url: img as string, name: referenceFileName('character', c.name, shot, img as string, idx) }}
-                              />
-                            ) })()}
-                          </>
-                        ) : busy ? (
-                          <div className="flex h-full w-full items-center justify-center"><Loader2 className="h-4 w-4 animate-spin text-primary" /></div>
-                        ) : (
-                          <div className="flex h-full w-full items-center justify-center"><ImageOff className="h-4 w-4 text-muted-foreground/40" /></div>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                  <div className="mt-2 truncate text-sm font-medium">{c.name} <span className="font-normal text-muted-foreground">· {photos.length}/{CHARACTER_PHOTO_COUNT} фото</span></div>
+                  {slots.length > 0 ? (
+                    <div className={slots.length > 1 ? 'grid grid-cols-2 gap-2' : ''}>
+                      {slots.map((s, i) => (
+                        <button key={`${s.shot}-${s.idx ?? 0}`} type="button" onClick={() => openLightbox(photos, i, `${c.name} — ${s.label}`)} className={`group relative aspect-[9/16] overflow-hidden rounded bg-muted ${slots.length === 1 ? 'mx-auto w-full max-w-[13rem]' : ''}`} title={s.label} data-testid="ref-image">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={s.url} alt={`${c.name} — ${s.label}`} className="h-full w-full object-contain" />
+                          <span className="absolute right-1 top-1 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
+                          <FrameToolbar
+                            regen={{ testId: `regen-shot-${s.shot}${s.idx !== undefined ? `-${s.idx}` : ''}`, busy, spinning: shotIsBusy(c.id, s.shot, s.idx), onClick: () => regenShot('character', c.id, s.shot, s.idx) }}
+                            download={{ url: s.url, name: referenceFileName('character', c.name, s.shot, s.url, s.idx) }}
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mx-auto flex aspect-[9/16] w-full max-w-[13rem] items-center justify-center rounded bg-muted" data-testid="ref-image">
+                      {busy ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : <ImageOff className="h-4 w-4 text-muted-foreground/40" />}
+                    </div>
+                  )}
+                  <div className="mt-2 truncate text-sm font-medium">{c.name} <span className="font-normal text-muted-foreground">· {photos.length} фото</span></div>
                   {c.role && <div className="truncate text-xs text-muted-foreground">{c.role}</div>}
                       {/* Stage 46E: prompt view/edit + download all */}
                       <div className="mt-2 flex flex-wrap items-center gap-1.5">
