@@ -46,7 +46,19 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     // A prompt edit no longer auto-locks the reference: the user may revise as many times as
     // needed and the location stays editable until they explicitly press «Сохранить навсегда»
     // (POST /api/ai/locations/[id]/lock), which is the only place refLocked is set to true.
-    const updated = await prisma.location.update({ where: { id }, data: { name: card.name, description: card.description, visualPrompt: card.visualPrompt } });
+    // Stage 60: one-step undo — snapshot the fields this edit (and any following image
+    // regeneration) may overwrite, so undo can restore both the text and the previous photos.
+    const prevSnapshot = {
+      kind: "location",
+      name: location.name,
+      description: location.description,
+      visualPrompt: location.visualPrompt,
+      imageUrl: location.imageUrl,
+      imageReverse: location.imageReverse,
+      imageDetail: location.imageDetail,
+      imageExtra: location.imageExtra,
+    };
+    const updated = await prisma.location.update({ where: { id }, data: { name: card.name, description: card.description, visualPrompt: card.visualPrompt, prevSnapshot } });
     // Keep bound episodes' display fields in sync (they still carry locationName/locationDesc for legacy views).
     await prisma.episode.updateMany({ where: { locationId: id }, data: { locationName: card.name, locationDesc: card.description } });
 

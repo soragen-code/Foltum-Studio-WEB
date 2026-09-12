@@ -36,7 +36,26 @@ export async function GET(
       },
     })
     if (!project) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-    return NextResponse.json({ project })
+
+    // Stage 60: never ship the whole prevSnapshot object to the client — expose only a boolean
+    // `hasUndo` so the UI can show the «Отменить последнее изменение» button when undo is available.
+    const strip = <T extends { prevSnapshot?: unknown }>(o: T) => {
+      const { prevSnapshot, ...rest } = o
+      return { ...rest, hasUndo: prevSnapshot != null }
+    }
+    const shaped = {
+      ...project,
+      characters: project.characters.map(strip),
+      locations: project.locations.map(strip),
+      seasons: project.seasons.map((s) => ({
+        ...s,
+        episodes: s.episodes.map((e) => ({
+          ...e,
+          scenes: e.scenes.map(strip),
+        })),
+      })),
+    }
+    return NextResponse.json({ project: shaped })
   } catch (err: any) {
     console.error('Project fetch error:', err)
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })

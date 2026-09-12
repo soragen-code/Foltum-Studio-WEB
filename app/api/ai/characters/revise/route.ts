@@ -69,6 +69,20 @@ export async function POST(request: Request) {
     const clean = sanitizeCharacterCard(next, character.project.characters.map((c) => c.name));
     const appearanceChanged = clean.appearance.trim() !== (character.appearance ?? "").trim();
 
+    // Stage 60: one-step undo — snapshot the fields this edit changes, before overwriting them.
+    const prevSnapshot = {
+      kind: "character",
+      name: character.name,
+      age: character.age,
+      role: character.role,
+      appearance: character.appearance,
+      personality: character.personality,
+      firstAppearance: character.firstAppearance,
+      tier: character.tier,
+      groupSize: character.groupSize,
+      description: character.description,
+    };
+
     const updated = await prisma.character.update({
       where: { id: characterId },
       data: {
@@ -81,6 +95,7 @@ export async function POST(request: Request) {
         tier: clean.tier ?? character.tier,
         groupSize: clean.tier === "CROWD" ? clean.groupSize ?? character.groupSize ?? 12 : null,
         description: clean.firstAppearance,
+        prevSnapshot,
       },
     });
 

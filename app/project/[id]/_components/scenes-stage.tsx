@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { Loader2, Play, Check, RefreshCw, Edit2, Film, ChevronDown, ChevronRight, Zap } from 'lucide-react'
-import { JobProgressBar, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from './use-job-polling'
+import { JobProgressBar, SmoothProgress, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from './use-job-polling'
 
 const VIDEO_EXPECTED_SEC = 600 // ~10 min: Seedance renders a 15 s clip with native audio + upload
 
@@ -598,7 +598,7 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
                     </div>
                   )}
                   {videoJobs[scene?.id] && (
-                    <JobProgressBar job={videoJobs[scene?.id]} expectedTotalSec={VIDEO_EXPECTED_SEC} className="mb-3" />
+                    <SmoothProgress job={videoJobs[scene?.id]} expectedTotalSec={VIDEO_EXPECTED_SEC} className="mb-3" />
                   )}
 
                   <div className="flex flex-wrap items-center gap-2">

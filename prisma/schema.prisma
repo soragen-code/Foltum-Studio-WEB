@@ -123,6 +123,7 @@ model Character {
   // Stage 3 (extended cast): MAIN / SUPPORTING / MINOR / CROWD; groupSize only for CROWD groups.
   tier        String   @default("MAIN")
   groupSize   Int?
+  prevSnapshot Json?   // stage 60: one previous version for one-step undo
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -204,6 +205,7 @@ model Location {
   imageExtra   String?  @db.Text // JSON array of extra angle/shot URLs generated on demand
   refLocked    Boolean  @default(false) // Stage 22: reference finalized ("save forever" or after one prompt edit) — no further edits allowed
   detailLevel  String?  // LLM-set required visual detail level: "low" | "medium" | "high" → number of reference frames (4/6/9); null = legacy (heuristic fallback)
+  prevSnapshot Json?    // stage 60: one previous version for one-step undo
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -294,6 +296,7 @@ model Scene {
   endStateActual String? @db.Text // stage 40: ACTUAL end state described by a vision model from the generated last frame (chain mode) — wins over endState for the next scene
   lookCache     String?  @db.Text // stage 46B-1: JSON {hash, videoPrompt, startState, endState, openingState} — scene text rewritten to the CURRENT character look
   lookStale     Boolean  @default(false) // stage 46B-1: a linked character's appearance changed after this scene's video was rendered
+  prevSnapshot  Json?    // stage 60: one previous version for one-step undo
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

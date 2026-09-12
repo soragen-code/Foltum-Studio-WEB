@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Loader2, Wand2, Pencil, X, MapPin, Users, FileText, RotateCcw } from 'lucide-react'
+import { Loader2, Wand2, Pencil, X, MapPin, Users, FileText, RotateCcw, Undo2 } from 'lucide-react'
 
 /** Cast tiers (mirrors lib/idea.ts CHARACTER_TIERS — kept client-side to avoid pulling server deps). */
 export const TIERS = ['MAIN', 'SUPPORTING', 'MINOR', 'CROWD'] as const
@@ -33,6 +33,8 @@ export interface LocationCardData {
   imageDetail?: string | null
   /** Stage 7: extra on-demand angles/shots (JSON array of URLs). */
   imageExtra?: string | null
+  /** Stage 60: whether a one-step undo is available for this location. */
+  hasUndo?: boolean | null
 }
 
 /** Tier badge (and group size for crowds) shown on character cards. */
@@ -52,6 +54,7 @@ export function LocationCard({
   loc,
   busy,
   onRevise,
+  onUndo,
   media,
   footer,
   hasPromptOverride,
@@ -61,6 +64,7 @@ export function LocationCard({
   loc: LocationCardData
   busy?: boolean
   onRevise?: (locationId: string, instruction: string) => Promise<void>
+  onUndo?: (locationId: string) => Promise<void>
   media?: React.ReactNode
   footer?: React.ReactNode
   /** Stage 46E: prompt tools — «Промпт» (view / edit) and «Сбросить промпт на авто»; badge when the live prompt differs from auto. */
@@ -72,6 +76,16 @@ export function LocationCard({
   const [editing, setEditing] = useState(false)
   const [instruction, setInstruction] = useState('')
   const [saving, setSaving] = useState(false)
+  const [undoing, setUndoing] = useState(false)
+  const undo = async () => {
+    if (!onUndo || undoing) return
+    setUndoing(true)
+    try {
+      await onUndo(loc.id)
+    } finally {
+      setUndoing(false)
+    }
+  }
   const submit = async () => {
     if (!instruction.trim() || !onRevise) return
     setSaving(true)
@@ -90,19 +104,34 @@ export function LocationCard({
           <MapPin className="h-5 w-5 flex-shrink-0 text-primary" />
           <h3 className="break-words font-semibold" data-testid="location-name">{loc.name}</h3>
         </div>
-        {onRevise && (
-          <button
-            type="button"
-            onClick={() => setEditing((v) => !v)}
-            disabled={busy || saving}
-            aria-label="Изменить локацию по подсказке"
-            title="Изменить локацию по подсказке"
-            data-testid="location-edit"
-            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition hover:text-foreground disabled:opacity-50"
-          >
-            {editing ? <X className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
-          </button>
-        )}
+        <div className="flex flex-shrink-0 items-center gap-2">
+          {onUndo && loc.hasUndo && (
+            <button
+              type="button"
+              onClick={undo}
+              disabled={busy || saving || undoing}
+              aria-label="Отменить последнее изменение"
+              title="Отменить последнее изменение"
+              data-testid="location-undo"
+              className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition hover:text-foreground disabled:opacity-50"
+            >
+              {undoing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Undo2 className="h-4 w-4" />}
+            </button>
+          )}
+          {onRevise && (
+            <button
+              type="button"
+              onClick={() => setEditing((v) => !v)}
+              disabled={busy || saving}
+              aria-label="Изменить локацию по подсказке"
+              title="Изменить локацию по подсказке"
+              data-testid="location-edit"
+              className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition hover:text-foreground disabled:opacity-50"
+            >
+              {editing ? <X className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
+            </button>
+          )}
+        </div>
       </div>
       {media}
       <dl className="space-y-1.5 text-xs text-muted-foreground [overflow-wrap:anywhere]">

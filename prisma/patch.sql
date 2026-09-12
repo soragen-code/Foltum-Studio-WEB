@@ -223,3 +223,10 @@ ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "propRegistry" TEXT;
 
 -- Stage 59: durable "new 4-step flow" marker (idea → synopsis → season story → episodes).
 ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "newFlow" BOOLEAN NOT NULL DEFAULT false;
+
+
+
+-- Stage 60: one previous version snapshot for one-step undo (character/location/scene edits)
+ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "prevSnapshot" JSONB;
+ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "prevSnapshot" JSONB;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "prevSnapshot" JSONB;

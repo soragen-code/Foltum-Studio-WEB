@@ -2,7 +2,7 @@
 
 import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Loader2, Wand2, Check, Pencil, User, X, Lightbulb, MessageSquareText, UserPlus, ChevronRight, Upload, FileText, FlaskConical } from 'lucide-react'
+import { Loader2, Wand2, Check, Pencil, User, X, Lightbulb, MessageSquareText, UserPlus, ChevronRight, Upload, FileText, FlaskConical, Undo2 } from 'lucide-react'
 import { LocationCard, AddLocationForm, TierBadge, TIER_LABELS, groupByTier, type LocationCardData } from './cast-and-locations'
 import { parseStoredShortSynopsis, type ShortSynopsis } from '@/lib/short-synopsis'
 import { CancelButton } from './cancel-button'
@@ -17,6 +17,7 @@ export interface CharacterCardData {
   firstAppearance?: string | null
   tier?: string | null
   groupSize?: number | null
+  hasUndo?: boolean | null
 }
 
 const LANGUAGE_LABELS: Record<string, string> = {
@@ -47,18 +48,31 @@ export function CharacterCard({
   char,
   busy,
   onRevise,
+  onUndo,
   extra,
   footer,
 }: {
   char: CharacterCardData
   busy?: boolean
   onRevise?: (characterId: string, instruction: string) => Promise<void>
+  onUndo?: (characterId: string) => Promise<void>
   extra?: React.ReactNode
   footer?: React.ReactNode
 }) {
   const [editing, setEditing] = useState(false)
   const [instruction, setInstruction] = useState('')
   const [saving, setSaving] = useState(false)
+  const [undoing, setUndoing] = useState(false)
+
+  const undo = async () => {
+    if (!onUndo || undoing) return
+    setUndoing(true)
+    try {
+      await onUndo(char.id)
+    } finally {
+      setUndoing(false)
+    }
+  }
 
   const submit = async () => {
     if (!instruction.trim() || !onRevise) return
@@ -83,19 +97,34 @@ export function CharacterCard({
           <User className="h-5 w-5 flex-shrink-0 text-primary" />
           <h3 className="break-words font-semibold" data-testid="character-name">{char.name}</h3>
         </div>
-        {onRevise && (
-          <button
-            type="button"
-            onClick={() => setEditing((v) => !v)}
-            disabled={busy || saving}
-            aria-label="Изменить персонажа по подсказке"
-            title="Изменить персонажа по подсказке"
-            data-testid="character-edit"
-            className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition hover:text-foreground disabled:opacity-50"
-          >
-            {editing ? <X className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
-          </button>
-        )}
+        <div className="flex flex-shrink-0 items-center gap-2">
+          {onUndo && char.hasUndo && (
+            <button
+              type="button"
+              onClick={undo}
+              disabled={busy || saving || undoing}
+              aria-label="Отменить последнее изменение"
+              title="Отменить последнее изменение"
+              data-testid="character-undo"
+              className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition hover:text-foreground disabled:opacity-50"
+            >
+              {undoing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Undo2 className="h-4 w-4" />}
+            </button>
+          )}
+          {onRevise && (
+            <button
+              type="button"
+              onClick={() => setEditing((v) => !v)}
+              disabled={busy || saving}
+              aria-label="Изменить персонажа по подсказке"
+              title="Изменить персонажа по подсказке"
+              data-testid="character-edit"
+              className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition hover:text-foreground disabled:opacity-50"
+            >
+              {editing ? <X className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
+            </button>
+          )}
+        </div>
       </div>
 
       <TierBadge char={char} />
@@ -238,7 +267,17 @@ export function IdeaEditor({
     })
     const data = await res.json()
     if (!res.ok) { setError(data?.error ?? 'Не удалось изменить локацию'); return }
-    setLocations((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...data.location } : l)))
+    setLocations((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...data.location, hasUndo: true } : l)))
+    onChanged?.('locations')
+  }
+
+  // Stage 60: one-step undo — restore the previous version, then hide the undo button.
+  const undoLocation = async (locationId: string) => {
+    setError(''); setNotice('')
+    const res = await fetch(`/api/ai/locations/${locationId}/undo`, { method: 'POST' })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) { setError(data?.error ?? 'Не удалось отменить изменение'); return }
+    setLocations((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...data.location, hasUndo: false } : l)))
     onChanged?.('locations')
   }
 
@@ -273,7 +312,17 @@ export function IdeaEditor({
     })
     const data = await res.json()
     if (!res.ok) { setError(data?.error ?? 'Не удалось изменить персонажа'); return }
-    setCharacters((prev) => prev.map((c) => (c.id === characterId ? { ...c, ...data.character } : c)))
+    setCharacters((prev) => prev.map((c) => (c.id === characterId ? { ...c, ...data.character, hasUndo: true } : c)))
+    onChanged?.('characters')
+  }
+
+  // Stage 60: one-step undo — restore the previous version, then hide the undo button.
+  const undoCharacter = async (characterId: string) => {
+    setError(''); setNotice('')
+    const res = await fetch(`/api/ai/characters/${characterId}/undo`, { method: 'POST' })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) { setError(data?.error ?? 'Не удалось отменить изменение'); return }
+    setCharacters((prev) => prev.map((c) => (c.id === characterId ? { ...c, ...data.character, hasUndo: false } : c)))
     onChanged?.('characters')
   }
 
@@ -328,7 +377,7 @@ export function IdeaEditor({
           <p className="mb-3 text-xs text-muted-foreground">Ключевые места сезона. Фотореалистичные референсы для них (и для персонажей) — на вкладке «Референсы»; видеомодель использует их вместе с персонажами.</p>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {locations.map((l) => (
-              <LocationCard key={l.id} loc={l} busy={busy} onRevise={reviseLocation} />
+              <LocationCard key={l.id} loc={l} busy={busy} onRevise={reviseLocation} onUndo={undoLocation} />
             ))}
           </div>
           <div className="mt-3">
@@ -345,7 +394,7 @@ export function IdeaEditor({
               <h4 className="mb-2 text-sm font-semibold text-muted-foreground">{TIER_LABELS[g.tier]} · {g.items.length}</h4>
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {g.items.map((c) => (
-                  <CharacterCard key={c.id} char={c} busy={busy} onRevise={reviseCharacter} />
+                  <CharacterCard key={c.id} char={c} busy={busy} onRevise={reviseCharacter} onUndo={undoCharacter} />
                 ))}
               </div>
             </div>

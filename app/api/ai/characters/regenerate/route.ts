@@ -80,6 +80,16 @@ Generate a fresh, different take on this character's appearance and personality.
 
     const imgMap = Object.fromEntries(imgResults.map((r) => [r.shot, r.url]));
 
+    // Stage 60: one-step undo — snapshot the fields this edit overwrites.
+    const prevSnapshot = {
+      kind: "character",
+      personality: existing.personality,
+      appearance: existing.appearance,
+      imageFront: existing.imageFront,
+      imageProfile: existing.imageProfile,
+      imageFull: existing.imageFull,
+    };
+
     const character = await prisma.character.update({
       where: { id: characterId },
       data: {
@@ -88,6 +98,7 @@ Generate a fresh, different take on this character's appearance and personality.
         imageFront: imgMap.front,
         imageProfile: imgMap.profile,
         imageFull: imgMap.full,
+        prevSnapshot,
       },
     });
 

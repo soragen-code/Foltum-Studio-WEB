@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Header } from '@/components/header'
-import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Copy, Check, FileText, RotateCcw, Save, Plus } from 'lucide-react'
+import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Copy, Check, FileText, RotateCcw, Save, Plus, Undo2 } from 'lucide-react'
 import { FrameToolbar, DownloadAllButton } from '@/app/project/[id]/_components/frame-toolbar'
 import { PromptModal, CHARACTER_PROMPT_DESCRIPTION, LOCATION_PROMPT_DESCRIPTION } from '@/app/project/[id]/_components/prompt-modal'
 import { referenceFileName } from '@/lib/download-name'
@@ -11,7 +11,7 @@ import { VIDEO_PROVIDERS, VIDEO_PROVIDER_LABEL, normalizeVideoProvider, videoMod
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
-import { JobProgressBar, useJobPolling, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
+import { JobProgressBar, SmoothProgress, useJobPolling, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
 import { CancelButton } from '../../_components/cancel-button'
 import { desiredTotalFrames, locationDetailLevel, locationDetailLabel, episodeLocations } from '@/lib/location-scale'
 import { CHARACTER_PHOTO_COUNT } from '@/lib/reference-counts'
@@ -65,7 +65,7 @@ const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.ima
 // Stage 17: top up location extras in serverless-safe chunks (a single 12-frame job can overrun the
 // serverless window and get killed — chunking + re-firing guarantees the target is actually reached).
 
-type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; lookStale?: boolean | null; videoModel?: string | null; status: string; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
+type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; lookStale?: boolean | null; videoModel?: string | null; status: string; hasUndo?: boolean | null; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null }
 
 export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits }: { episode: any; project: any; siblings?: Sibling[]; credits: number }) {
@@ -442,7 +442,13 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
    *  nothing else — extra angles are added later, one per click, with «+ Ракурс». Characters are not touched. */
   const generateLocationRefs = async (locationId: string) => {
     setError(''); setRefStarting(true); refCanceled.current = false; locCanceled.current = new Set()
-    refScopeRef.current = 'locations'; setRefScope('locations'); setTickSeen(false)
+    // Stage 60: a location may be generated WITHOUT waiting for a running character session.
+    // Only take over the polling scope when characters aren't already generating — otherwise
+    // keep 'characters' so the character resume loop / banner stay intact; the location job
+    // runs concurrently, tracked via locActive.
+    const keepChars = refSession && refScope === 'characters' && !refsCharsReady
+    if (!keepChars) { refScopeRef.current = 'locations'; setRefScope('locations') }
+    setTickSeen(false)
     try {
       const res = await fetch(`/api/ai/locations/${locationId}/image`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageModel: imageModelRef.current }) })
       const d = await res.json().catch(() => ({}))
@@ -459,7 +465,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   /** «+ Ракурс» (Stage 46A): ONE additional angle of a location, chained on its master frame. */
   const addLocationAngle = async (locationId: string) => {
     setError(''); setRefStarting(true); refCanceled.current = false; locCanceled.current = new Set()
-    refScopeRef.current = 'locations'; setRefScope('locations'); setTickSeen(false)
+    // Stage 60: allow adding a location angle without waiting for a running character session.
+    const keepChars = refSession && refScope === 'characters' && !refsCharsReady
+    if (!keepChars) { refScopeRef.current = 'locations'; setRefScope('locations') }
+    setTickSeen(false)
     try {
       const res = await fetch(`/api/ai/locations/${locationId}/extra-images`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 1, imageModel: imageModelRef.current }) })
       const d = await res.json().catch(() => ({}))
@@ -537,9 +546,20 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       const res = await fetch('/api/ai/characters/appearance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ characterId, instruction }) })
       const d = await res.json()
       if (!res.ok) { setError(d?.error ?? 'Не удалось изменить персонажа'); return }
-      if (d?.character) setRefChars((prev) => prev.map((c) => (c.id === characterId ? { ...c, ...d.character } : c)))
+      if (d?.character) setRefChars((prev) => prev.map((c) => (c.id === characterId ? { ...c, ...d.character, hasUndo: true } : c)))
       setCharEdit((t) => ({ ...t, [characterId]: '' }))
       setRefSession(true) // poll until the new references land
+    } catch { setError('Ошибка сети') } finally { setCharBusy((b) => { const n = { ...b }; delete n[characterId]; return n }) }
+  }
+
+  // Stage 60: one-step undo — restore the previous character version (appearance + references).
+  const undoCharacter = async (characterId: string) => {
+    setCharBusy((b) => ({ ...b, [characterId]: true })); setError('')
+    try {
+      const res = await fetch(`/api/ai/characters/${characterId}/undo`, { method: 'POST' })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) { setError(d?.error ?? 'Не удалось отменить изменение'); return }
+      if (d?.character) setRefChars((prev) => prev.map((c) => (c.id === characterId ? { ...c, ...d.character, hasUndo: false } : c)))
     } catch { setError('Ошибка сети') } finally { setCharBusy((b) => { const n = { ...b }; delete n[characterId]; return n }) }
   }
 
@@ -551,9 +571,20 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       const res = await fetch(`/api/ai/locations/${locationId}/revise`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instruction, regenerate: true }) })
       const d = await res.json()
       if (!res.ok) { setError(d?.error ?? 'Не удалось изменить локацию'); return }
-      if (d?.location) setRefLocs((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...d.location } : l)))
+      if (d?.location) setRefLocs((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...d.location, hasUndo: true } : l)))
       setLocEdit((t) => ({ ...t, [locationId]: '' }))
       if (d?.jobId) setRefSession(true) // poll only when a regeneration job actually started
+    } catch { setError('Ошибка сети') } finally { setLocBusy((b) => { const n = { ...b }; delete n[locationId]; return n }) }
+  }
+
+  // Stage 60: one-step undo — restore the previous location version (text + reference images).
+  const undoLocation = async (locationId: string) => {
+    setLocBusy((b) => ({ ...b, [locationId]: true })); setError('')
+    try {
+      const res = await fetch(`/api/ai/locations/${locationId}/undo`, { method: 'POST' })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) { setError(d?.error ?? 'Не удалось отменить изменение'); return }
+      if (d?.location) setRefLocs((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...d.location, hasUndo: false } : l)))
     } catch { setError('Ошибка сети') } finally { setLocBusy((b) => { const n = { ...b }; delete n[locationId]; return n }) }
   }
 
@@ -587,7 +618,18 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const res = await fetch(`/api/ai/scenes/${scene.id}/revise`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instruction }) })
       const data = await res.json(); if (!res.ok) throw new Error(data?.error ?? 'Не удалось изменить сцену')
-      patchScene(scene.id, data.scene); setSceneEdit((t) => ({ ...t, [scene.id]: '' })); setRegenAsk(scene.id)
+      patchScene(scene.id, { ...data.scene, hasUndo: true }); setSceneEdit((t) => ({ ...t, [scene.id]: '' })); setRegenAsk(scene.id)
+    } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setSceneBusy((b) => { const n = { ...b }; delete n[scene.id]; return n }) }
+  }
+
+  // Stage 60: one-step undo — restore the previous scene version (text + previously rendered clip).
+  const undoScene = async (scene: Scene) => {
+    setSceneBusy((b) => ({ ...b, [scene.id]: true })); setError(null)
+    try {
+      const res = await fetch(`/api/ai/scenes/${scene.id}/undo`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error ?? 'Не удалось отменить изменение')
+      patchScene(scene.id, { ...data.scene, hasUndo: false })
     } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setSceneBusy((b) => { const n = { ...b }; delete n[scene.id]; return n }) }
   }
 
@@ -936,6 +978,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                         <button onClick={() => reviseCharacter(c.id)} disabled={busy || !(charEdit[c.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-character-submit" title="Изменить по промпту">
                           {charBusy[c.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
                         </button>
+                        {c.hasUndo && (
+                          <button onClick={() => undoCharacter(c.id)} disabled={busy} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="character-undo" title="Отменить последнее изменение">
+                            <Undo2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                       </div>
                 </div>
               )
@@ -1014,7 +1061,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                         <div className="mt-2 flex gap-1.5">
                           <button
                             onClick={() => generateLocationRefs(l.id)}
-                            disabled={busy || refSession || refStarting}
+                            disabled={busy || refStarting}
                             className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg bg-primary px-2 py-1 text-xs font-medium text-primary-foreground disabled:opacity-50"
                             data-testid="ref-location-generate"
                             title={locBaseReady(l) ? 'Снять новый мастер-кадр локации (старые ракурсы будут сброшены)' : 'Сгенерировать один мастер-кадр этой локации'}
@@ -1025,7 +1072,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                           {locBaseReady(l) && (
                             <button
                               onClick={() => addLocationAngle(l.id)}
-                              disabled={busy || refSession || refStarting}
+                              disabled={busy || refStarting}
                               className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs font-medium disabled:opacity-50"
                               data-testid="ref-location-add-angle"
                               title={`Добавить ещё один ракурс этой локации (${CHARACTER_REFERENCE_COST} кр.)`}
@@ -1049,6 +1096,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                         <button onClick={() => reviseLocation(l.id)} disabled={busy || !(locEdit[l.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-location-submit" title="Изменить по промпту">
                           {locBusy[l.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
                         </button>
+                        {l.hasUndo && (
+                          <button onClick={() => undoLocation(l.id)} disabled={busy} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="location-undo" title="Отменить последнее изменение">
+                            <Undo2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                       </div>
                 </div>
               )
@@ -1178,7 +1230,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       <Loader2 className="h-8 w-8 animate-spin text-primary" />
                       <div className="text-xs text-muted-foreground">{job?.message ?? 'В очереди…'}</div>
                       {job?.result?.providerNote && <div className="text-[11px] text-amber-500" data-testid="kling-duration-note">{job.result.providerNote}</div>}
-                      {job && <JobProgressBar job={job} expectedTotalSec={VIDEO_EXPECTED_SEC} className="w-full" />}
+                      {job && <SmoothProgress job={job} expectedTotalSec={VIDEO_EXPECTED_SEC} className="w-full" />}
                     </div>
                   ) : validUrl(scene.videoUrl) ? (
                     <SceneVideoPlayer videoUrl={scene.videoUrl as string} poster={scene.lastFrameUrl} className="h-full w-full object-contain" />
@@ -1254,6 +1306,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                     <button onClick={() => reviseScene(scene)} disabled={gen || !!sceneBusy[scene.id] || !(sceneEdit[scene.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-50" data-testid="scene-revise-submit">
                       {sceneBusy[scene.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Изменить
                     </button>
+                    {scene.hasUndo && (
+                      <button onClick={() => undoScene(scene)} disabled={gen || !!sceneBusy[scene.id]} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-50" data-testid="scene-undo" title="Отменить последнее изменение">
+                        <Undo2 className="h-4 w-4" /> Отменить
+                      </button>
+                    )}
                   </div>
                   {cancelAsk === scene.id && gen && (
                     <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm" data-testid="cancel-confirm">

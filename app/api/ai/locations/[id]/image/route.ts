@@ -25,6 +25,20 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     if (!location) return NextResponse.json({ error: "Location not found" }, { status: 404 });
     const body = await request.json().catch(() => ({}));
     const imageModel = normalizeImageModel(body?.imageModel);
+    // Stage 60: one-step undo — snapshot the current reference images before the regeneration
+    // job overwrites them, so undo can restore the previous photos.
+    await prisma.location.update({
+      where: { id },
+      data: {
+        prevSnapshot: {
+          kind: "location",
+          imageUrl: location.imageUrl,
+          imageReverse: location.imageReverse,
+          imageDetail: location.imageDetail,
+          imageExtra: location.imageExtra,
+        },
+      },
+    });
     const started = await startLocationImageJob({ user, projectId: location.projectId, locationIds: [id], imageModel });
     if ("error" in started) return NextResponse.json(started, { status: started.status });
     return NextResponse.json(started);

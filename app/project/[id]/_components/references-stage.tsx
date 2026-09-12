@@ -305,8 +305,18 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
     })
     const data = await res.json()
     if (!res.ok) { setError(data?.error ?? 'Не удалось изменить локацию'); return }
-    if (data?.location) setLocations((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...data.location } : l)))
+    if (data?.location) setLocations((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...data.location, hasUndo: true } : l)))
     if (data?.jobId) setLocalLoc((prev) => ({ ...prev, [locationId]: data.jobId }))
+    await tick()
+  }
+
+  // Stage 60: one-step undo — restore the previous location version (text + reference images).
+  const undoLocation = async (locationId: string) => {
+    setError('')
+    const res = await fetch(`/api/ai/locations/${locationId}/undo`, { method: 'POST' })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) { setError(data?.error ?? 'Не удалось отменить изменение'); return }
+    if (data?.location) setLocations((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...data.location, hasUndo: false } : l)))
     await tick()
   }
 
@@ -331,8 +341,18 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
     })
     const data = await res.json()
     if (!res.ok) { setError(data?.error ?? 'Не удалось изменить внешность'); return }
-    if (data?.character) setCharacters((prev) => prev.map((c) => (c.id === characterId ? { ...c, ...data.character } : c)))
+    if (data?.character) setCharacters((prev) => prev.map((c) => (c.id === characterId ? { ...c, ...data.character, hasUndo: true } : c)))
     if (data?.jobId) setLocalGen((prev) => ({ ...prev, [characterId]: data.jobId }))
+    await tick()
+  }
+
+  // Stage 60: one-step undo — restore the previous character version (appearance + reference images).
+  const undoCharacter = async (characterId: string) => {
+    setError('')
+    const res = await fetch(`/api/ai/characters/${characterId}/undo`, { method: 'POST' })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) { setError(data?.error ?? 'Не удалось отменить изменение'); return }
+    if (data?.character) setCharacters((prev) => prev.map((c) => (c.id === characterId ? { ...c, ...data.character, hasUndo: false } : c)))
     await tick()
   }
 
@@ -442,6 +462,7 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                   key={c.id}
                   char={c}
                   busy={!!gen}
+                  onUndo={undoCharacter}
                   extra={
                     <>
                       <ReferenceImages char={c} generating={!!gen} message={gen && gen !== 'local' ? gen.message : null} onRegen={(shot) => regenShot('character', c.id, shot)} shotBusy={(shot) => !!shotBusy[shotKey(c.id, shot)]} />
@@ -488,6 +509,7 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                   loc={loc}
                   busy={!!gen}
                   onRevise={reviseLocation}
+                  onUndo={undoLocation}
                   hasPromptOverride={loc.visualPromptAuto != null && (loc.visualPrompt ?? '').trim() !== (loc.visualPromptAuto ?? '').trim()}
                   onOpenPrompt={() => setPromptFor({ kind: 'location', id: loc.id, name: loc.name })}
                   onResetPrompt={() => resetLocationPrompt(loc.id)}

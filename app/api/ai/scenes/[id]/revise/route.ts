@@ -63,7 +63,25 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       startState: raw.startState.trim(),
       endStateActual: null,
     };
-    const updated = await prisma.scene.update({ where: { id: scene.id }, data: { ...parsed, status: "pending" } });
+    // Stage 60: one-step undo — snapshot the fields this edit overwrites (text + video),
+    // so undo can restore the previous scene text and the previously rendered clip.
+    const prevSnapshot = {
+      kind: "scene",
+      dialogue: scene.dialogue,
+      dialogueEn: scene.dialogueEn,
+      action: scene.action,
+      videoPrompt: scene.videoPrompt,
+      videoUrl: scene.videoUrl,
+      startState: scene.startState,
+      endState: scene.endState,
+      endStateActual: scene.endStateActual,
+      durationSec: scene.durationSec,
+      status: scene.status,
+      sceneKind: scene.sceneKind,
+      language: scene.language,
+      subtitled: scene.subtitled,
+    };
+    const updated = await prisma.scene.update({ where: { id: scene.id }, data: { ...parsed, status: "pending", prevSnapshot } });
     const scenes = scene.episode.scenes.map((s) => (s.id === scene.id ? { ...s, ...parsed } : s));
     await prisma.episode.update({ where: { id: scene.episode.id }, data: { script: renderScriptFromScenes(scene.episode, scene.episode.characters.map((c) => c.character.name), scenes) } });
     return NextResponse.json({ ok: true, scene: updated });

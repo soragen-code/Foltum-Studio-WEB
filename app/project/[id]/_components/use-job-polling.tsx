@@ -111,6 +111,120 @@ export function estimateRemaining(job: JobInfo, expectedTotalSec: number): strin
   return `~${Math.ceil(remaining / 60)} min remaining`
 }
 
+/**
+ * Stage 60 — monotonic, smooth 0→100% for scene-video progress.
+ *
+ * The server progress for a scene clip is non-monotonic (it can jump 5→50→10 when the video
+ * model retries after a copyright rejection). This helper turns the raw signal into a value that
+ * NEVER decreases on screen, eases upward with elapsed time, and is capped below 100% until the
+ * job actually reaches a terminal state:
+ *   - status 'completed'            → 100 (the only path to 100);
+ *   - status 'failed' / 'canceled'  → hold the last shown value (never snap to 100);
+ *   - otherwise                     → max(prevShown, min(cap, max(serverProgress, timeCreep))).
+ * Pure and side-effect free so it can be unit tested.
+ */
+export function smoothedProgress({
+  serverProgress,
+  status,
+  prevShown,
+  elapsedSec,
+  expectedTotalSec = 90,
+  cap = 96,
+}: {
+  serverProgress: number
+  status: string
+  prevShown: number
+  elapsedSec: number
+  expectedTotalSec?: number
+  cap?: number
+}): number {
+  const prev = Math.max(0, Math.min(100, prevShown || 0))
+  if (status === 'completed') return 100
+  if (status === 'failed' || status === 'canceled') return prev
+  // Time-based creep: asymptotically approaches `cap`, so the bar always inches forward even
+  // when the server progress is stuck, but slows down as it nears the cap.
+  const timeCreep = cap * (1 - Math.exp(-Math.max(0, elapsedSec) / (Math.max(1, expectedTotalSec) * 0.6)))
+  const base = Math.max(0, Math.min(cap, serverProgress || 0))
+  const target = Math.min(cap, Math.max(base, timeCreep))
+  return Math.max(prev, target)
+}
+
+/**
+ * Stage 60 — smooth, monotonic scene-video progress bar with an elapsed-time counter.
+ * Same visual style as JobProgressBar, but the percentage is fed through `smoothedProgress`
+ * (never goes backwards, capped <100% until the clip is really done) and shows «прошло Xм Yс».
+ */
+export function SmoothProgress({
+  job,
+  expectedTotalSec,
+  className = '',
+}: {
+  job: JobInfo
+  expectedTotalSec: number
+  className?: string
+}) {
+  const shownRef = useRef(0)
+  const jobIdRef = useRef<string | null>(null)
+  const [, setTick] = useState(0)
+
+  // Reset the monotonic floor whenever a new job starts.
+  if (jobIdRef.current !== job.id) {
+    jobIdRef.current = job.id
+    shownRef.current = 0
+  }
+
+  useEffect(() => {
+    if (job.status !== 'processing' && job.status !== 'pending') return
+    const id = setInterval(() => setTick((t) => t + 1), 1000)
+    return () => clearInterval(id)
+  }, [job.status, job.id])
+
+  const done = job.status === 'completed'
+  const failed = job.status === 'failed'
+  const canceled = job.status === 'canceled'
+  const elapsedSec = Math.max(0, (Date.now() - new Date(job.createdAt).getTime()) / 1000)
+  const pct = smoothedProgress({
+    serverProgress: job.progress,
+    status: job.status,
+    prevShown: shownRef.current,
+    elapsedSec,
+    expectedTotalSec,
+  })
+  shownRef.current = pct
+
+  const s = Math.floor(elapsedSec)
+  const elapsedLabel = s < 60 ? `${s}с` : `${Math.floor(s / 60)}м ${s % 60}с`
+
+  return (
+    <div className={`space-y-2 ${className}`}>
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <span className="flex min-w-0 items-center gap-2">
+          {done ? (
+            <Check className="h-3 w-3 flex-shrink-0 text-green-400" />
+          ) : failed ? (
+            <AlertCircle className="h-3 w-3 flex-shrink-0 text-destructive" />
+          ) : canceled ? (
+            <Ban className="h-3 w-3 flex-shrink-0 text-amber-400" />
+          ) : (
+            <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-primary" />
+          )}
+          <span className="truncate">
+            {failed ? job.error ?? 'Generation failed' : canceled ? job.message ?? 'Отменено' : job.message ?? 'Working...'}
+            {!done && !failed && !canceled && <span className="text-muted-foreground/70"> · прошло {elapsedLabel}</span>}
+          </span>
+        </span>
+        <span className="ml-3 flex-shrink-0 tabular-nums">{Math.round(pct)}%</span>
+      </div>
+      <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+        <div
+          className={`h-full rounded-full transition-all duration-1000 ease-out ${failed ? 'bg-destructive' : canceled ? 'bg-amber-500/60' : 'bg-primary'}`}
+          style={{ width: `${failed || canceled ? 100 : pct}%` }}
+        />
+      </div>
+    </div>
+  )
+}
+
 /** Progress bar driven by a GenerationJob (bg-muted track, bg-primary fill). */
 export function JobProgressBar({
   job,

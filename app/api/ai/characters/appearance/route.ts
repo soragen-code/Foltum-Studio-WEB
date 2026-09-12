@@ -93,6 +93,17 @@ export async function POST(request: Request) {
     // (b) the frontend's completeness check flips to false → reference polling resumes and
     //     the spinner holds until the new photos land.
     // Stage 46B-1: no lock concept any more — the character stays editable; scenes always render the current look.
+    // Stage 60: one-step undo — snapshot the appearance text and current reference images
+    // before we clear them, so undo can restore both the text and the previous photos.
+    const prevSnapshot = {
+      kind: "character",
+      appearance: character.appearance,
+      imageFront: character.imageFront,
+      imageProfile: character.imageProfile,
+      imageFull: character.imageFull,
+      imageExtra: character.imageExtra,
+    };
+
     const updated = await prisma.character.update({
       where: { id: characterId },
       data: {
@@ -102,6 +113,7 @@ export async function POST(request: Request) {
         imageProfile: null,
         imageFull: null,
         imageExtra: null,
+        prevSnapshot,
       },
     });
 
