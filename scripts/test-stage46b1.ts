@@ -54,7 +54,8 @@ ok("too-short / missing state falls back to the original state", shortState.star
   const r7 = await rewriteSceneLook([{ ...anna, appearance: "" }], original, null, llmOk);
   ok("no appearance → no call, original text", r7.texts === original && calls === 2);
 
-  // 4. characterRefs: front + full for individuals, front only for crowds, correct order/notes
+  // 4. Stage 50: individuals send ONLY the full body (front-face never sent); fallback to front when
+  //    no full body; crowds front only; order character full-body → location → crowds.
   const scene = { id: "s1", number: 1, videoPrompt: prompt9, sceneKind: null, voiceover: null, dialogue: 'ANNA: "Now."', dialogueEn: 'ANNA: "Now."', language: "en", locationDesc: "Kitchen", continuesFrom: "new-sequence", startState: "", endState: "" };
   const loc = { id: "loc", name: "Kitchen", imageUrl: styledUrl("k-wide"), imageReverse: styledUrl("k-rev"), imageDetail: styledUrl("k-det"), imageExtra: null };
   const chars = [
@@ -64,21 +65,21 @@ ok("too-short / missing state falls back to the original state", shortState.star
   ];
   const b = buildScenePrompt({ scene, characters: chars, location: loc, previous: null, provider: "seedance" });
   const urls = b.referenceImages;
-  ok("front first, full-body right after, character-first order", urls[0] === styledUrl("anna-front") && urls[1] === styledUrl("anna-full") && urls[2] === styledUrl("mark-front"));
+  ok("Anna sends full body only (front never sent)", urls[0] === styledUrl("anna-full") && !urls.includes(styledUrl("anna-front")));
+  ok("Mark falls back to front (no full body)", urls[1] === styledUrl("mark-front"));
   ok("crowd sends front only", urls.includes(styledUrl("crowd-front")) && !urls.includes(styledUrl("crowd-full")));
-  ok("location refs follow character refs", urls[3] === styledUrl("k-wide"));
-  ok("[Image1] note = face/identity", /\[Image1\] defines Anna's face and identity/.test(b.prompt));
-  ok("[Image2] note = full-body build / current clothing", /\[Image2\] defines Anna's full-body build, proportions and current clothing/.test(b.prompt));
-  ok("[Image3] Mark front", /\[Image3\] defines Mark's face and identity/.test(b.prompt));
+  ok("location refs follow character refs", urls[2] === styledUrl("k-wide"));
+  ok("[Image1] Anna = full identity note", /\[Image1\] defines Anna: face, full-body build, proportions and current clothing/.test(b.prompt));
+  ok("[Image2] Mark = face/identity fallback note", /\[Image2\] defines Mark's face and identity/.test(b.prompt));
   ok("crowd note unchanged", /defines the look of the group "Guests"/.test(b.prompt));
 
-  // 5. cap trimming unchanged: character refs never trimmed, crowds trimmed first
+  // 5. Stage 50 cap trimming: one full-body ref per character never trimmed, crowds trimmed first
   const many = Array.from({ length: 14 }, (_, i) => ({ characterId: `c${i}`, name: `C${i}`, tier: "MAIN", imageFront: styledUrl(`c${i}-f`), imageFull: styledUrl(`c${i}-full`), appearance: "x", age: null }));
   const crowds = Array.from({ length: 10 }, (_, i) => ({ characterId: `g${i}`, name: `G${i}`, tier: "CROWD", imageFront: styledUrl(`g${i}`), appearance: "y", age: null }));
   const big = buildScenePrompt({ scene, characters: [...many, ...crowds], location: loc, previous: null, provider: "seedance" });
   ok("cap respected", big.referenceImages.length <= REFERENCE_IMAGE_CAP && REFERENCE_IMAGE_CAP === 30);
-  ok("28 character refs all kept", many.every(c => big.referenceImages.includes(c.imageFront) && big.referenceImages.includes(c.imageFull)));
-  ok("crowds trimmed to the remaining room after location", big.referenceImages.filter(u => u.includes("/g")).length === 30 - 28 - 1 || big.referenceImages.filter(u => u.includes("/g")).length <= 2);
+  ok("14 full-body character refs all kept, fronts never sent", many.every(c => big.referenceImages.includes(c.imageFull) && !big.referenceImages.includes(c.imageFront)));
+  ok("crowds fit in the remaining room after 14 chars + 3 location angles", big.referenceImages.filter(u => u.includes("/g")).length === 10);
 
   // 6. look-neutral last-frame description
   ok("frame prompt forbids faces/hair/skin/build/clothing", /Do NOT describe people's faces, hair, skin, body build or clothing/.test(FRAME_STATE_SYSTEM_PROMPT) && !/clothing state/.test(FRAME_STATE_SYSTEM_PROMPT));

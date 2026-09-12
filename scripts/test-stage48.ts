@@ -121,7 +121,11 @@ async function main() {
     previous: null, provider: null, resolvedDialogueEn: "",
   });
   const kinds = built.retryRefs.map((r) => r.kind);
-  ok("refs: face is Image1", built.referenceImages[0] === FACE);
+  // Stage 50: the character contributes ONLY the full-body photo — the front-face portrait (which trips
+  // Seedance E005), the profile and the extra angle are never sent to video.
+  ok("refs: full body is Image1", built.referenceImages[0] === FULL);
+  ok("refs: front-face portrait never sent", !built.referenceImages.includes(FACE));
+  ok("refs: profile / extra never sent", !built.referenceImages.includes(PROFILE) && !built.referenceImages.includes(EXTRA));
   ok("refs: characters precede the location", kinds.indexOf("location") > kinds.lastIndexOf("character"));
   ok("refs: full-body photo is included", built.referenceImages.includes(FULL));
   ok("refs: total within the cap", built.referenceImages.length <= MAX_REFERENCE_IMAGES);
