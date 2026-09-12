@@ -279,9 +279,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       aria-disabled={busy || spinning}
       data-testid={testId}
       onClick={(e) => { e.stopPropagation(); e.preventDefault(); if (!busy && !spinning) onClick() }}
-      className={`absolute left-1 top-1 rounded bg-black/50 p-0.5 transition ${spinning ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} ${busy && !spinning ? 'pointer-events-none opacity-30' : 'hover:bg-black/70'}`}
+      className={`absolute inset-x-1 bottom-1 inline-flex cursor-pointer items-center justify-center gap-1 rounded bg-black/60 px-1.5 py-1 text-[10px] font-medium leading-none text-white transition ${busy && !spinning ? 'pointer-events-none opacity-40' : 'hover:bg-black/80'}`}
     >
-      {spinning ? <Loader2 className="h-3 w-3 animate-spin text-white" /> : <RefreshCw className="h-3 w-3 text-white" />}
+      {spinning ? <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin" /> : <RefreshCw className="h-3 w-3 flex-shrink-0" />}
+      <span className="truncate">Перегенерировать</span>
     </span>
   )
 

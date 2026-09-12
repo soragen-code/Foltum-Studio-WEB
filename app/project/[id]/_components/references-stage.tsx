@@ -546,9 +546,10 @@ function RegenBtn({ testId, busy, spinning, onClick }: { testId: string; busy: b
       disabled={busy || spinning}
       data-testid={testId}
       onClick={(e) => { e.stopPropagation(); onClick() }}
-      className={`absolute left-1 top-1 rounded bg-black/50 p-0.5 transition hover:bg-black/70 disabled:opacity-30 ${spinning ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+      className="absolute inset-x-1 bottom-1 inline-flex items-center justify-center gap-1 rounded bg-black/60 px-1.5 py-1 text-[10px] font-medium leading-none text-white transition hover:bg-black/80 disabled:opacity-40"
     >
-      {spinning ? <Loader2 className="h-3 w-3 animate-spin text-white" /> : <RefreshCw className="h-3 w-3 text-white" />}
+      {spinning ? <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin" /> : <RefreshCw className="h-3 w-3 flex-shrink-0" />}
+      <span className="truncate">Перегенерировать</span>
     </button>
   )
 }
