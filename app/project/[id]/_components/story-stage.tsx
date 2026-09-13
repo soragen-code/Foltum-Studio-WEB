@@ -3,9 +3,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Loader2, Wand2, ArrowRight, BookOpen } from 'lucide-react'
-import { JOB_POLL_INTERVAL_MS } from './use-job-polling'
+import { JOB_POLL_INTERVAL_MS, useJobPolling, SmoothProgress } from './use-job-polling'
 import { CancelButton } from './cancel-button'
+import { StickyReviseBar } from './sticky-revise-bar'
 import { type SeasonEpisode } from './season-stage'
+
+// GenerationJob.type values (mirrored from the server workers — this is a client component, so we can't
+// import the worker modules, which pull in prisma/openai). The job's `type` field arrives as a string.
+const STORY_REVISE_JOB_TYPE = 'story_revise'
+const SEASON_JOB_TYPE = 'season_script'
+const STORY_REVISE_EXPECTED_SEC = 90 // prose rewrite + structure sync
+const SEASON_REWRITE_EXPECTED_SEC = 480 // affected-episode script rewrite phase
 
 // Fixed episode-boundary bars written by the LLM (see lib/season.ts fullStoryFormatRules).
 const START_MARK = '═══'
@@ -52,7 +60,6 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
   const [storyBusy, setStoryBusy] = useState(false)
   const [storyNotice, setStoryNotice] = useState('')
   const [openingEpisode, setOpeningEpisode] = useState<string | null>(null) // episodeId being navigated to
-  const abortRef = useRef<AbortController | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -117,41 +124,88 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
     if (wasActive.current) { wasActive.current = false; onRefresh?.() }
   }, [jobActive]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  /** Story-screen edit-by-prompt (also used to sync the story after idea edits). Regenerates the prose
-   *  + keeps the structure in sync; only changed episodes are rewritten (existing assets are otherwise kept). */
+  /**
+   * Story-screen edit-by-prompt («Что изменить в сюжете»). Stage 69: the whole operation now runs as a
+   * background GenerationJob (type "story_revise") with a smooth 0→100 % bar — prose rewrite + structure
+   * sync — that then follows the handed-off season job for the affected-episode script rewrite. Only
+   * changed episodes are rewritten; existing episodes/assets are otherwise kept.
+   */
+  const lastInstructionRef = useRef('')
+  const revisePoll = useJobPolling({
+    onFinish: (res) => {
+      const j = res.job
+      if (j.type === STORY_REVISE_JOB_TYPE) {
+        if (j.status === 'completed') {
+          const r = j.result || {}
+          if (r.needsForce) {
+            setStoryBusy(false)
+            if (confirm(`${r.error}\n\nПродолжить и переписать эти эпизоды?`)) {
+              reviseStory({ instruction: lastInstructionRef.current, force: true })
+            }
+            return
+          }
+          const affected: number[] = Array.isArray(r.affected) ? r.affected : []
+          setStoryText('')
+          setStoryNotice(affected.length
+            ? `Сюжет обновлён. Переписываю эпизоды: ${affected.join(', ')} — остальные не тронуты.`
+            : 'Сюжет обновлён. Сценарии эпизодов не изменились.')
+          void load() // refresh fullStory + any active season job
+          if (r.seasonJobId) {
+            revisePoll.start(r.seasonJobId) // keep the bar going through the episode-rewrite phase
+          } else {
+            setStoryBusy(false)
+          }
+        } else if (j.status === 'failed') {
+          setError(j.error ?? 'Не удалось изменить сюжет'); setStoryBusy(false)
+        } else if (j.status === 'canceled') {
+          setStoryNotice('Изменение отменено.'); setStoryBusy(false)
+        }
+      } else if (j.type === SEASON_JOB_TYPE) {
+        // Phase 2 (affected-episode scripts) finished.
+        setStoryBusy(false)
+        void load()
+        onRefresh?.()
+      }
+    },
+  })
+
   const reviseStory = async (opts: { instruction: string; force?: boolean }) => {
     const instruction = opts.instruction.trim()
     if (instruction.length < 3) return
+    lastInstructionRef.current = instruction
     setStoryBusy(true); setError(null); setStoryNotice('')
-    const ctrl = new AbortController()
-    abortRef.current = ctrl
     try {
       const res = await fetch('/api/ai/season/full-story/revise', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projectId: project.id, instruction, force: !!opts.force }),
-        signal: ctrl.signal,
       })
       const data = await res.json()
-      if (res.status === 409 && data?.needsForce) {
-        if (confirm(`${data.error}\n\nПродолжить и переписать эти эпизоды?`)) return reviseStory({ ...opts, force: true })
-        return
-      }
       if (!res.ok) throw new Error(data?.error ?? 'Не удалось изменить сюжет')
-      setStoryText('')
-      const affected: number[] = Array.isArray(data?.affected) ? data.affected : []
-      setStoryNotice(affected.length
-        ? `Сюжет обновлён. Переписываю эпизоды: ${affected.join(', ')} — остальные не тронуты.`
-        : 'Сюжет обновлён. Сценарии эпизодов не изменились.')
-      if (typeof data?.fullStory === 'string') setSeason((s) => (s ? { ...s, fullStory: data.fullStory } : s))
-      if (data?.jobId) setJob({ id: data.jobId, status: 'processing', progress: 1, message: 'Запуск...' })
-      await load()
+      if (data?.jobId) { revisePoll.start(data.jobId) }
+      else setStoryBusy(false)
     } catch (e: any) {
-      if (e?.name === 'AbortError') { setStoryNotice('Изменение отменено.') }
-      else setError(e?.message ?? 'Ошибка')
+      setError(e?.message ?? 'Ошибка'); setStoryBusy(false)
     }
-    finally { setStoryBusy(false); abortRef.current = null }
   }
-  const cancelRevise = () => { abortRef.current?.abort() }
+
+  // Resume the progress bar if the page was reloaded while a story-revise job was running.
+  const reviseResumedRef = useRef(false)
+  useEffect(() => {
+    if (reviseResumedRef.current) return
+    reviseResumedRef.current = true
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/ai/season/full-story/revise?projectId=${project.id}`, { cache: 'no-store' })
+        const data = await res.json()
+        const j = data?.job
+        if (j && (j.status === 'pending' || j.status === 'processing')) {
+          setStoryBusy(true)
+          revisePoll.start(j.id)
+        }
+      } catch { /* ignore */ }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id])
 
   if (loading) return <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
 
@@ -189,7 +243,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
             Сгенерировать сезон
           </button>
         )}
-        {(jobActive || starting) && (
+        {(jobActive || starting) && !storyBusy && (
           <div className="mt-4 space-y-2" data-testid="season-progress">
             <div className="flex items-center justify-between gap-2 text-sm">
               <span className="flex min-w-0 items-center gap-2">
@@ -235,10 +289,29 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
           <p className="mt-4 text-sm text-muted-foreground">Сюжет ещё не написан. Изменение ниже сгенерирует его.</p>
         )}
 
+        {storyBusy && revisePoll.job && (
+          <SmoothProgress
+            job={revisePoll.job}
+            expectedTotalSec={revisePoll.job.type === SEASON_JOB_TYPE ? SEASON_REWRITE_EXPECTED_SEC : STORY_REVISE_EXPECTED_SEC}
+            className="mt-4"
+          />
+        )}
         {storyNotice && <p className="mt-3 text-sm text-primary" data-testid="story-notice">{storyNotice}</p>}
         {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
       </div>
 
+      {/* Compact bottom-docked «Что изменить в сюжете» field (Stage 69) — restored without the episode list. */}
+      <StickyReviseBar
+        value={storyText}
+        onChange={setStoryText}
+        onSubmit={() => reviseStory({ instruction: storyText })}
+        busy={storyBusy}
+        disabled={jobActive || starting}
+        label="Что изменить в сюжете"
+        placeholder="Например: сделать финал драматичнее"
+        submitLabel="Изменить сюжет"
+        testId="story-revise"
+      />
     </div>
   )
 }

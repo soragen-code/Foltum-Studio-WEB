@@ -1,7 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Wand2, Loader2, Check, PenLine } from 'lucide-react'
+import { useJobPolling, SmoothProgress } from './use-job-polling'
+
+// Roughly how long the synopsis rewrite takes — drives the smooth 0→100 % client bar.
+const SYNOPSIS_CORRECTION_EXPECTED_SEC = 30
 
 export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh: () => void }) {
   const [prompt, setPrompt] = useState('')
@@ -10,6 +14,26 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
   const [generating, setGenerating] = useState(false)
   const [approving, setApproving] = useState(false)
   const [error, setError] = useState('')
+  const resumedRef = useRef(false)
+
+  // Stage 69: «Переписать синопсис» now runs as a background GenerationJob so the client no longer
+  // holds an open fetch (which broke on navigation and showed no progress). We poll the job and show a
+  // smooth 0→100 % bar; on finish the new synopsis is written into the textarea.
+  const poll = useJobPolling({
+    onFinish: (res) => {
+      const job = res.job
+      if (job.status === 'completed') {
+        const next = job.result?.synopsis
+        if (typeof next === 'string' && next.trim()) {
+          setSynopsis(next)
+          setCorrectionPrompt('')
+        }
+      } else if (job.status === 'failed') {
+        setError(job.error ?? 'Generation failed')
+      }
+      setGenerating(false)
+    },
+  })
 
   const generate = async () => {
     if (!prompt.trim() && !correctionPrompt.trim()) return
@@ -27,15 +51,35 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
         }),
       })
       const data = await res.json()
-      if (data?.synopsis) {
-        setSynopsis(data.synopsis)
-        setCorrectionPrompt('')
+      if (data?.jobId) {
+        poll.start(data.jobId)
       } else {
         setError(data?.error ?? 'Generation failed')
+        setGenerating(false)
       }
-    } catch { setError('Network error') }
-    finally { setGenerating(false) }
+    } catch { setError('Network error'); setGenerating(false) }
   }
+
+  // Resume the progress bar / pick up a finished synopsis if the page was reloaded mid-rewrite.
+  useEffect(() => {
+    if (resumedRef.current || !project?.id) return
+    resumedRef.current = true
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/ai/synopsis?projectId=${project.id}`, { cache: 'no-store' })
+        const data = await res.json()
+        const job = data?.job
+        if (!job) return
+        if (job.status === 'pending' || job.status === 'processing') {
+          setGenerating(true)
+          poll.start(job.id)
+        } else if (job.status === 'completed' && typeof job.result?.synopsis === 'string' && !synopsis.trim()) {
+          setSynopsis(job.result.synopsis)
+        }
+      } catch { /* ignore */ }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.id])
 
   const approve = async () => {
     if (!synopsis.trim()) return
@@ -96,6 +140,9 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
                 {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
                 Переписать синопсис
               </button>
+            )}
+            {poll.job && generating && (
+              <SmoothProgress job={poll.job} expectedTotalSec={SYNOPSIS_CORRECTION_EXPECTED_SEC} className="mt-3" />
             )}
           </div>
 

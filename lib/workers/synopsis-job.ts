@@ -13,7 +13,7 @@
  */
 import { prisma } from "@/lib/db";
 import { updateJob, completeJob, failJob, heartbeatJob, markCanceled, isCancelRequested } from "@/lib/jobs";
-import { chatJSON } from "@/lib/ai";
+import { chat, chatJSON } from "@/lib/ai";
 import {
   ideaSystemPrompt,
   ideaUserPrompt,
@@ -121,6 +121,70 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
     );
   } catch (err: any) {
     console.error("[synopsis] job error:", err);
+    await failJob(jobId, "Generation failed: " + (err?.message ?? "Unknown error"));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stage 69 — synopsis REWRITE («Переписать синопсис» on step 2 «Синопсис»)
+// ---------------------------------------------------------------------------
+
+/** GenerationJob.type value for the step-2 synopsis rewrite (separate from the idea→synopsis job). */
+export const SYNOPSIS_CORRECTION_JOB_TYPE = "synopsis_correction";
+
+/** Roughly how long the rewrite takes — drives the smooth 0→100 % client bar. */
+export const SYNOPSIS_CORRECTION_EXPECTED_SEC = 30;
+
+/** System prompt copied verbatim from the old synchronous app/api/ai/synopsis route. */
+const SYNOPSIS_SYSTEM = `You are a professional screenwriter and showrunner. You write compelling, cinematic synopses for short-form vertical drama series (think TikTok / Reels format, episodes 1-3 minutes).
+
+When given an idea, produce a rich synopsis (300-600 words) that covers:
+- Core premise and hook
+- Main characters (brief intro)
+- Central conflict and stakes
+- Tone & genre
+- Target format (number of seasons, episodes per season)
+
+Write in vivid, engaging prose. Be specific — avoid generic descriptions.
+If a correction/revision is requested, rewrite the synopsis incorporating the feedback while keeping what works.
+
+IMPORTANT: Write the synopsis in the SAME LANGUAGE as the user's input. If they write in Russian — respond in Russian. If in English — respond in English. Match their language exactly.`;
+
+export interface SynopsisCorrectionParams {
+  prompt?: string | null;
+  correction?: string | null;
+  currentSynopsis?: string | null;
+}
+
+/**
+ * Rewrite (or create) the project synopsis in the background. Mirrors the old sync route's userMessage
+ * logic exactly: with a correction + current synopsis it revises the existing text; otherwise it writes
+ * a fresh synopsis from `prompt`. Updates ONLY project.synopsis and completes with { synopsis }.
+ */
+export async function runSynopsisCorrectionJob(jobId: string, projectId: string, params: SynopsisCorrectionParams): Promise<void> {
+  try {
+    const prompt = (params.prompt ?? "").trim();
+    const correction = (params.correction ?? "").trim();
+    const currentSynopsis = (params.currentSynopsis ?? "").trim();
+
+    if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
+    await updateJob(jobId, { status: "processing", progress: 15, message: "Переписываю синопсис…" });
+
+    const userMessage = correction && currentSynopsis
+      ? `Here is the current synopsis:\n\n${currentSynopsis}\n\nPlease revise it based on this feedback: ${correction}`
+      : `Create a synopsis for this idea: ${prompt}`;
+
+    await heartbeatJob(jobId);
+    const synopsis = await chat(SYNOPSIS_SYSTEM, userMessage, { temperature: 0.9, maxTokens: 2048 });
+    if (!synopsis || !synopsis.trim()) { await failJob(jobId, "AI returned an empty synopsis"); return; }
+
+    if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
+    await updateJob(jobId, { progress: 80, message: "Сохраняю синопсис…" });
+
+    await prisma.project.update({ where: { id: projectId }, data: { synopsis } });
+    await completeJob(jobId, { synopsis }, "Синопсис обновлён");
+  } catch (err: any) {
+    console.error("[synopsis-correction] job error:", err);
     await failJob(jobId, "Generation failed: " + (err?.message ?? "Unknown error"));
   }
 }
