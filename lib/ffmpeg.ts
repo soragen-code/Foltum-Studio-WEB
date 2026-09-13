@@ -726,6 +726,18 @@ export interface AssembleOptions {
    * Throwing is treated as "no music".
    */
   resolveMusic?: (workDir: string) => Promise<string | null>;
+  /**
+   * Stage 79: per-moment thematic soundtrack. Called AFTER the clips are joined, with the seam
+   * positions in the OUTPUT timeline and the total duration; returns one entry per timeline segment
+   * ({ local music path, startSec, endSec, intensity }) or null. When it returns a non-empty array
+   * the SEGMENTED, ducked mix is used; otherwise the single `resolveMusic` path applies. Throwing is
+   * treated as "no music". Backward compatible: absent → nothing changes.
+   */
+  resolveMusicSegments?: (
+    workDir: string,
+    seamOffsets: number[],
+    totalDuration: number
+  ) => Promise<Array<{ path: string; startSec: number; endSec: number; intensity: number }> | null>;
   /** Stage 46B: real progress events for the job bar. */
   onProgress?: (event: AssembleProgressEvent) => void;
 }
@@ -778,6 +790,77 @@ export function buildMusicMixFilter(opts: MusicMixOptions): string {
   );
 }
 
+/** Stage 79 — one music segment placed on the output timeline. */
+export interface MusicSegmentInput {
+  /** Local music file for this segment's mood (looped by ffmpeg). */
+  path: string;
+  /** Segment window in the output timeline (seconds). */
+  startSec: number;
+  endSec: number;
+  /** 0..1 — scales the music level (see buildMusicSegmentsMixFilter). */
+  intensity: number;
+}
+
+/** Convert a dB gain to a linear ffmpeg `volume` multiplier. */
+export function dbToLinear(db: number): number {
+  return Math.pow(10, db / 20);
+}
+
+/** Stage 79 — nominal music level (dB) at full intensity, scaled DOWN by (1 - intensity) is NOT used;
+ *  the level in dB is `MUSIC_SEGMENT_DB * intensity` (see spec: linear value of -18 dB * intensity). */
+export const MUSIC_SEGMENT_DB = -18;
+
+export interface MusicSegmentsMixOptions {
+  segments: MusicSegmentInput[];
+  /** True when input 0 carries dialogue/native audio to duck under (and preserve). */
+  hasVoice: boolean;
+  /** Episode length in seconds. */
+  totalDuration: number;
+}
+
+/**
+ * PURE (Stage 79) — filtergraph for the per-moment SEGMENTED soundtrack. Input 0 is the joined
+ * episode (its audio = the voice/dialogue track). Music segment i is ffmpeg input i+1 (each fed with
+ * `-stream_loop -1` so it repeats). Per segment: `atrim` to the window length, `afade` in/out 1 s,
+ * `volume` = the LINEAR value of (MUSIC_SEGMENT_DB × intensity) dB, `adelay` startSec×1000 on both
+ * channels. All segments are `amix`-ed into one bed; when `hasVoice` the bed is ducked under the
+ * voice with `sidechaincompress` and the voice is mixed back on top; otherwise the bed is the output.
+ * Output label: `[aout]`.
+ */
+export function buildMusicSegmentsMixFilter(opts: MusicSegmentsMixOptions): string {
+  const total = Math.max(0.1, opts.totalDuration);
+  const segs = opts.segments;
+  const parts: string[] = [];
+  const aformat = "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo";
+  segs.forEach((seg, i) => {
+    const inputIdx = i + 1;
+    const len = Math.max(0.1, Math.min(seg.endSec, total) - Math.max(0, seg.startSec));
+    const fadeIn = Math.min(1, len / 2);
+    const fadeOut = Math.min(1, len / 2);
+    const fadeOutStart = Math.max(0, len - fadeOut);
+    const lin = dbToLinear(MUSIC_SEGMENT_DB * Math.max(0, Math.min(1, seg.intensity)));
+    const delayMs = Math.round(Math.max(0, seg.startSec) * 1000);
+    parts.push(
+      `[${inputIdx}:a]${aformat},atrim=0:${len.toFixed(3)},asetpts=PTS-STARTPTS,` +
+        `afade=t=in:st=0:d=${fadeIn.toFixed(3)},afade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fadeOut.toFixed(3)},` +
+        `volume=${lin.toFixed(4)},adelay=${delayMs}|${delayMs}[m${i}]`
+    );
+  });
+  const musicLabels = segs.map((_, i) => `[m${i}]`).join("");
+  parts.push(`${musicLabels}amix=inputs=${segs.length}:duration=longest:dropout_transition=0:normalize=0[musicMixed]`);
+
+  if (opts.hasVoice) {
+    parts.push(`[0:a]${aformat},asplit=2[vmain][vkey]`);
+    parts.push(
+      `[musicMixed][vkey]sidechaincompress=threshold=0.03:ratio=8:attack=20:release=300[ducked]`
+    );
+    parts.push(`[vmain][ducked]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]`);
+  } else {
+    parts.push(`[musicMixed]anull[aout]`);
+  }
+  return parts.join(";");
+}
+
 export interface FinalRenderOptions {
   input: string;
   output: string;
@@ -785,6 +868,10 @@ export interface FinalRenderOptions {
   fps: AssembleFps;
   /** Local music file (looped) or null. */
   musicPath?: string | null;
+  /** Stage 79: per-moment segmented soundtrack; takes precedence over `musicPath` when non-empty. */
+  musicSegments?: MusicSegmentInput[] | null;
+  /** Stage 79: whether the joined episode has a voice/native audio track to duck + preserve. Default true. */
+  hasVoice?: boolean;
   /** Episode length (needed for the music trim / fades). */
   durationSec: number;
 }
@@ -798,15 +885,24 @@ export interface FinalRenderOptions {
  */
 export function buildFinalRenderArgs(o: FinalRenderOptions): { args: string[]; reencodesVideo: boolean; reencodesAudio: boolean } {
   const isNative = o.quality === "480p" && o.fps === 30;
-  const hasMusic = Boolean(o.musicPath);
+  // Stage 79: segmented soundtrack takes precedence over the single-track path when non-empty.
+  const segments = o.musicSegments && o.musicSegments.length > 0 ? o.musicSegments : null;
+  const hasMusic = !segments && Boolean(o.musicPath);
+  const hasVoice = o.hasVoice !== false;
   const { width, height } = ASSEMBLE_DIMENSIONS[o.quality];
-  const inputs = ["-i", o.input, ...(hasMusic ? ["-stream_loop", "-1", "-i", o.musicPath as string] : [])];
+  const musicInputs = segments
+    ? segments.flatMap((s) => ["-stream_loop", "-1", "-i", s.path])
+    : hasMusic
+      ? ["-stream_loop", "-1", "-i", o.musicPath as string]
+      : [];
+  const inputs = ["-i", o.input, ...musicInputs];
   const audioEnc = ["-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2"];
   const tail = ["-movflags", "+faststart", o.output];
 
-  if (isNative && !hasMusic) {
+  if (isNative && !hasMusic && !segments) {
     return { args: [...inputs, "-map", "0:v:0", "-map", "0:a:0", "-c", "copy", ...tail], reencodesVideo: false, reencodesAudio: false };
   }
+  const anyMusic = hasMusic || Boolean(segments);
   const filters: string[] = [];
   if (!isNative) {
     filters.push(
@@ -814,9 +910,10 @@ export function buildFinalRenderArgs(o: FinalRenderOptions): { args: string[]; r
         `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${o.fps},format=yuv420p[vout]`
     );
   }
-  if (hasMusic) filters.push(buildMusicMixFilter({ durationSec: o.durationSec }));
+  if (segments) filters.push(buildMusicSegmentsMixFilter({ segments, hasVoice, totalDuration: o.durationSec }));
+  else if (hasMusic) filters.push(buildMusicMixFilter({ durationSec: o.durationSec }));
   const videoMap = isNative ? ["-map", "0:v:0", "-c:v", "copy"] : ["-map", "[vout]", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-r", String(o.fps)];
-  const audioMap = hasMusic ? ["-map", "[aout]", ...audioEnc] : ["-map", "0:a:0", ...(isNative ? ["-c:a", "copy"] : audioEnc)];
+  const audioMap = anyMusic ? ["-map", "[aout]", ...audioEnc] : ["-map", "0:a:0", ...(isNative ? ["-c:a", "copy"] : audioEnc)];
   const args = [
     ...inputs,
     ...(filters.length ? ["-filter_complex", filters.join(";")] : []),
@@ -825,7 +922,7 @@ export function buildFinalRenderArgs(o: FinalRenderOptions): { args: string[]; r
     "-t", Math.max(0.1, o.durationSec).toFixed(3),
     ...tail,
   ];
-  return { args, reencodesVideo: !isNative, reencodesAudio: hasMusic || !isNative };
+  return { args, reencodesVideo: !isNative, reencodesAudio: anyMusic || !isNative };
 }
 
 /**
@@ -1074,6 +1171,10 @@ export async function assembleEpisodeLocally(scenes: SceneClipInput[], opts: Ass
 
   const joinedPath = path.join(workDir, "joined.mp4");
   const mode: StitchMode = opts.mode ?? DEFAULT_STITCH_MODE;
+  // Stage 79: seam positions in the OUTPUT timeline (scene boundaries) — needed to map the
+  // per-moment music plan onto the assembled episode. Populated by the seamless-cut graph; for the
+  // other join modes it is approximated below from the clip durations.
+  let seamOffsets: number[] = [];
   opts.onProgress?.({ stage: "join", pct: 0 });
   if (normalized.length === 1) {
     await fs.copyFile(normalized[0], joinedPath);
@@ -1082,6 +1183,7 @@ export async function assembleEpisodeLocally(scenes: SceneClipInput[], opts: Ass
     // no visible dissolve. If the ultra-short xfade fails for any reason → frame-exact concat.
     try {
       const g = await seamlessCutClips(normalized, infos, joinedPath);
+      seamOffsets = g.seamOffsets;
       console.log(`[ffmpeg] seamless cut: ${normalized.length} clips, hard cut (blend=0), tailTrim=${g.tailTrimSec.toFixed(2)}s, audioFade=${g.audioFade.toFixed(3)}s, expected=${g.expectedDuration.toFixed(2)}s`);
     } catch (err) {
       console.warn("[ffmpeg] seamless cut failed — falling back to hard concat:", (err as Error).message);
@@ -1123,19 +1225,56 @@ export async function assembleEpisodeLocally(scenes: SceneClipInput[], opts: Ass
   const quality = opts.quality ?? DEFAULT_ASSEMBLE_QUALITY;
   const fps = opts.fps ?? DEFAULT_ASSEMBLE_FPS;
   const outputPath = path.join(workDir, "episode.mp4");
-  const render = buildFinalRenderArgs({ input: joinedPath, output: outputPath, quality, fps, musicPath, durationSec: joinedInfo.duration });
+
+  // Stage 79: per-moment thematic soundtrack. Resolve the timeline segments AFTER the join, once the
+  // seam offsets and the real total duration are known. A non-empty result takes precedence over the
+  // single-track `musicPath`; any failure falls through to the single track (then to no music).
+  let musicSegments: MusicSegmentInput[] | null = null;
+  if (opts.resolveMusicSegments) {
+    // For join modes that don't fill seamOffsets (concat / crossfade / film), approximate the scene
+    // boundaries from the normalized clip durations so the plan still maps onto the timeline.
+    let offsets = seamOffsets;
+    if (offsets.length === 0 && infos.length > 1) {
+      offsets = [];
+      let acc = 0;
+      for (let i = 0; i < infos.length - 1; i++) {
+        acc += seamClipDuration(infos[i]);
+        offsets.push(Number(acc.toFixed(6)));
+      }
+    }
+    opts.onProgress?.({ stage: "music" });
+    try {
+      const resolved = await opts.resolveMusicSegments(workDir, offsets, joinedInfo.duration);
+      if (resolved && resolved.length > 0) musicSegments = resolved;
+    } catch (err) {
+      console.warn("[ffmpeg] per-moment soundtrack unavailable — falling back:", (err as Error).message);
+      musicSegments = null;
+    }
+  }
+
+  const render = buildFinalRenderArgs({
+    input: joinedPath,
+    output: outputPath,
+    quality,
+    fps,
+    musicPath,
+    musicSegments,
+    hasVoice: joinedInfo.hasAudio,
+    durationSec: joinedInfo.duration,
+  });
   let musicApplied = false;
   try {
     opts.onProgress?.({ stage: "render", pct: 0 });
     await runFfmpegWithProgress(render.args, "final render", joinedInfo.duration, (pct) => opts.onProgress?.({ stage: "render", pct }));
-    musicApplied = Boolean(musicPath);
+    musicApplied = Boolean(musicSegments) || Boolean(musicPath);
   } catch (err) {
-    if (!musicPath) throw err;
-    // Music mix failed → render the same quality/fps WITHOUT music; assembly always completes.
+    if (!musicSegments && !musicPath) throw err;
+    // Music mix failed → render the same quality/fps WITHOUT any music; assembly always completes.
     console.warn("[ffmpeg] music mix failed — rendering without music:", (err as Error).message);
     await fs.rm(outputPath, { force: true });
-    const plain = buildFinalRenderArgs({ input: joinedPath, output: outputPath, quality, fps, musicPath: null, durationSec: joinedInfo.duration });
+    const plain = buildFinalRenderArgs({ input: joinedPath, output: outputPath, quality, fps, musicPath: null, musicSegments: null, durationSec: joinedInfo.duration });
     await runFfmpegWithProgress(plain.args, "final render (no music)", joinedInfo.duration, (pct) => opts.onProgress?.({ stage: "render", pct }));
+    musicApplied = false;
   }
   await fs.rm(joinedPath, { force: true }).catch(() => {});
 

@@ -125,6 +125,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [assembleQuality, setAssembleQuality] = useState<AssembleQuality>(DEFAULT_ASSEMBLE_QUALITY)
   const [assembleFps, setAssembleFps] = useState<AssembleFps>(DEFAULT_ASSEMBLE_FPS)
   const [assembleNote, setAssembleNote] = useState<string | null>(null)
+  // Stage 79: music status of the LAST assembly, shown in the «Собрать» dialog.
+  const [assembleMusic, setAssembleMusic] = useState<{ musicApplied?: boolean; musicSummary?: string | null; musicError?: string | null } | null>(null)
   const stitchJob = useJobPolling({
     onFinish: (res) => {
       setStitching(false)
@@ -132,6 +134,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       if (j.status === 'completed') {
         if (validUrl(j.result?.videoUrl)) setEpisode((p: any) => ({ ...p, videoUrl: j.result.videoUrl, status: 'assembled', assembleQuality: j.result?.quality ?? null, assembleFps: j.result?.fps ?? null }))
         setAssembleNote(j.result?.note ?? null)
+        setAssembleMusic({ musicApplied: j.result?.musicApplied, musicSummary: j.result?.musicSummary ?? null, musicError: j.result?.musicError ?? null })
       } else {
         setError(j.error ?? j.message ?? 'Не удалось собрать эпизод')
       }
@@ -1497,7 +1500,13 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             <select id="assemble-fps" data-testid="assemble-fps" value={assembleFps} onChange={(e) => setAssembleFps(Number(e.target.value) as AssembleFps)} className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
               {ASSEMBLE_FPS.map((f) => (<option key={f} value={f}>{f} кадров/с</option>))}
             </select>
-            <p className="mt-3 text-xs text-muted-foreground">Фоновая музыка подбирается по настроению серии автоматически; если музыка недоступна, эпизод собирается без неё.</p>
+            <p className="mt-3 text-xs text-muted-foreground" data-testid="assemble-music-status">
+              {assembleMusic?.musicError
+                ? `Музыка недоступна: ${assembleMusic.musicError}`
+                : assembleMusic?.musicApplied && assembleMusic.musicSummary
+                  ? `Музыка: ${assembleMusic.musicSummary}`
+                  : 'Музыка подбирается по моментам серии автоматически; если она недоступна, эпизод собирается без неё.'}
+            </p>
             <div className="mt-4 flex justify-end gap-2">
               <button onClick={() => setAssembleDialogOpen(false)} className="rounded-lg border border-border px-3 py-1.5 text-sm" data-testid="assemble-cancel">Отмена</button>
               <button onClick={stitch} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground" data-testid="assemble-ok">

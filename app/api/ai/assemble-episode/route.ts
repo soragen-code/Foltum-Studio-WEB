@@ -88,7 +88,7 @@ export async function POST(request: Request) {
         });
         await completeJob(
           jobId,
-          { episodeId, quality, fps, videoUrl: result.videoUrl, sceneCount: result.sceneCount, mood: result.mood, musicApplied: result.musicApplied, note: result.note },
+          { episodeId, quality, fps, videoUrl: result.videoUrl, sceneCount: result.sceneCount, mood: result.mood, musicApplied: result.musicApplied, musicPlan: result.musicPlan, musicSummary: result.musicSummary, musicError: result.musicError, note: result.note },
           result.note ?? "Эпизод собран"
         );
       } catch (err: any) {

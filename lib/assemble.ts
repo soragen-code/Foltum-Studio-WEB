@@ -27,7 +27,17 @@ import {
   type AssembleQuality,
 } from "@/lib/ffmpeg";
 import { uploadBufferToS3 } from "@/lib/s3-upload";
-import { getOrCreateMusicTrack, pickMood, MOOD_LABELS, type Mood } from "@/lib/music";
+import { getOrCreateMusicTrack, type Mood } from "@/lib/music";
+import {
+  buildMusicPlan,
+  mergeMoodSegments,
+  limitMoods,
+  toTimelineSegments,
+  summarizePlan,
+  countScenesWithoutMusic,
+  type SceneMoodInput,
+  type MoodSegment,
+} from "@/lib/music-plan";
 
 const validUrl = (u?: string | null) => typeof u === "string" && u.startsWith("http") && u.length > 10;
 
@@ -47,6 +57,12 @@ export interface AssembleEpisodeResult {
   fps: AssembleFps;
   mood: Mood | null;
   musicApplied: boolean;
+  /** Stage 79: the per-moment plan actually used (segments + scenes left silent), or null. */
+  musicPlan: { segments: MoodSegment[]; scenesWithoutMusic: number } | null;
+  /** Stage 79: Russian summary of the plan («напряжённая → загадочная (2 сегмента …)») or null. */
+  musicSummary: string | null;
+  /** Stage 79: Russian error when music could not be produced, or null. */
+  musicError: string | null;
   /** Russian note for the UI («Музыка недоступна — собрано без музыки») or null. */
   note: string | null;
 }
@@ -98,9 +114,15 @@ export async function assembleEpisodeVideo(episodeId: string, opts: AssembleEpis
     const projectId = episode.season?.projectId ?? "unknown";
     let mood: Mood | null = null;
     let musicFailed = false;
+    // Stage 79: per-moment thematic soundtrack — the plan (segments + silent scenes), its Russian
+    // summary and any error are captured inside the resolveMusicSegments callback for the resultData.
+    let planSegments: MoodSegment[] = [];
+    let scenesWithoutMusic = 0;
+    let musicSummary: string | null = null;
+    let musicError: string | null = null;
 
     // Mux voiceovers + join with local ffmpeg (audio-preserving, default seamless hard cut), then
-    // the final render at the chosen quality / fps with the thematic music track (Stage 46B).
+    // the final render at the chosen quality / fps with the per-moment thematic soundtrack (Stage 79).
     const result = await assembleEpisodeLocally(
       scenes.map((s) => ({
         videoUrl: s.videoUrl as string,
@@ -110,20 +132,53 @@ export async function assembleEpisodeVideo(episodeId: string, opts: AssembleEpis
         quality,
         fps,
         onProgress: report,
-        resolveMusic:
+        resolveMusicSegments:
           opts.music === false
             ? undefined
-            : async (dir) => {
+            : async (dir, seamOffsets, totalDuration) => {
                 try {
-                  mood = await pickMood({ title: episode.title, logline: episode.logline, synopsis: episode.season?.project?.synopsis });
-                  void opts.onProgress?.(30, `Подбор музыки: ${MOOD_LABELS[mood]}`);
-                  const url = await getOrCreateMusicTrack(projectId, mood);
-                  const local = path.join(dir, "music.mp3");
-                  await downloadToFile(url, local);
-                  return local;
+                  // 1. Per-scene mood plan (gpt-4o) → merged consecutive segments → cap at 3 moods.
+                  const sceneInputs: SceneMoodInput[] = scenes.map((s, i) => ({
+                    index: i,
+                    action: s.action ?? undefined,
+                    dialogue: s.dialogue ?? undefined,
+                    kind: s.sceneKind ?? undefined,
+                  }));
+                  const perScene = await buildMusicPlan(sceneInputs, {
+                    title: episode.title,
+                    logline: episode.logline,
+                    synopsis: episode.season?.project?.synopsis,
+                  });
+                  planSegments = limitMoods(mergeMoodSegments(perScene), 3);
+                  scenesWithoutMusic = countScenesWithoutMusic(perScene);
+                  musicSummary = summarizePlan(planSegments, scenesWithoutMusic);
+                  mood = planSegments[0]?.mood ?? null;
+                  if (planSegments.length === 0) return null; // every scene is "none" — no music
+
+                  void opts.onProgress?.(30, `Подбор музыки: ${musicSummary}`);
+                  // 2. One cached track per UNIQUE mood (parallel; the S3 cache is reused).
+                  const uniqueMoods = [...new Set(planSegments.map((s) => s.mood))];
+                  const moodFiles = new Map<Mood, string>();
+                  await Promise.all(
+                    uniqueMoods.map(async (m) => {
+                      const url = await getOrCreateMusicTrack(projectId, m);
+                      const local = path.join(dir, `music_${m}.mp3`);
+                      await downloadToFile(url, local);
+                      moodFiles.set(m, local);
+                    })
+                  );
+                  // 3. Map segments onto the output timeline (seam offsets) → per-window inputs.
+                  const timeline = toTimelineSegments(planSegments, seamOffsets, totalDuration);
+                  return timeline.map((t) => ({
+                    path: moodFiles.get(t.mood) as string,
+                    startSec: t.startSec,
+                    endSec: t.endSec,
+                    intensity: t.intensity,
+                  }));
                 } catch (err) {
                   console.warn(`[assemble] ${episodeId}: music unavailable —`, (err as Error).message);
                   musicFailed = true;
+                  musicError = (err as Error).message;
                   return null;
                 }
               },
@@ -133,7 +188,8 @@ export async function assembleEpisodeVideo(episodeId: string, opts: AssembleEpis
     if (Boolean(mood) && !result.musicApplied) musicFailed = true;
     console.log(
       `[assemble] ${episodeId}: ${scenes.length} scenes, audio=${result.audioSources.join(",")}, ` +
-        `duration=${result.info.duration.toFixed(1)}s, hasAudio=${result.info.hasAudio}, ${quality}/${fps}fps, music=${result.musicApplied ? mood : "none"}`
+        `duration=${result.info.duration.toFixed(1)}s, hasAudio=${result.info.hasAudio}, ${quality}/${fps}fps, ` +
+        `music=${result.musicApplied ? musicSummary : "none"}`
     );
 
     // Persist to S3
@@ -154,6 +210,9 @@ export async function assembleEpisodeVideo(episodeId: string, opts: AssembleEpis
       fps,
       mood,
       musicApplied: result.musicApplied,
+      musicPlan: planSegments.length > 0 ? { segments: planSegments, scenesWithoutMusic } : null,
+      musicSummary,
+      musicError: musicFailed ? musicError ?? "неизвестная ошибка" : null,
       note: opts.music !== false && musicFailed ? "Музыка недоступна — собрано без музыки" : null,
     };
   } finally {

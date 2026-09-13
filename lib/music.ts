@@ -44,10 +44,44 @@ export const MOOD_PROMPTS: Record<Mood, string> = {
 };
 
 export const MUSIC_MODEL = "meta/musicgen";
+/**
+ * Stage 79 — MusicGen CANNOT be run by name (`predictions.create({ model: "meta/musicgen" })` hits
+ * POST /v1/models/meta/musicgen/predictions and returns 404, because meta/musicgen is not an official
+ * model). It must be run BY VERSION (POST /v1/predictions with { version, input }). This is the full
+ * hex id of the latest version (starts with 671ac645ce5e); resolveMusicgenVersion() caches it and
+ * re-fetches the current version once if a create fails because this pin went stale.
+ */
+export const MUSICGEN_VERSION_ID = "671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb";
 /** MusicGen renders at most 30 s; the file is looped to the episode length. */
 export const MUSIC_TRACK_SECONDS = 30;
 const MUSIC_TIMEOUT_MS = 4 * 60 * 1000;
 const POLL_MS = 4000;
+
+/** Cached MusicGen version id (seeded with MUSICGEN_VERSION_ID; refreshed on a stale-version error). */
+let _musicgenVersion: string = MUSICGEN_VERSION_ID;
+
+/** Return the cached MusicGen version id. */
+export function resolveMusicgenVersion(): string {
+  return _musicgenVersion;
+}
+
+/** Fetch the CURRENT MusicGen version from Replicate and cache it (used when the pinned version is stale). */
+async function refreshMusicgenVersion(): Promise<string> {
+  const model = await getReplicate().models.get("meta", "musicgen");
+  const id = (model as { latest_version?: { id?: string } })?.latest_version?.id;
+  if (!id) throw new Error("Could not resolve meta/musicgen latest version");
+  _musicgenVersion = id;
+  return id;
+}
+
+/** True when a create error looks like a stale / missing model version (worth re-resolving the version once). */
+function isStaleVersionError(err: unknown): boolean {
+  const msg = String((err as Error)?.message ?? err ?? "").toLowerCase();
+  return (
+    msg.includes("version") &&
+    (msg.includes("404") || msg.includes("not found") || msg.includes("invalid version") || msg.includes("does not exist"))
+  );
+}
 
 /** Validate a raw model answer; unknown / malformed → DEFAULT_MOOD. */
 export function parseMood(raw: unknown): Mood {
@@ -86,16 +120,24 @@ function publicUrlForKey(key: string): string {
 
 /** Generate a 30 s instrumental with MusicGen; returns the temporary Replicate output URL. */
 export async function generateMusicTrack(mood: Mood): Promise<string> {
-  const prediction = await getReplicate().predictions.create({
-    model: MUSIC_MODEL as `${string}/${string}`,
-    input: {
-      prompt: MOOD_PROMPTS[mood],
-      duration: MUSIC_TRACK_SECONDS,
-      model_version: "stereo-large",
-      output_format: "mp3",
-      normalization_strategy: "peak",
-    },
-  });
+  const input = {
+    prompt: MOOD_PROMPTS[mood],
+    duration: MUSIC_TRACK_SECONDS,
+    model_version: "stereo-large",
+    output_format: "mp3",
+    normalization_strategy: "peak",
+  };
+  // Stage 79: run BY VERSION (meta/musicgen can't be run by name — returns 404). If the pinned
+  // version is stale, re-resolve the current version ONCE and retry the create.
+  let prediction;
+  try {
+    prediction = await getReplicate().predictions.create({ version: resolveMusicgenVersion(), input });
+  } catch (err) {
+    if (!isStaleVersionError(err)) throw err;
+    console.warn("[music] MusicGen version stale — re-resolving:", (err as Error).message);
+    const fresh = await refreshMusicgenVersion();
+    prediction = await getReplicate().predictions.create({ version: fresh, input });
+  }
   const started = Date.now();
   for (;;) {
     const state = await getPredictionState(prediction.id);
