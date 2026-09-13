@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { Wand2, Loader2, Check, PenLine } from 'lucide-react'
-import { useJobPolling, SmoothProgress } from './use-job-polling'
+import { useJobPolling } from './use-job-polling'
+import { RewritePlaceholder } from './rewrite-placeholder'
+import { rewriteViewState } from '@/lib/rewrite-view-state'
 
 // Roughly how long the synopsis rewrite takes — drives the smooth 0→100 % client bar.
 const SYNOPSIS_CORRECTION_EXPECTED_SEC = 30
@@ -111,14 +113,19 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
 
           {error && <div className="mb-4 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
 
-          <textarea
-            rows={12}
-            value={synopsis}
-            onChange={(e) => setSynopsis(e.target.value)}
-            placeholder="Синопсис сезона..."
-            className="mb-4 w-full rounded-lg border border-input bg-background p-3 text-sm leading-relaxed outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
-            data-testid="synopsis-text"
-          />
+          {/* Stage 77: while the rewrite job runs the OLD synopsis is hidden behind a placeholder. */}
+          {rewriteViewState(generating, poll.job?.status) === 'placeholder' ? (
+            <RewritePlaceholder job={poll.job} expectedTotalSec={SYNOPSIS_CORRECTION_EXPECTED_SEC} label="Переписываю синопсис…" testId="synopsis-revise-progress" className="mb-4" />
+          ) : (
+            <textarea
+              rows={12}
+              value={synopsis}
+              onChange={(e) => setSynopsis(e.target.value)}
+              placeholder="Синопсис сезона..."
+              className="mb-4 w-full rounded-lg border border-input bg-background p-3 text-sm leading-relaxed outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
+              data-testid="synopsis-text"
+            />
+          )}
 
           <div className="mb-4">
             <label className="mb-1 block text-sm font-medium">Замечание для переписывания (необязательно)</label>
@@ -127,7 +134,8 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
               placeholder="Сделать драматичнее, убрать счастливый финал, добавить семейную линию..."
               value={correctionPrompt}
               onChange={(e) => setCorrectionPrompt(e.target.value)}
-              className="w-full rounded-lg border border-input bg-background p-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
+              disabled={generating}
+              className="w-full rounded-lg border border-input bg-background p-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary disabled:opacity-60"
               data-testid="synopsis-correction"
             />
             {correctionPrompt.trim() && (
@@ -140,9 +148,6 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
                 {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
                 Переписать синопсис
               </button>
-            )}
-            {poll.job && generating && (
-              <SmoothProgress job={poll.job} expectedTotalSec={SYNOPSIS_CORRECTION_EXPECTED_SEC} className="mt-3" />
             )}
           </div>
 

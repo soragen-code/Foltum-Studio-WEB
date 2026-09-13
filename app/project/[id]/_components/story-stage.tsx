@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Loader2, Wand2, ArrowRight, BookOpen } from 'lucide-react'
-import { JOB_POLL_INTERVAL_MS, useJobPolling, SmoothProgress } from './use-job-polling'
+import { JOB_POLL_INTERVAL_MS, useJobPolling } from './use-job-polling'
+import { RewritePlaceholder } from './rewrite-placeholder'
+import { rewriteViewState } from '@/lib/rewrite-view-state'
 import { CancelButton } from './cancel-button'
 import { StickyReviseBar } from './sticky-revise-bar'
 import { type SeasonEpisode } from './season-stage'
@@ -280,21 +282,26 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
           </button>
         )}
 
-        {season?.fullStory && (
-          <div className="mt-5 rounded-lg border border-border/60 bg-muted/10 p-4" data-testid="story-body">
-            <FullStoryView text={season.fullStory} />
-          </div>
-        )}
-        {season && !season.fullStory && !jobActive && (
-          <p className="mt-4 text-sm text-muted-foreground">Сюжет ещё не написан. Изменение ниже сгенерирует его.</p>
-        )}
-
-        {storyBusy && revisePoll.job && (
-          <SmoothProgress
+        {/* Stage 77: while the rewrite runs the OLD story is replaced by a placeholder with the smooth bar. */}
+        {rewriteViewState(storyBusy, revisePoll.job?.status) === 'placeholder' ? (
+          <RewritePlaceholder
             job={revisePoll.job}
-            expectedTotalSec={revisePoll.job.type === SEASON_JOB_TYPE ? SEASON_REWRITE_EXPECTED_SEC : STORY_REVISE_EXPECTED_SEC}
-            className="mt-4"
+            expectedTotalSec={revisePoll.job?.type === SEASON_JOB_TYPE ? SEASON_REWRITE_EXPECTED_SEC : STORY_REVISE_EXPECTED_SEC}
+            label="Переписываю сюжет…"
+            testId="story-revise-progress"
+            className="mt-5"
           />
+        ) : (
+          <>
+            {season?.fullStory && (
+              <div className="mt-5 rounded-lg border border-border/60 bg-muted/10 p-4" data-testid="story-body">
+                <FullStoryView text={season.fullStory} />
+              </div>
+            )}
+            {season && !season.fullStory && !jobActive && (
+              <p className="mt-4 text-sm text-muted-foreground">Сюжет ещё не написан. Изменение ниже сгенерирует его.</p>
+            )}
+          </>
         )}
         {storyNotice && <p className="mt-3 text-sm text-primary" data-testid="story-notice">{storyNotice}</p>}
         {error && <p className="mt-3 text-sm text-destructive">{error}</p>}

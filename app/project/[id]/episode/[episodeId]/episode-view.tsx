@@ -11,6 +11,9 @@ import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
 import { JobProgressBar, SmoothProgress, useJobPolling, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
+import { RewritePlaceholder } from '../../_components/rewrite-placeholder'
+import { isEpisodeRevisePending } from '@/lib/episode-revise-state'
+import { rewriteViewState } from '@/lib/rewrite-view-state'
 import { CancelButton } from '../../_components/cancel-button'
 import { desiredTotalFrames, locationDetailLevel, locationDetailLabel, episodeLocations } from '@/lib/location-scale'
 import { CHARACTER_PHOTO_COUNT } from '@/lib/reference-counts'
@@ -25,6 +28,8 @@ import { ProviderPicker } from '@/app/project/[id]/_components/provider-picker'
 type EpisodePhase = 'script' | 'references' | 'scenes'
 
 const VIDEO_EXPECTED_SEC = 600
+// Stage 77: rough duration of a whole-episode script rewrite (drives the smooth 0→100 % bar).
+const EPISODE_REVISE_EXPECTED_SEC = 180
 const REF_POLL_MS = 3500
 // Stage 53: full-body front is the primary photo, shown first; front/profile are optional manual slots.
 const SHOT_LABELS = ['В полный рост (референс)', 'Портрет (лицо)', 'Левый профиль']
@@ -75,6 +80,25 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [error, setError] = useState<string | null>(null)
   const [reviseText, setReviseText] = useState('')
   const [revising, setRevising] = useState(false)
+  const [reviseNotice, setReviseNotice] = useState<string | null>(null)
+  // Stage 77 — the episode rewrite is a background season_script job; poll it and swap the old
+  // script for a placeholder until the job is terminal (see RewritePlaceholder).
+  const revisePoll = useJobPolling({
+    onFinish: async (res) => {
+      const j = res.job
+      if (j.status === 'completed') {
+        await reloadEpisode()
+        setReviseText('')
+        setRevising(false)
+      } else if (j.status === 'failed') {
+        setError(j.error ?? 'Не удалось переписать эпизод')
+        setRevising(false)
+      } else if (j.status === 'canceled') {
+        setReviseNotice('Изменение отменено.')
+        setRevising(false)
+      }
+    },
+  })
   const [sceneEdit, setSceneEdit] = useState<Record<string, string>>({})
   const [sceneBusy, setSceneBusy] = useState<Record<string, boolean>>({})
   const [regenAsk, setRegenAsk] = useState<string | null>(null) // sceneId awaiting paid regen confirmation
@@ -602,15 +626,40 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
 
   const reviseEpisode = async (force = false) => {
     const instruction = reviseText.trim(); if (!instruction) return
-    setRevising(true); setError(null)
+    setRevising(true); setError(null); setReviseNotice(null)
     try {
       const res = await fetch(`/api/ai/episodes/${episode.id}/revise`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instruction, force }) })
       const data = await res.json()
-      if (res.status === 409 && data?.needsForce) { if (confirm(`${data.error}\n\nПродолжить?`)) return reviseEpisode(true); return }
+      if (res.status === 409 && data?.needsForce) { if (confirm(`${data.error}\n\nПродолжить?`)) return reviseEpisode(true); setRevising(false); return }
       if (!res.ok) throw new Error(data?.error ?? 'Не удалось переписать эпизод')
-      setReviseText(''); await reloadEpisode()
-    } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setRevising(false) }
+      // Stage 77: the route returns a background job — keep `revising` until the poll finishes
+      // (revisePoll.onFinish reloads the episode and clears the instruction on success).
+      if (data?.jobId) { revisePoll.start(data.jobId); return }
+      // No jobId (unexpected) — fall back to the old immediate reload.
+      setReviseText(''); await reloadEpisode(); setRevising(false)
+    } catch (e: any) { setError(e?.message ?? 'Ошибка'); setRevising(false) }
   }
+
+  // Stage 77 — resume the rewrite placeholder after a page reload: the latest season job from
+  // GET /api/ai/season carries `resultData.revise.episodeIds`; if it is active and names THIS
+  // episode, the script is being rewritten right now.
+  const reviseResumedRef = useRef(false)
+  useEffect(() => {
+    if (reviseResumedRef.current) return
+    reviseResumedRef.current = true
+    ;(async () => {
+      try {
+        const r = await fetch(`/api/ai/season?projectId=${project.id}`, { cache: 'no-store' })
+        if (!r.ok) return
+        const d = await r.json()
+        if (isEpisodeRevisePending(d?.job, episode.id)) {
+          setRevising(true)
+          revisePoll.start(d.job.id)
+        }
+      } catch { /* ignore */ }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id, episode.id])
 
   const reviseScene = async (scene: Scene) => {
     const instruction = sceneEdit[scene.id]?.trim(); if (!instruction) return
@@ -893,10 +942,16 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         {phase === 'script' && (
           <div className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="phase-script">
             <h2 className="mb-3 font-display text-xl font-bold">Сценарий эпизода</h2>
-            <BookScript text={episode.script} scenes={scenes} />
+            {/* Stage 77: while the rewrite job runs the OLD script is hidden behind a placeholder. */}
+            {rewriteViewState(revising, revisePoll.job?.status) === 'placeholder' ? (
+              <RewritePlaceholder job={revisePoll.job} expectedTotalSec={EPISODE_REVISE_EXPECTED_SEC} label="Переписываю сценарий эпизода…" testId="episode-revise-progress" />
+            ) : (
+              <BookScript text={episode.script} scenes={scenes} />
+            )}
+            {reviseNotice && <p className="mt-3 text-sm text-primary" data-testid="episode-revise-notice">{reviseNotice}</p>}
             {/* Stage 59 navigation — Сценарий is step 1: single forward button to references. */}
             <div className="mt-5 flex flex-wrap items-center justify-end gap-3 border-t border-border pt-4">
-              <button onClick={() => goPhase('references')} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:brightness-110" data-testid="script-to-references">
+              <button onClick={() => goPhase('references')} disabled={revising} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:brightness-110 disabled:opacity-50" data-testid="script-to-references">
                 К референсам <ArrowRight className="h-4 w-4" />
               </button>
             </div>
