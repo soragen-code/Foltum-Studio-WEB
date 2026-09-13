@@ -105,13 +105,68 @@ export async function chatJSON<T = any>(
   opts?: ChatOptions
 ): Promise<T> {
   const raw = await chat(system, user, { ...opts, json: true });
-  return JSON.parse(stripJsonFences(raw)) as T;
+  return safeJsonParse<T>(raw);
 }
 
 /** Some models wrap JSON in ```json fences even in json mode — strip them before parsing. */
 export function stripJsonFences(raw: string): string {
   const m = raw.trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
   return m ? m[1] : raw;
+}
+
+/**
+ * Attempt to repair a TRUNCATED JSON blob — the usual failure when a model hits its token cap and the
+ * output stops mid-string ("Unterminated string in JSON at position …"). Walks the text tracking string
+ * state and open braces/brackets, closes a dangling string, drops a trailing partial key/value/comma,
+ * and closes every still-open structure. Returns the repaired text, or null when it does not look like JSON.
+ */
+export function repairTruncatedJson(input: string): string | null {
+  let str = input.trim();
+  if (!str || !/^[[{]/.test(str)) return null;
+  const stack: string[] = [];
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") stack.push("}");
+    else if (ch === "[") stack.push("]");
+    else if (ch === "}" || ch === "]") stack.pop();
+  }
+  if (inString) str += '"'; // close the string the model was cut off in
+  str = str.replace(/,\s*$/, ""); // drop a dangling comma left after the last complete item
+  // If we're right after a "key": with no value, drop that partial pair so the object stays valid.
+  str = str.replace(/,?\s*"[^"]*"\s*:\s*$/, "");
+  while (stack.length) str += stack.pop();
+  return str;
+}
+
+/**
+ * Parse a model's JSON answer robustly. Strips ``` fences, then on a parse failure tries ONCE to repair a
+ * truncated blob before giving up with a short, human-readable error (never the raw "Unterminated string …"
+ * exception, which would otherwise reach the user verbatim). Callers still validate the shape with Zod.
+ */
+export function safeJsonParse<T = any>(raw: string): T {
+  const cleaned = stripJsonFences(raw);
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    const repaired = repairTruncatedJson(cleaned);
+    if (repaired !== null) {
+      try {
+        return JSON.parse(repaired) as T;
+      } catch {
+        /* fall through to the friendly error */
+      }
+    }
+    throw new Error(`Модель вернула неполный ответ (обрезанный JSON, ${cleaned.length} символов). Попробуйте ещё раз.`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -172,7 +227,7 @@ export async function pollBackgroundJSON<T = any>(id: string): Promise<Backgroun
     const raw = String(r.output_text ?? "");
     let json: T;
     try {
-      json = JSON.parse(stripJsonFences(raw)) as T;
+      json = safeJsonParse<T>(raw);
     } catch {
       return { status: "failed", error: `invalid JSON in response (${raw.length} chars)` };
     }

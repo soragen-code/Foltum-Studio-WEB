@@ -39,7 +39,10 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   const nextCont = next ? `\n  presence(start): ${next.presence ?? "—"} | link: ${next.continuesFrom ?? "—"}` : "";
   const user = `EPISODE ${scene.episode.number} «${scene.episode.title}»: ${scene.episode.logline}\nLOCATION: ${scene.episode.locationName} — ${scene.episode.locationDesc}\nCHARACTERS IN SCENE: ${scene.characters.map((c) => `${c.character.name}: ${c.character.appearance ?? ""}`).join("; ")}\n\nPREVIOUS SHOT: ${prev ? `${prev.action}\n${prev.dialogue}${prevCont}` : "(none)"}\nNEXT SHOT: ${next ? `${next.action}\n${next.dialogue}${nextCont}` : "(none)"}\n\nCURRENT SCENE #${scene.number}\nshotType: ${scene.shotType}\ndurationSec: ${scene.durationSec ?? 15}\nlocationDesc: ${scene.locationDesc}\naction: ${scene.action}\npresence: ${scene.presence ?? "—"}\nentrances: ${scene.entrances ?? "—"}\ncontinuesFrom: ${scene.continuesFrom ?? "—"}\nstartState: ${scene.startState ?? "—"}\nendState: ${scene.endState ?? "—"}\ndialogue:\n${scene.dialogue}\nvideoPrompt:\n${scene.videoPrompt}\n\nINSTRUCTION: ${instruction}`;
   try {
-    const raw0 = sceneReviseSchema.parse(await chatJSON(sceneReviseSystemPrompt(language), user, { temperature: 0.6, maxTokens: 3000 }));
+    // maxTokens 4096 (was 3000): a full scene rewrite (action + dialogue + videoPrompt + states) can run
+    // ~14KB and was hitting the cap, truncating the JSON ("Unterminated string …"). Larger budget + the
+    // robust parser in chatJSON keep the rewrite from failing on the scenes page.
+    const raw0 = sceneReviseSchema.parse(await chatJSON(sceneReviseSystemPrompt(language), user, { temperature: 0.6, maxTokens: 4096 }));
     // Seedance voices `dialogue` → guarantee English (swap swapped fields / translate).
     // Stage 38: the model may switch the kind ("make this scene a fight" → "action"); a narration scene
     // never changes kind here, otherwise keep the stored kind when the model omits it.
