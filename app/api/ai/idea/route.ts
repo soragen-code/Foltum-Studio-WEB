@@ -1,21 +1,24 @@
 export const dynamic = "force-dynamic";
-export const maxDuration = 120;
+export const maxDuration = 800; // the synopsis job runs in the background of this invocation via after()
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, ideaSchema } from "@/lib/validations";
-import { chatJSON } from "@/lib/ai";
-import { ideaSystemPrompt, ideaUserPrompt, ideaAutoSystemPrompt, ideaAutoUserPrompt, ideaFromStorySystemPrompt, ideaFromStoryUserPrompt, genresToEnglish, normalizeIdeaResult, castExpansionSystemPrompt, castExpansionUserPrompt, normalizeCastExpansion, characterCardToData, locationsFromSynopsisSystemPrompt, locationsResultSchema, dedupeCast, sanitizeLocationCard, detectLanguage, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
-import { resolveProjectName } from "@/lib/project-name";
+import { runInBackground, failStaleJobs } from "@/lib/jobs";
+import { runSynopsisJob, SYNOPSIS_JOB_TYPE } from "@/lib/workers/synopsis-job";
 
 /**
- * POST /api/ai/idea  { projectId, idea }
+ * POST /api/ai/idea  { projectId, idea | auto+genres | fromStory+story, extras?, episodeCount? }
  *
- * Stage 1 of the new flow: idea → synopsis (in the idea's language) + character
- * cards. Replaces the project's draft characters (only while they are not yet
- * approved) and stores idea/synopsis/language on the project.
+ * Stage 1 of the new flow: idea → synopsis. This used to run the LLM synchronously and hold the
+ * client's fetch open for the whole generation — if the producer left the page the request aborted
+ * and the UI showed «Ошибка сети» even though the server had (or would have) finished.
+ *
+ * It now creates a background GenerationJob (type "synopsis") and returns { jobId } immediately;
+ * the actual generation runs via runSynopsisJob() in the background of this invocation (after()),
+ * and the frontend polls GET /api/jobs/[id]. Idempotent: an active job is returned as-is.
  */
 export async function POST(request: Request) {
   try {
@@ -28,22 +31,6 @@ export async function POST(request: Request) {
     const parsed = await parseBody(request, ideaSchema);
     if (!parsed.ok) return parsed.response;
     const { projectId, idea, auto, genres, extras, fromStory, story, episodeCount } = parsed.data;
-    // Stage 14 (B): the producer sets how many episodes the season has (manual/auto). Story-upload
-    // mode lets the story dictate, so we only persist the count when it was actually chosen.
-    const episodeCountToStore = !fromStory && typeof episodeCount === "number" ? episodeCount : undefined;
-
-    // STORY mode: the producer uploaded a finished story (parsed to text on the server). Language is
-    // auto-detected from the story. AUTO mode: the AI invents the story from the chosen genre(s).
-    // MANUAL mode: language is detected from the idea text inside normalizeIdeaResult.
-    const storyText = (story ?? "").trim();
-    const storyLanguage: IdeaLanguage = storyText ? detectLanguage(storyText) : "ru";
-    const autoLanguage: IdeaLanguage = (extras && extras.trim() ? detectLanguage(extras) : "ru");
-    // What we persist as the project's "idea" so the producer can see what drove the generation.
-    const ideaForStore = fromStory
-      ? `[Файл-сюжет] ${storyText.slice(0, 280)}${storyText.length > 280 ? "…" : ""}`
-      : auto
-      ? `[Авто] Жанр: ${genresToEnglish(genres).join(", ") || "—"}${extras && extras.trim() ? `\nПожелания: ${extras.trim()}` : ""}`
-      : (idea ?? "");
 
     const user = await prisma.user.findUnique({ where: { email: session.user.email } });
     if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
@@ -53,46 +40,50 @@ export async function POST(request: Request) {
     if (project.charactersApproved)
       return NextResponse.json({ error: "Synopsis and characters are already confirmed" }, { status: 409 });
 
-    // One retry if the model returns malformed JSON / schema violations.
-    let result: ReturnType<typeof normalizeIdeaResult> | null = null;
-    let lastError = "";
-    for (let attempt = 0; attempt < 2 && !result; attempt++) {
-      try {
-        const raw = fromStory
-          ? await chatJSON(ideaFromStorySystemPrompt(storyLanguage), ideaFromStoryUserPrompt(storyText), { temperature: 0.6, maxTokens: 4200 })
-          : auto
-          ? await chatJSON(ideaAutoSystemPrompt(autoLanguage), ideaAutoUserPrompt(genres, extras), { temperature: 0.95, maxTokens: 3800 })
-          : await chatJSON(ideaSystemPrompt(), ideaUserPrompt(idea ?? ""), { temperature: 0.8, maxTokens: 3500 });
-        // Fallback language source: STORY → the uploaded story; AUTO → chosen/extras; MANUAL → idea text.
-        result = normalizeIdeaResult(raw, fromStory ? storyText : auto ? (extras && extras.trim() ? extras : (autoLanguage === "ru" ? "русская история" : "story")) : (idea ?? ""));
-      } catch (e: any) {
-        lastError = e?.message ?? String(e);
-        console.warn(`[idea] attempt ${attempt + 1} failed:`, lastError);
-      }
-    }
-    if (!result) return NextResponse.json({ error: "AI returned an invalid result: " + lastError }, { status: 502 });
+    // Reap dead jobs, then reuse an active one (idempotent — a refresh must not start a second job).
+    await failStaleJobs({ projectId, type: SYNOPSIS_JOB_TYPE });
+    const active = await prisma.generationJob.findFirst({
+      where: { projectId, type: SYNOPSIS_JOB_TYPE, status: { in: ["pending", "processing"] } },
+      orderBy: { createdAt: "desc" },
+    });
+    if (active) return NextResponse.json({ jobId: active.id, resumed: true });
 
-    // Stage 59 (step 1 «Идея»): this step ONLY produces the synopsis. The full season cast and
-    // locations are generated later, from the APPROVED synopsis, inside the season-script job — so
-    // we intentionally do NOT create any character/location rows here, and advance the project to
-    // the synopsis step so the wizard auto-renders the synopsis screen next.
-    await prisma.$transaction(async (tx) => {
-      await tx.project.update({
-        where: { id: projectId },
-        data: {
-          idea: ideaForStore, synopsis: result!.synopsis, language: result!.language, synopsisApproved: false,
-          stage: "synopsis",
-          // Stage 40: the project is named automatically from the plot (model title → first words of the idea/synopsis).
-          name: resolveProjectName(result!.title, fromStory ? storyText : (idea && idea.trim()) ? idea : result!.synopsis),
-          ...(episodeCountToStore !== undefined ? { episodeCount: episodeCountToStore } : {}),
-        },
-      });
-    }, { timeout: 30_000 });
-
-    const renamed = await prisma.project.findUnique({ where: { id: projectId }, select: { name: true } });
-    return NextResponse.json({ synopsis: result.synopsis, language: result.language, projectName: renamed?.name ?? null });
+    const job = await prisma.generationJob.create({
+      data: { type: SYNOPSIS_JOB_TYPE, status: "pending", progress: 0, message: "Запуск…", projectId },
+    });
+    runInBackground(() => runSynopsisJob(job.id, projectId, { idea, auto, genres, extras, fromStory, story, episodeCount }));
+    return NextResponse.json({ jobId: job.id, resumed: false });
   } catch (err: any) {
     console.error("Idea generation error:", err);
     return NextResponse.json({ error: "Generation failed: " + (err?.message ?? "Unknown error") }, { status: 500 });
   }
+}
+
+/**
+ * GET /api/ai/idea?projectId=… → the latest synopsis job for the project (with its parsed result),
+ * so the client can resume the progress bar / pick up a finished synopsis after a reload or navigation.
+ */
+export async function GET(request: Request) {
+  const session = await auth();
+  if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const projectId = new URL(request.url).searchParams.get("projectId") ?? "";
+  if (!projectId) return NextResponse.json({ error: "projectId required" }, { status: 400 });
+
+  const user = await prisma.user.findUnique({ where: { email: session.user.email }, select: { id: true } });
+  if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
+  const project = await prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true } });
+  if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
+
+  await failStaleJobs({ projectId, type: SYNOPSIS_JOB_TYPE });
+  const latest = await prisma.generationJob.findFirst({
+    where: { projectId, type: SYNOPSIS_JOB_TYPE },
+    orderBy: { createdAt: "desc" },
+  });
+  let result: any = null;
+  if (latest?.resultData) { try { result = JSON.parse(latest.resultData); } catch {} }
+  return NextResponse.json(
+    { job: latest ? { ...latest, result } : null },
+    { headers: { "Cache-Control": "no-store" } }
+  );
 }

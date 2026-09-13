@@ -1,11 +1,15 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Loader2, Wand2, Check, Pencil, User, X, Lightbulb, MessageSquareText, UserPlus, ChevronRight, Upload, FileText, FlaskConical, Undo2 } from 'lucide-react'
 import { LocationCard, AddLocationForm, TierBadge, TIER_LABELS, groupByTier, type LocationCardData } from './cast-and-locations'
 import { parseStoredShortSynopsis, type ShortSynopsis } from '@/lib/short-synopsis'
 import { CancelButton } from './cancel-button'
+import { useJobPolling, SmoothProgress } from './use-job-polling'
+
+/** Roughly how long the synopsis step takes — drives the smooth 0→100 % progress bar. */
+const SYNOPSIS_EXPECTED_SEC = 45
 
 export interface CharacterCardData {
   id: string
@@ -440,13 +444,53 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   const [result, setResult] = useState<{ synopsis: string; language: string; characters: CharacterCardData[]; locations: LocationCardData[] } | null>(
     project?.synopsis && project?.characters?.length ? { synopsis: project.synopsis, language: project.language ?? '', characters: project.characters, locations: project.locations ?? [] } : null
   )
-  const [generating, setGenerating] = useState(false)
+  const [starting, setStarting] = useState(false)   // POST /api/ai/idea in flight (before the job appears)
   const [chaining, setChaining] = useState(false)
   const [approving, setApproving] = useState(false)
   const [notice, setNotice] = useState('')
   const [error, setError] = useState('')
   const [ideaCanceled, setIdeaCanceled] = useState(false)
-  const ideaAbort = useRef<AbortController | null>(null)
+  const activeJobIdRef = useRef<string | null>(null)
+  // Stage 67: synopsis generation is a background GenerationJob (type "synopsis"). We poll it instead
+  // of holding an open fetch, so leaving the page no longer aborts the request / shows «Ошибка сети».
+  const { job: synopsisJob, start: startPolling, clear: clearSynopsisJob } = useJobPolling({
+    onFinish: (res) => {
+      activeJobIdRef.current = null
+      if (res.job.status === 'completed') {
+        setError(''); setIdeaCanceled(false)
+        // The route advanced the project to stage="synopsis"; refresh so the wizard renders step 2.
+        onRefresh()
+      } else if (res.job.status === 'canceled') {
+        setIdeaCanceled(true)
+      } else {
+        setError(res.job.error ?? 'Не удалось сгенерировать')
+      }
+    },
+  })
+  const jobActive = !!synopsisJob && (synopsisJob.status === 'pending' || synopsisJob.status === 'processing')
+  const generating = starting || jobActive
+  // Stage 67 — resume on mount: if a synopsis job is still running for this project (the producer left
+  // and came back), pick it up and keep polling instead of starting a new one. If it finished while
+  // away, the project is already on stage="synopsis" and the wizard renders step 2, so this component
+  // won't even mount — nothing to do here.
+  useEffect(() => {
+    let ignore = false
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/ai/idea?projectId=${project.id}`, { cache: 'no-store' })
+        if (!res.ok) return
+        const d = await res.json().catch(() => null)
+        const j = d?.job
+        if (!j || ignore) return
+        if (j.status === 'pending' || j.status === 'processing') {
+          activeJobIdRef.current = j.id
+          startPolling(j.id)
+        }
+      } catch { /* transient — the button still lets the producer start a fresh job */ }
+    })()
+    return () => { ignore = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id])
   // Idea source: 'manual' = producer writes the idea; 'auto' = the AI invents it from a genre;
   // 'upload' = the producer uploads a finished story file (Stage 12).
   // 'test' (Stage 40) = «Тестовая серия»: one hand-written scene prompt → one-scene episode, no story pipeline.
@@ -554,38 +598,36 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
     } else if (idea.trim().length < 10) {
       setError('Опишите идею хотя бы одним-двумя предложениями'); return
     }
-    setError(''); setNotice(''); setIdeaCanceled(false); setGenerating(true)
-    const controller = new AbortController()
-    ideaAbort.current = controller
+    setError(''); setNotice(''); setIdeaCanceled(false); clearSynopsisJob(); setStarting(true)
     try {
       const body = mode === 'auto'
         ? { projectId: project.id, auto: true, genres, extras: extras.trim(), episodeCount }
         : mode === 'upload'
         ? { projectId: project.id, fromStory: true, story: storyText }
         : { projectId: project.id, idea: idea.trim(), episodeCount }
+      // Stage 67: the route creates a background job and returns { jobId } immediately. We poll it, so
+      // the producer can leave the page — generation continues server-side and resumes on return.
       const res = await fetch('/api/ai/idea', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-        signal: controller.signal,
       })
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
       if (!res.ok) { setError(data?.error ?? 'Не удалось сгенерировать'); return }
-      // Stage 59 (step 1 «Идея»): the idea step now produces ONLY the synopsis and the route advances
-      // the project to stage="synopsis". Refresh so the wizard auto-renders the synopsis screen (step 2).
-      // The cast and locations are generated later, at the season-story step, from the approved synopsis.
-      setResult({ synopsis: data.synopsis ?? '', language: data.language ?? '', characters: [], locations: [] })
-      onRefresh()
-    } catch (e: any) {
-      // Stage 11: the author canceled — the request is abandoned, nothing was saved or charged.
-      if (e?.name === 'AbortError') setIdeaCanceled(true)
-      else setError('Ошибка сети')
+      if (data?.jobId) { activeJobIdRef.current = data.jobId; startPolling(data.jobId) }
+    } catch {
+      setError('Ошибка сети')
     }
-    finally { setGenerating(false); ideaAbort.current = null }
+    finally { setStarting(false) }
   }
 
-  // Stage 11: stop waiting for the (free) idea generation and abandon the request.
-  const cancelIdea = async () => { ideaAbort.current?.abort() }
+  // Stage 67: stop the (free) synopsis job. The worker marks it "canceled" at its next check;
+  // polling then surfaces the canceled state. Nothing was saved or charged.
+  const cancelIdea = async () => {
+    const id = activeJobIdRef.current
+    if (!id) return
+    try { await fetch(`/api/ai/jobs/${id}/cancel`, { method: 'POST' }) } catch { /* polling will retry */ }
+  }
 
   /** Stage 46A: (re)write the short synopsis with the fast model. `comment` = the author's rework notes. */
   const generateShortSynopsis = async (comment?: string) => {
@@ -816,9 +858,16 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
           {hasResult ? 'Сгенерировать заново' : mode === 'auto' ? 'Придумать историю и составить синопсис' : mode === 'upload' ? 'Структурировать сюжет и составить синопсис' : 'Составить синопсис'}
         </button>}
         {generating && !chaining && (
-          <div className="mt-2 flex items-center justify-between gap-2" data-testid="idea-progress">
-            <p className="min-w-0 text-xs text-muted-foreground">Шаг 1 из 4 · обычно 30–60 секунд: составляю синопсис сезона...</p>
-            <CancelButton onCancel={cancelIdea} testId="idea-cancel" className="flex-shrink-0" />
+          <div className="mt-3 space-y-2" data-testid="idea-progress">
+            {synopsisJob ? (
+              <SmoothProgress job={synopsisJob} expectedTotalSec={SYNOPSIS_EXPECTED_SEC} />
+            ) : (
+              <p className="inline-flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin text-primary" /> Запускаю генерацию…</p>
+            )}
+            <div className="flex items-center justify-between gap-2">
+              <p className="min-w-0 text-xs text-muted-foreground">Шаг 1 из 4 · обычно 30–60 секунд: составляю синопсис сезона. Можно закрыть страницу — генерация продолжится в фоне, а прогресс восстановится при возврате.</p>
+              <CancelButton onCancel={cancelIdea} testId="idea-cancel" className="flex-shrink-0" />
+            </div>
           </div>
         )}
         {ideaCanceled && !generating && !chaining && (
