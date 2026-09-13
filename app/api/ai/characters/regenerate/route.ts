@@ -11,6 +11,8 @@ import { uploadRemoteToS3 } from "@/lib/s3-upload";
 
 import { characterImagePrompt, VISUAL_STYLE_ID } from "@/lib/visual-style";
 import { loadProjectImageProvider } from "@/lib/providers/project-provider";
+// Stage 75: user-uploaded photo references — transport only (fed as image_input, existing chained path).
+import { parseUserRefs, mergeImageInput } from "@/lib/character-user-refs";
 
 const SYSTEM = `You are a character designer. Given a character's current data and the project synopsis, regenerate a fresh take on their appearance and personality while keeping their name and role.
 
@@ -67,12 +69,15 @@ Generate a fresh, different take on this character's appearance and personality.
     const pid = existing.projectId;
 
     const imageProvider = await loadProjectImageProvider(projectId || existing.projectId); // Stage 73
+    const userRefs = parseUserRefs(existing.userRefs); // Stage 75
+    const userInput = mergeImageInput(userRefs, [], 10);
     const imgResults = await Promise.all(
       shots.map(async (shot) => {
-        const prompt = characterImagePrompt(data.appearance, shot, existing.name);
+        const prompt = characterImagePrompt(data.appearance, shot, existing.name, undefined, undefined, userInput.length > 0, "face");
         const replicateUrl = await generateImage({
           prompt,
           aspect_ratio: aspectRatios[shot],
+          ...(userInput.length ? { image_input: userInput } : {}),
         }, { characterId: existing.id, provider: imageProvider });
         const s3Key = `media/public/characters/${pid}/${existing.id}/${VISUAL_STYLE_ID}/${shot}_${Date.now()}.png`;
         const s3Url = await uploadRemoteToS3(replicateUrl, s3Key, "image/png");

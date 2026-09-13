@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react'
 import { useJobPolling, JobProgressBar } from './use-job-polling'
-import { Loader2, RefreshCw, Upload, Lock, Check, User, Wand2, ImageOff } from 'lucide-react'
+import { Loader2, RefreshCw, Lock, Check, User, Wand2, ImageOff } from 'lucide-react'
+import { CharacterUserRefs } from './character-user-refs'
 
 /** Renders the 3 character image slots with proper fallback */
 function CharacterImages({
@@ -212,6 +213,8 @@ export function CharactersStage({ project, onRefresh }: { project: any; onRefres
                   <p><span className="font-medium text-foreground">Personality:</span> {char?.personality ?? 'N/A'}</p>
                 </div>
                 <CharacterImages char={char} ImagePlaceholder={ImagePlaceholder} pending={generating} />
+                {/* Stage 75: user-uploaded photo references (shared component; replaces the old dead "Upload Photo" placeholder) */}
+                {char?.id && <CharacterUserRefs characterId={char.id} userRefs={(char as any).userRefs} disabled={isLocked || !!(char as any).refLocked} />}
                 {!isLocked && (
                   <div className="flex gap-2">
                     <button
@@ -221,10 +224,6 @@ export function CharactersStage({ project, onRefresh }: { project: any; onRefres
                     >
                       <RefreshCw className="h-3 w-3" /> Regenerate
                     </button>
-                    <label className="flex cursor-pointer items-center gap-1 rounded-lg bg-muted px-3 py-1.5 text-xs transition hover:bg-muted/80">
-                      <Upload className="h-3 w-3" /> Upload Photo
-                      <input type="file" accept="image/*" className="hidden" />
-                    </label>
                   </div>
                 )}
               </div>

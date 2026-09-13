@@ -254,3 +254,6 @@ END $$;
 -- Stage 73: per-project generation provider (reference images / scene videos): replicate | wavespeed | modelark
 ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "imageProvider" TEXT NOT NULL DEFAULT 'replicate';
 ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "videoProvider" TEXT NOT NULL DEFAULT 'wavespeed';
+
+-- Stage 75: user-uploaded photo references per character (JSON array of public S3 URLs, max 4).
+ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "userRefs" TEXT;

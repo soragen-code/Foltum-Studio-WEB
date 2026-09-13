@@ -13,6 +13,7 @@ import { CHARACTER_REFERENCE_COST } from '@/lib/power-tier'
 import { TIER_LABELS, groupByTier, tierOf, type Tier, type LocationCardData, LocationCard, AddLocationForm } from './cast-and-locations'
 import { locationExtraLabel } from '@/lib/visual-style'
 import { ProviderPicker } from './provider-picker'
+import { CharacterUserRefs } from './character-user-refs'
 
 interface RefCharacter extends CharacterCardData {
   imageFront?: string | null
@@ -21,6 +22,9 @@ interface RefCharacter extends CharacterCardData {
   imageExtra?: string | null
   /** Stage 46E: manual character prompt (null = auto). */
   promptOverride?: string | null
+  /** Stage 75: user-uploaded photo references (JSON array of URLs, max 4). */
+  userRefs?: string | null
+  refLocked?: boolean | null
 }
 
 const POLL_MS = 3000
@@ -471,6 +475,8 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                   extra={
                     <>
                       <ReferenceImages char={c} generating={!!gen} message={gen && gen !== 'local' ? gen.message : null} onRegen={(shot) => regenShot('character', c.id, shot)} shotBusy={(shot) => !!shotBusy[shotKey(c.id, shot)]} />
+                      {/* Stage 75: user-uploaded photo references (fed as image_input to every reference shot) */}
+                      <CharacterUserRefs characterId={c.id} userRefs={c.userRefs} disabled={!!c.refLocked} />
                       {/* Stage 46E: prompt view/edit + download all */}
                       <div className="mb-3 flex flex-wrap items-center gap-1.5">
                         <button type="button" onClick={() => setPromptFor({ kind: 'character', id: c.id, name: c.name })} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs" data-testid="character-prompt" title="Посмотреть, скопировать или изменить промпт персонажа">

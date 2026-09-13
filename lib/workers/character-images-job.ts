@@ -10,6 +10,8 @@ import { detectC2paFromUrl } from "@/lib/c2pa";
 import { checkFullBodyImage, fullBodyPasses, fullBodyScore, fullBodyCorrectionSuffix, evaluateProportions, type FullBodyCheck, type ProportionDefect } from "@/lib/full-body-check";
 import { REF_BATCH_CONCURRENCY, runWithConcurrency } from "@/lib/reference-counts";
 import { loadProjectImageProvider } from "@/lib/providers/project-provider";
+// Stage 75: user-uploaded photo references — transport only (prepended to image_input).
+import { parseUserRefs, mergeImageInput } from "@/lib/character-user-refs";
 
 // Stage 53: a character reference is a SINGLE photo — the full-body FRONT shot (imageFull). The front
 // portrait, the profile and the extra angles are no longer auto-generated; they are only produced when
@@ -100,6 +102,8 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
     const c2paChecks: C2paCheck[] = [];
     // Stage 46D: full-body frames kept despite failing the proportion guard (logged in the job result, no schema change).
     const proportionsWarnings: { characterId: string; name: string; defects: ProportionDefect[] }[] = [];
+    // Stage 75: which shots were generated with user-uploaded photo references (logged in the job result).
+    const userRefUse: { characterId: string; shot: string; userRefCount: number }[] = [];
 
     // Count the full-body photos that already exist (idempotent resume) toward "done".
     for (const c of characters) if ((c as any).imageFull) done += 1;
@@ -114,16 +118,21 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
     // Stage 21: `refFront` (when given) is passed as image_input so the shot locks onto the SAME
     // identity as the stored front portrait — profile/full must be the same person as the face shot.
     // Stage 46A: `ref` may be the FULL-BODY anchor (refKind "full") or a face close-up (legacy resume path).
+    // Stage 75: user-uploaded photos (Character.userRefs) go FIRST in image_input; when present the shot is
+    // treated as chained so the EXISTING identity-lock prompt path applies (no new prompt text).
     const genBaseShot = async (char: (typeof characters)[number], shot: BaseShot, ref: string | null, refKind: CharacterRefKind = "face") => {
       if (await canceled()) return;
-      const chained = !!ref;
+      const userRefs = parseUserRefs((char as any).userRefs);
+      const imageInput = mergeImageInput(userRefs, ref ? [ref] : [], 10);
+      const chained = imageInput.length > 0;
+      if (userRefs.length) userRefUse.push({ characterId: char.id, shot, userRefCount: userRefs.length });
       try {
         const basePrompt = characterShotPrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize, chained, refKind, char.promptOverride, char.age);
         // Stage 58: clamp the FINAL prompt (including any corrective retry suffix appended by the guard) so it
         // never exceeds the image provider's 4000-char hard limit (Seedream returns HTTP 422 otherwise, which
         // previously nulled the full-body photo). A prompt already within the limit is passed through unchanged.
         const gen = (prompt: string) => generateImage(
-          { prompt: clampPromptToLimit(prompt), aspect_ratio: ASPECT_RATIOS[shot], ...(chained ? { image_input: [ref!] } : {}) },
+          { prompt: clampPromptToLimit(prompt), aspect_ratio: ASPECT_RATIOS[shot], ...(chained ? { image_input: imageInput } : {}) },
           { jobId, characterId: char.id, imageModel, provider: imageProvider }
         );
         let replicateUrl: string;
@@ -168,7 +177,7 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
 
     await completeJob(
       jobId,
-      { total, failed, c2paOk: c2paMissing === 0, c2paMissing, c2paChecks, ...(proportionsWarnings.length ? { proportionsWarnings } : {}) },
+      { total, failed, c2paOk: c2paMissing === 0, c2paMissing, c2paChecks, ...(proportionsWarnings.length ? { proportionsWarnings } : {}), ...(userRefUse.length ? { userRefUse } : {}) },
       failed > 0 ? `Готово — не удалось ${failed} из ${total} фото` : "Все фото персонажей готовы"
     );
   } catch (err: any) {

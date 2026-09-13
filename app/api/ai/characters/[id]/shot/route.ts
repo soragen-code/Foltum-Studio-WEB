@@ -17,6 +17,8 @@ import { characterShotPrompt, characterExtraShotPrompt } from "@/lib/full-body-p
 import { parseImageArray } from "@/lib/reference-counts";
 import { CHARACTER_REFERENCE_COST } from "@/lib/power-tier";
 import { loadProjectImageProvider } from "@/lib/providers/project-provider";
+// Stage 75: user-uploaded photo references — transport only (prepended to image_input).
+import { parseUserRefs, mergeImageInput } from "@/lib/character-user-refs";
 
 /** Job type of a single-shot regeneration — distinct from "characters" so the full-set polling ignores it. */
 export const CHARACTER_SHOT_JOB_TYPE = "character_shot";
@@ -110,6 +112,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         const front = char.imageFront;
         const full = char.imageFull;
         const ctx = { jobId: job.id, characterId, imageModel, provider: await loadProjectImageProvider(char.projectId) }; // Stage 73
+        const userRefs = parseUserRefs(char.userRefs); // Stage 75: user photos go first in image_input
         let remote: string;
         let s3Key: string;
         if (shot === "extra") {
@@ -119,7 +122,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           if (!ref) throw new Error("No base photo to chain the extra angle on");
           const refKind: CharacterRefKind = ref === full && full ? "full" : "face";
           remote = await generateImage(
-            { prompt: characterExtraShotPrompt(appearance, char.name, index!, refKind, char.promptOverride), aspect_ratio: isFullShot ? "9:16" : "3:4", image_input: [ref] },
+            { prompt: characterExtraShotPrompt(appearance, char.name, index!, refKind, char.promptOverride), aspect_ratio: isFullShot ? "9:16" : "3:4", image_input: mergeImageInput(userRefs, [ref], 10) },
             ctx
           );
           s3Key = `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/extra-${Date.now()}-${index}.png`;
@@ -131,9 +134,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           if (shot === "front") { ref = full ?? null; refKind = "full"; }
           else if (shot === "profile") { ref = front ?? full ?? null; refKind = front ? "face" : "full"; }
           else if (shot === "full") { ref = front ?? null; refKind = "face"; }
-          const chained = !!ref;
+          // Stage 75: user photos first, then the generated anchor; any refs → the existing chained (identity-lock) path.
+          const imageInput = mergeImageInput(userRefs, ref ? [ref] : [], 10);
+          const chained = imageInput.length > 0;
           const basePrompt = characterShotPrompt(appearance, shot, char.name, char.tier, char.groupSize, chained, refKind, char.promptOverride);
-          const gen = (prompt: string) => generateImage({ prompt, aspect_ratio: ASPECT[shot], ...(chained ? { image_input: [ref!] } : {}) }, ctx);
+          const gen = (prompt: string) => generateImage({ prompt, aspect_ratio: ASPECT[shot], ...(chained ? { image_input: imageInput } : {}) }, ctx);
           if (shot === "full" && char.tier !== "CROWD") {
             // Framing + Stage 46D proportion guard (one vision call per attempt, bounded retries); the best
             // candidate is kept when all attempts fail and its remaining defects are logged.
