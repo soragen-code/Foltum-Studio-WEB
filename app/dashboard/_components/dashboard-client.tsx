@@ -12,6 +12,7 @@ interface Project {
   tier: string
   stage: string
   isTest?: boolean
+  coverUrl?: string | null // Stage 76: first episode's location image (first season) or null
   createdAt: string
   updatedAt: string
 }
@@ -85,7 +86,7 @@ export function DashboardClient() {
         {loading ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {[1, 2, 3].map((i: number) => (
-              <div key={i} className="h-48 animate-pulse rounded-xl bg-muted" />
+              <div key={i} className="h-72 animate-pulse rounded-xl bg-muted" />
             ))}
           </div>
         ) : (projects?.length ?? 0) === 0 ? (
@@ -124,6 +125,21 @@ export function DashboardClient() {
                     href={`/project/${project?.id}`}
                     className="group block p-5 pb-3"
                   >
+                    {/* Stage 76: 16:9 project cover — location image of the first episode, or a muted placeholder. */}
+                    <div className="mb-4 aspect-video w-full overflow-hidden rounded-lg bg-muted" data-testid="project-cover">
+                      {project?.coverUrl ? (
+                        <img
+                          src={project.coverUrl}
+                          alt={project?.name ?? 'Untitled'}
+                          loading="lazy"
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center" data-testid="project-cover-placeholder">
+                          <Film className="h-8 w-8 text-muted-foreground/40" />
+                        </div>
+                      )}
+                    </div>
                     <div className="mb-3 flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Film className="h-5 w-5 text-primary" />

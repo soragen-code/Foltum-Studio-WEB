@@ -851,7 +851,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
 
   return (
     <div className="min-h-screen bg-background">
-      <Header />
+      {/* Stage 76: project name in the sticky header (project comes from episode.season.project on the server). */}
+      <Header projectName={project?.name} projectId={project?.id} />
       <main className={`mx-auto max-w-[1200px] px-4 py-6 ${phase === 'script' ? 'pb-44' : ''}`} data-testid="episode-page">
         {/* Stage 14 (C): episode nav — right-aligned «Эпизоды» dropdown grid (10/row desktop), any order. */}
         <div className="flex flex-wrap items-center gap-4">

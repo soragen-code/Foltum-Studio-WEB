@@ -5,6 +5,7 @@ import { prisma } from '@/lib/db'
 import { parseBody, createProjectSchema } from '@/lib/validations'
 import { legacyTierToPower, powerToLegacyTier, DEFAULT_POWER_TIER } from '@/lib/power-tier'
 import { PLACEHOLDER_PROJECT_NAME } from '@/lib/project-name'
+import { pickProjectCover } from '@/lib/project-cover'
 
 export async function GET() {
   try {
@@ -15,10 +16,23 @@ export async function GET() {
     const user = await prisma.user.findUnique({ where: { email: session.user.email } })
     if (!user) return NextResponse.json({ projects: [] }, { status: 401 })
 
-    const projects = await prisma.project.findMany({
+    const rows = await prisma.project.findMany({
       where: { userId: user.id },
       orderBy: { updatedAt: 'desc' },
+      // Stage 76: minimal season/episode/location slice to compute the dashboard cover.
+      include: {
+        seasons: {
+          select: {
+            number: true,
+            createdAt: true,
+            episodes: { select: { number: true, location: { select: { imageUrl: true } } } },
+          },
+        },
+      },
     })
+    // Stage 76: `coverUrl` = first episode's location image (first season); nested seasons are stripped
+    // so the payload shape stays the same as before (plus one additive field).
+    const projects = rows.map(({ seasons, ...project }) => ({ ...project, coverUrl: pickProjectCover(seasons) }))
     return NextResponse.json({ projects })
   } catch (err: any) {
     console.error('Projects fetch error:', err)

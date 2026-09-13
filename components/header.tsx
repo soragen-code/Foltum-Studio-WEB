@@ -6,7 +6,9 @@ import { Coins, Film, LogOut, Plus, User, CreditCard } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 
-export function Header({ showNewProject = true }: { showNewProject?: boolean } = {}) {
+// Stage 76: optional project context — when `projectName` is set, the sticky header shows
+// "Foltum Studio / <project name>" (the name links back to the project's main page).
+export function Header({ showNewProject = true, projectName = null, projectId = null }: { showNewProject?: boolean; projectName?: string | null; projectId?: string | null } = {}) {
   const { data: session, status } = useSession()
   const [credits, setCredits] = useState(0)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -25,12 +27,27 @@ export function Header({ showNewProject = true }: { showNewProject?: boolean } =
   return (
     <header className="sticky top-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-[1200px] items-center justify-between px-4">
-        <Link href="/dashboard" className="flex items-center gap-2">
-          <Film className="h-6 w-6 text-primary" />
-          <span className="font-display text-lg font-bold tracking-tight">
-            <span className="text-primary">Foltum</span> Studio
-          </span>
-        </Link>
+        <div className="flex min-w-0 items-center gap-2">
+          <Link href="/dashboard" className="flex shrink-0 items-center gap-2">
+            <Film className="h-6 w-6 text-primary" />
+            <span className="font-display text-lg font-bold tracking-tight">
+              <span className="text-primary">Foltum</span> Studio
+            </span>
+          </Link>
+          {projectName && (
+            <>
+              <span className="shrink-0 text-muted-foreground/60" aria-hidden="true">/</span>
+              <Link
+                href={`/project/${projectId ?? ''}`}
+                title={projectName}
+                className="font-display truncate max-w-[40vw] text-base font-semibold tracking-tight text-foreground hover:text-primary sm:max-w-[420px]"
+                data-testid="header-project-name"
+              >
+                {projectName}
+              </Link>
+            </>
+          )}
+        </div>
 
         {session?.user ? (
           <div className="flex items-center gap-3">

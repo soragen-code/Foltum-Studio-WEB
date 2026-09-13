@@ -42,7 +42,8 @@ export function ProjectWizard({ project: initialProject }: { project: any }) {
 
   return (
     <div className="min-h-screen bg-background">
-      <Header />
+      {/* Stage 76: project name in the sticky header on every project screen. */}
+      <Header projectName={project?.name} projectId={project?.id} />
       <main className="mx-auto max-w-[1200px] px-4 py-6">
         <div className="mb-6">
           <h1 className="font-display text-2xl font-bold tracking-tight">
