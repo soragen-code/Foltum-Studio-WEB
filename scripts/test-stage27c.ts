@@ -75,7 +75,7 @@ const baseScene = {
   ok(built.model === "seedance" && built.modelSlug === "bytedance/seedance-2.5", "legacy provider seedance-2.0 is ignored → Seedance 2.5 slug (Stage 33)");
 }
 
-// ── 3. Stage 36/38: same-location adjacent styled last frame → reference mode, previous frame NEVER sent ──
+// ── 3. Stage 62: same-location adjacent styled last frame → reference mode, previous frame IS sent as continuity ──
 {
   const prevFrame = styledUrl("prev-lastframe");
   const built = buildScenePrompt({
@@ -87,10 +87,10 @@ const baseScene = {
   });
   ok(built.referenceKind === "character_references", "adjacent same-location styled frame resolves to character_references (no first-frame mode)");
   ok(!("image" in built), "no `image` (first-frame) field is returned");
-  ok(!built.referenceImages.includes(prevFrame), "Stage 38: the previous last frame is NOT among the reference images");
-  ok(!built.retryRefs.some(r => r.kind === "previous_frame"), "…no kind previous_frame");
-  ok(built.previousFrameSceneId === null, "previousFrameSceneId is null (never chained)");
-  ok(built.prompt.includes("[Image1]") && !built.prompt.includes("final frame of the previous scene"), "notes: portrait only, no previous-frame continuity note");
+  ok(built.referenceImages.includes(prevFrame), "Stage 62: the previous last frame IS among the reference images (continuation)");
+  ok(built.retryRefs.some(r => r.kind === "previous_frame"), "kind previous_frame present");
+  ok(built.previousFrameSceneId === "scene-2", "previousFrameSceneId is the previous scene id (continuation)");
+  ok(built.prompt.includes("[Image1]") && built.prompt.includes("LAST FRAME of the previous shot"), "notes: portrait + the previous-frame continuity note");
   ok(noUrl(built.prompt), "prompt text contains NO URL");
 }
 
@@ -170,7 +170,7 @@ const baseScene = {
     previous: { id: "scene-2", number: 2, locationDesc: "A sunlit apartment", lastFrameUrl: prevFrame },
     provider: "seedance",
   });
-  ok(chained.prompt === override && chained.referenceKind === "character_references" && !chained.referenceImages.includes(prevFrame) && chained.referenceImages.length > 0, "override keeps the reference set (previous frame never included) while replacing the text");
+  ok(chained.prompt === override && chained.referenceKind === "character_references" && chained.referenceImages.includes(prevFrame) && chained.referenceImages.length > 0, "override keeps the reference set (Stage 62: previous frame included) while replacing the text");
   ok(!chained.prompt.includes("[Image"), "override: images are sent but no [ImageN] notes are appended");
 
   // 8c. whitespace-only override is treated as no override (auto prompt is used).

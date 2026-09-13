@@ -39,8 +39,8 @@ const loc = { id: "loc", name: "Kitchen", imageUrl: styledUrl("k-wide"), imageRe
 
   const b = buildScenePrompt({ scene, characters: cast, location: loc, previous, provider: "seedance" });
   ok(b.openingState === scripted && b.prompt.startsWith(OPENING_STATE_PREFIX + scripted), "A: prompt opens with OPENING STATE from the scripted endState");
-  ok(b.referenceKind === "character_references" && b.previousFrameSceneId === null && !b.retryRefs.some(r => r.kind === "previous_frame"), "A: still no previous_frame reference (Stage 38 rule holds)");
-  ok(!b.referenceImages.includes(previous.lastFrameUrl), "A: last frame URL never sent as an image");
+  ok(b.referenceKind === "character_references" && b.previousFrameSceneId === "s2" && b.retryRefs.some(r => r.kind === "previous_frame"), "A: continuation scene sends the previous_frame reference (Stage 62)");
+  ok(b.referenceImages.includes(previous.lastFrameUrl), "A: last frame URL is sent as an image on a continuation seam");
   const b2 = buildScenePrompt({ scene, characters: cast, location: loc, previous: { ...previous, endStateActual: actual }, provider: "seedance" });
   ok(b2.openingState === actual && b2.prompt.includes(actual) && !b2.prompt.includes(scripted), "A: actual description replaces the scripted one in the prompt");
   const b3 = buildScenePrompt({ scene: { ...scene, continuesFrom: "location-change" }, characters: cast, location: loc, previous, provider: "seedance" });

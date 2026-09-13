@@ -1,6 +1,9 @@
 /**
  * Stage 36/37/38 tests — reference mode for every scene, manual prompt override normalization.
- * Stage 38: the previous scene's last frame is NEVER sent as a reference (skipPreviousFrame is obsolete).
+ * Stage 62 (Variant A): the Stage 38 "never send the previous frame" rule is relaxed for CONTINUATION
+ * scenes — when a previous scene exists AND the seam is not a sequence break, its LAST FRAME is added
+ * back as ONE continuity reference (after the characters, before the base location angles). It is still
+ * NEVER sent on a sequence break or in text-only mode, and the legacy skipPreviousFrame flag is a no-op.
  * Run: npx tsx scripts/test-stage36.ts
  *
  * Pure-logic only (NO Replicate / network / LLM / DB).
@@ -23,20 +26,21 @@ const loc = { id: "loc", name: "Kitchen", imageUrl: styledUrl("k-wide"), imageRe
 const cast = ["Yara", "Theo", "Ann", "Bob", "Cid"].map(n => ({ characterId: n.toLowerCase(), name: n, tier: "MAIN", imageFront: styledUrl(n.toLowerCase()) }));
 const crowd = { characterId: "crowd", name: "Guests", tier: "CROWD", imageFront: styledUrl("guests") };
 
-// ── A. chained scene: cast → all angles → crowd; NO previous frame (Stage 38) ─────────────────────
+// ── A. continuation scene (Stage 62): cast → previous frame → all angles → crowd ───────────────────
 {
   const b = buildScenePrompt({ scene, characters: [...cast, crowd], location: loc, previous, provider: "seedance" });
   ok(b.referenceKind === "character_references", "chained scene → character_references");
   ok(!("image" in b), "no first-frame `image`");
   const kinds = b.retryRefs.map(r => r.kind);
-  ok(JSON.stringify(kinds) === JSON.stringify(["character", "character", "character", "character", "character", "location", "location", "location", "crowd"]), "order: 5 portraits, 3 location angles, crowd — no previous frame");
+  ok(JSON.stringify(kinds) === JSON.stringify(["character", "character", "character", "character", "character", "previous_frame", "location", "location", "location", "crowd"]), "order: 5 portraits, previous frame, 3 location angles, crowd (Stage 62)");
   ok(b.referenceImages[0] === styledUrl("yara") && b.referenceImages[1] === styledUrl("theo"), "mentioned characters first (Yara, Theo)");
-  ok(b.referenceImages[5] === loc.imageUrl, "wide angle first among the location angles");
-  ok(!b.referenceImages.includes(previous.lastFrameUrl), "previous frame URL is never sent");
-  ok(b.previousFrameSceneId === null && (b.reference as any).previousFrameSceneId === null, "previousFrameSceneId is null in result and diagnostics");
-  ok(!(b.reference as any).kinds.includes("previous_frame") && (b.reference as any).mode === "character_references", "diagnostics: mode + kinds (no previous_frame)");
-  ok(!b.prompt.includes("final frame of the previous scene"), "no continuity note for a previous frame");
-  ok(b.prompt.includes(`[Image6] the location "Kitchen" — wide angle`), "each location angle carries its own note");
+  ok(b.referenceImages[5] === previous.lastFrameUrl, "previous frame sits right after the characters");
+  ok(b.referenceImages[6] === loc.imageUrl, "wide angle first among the location angles (after the previous frame)");
+  ok(b.referenceImages.includes(previous.lastFrameUrl), "continuation scene sends the previous frame URL");
+  ok(b.previousFrameSceneId === "s2" && (b.reference as any).previousFrameSceneId === "s2", "previousFrameSceneId is the previous scene id in result and diagnostics");
+  ok((b.reference as any).kinds.includes("previous_frame") && (b.reference as any).mode === "character_references", "diagnostics: mode + kinds (previous_frame present)");
+  ok(b.prompt.includes("LAST FRAME of the previous shot"), "continuity note for the previous frame is present");
+  ok(b.prompt.includes(`[Image7] the location "Kitchen" — wide angle`), "each location angle carries its own note (wide is Image7 after the previous frame)");
   ok(!/https?:\/\//.test(b.prompt), "no URL leaks into the prompt");
 }
 
@@ -57,7 +61,7 @@ const crowd = { characterId: "crowd", name: "Guests", tier: "CROWD", imageFront:
 // ── D. override: images still sent, no notes ─────────────────────────────────────────────────────
 {
   const b = buildScenePrompt({ scene: { ...scene, promptOverride: "MY PROMPT" }, characters: cast, location: loc, previous, provider: "seedance" });
-  ok(b.prompt === "MY PROMPT" && b.referenceImages.length === 8, "override: text replaced verbatim, 8 images still sent (5 portraits + 3 angles)");
+  ok(b.prompt === "MY PROMPT" && b.referenceImages.length === 9, "override: text replaced verbatim, 9 images still sent (5 portraits + previous frame + 3 angles)");
 }
 
 // ── E. cap: crowds trimmed first, then extra location angles; characters kept ─────────────────────
@@ -69,8 +73,11 @@ const crowd = { characterId: "crowd", name: "Guests", tier: "CROWD", imageFront:
   const kinds = b.retryRefs.map(r => r.kind);
   ok(b.referenceImages.length === 30, "trimmed to 30");
   ok(kinds.filter(k => k === "character").length === 27, "all characters kept");
-  ok(!kinds.includes("previous_frame"), "no previous frame even at the cap");
-  ok(kinds.filter(k => k === "location").length === 3 && b.referenceImages[27] === loc.imageUrl, "all 3 location angles fit (wide first)");
+  // Stage 62: 27 characters + previous frame + 3 base angles = 31 raw → the LAST base angle is the one
+  // dropped at the cap (crowds first, then the tail base angle), never the previous frame or a character.
+  ok(kinds.includes("previous_frame") && b.referenceImages[27] === previous.lastFrameUrl, "previous frame is kept at the cap, right after the characters");
+  ok(b.previousFrameSceneId === "s2", "previousFrameSceneId set because the previous frame survived the cap");
+  ok(kinds.filter(k => k === "location").length === 2 && b.referenceImages[28] === loc.imageUrl, "2 of the 3 location angles fit after the previous frame (wide first)");
   ok(kinds.filter(k => k === "crowd").length === 0, "crowds trimmed first");
 }
 
@@ -86,14 +93,14 @@ const crowd = { characterId: "crowd", name: "Guests", tier: "CROWD", imageFront:
   ok(normalizePromptOverride("[ACTION]: keep me\nbody") === "[ACTION]: keep me\nbody", "header at the very start: nothing dropped");
 }
 
-// ── G. Stage 38: the legacy skipPreviousFrame flag has no effect — same 8 references either way ──
+// ── G. the legacy skipPreviousFrame flag is a no-op — Stage 62 continuity is unaffected by it ──────
 {
   for (const flag of [true, false, undefined]) {
     const b = buildScenePrompt({ scene: { ...scene, skipPreviousFrame: flag }, characters: cast, location: loc, previous, provider: "seedance" });
     const kinds = b.retryRefs.map(r => r.kind);
-    ok(b.referenceKind === "character_references" && !kinds.includes("previous_frame") && b.referenceImages.length === 8, `skipPreviousFrame=${flag}: 5 portraits + 3 angles, no previous frame`);
-    ok(b.previousFrameSceneId === null && (b.reference as any).previousFrameSceneId === null && (b.reference as any).previousFrameSkipped === undefined, `skipPreviousFrame=${flag}: diagnostics have null previousFrameSceneId and no previousFrameSkipped marker`);
-    ok(!b.referenceImages.includes(previous.lastFrameUrl) && !b.prompt.includes("final frame of the previous scene"), `skipPreviousFrame=${flag}: no frame URL, no continuity note`);
+    ok(b.referenceKind === "character_references" && kinds.includes("previous_frame") && b.referenceImages.length === 9, `skipPreviousFrame=${flag}: 5 portraits + previous frame + 3 angles (flag is a no-op)`);
+    ok(b.previousFrameSceneId === "s2" && (b.reference as any).previousFrameSceneId === "s2" && (b.reference as any).previousFrameSkipped === undefined, `skipPreviousFrame=${flag}: diagnostics carry the previous scene id and no previousFrameSkipped marker`);
+    ok(b.referenceImages.includes(previous.lastFrameUrl) && b.prompt.includes("LAST FRAME of the previous shot"), `skipPreviousFrame=${flag}: previous frame URL sent, continuity note present`);
   }
 }
 

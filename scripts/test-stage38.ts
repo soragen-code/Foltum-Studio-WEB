@@ -26,15 +26,16 @@ const previous = { id: "s2", number: 2, locationDesc: "Kitchen", lastFrameUrl: s
 const loc = { id: "loc", name: "Kitchen", imageUrl: styledUrl("k-wide"), imageReverse: styledUrl("k-reverse"), imageDetail: styledUrl("k-detail") };
 const cast = ["Yara", "Theo"].map(n => ({ characterId: n.toLowerCase(), name: n, tier: "MAIN", imageFront: styledUrl(n.toLowerCase()) }));
 
-// ── a. chained scene with previous.lastFrameUrl → no previous_frame reference, no continuity note ──
+// ── a. continuation scene with previous.lastFrameUrl → previous_frame reference + continuity note (Stage 62) ──
 {
   const b = buildScenePrompt({ scene, characters: cast, location: loc, previous, provider: "seedance" });
   const kinds = b.retryRefs.map(r => r.kind);
-  ok(!kinds.includes("previous_frame"), "a: no previous_frame among the reference kinds");
-  ok(!b.referenceImages.includes(previous.lastFrameUrl), "a: previous scene's lastFrameUrl is not among the images");
-  ok(b.previousFrameSceneId === null && (b.reference as any).previousFrameSceneId === null, "a: previousFrameSceneId is null (result + diagnostics)");
-  ok(!/previous frame|final frame of the previous scene|previous scene/i.test(b.prompt), "a: prompt has no 'previous frame' note");
-  ok(JSON.stringify(kinds) === JSON.stringify(["character", "character", "location", "location", "location"]), "a: 2 portraits + 3 location angles only");
+  ok(kinds.includes("previous_frame"), "a: previous_frame is among the reference kinds (continuation scene)");
+  ok(b.referenceImages.includes(previous.lastFrameUrl), "a: previous scene's lastFrameUrl is among the images");
+  ok(b.previousFrameSceneId === "s2" && (b.reference as any).previousFrameSceneId === "s2", "a: previousFrameSceneId is the previous scene id (result + diagnostics)");
+  ok(/LAST FRAME of the previous shot/.test(b.prompt), "a: prompt carries the continuity note");
+  ok(!b.prompt.includes(previous.lastFrameUrl), "a: the real last-frame URL is NOT exposed in the prompt text");
+  ok(JSON.stringify(kinds) === JSON.stringify(["character", "character", "previous_frame", "location", "location", "location"]), "a: 2 portraits + previous frame + 3 location angles");
   ok(!("image" in b), "a: no first-frame `image` either");
 }
 
@@ -53,7 +54,7 @@ const cast = ["Yara", "Theo"].map(n => ({ characterId: n.toLowerCase(), name: n,
   ok(/NEVER anyone casting, shooting or striking at someone's BACK/.test(b.prompt), "b: no attacks at someone's back / empty air");
   ok(!/NO BLOOD/.test(b.prompt) && /blood, wounds/.test(b.prompt), "b: no-blood softening removed, impact consequences allowed");
   ok(/on camera: "Now\."/.test(b.prompt), "b: the spoken line is still rendered");
-  ok(b.referenceImages.length === 5, "b: references unchanged for action scenes (2 portraits + 3 angles)");
+  ok(b.referenceImages.length === 6, "b: references for action scenes (2 portraits + previous frame + 3 angles)");
 }
 
 // ── c. dialogue scene → PACE_DIRECTION + confrontation sentence ──────────────────────────────────

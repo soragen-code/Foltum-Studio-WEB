@@ -135,8 +135,10 @@ const mk = (n: number, opts: { continuesFrom?: (string | undefined)[]; startCame
   ok(b1.prompt.includes(SPEECH_BEFORE_CUT_LINE) && b2.prompt.includes(SPEECH_BEFORE_CUT_LINE) && /mid-word or mid-sentence/.test(SPEECH_BEFORE_CUT_LINE), "E: every scene carries the speech-before-cut line");
   const b3 = buildScenePrompt({ scene: { ...scene2, continuesFrom: "location-change" }, characters: cast, location: loc, previous, provider: "seedance" });
   ok(!b3.prompt.includes(NEW_CAMERA_ON_CUT_LINE), "E: location-change scene has no NEW CAMERA line");
-  // Stage 38 — the previous frame image is still never sent.
-  ok(!b2.referenceImages.includes(previous.lastFrameUrl), "E: previous scene's last frame is never sent as an image reference");
+  // Stage 62 (Variant A) — on a same-location continuation seam the previous scene's last frame IS sent
+  // as a continuity reference; on the location-change seam (b3) it is not.
+  ok(b2.referenceImages.includes(previous.lastFrameUrl), "E: previous scene's last frame is sent as a reference on the continuation seam (Stage 62)");
+  ok(!b3.referenceImages.includes(previous.lastFrameUrl), "E: previous scene's last frame is NOT sent on the location-change seam");
   // location refs include the extras + INSIDE note
   ok(extras.every((u) => b2.referenceImages.includes(u)) && b2.referenceImages.includes(loc.imageUrl), "E: extra location angles are sent as references alongside the base angles");
   ok(b2.prompt.includes(LOCATION_INSIDE_NOTE) && /INSIDE this space/.test(LOCATION_INSIDE_NOTE) && /never as figures placed in front of a picture of the place/.test(LOCATION_INSIDE_NOTE), "E: prompt carries the 'characters INSIDE this space' note");

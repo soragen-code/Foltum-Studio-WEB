@@ -38,8 +38,14 @@ import { matchPropsInText, type PropRegistryEntry } from "@/lib/prop-registry";
  * angles are NEVER sent to video: they stay on the character card for regen/download only. The rule
  * that PASSED moderation on 11-09 23:13 is still ONE photo per character (sending several at once —
  * face+profile+full+extras, added in 46B-1/46B-2 — is what triggered E005); Stage 53 only swaps WHICH
- * single photo that is. If the set exceeds the cap the trim order is: crowds → extra location angles;
- * the one-per-character refs and the base location angles are never dropped. See buildScenePrompt.
+ * single photo that is. Stage 62 (Variant A): the Stage 38 rule is relaxed for CONTINUATION scenes only —
+ * when a scene continues the SAME location/sequence (a previous scene exists AND !breaksSequence), the
+ * previous scene's LAST FRAME is added back as ONE continuity reference (with the lock-placement note) so
+ * the set dressing / object positions carry over instead of being re-invented on every clip; it is never
+ * added after a sequence break (location-change/new-sequence) nor in text-only mode. If the set exceeds
+ * the cap the trim order is: crowds → extra location angles → base location angles → last-frame; the
+ * one-per-character refs are never dropped, and the last-frame is prioritized above the base angles so it
+ * is never dropped before the characters or the base angles. See buildScenePrompt.
  */
 export const REFERENCE_IMAGE_CAP = 30;
 /** Stage 44 — how many extra location angles (Location.imageExtra) may join the three base angles as references. */
@@ -49,6 +55,14 @@ export const LOCATION_INSIDE_NOTE =
   "Camera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location references. Only the camera angle changes between shots. These frames are the SAME real place photographed from different positions — the characters are INSIDE this space: floor under their feet, walls/objects beside and behind them, real depth in front and behind; shoot them in wide/full shots within the environment, never as figures placed in front of a picture of the place. They interact with its objects and surfaces; the cuts show the same location from different angles with real depth (foreground, characters, background) — never a flat backdrop.";
 /** @deprecated alias kept for older imports — use REFERENCE_IMAGE_CAP. */
 export const MAX_REFERENCE_IMAGES = REFERENCE_IMAGE_CAP;
+/**
+ * Stage 62 (Variant A) — the continuity note attached to the previous scene's LAST FRAME when this
+ * scene CONTINUES the same location/sequence. It locks the object placement so the model keeps the
+ * exact set dressing instead of re-inventing where everything is on every clip (the drift the user
+ * reported). Only ever attached to the previous last-frame reference — never to characters/location.
+ */
+export const LAST_FRAME_CONTINUITY_NOTE =
+  "This frame is the LAST FRAME of the previous shot in the SAME location — this scene continues directly from it. Keep every object in the SAME position; do not move any furniture or props; do not add or remove any object that is not already in this frame; identical set dressing, lighting and colour palette. Only the camera angle and the ongoing action advance.";
 
 export interface ScenePromptScene {
   id: string;
@@ -266,7 +280,7 @@ export interface BuildScenePromptResult {
   retryRefs: SceneReference[];
   /** Reduced reference set kept for diagnostics: individual characters + the wide location angle. */
   fallbackRefs: SceneReference[];
-  /** Stage 38: always null — the previous scene's frame is never sent as a reference any more (kept for diagnostics shape). */
+  /** Stage 62: the previous scene's id when its LAST FRAME is sent as a continuity reference (same-location continuation); null otherwise. */
   previousFrameSceneId: string | null;
   /** true when the worker must generate a fresh Flux still (no chain, no references). */
   newSceneReference: boolean;
@@ -413,6 +427,22 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     ...(effectiveLocation ? locationExtras.map((url, i) => ({ url, angle: locationExtraLabel(i) })) : []),
   ].map(a => ({ url: a.url, kind: "location" as const, id: effectiveLocation!.id, note: `the location "${effectiveLocation!.name}" — ${a.angle} angle. Same place, same time of day, same light and palette in every shot. Keep the camera inside this location and match this lighting exactly.` }));
   const crowdRefs: Ref[] = crowds.map(c => ({ url: anchorUrl(c), kind: "crowd", id: c.characterId, note: `defines the look of the group "${c.name}" (extras): who they are and how they are dressed.` }));
+  // Stage 44 — the BASE photographed angles vs the extra angles are separated so the Stage 62 last-frame
+  // ref can be prioritized above the extras (and above crowds) but not above the base angles.
+  const baseLocationRefs = locationRefs.slice(0, locationAngles.length);
+  const extraLocationRefs = locationRefs.slice(locationAngles.length);
+  // Stage 62 (Variant A) — scene continuity: when this scene CONTINUES the same location/sequence
+  // (there IS a previous scene AND it is not a sequence break — i.e. not location-change/new-sequence),
+  // feed the previous scene's LAST FRAME as a reference with the lock-placement note so the set dressing
+  // and object positions carry over instead of being re-invented on every clip. Graceful: if the previous
+  // frame URL is missing (scene rendered out of order, or the previous clip has no last frame yet) nothing
+  // is added and the scene behaves exactly as before (continuity rests on the script text). Never added
+  // for a sequence break (a new arrangement starts) nor in text-only mode (no references are sent at all).
+  const continuesSameLocation = !!previous && !breaksSequence(scene.continuesFrom);
+  const previousLastFrameUrl = continuesSameLocation ? (previous!.lastFrameUrl ?? "").trim() : "";
+  const lastFrameRefs: Ref[] = previousLastFrameUrl
+    ? [{ url: previousLastFrameUrl, kind: "previous_frame", id: previous!.id, note: LAST_FRAME_CONTINUITY_NOTE }]
+    : [];
   // Reduced set (individual characters + the wide location angle) kept for diagnostics.
   const fallbackRefs: SceneReference[] = [...characterRefs, ...locationRefs.slice(0, 1)].slice(0, REFERENCE_IMAGE_CAP).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
 
@@ -495,7 +525,8 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   let newSceneReference = false;
   let referencePrompt: string | undefined;
   let newSceneReferenceNote: string | undefined;
-  const previousFrameSceneId: string | null = null;
+  // Stage 62: set to the previous scene's id when its last frame is sent as a continuity reference; else null.
+  let previousFrameSceneId: string | null = null;
 
   // Stage 36 — reference mode for EVERY scene. Ordered set (Stage 51 — reverted to the known-good
   // 46B-0 selection after 46B-1/46B-2/49/50 regressed Seedance moderation with E005):
@@ -531,14 +562,23 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     reference = { mode: "text_only", sceneId: scene.id };
     referenceKind = "text_only";
   } else if (characterRefs.length || locationRefs.length || crowdRefs.length) {
-    // Stage 51 (46B-0 known-good): the mandatory part is the one-per-character front refs — never
-    // trimmed. The remaining room is filled: location angles (wide first, then extras) → crowds.
-    const mandatory = characterRefs.length;
-    let room = Math.max(0, REFERENCE_IMAGE_CAP - mandatory);
-    const keptLocation = locationRefs.slice(0, room);
-    room -= keptLocation.length;
-    const keptCrowds = crowdRefs.slice(0, room);
-    const refs: Ref[] = [...characterRefs, ...keptLocation, ...keptCrowds].slice(0, REFERENCE_IMAGE_CAP);
+    // Stage 51 (46B-0 known-good) + Stage 62 continuity. Priority order, highest first — the trim
+    // (Seedance keeps the first REFERENCE_IMAGE_CAP=30; Kling keeps only the first
+    // KLING_MAX_REFERENCE_IMAGES=7, see capKlingReferences) drops from the TAIL, so the order IS the
+    // priority:
+    //   1. one-per-character front refs (never dropped);
+    //   2. the previous scene's LAST FRAME (Stage 62) — above the base location angles so it is never
+    //      dropped before the characters or the base angles;
+    //   3. the BASE location angles (wide first);
+    //   4. the EXTRA location angles;
+    //   5. crowds.
+    // So the trim drops crowds → extra angles → base angles → last-frame, never the characters. With no
+    // last-frame this collapses to the exact previous order (characters → base+extra location → crowds).
+    const ordered: Ref[] = [...characterRefs, ...lastFrameRefs, ...baseLocationRefs, ...extraLocationRefs, ...crowdRefs];
+    const refs: Ref[] = ordered.slice(0, REFERENCE_IMAGE_CAP);
+    const keptLocation = refs.filter(r => r.kind === "location");
+    const keptLastFrame = refs.some(r => r.kind === "previous_frame");
+    previousFrameSceneId = keptLastFrame ? previous!.id : null;
     referenceImages = refs.map(r => r.url);
     retryRefs = refs.map(r => ({ url: r.url, kind: r.kind, note: r.note }));
     reference = {
@@ -546,7 +586,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
       characterIds: refs.filter(r => r.kind === "character" || r.kind === "crowd").map(r => r.id),
       locationId: keptLocation.length ? effectiveLocation!.id : null,
       kinds: refs.map(r => r.kind),
-      previousFrameSceneId, // Stage 38: always null (kept for diagnostics-shape compatibility)
+      previousFrameSceneId, // Stage 62: the previous scene's id when its last frame is a continuity ref, else null
     };
     referenceKind = "character_references";
     // With a manual override the producer owns the full text — never append the reference notes
