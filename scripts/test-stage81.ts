@@ -70,7 +70,7 @@ const base = `[SHOT TYPE] medium shot.\n\nDialogue (EN): "Hello."`;
   const refs = [{ kind: "previous_frame" }, { kind: "character" }];
   const step1 = applyReframeDirective(applySeamDirectives(base, { hasOverride: false }), refs, { hasOverride: false });
   const full = applyNewShotCameraMove(step1, 4, { hasOverride: false, continuity: "last_frame" as Continuity });
-  ok(full.includes("RE-FRAME") && full.includes("NEW-SHOT CAMERA MOVE:"), "8: reframe + camera move both present");
+  ok(full.includes("CONTINUE FROM") && full.includes("NEW-SHOT CAMERA MOVE:"), "8: continue-from (reframe) + camera move both present");
   const again = applyNewShotCameraMove(
     applyReframeDirective(applySeamDirectives(full, { hasOverride: false }), refs, { hasOverride: false }),
     4, { hasOverride: false, continuity: "last_frame" as Continuity },

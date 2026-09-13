@@ -51,12 +51,19 @@ export function applySeamDirectives(prompt: string, opts: { hasOverride: boolean
 }
 
 /**
- * Part D — the new scene must not open on a copy of the previous scene's last frame ([ImageN]):
- * same instant, same people/props/light, only the camera has moved.
+ * Part D — the new scene CONTINUES the previous scene's last frame ([ImageN]) as its STARTING POINT
+ * only, never as a frozen composition to hold.
+ *
+ * Stage 82 rework: the previous wording ("the SAME instant — identical people at identical spots in
+ * the same phase of movement") froze the characters into the hand-off pose for the whole clip. Now
+ * [ImageN] is used purely as the ENTRY FRAME for continuity — same world, same people, same wardrobe,
+ * light and time of day — after which the characters move and act freely per this scene, and the
+ * camera (at its new angle) does NOT reposition anyone to keep them in frame: people stay where the
+ * story puts them and may pass out of shot. Continuity = same world + continuing action, not a held pose.
  */
 export function reframePreviousFrameLine(imageIndex: number): string {
   const tag = `[Image${imageIndex}]`;
-  return `RE-FRAME ${tag}: frame 1 of this shot is NOT a copy of ${tag} and that exact composition never appears in this clip. It is the SAME instant — identical people at identical spots in the same phase of movement, identical wardrobe, props, set dressing, light and time of day; nothing and nobody new is added, nothing removed. Only the camera differs: it has moved to a clearly different angle (about 30–60° around the subjects) with a different shot scale and height, and the shot keeps living and moving from that new angle.`;
+  return `CONTINUE FROM ${tag}: use ${tag} only as the STARTING frame of this shot — the world carries straight on from it (the same characters with the same faces, wardrobe, hair and build; the same location, props, set dressing, light and time of day; nothing and nobody new is added, nothing removed). It is NOT a still to hold and that exact composition is not frozen: from the first frame the characters keep moving and acting for THIS scene, free to walk, turn, shift and leave the frame. The camera opens from a clearly different angle (about 30–60° around the subjects) with a different shot scale and height, and it is NOT re-blocked to keep everyone in view — people stay wherever the action puts them and may pass out of shot; the shot keeps living and moving from that new angle.`;
 }
 
 /** Alias kept for the spec's naming (RE_FRAME_PREVIOUS_FRAME_LINE). */
@@ -113,7 +120,8 @@ export function newShotCameraMoveLine(sceneNumber: number): string {
     `NEW-SHOT CAMERA MOVE: this shot has its OWN camera work — ${cameraMoveForScene(sceneNumber)} — ` +
     `that is ALREADY IN MOTION on the very first frame and continues throughout the clip. ` +
     `The camera does NOT hold, copy or settle back into the static, locked-off framing of the previous shot's final frame; ` +
-    `it establishes this scene's own angle and momentum from frame 1 and keeps moving — the shot never freezes on a still composition at the start.`
+    `it establishes this scene's own angle and momentum from frame 1 and keeps moving — the shot never freezes on a still composition at the start. ` +
+    `The blocking is NOT adjusted to the camera: characters are never nudged, re-centred or pulled back into frame to fit the new angle — they stay where the action puts them and may sit at the edge of frame or pass out of shot entirely while the camera looks elsewhere.`
   );
 }
 
@@ -132,6 +140,33 @@ export function applyNewShotCameraMove(
   const line = newShotCameraMoveLine(sceneNumber);
   if (prompt.includes(line)) return prompt;
   return `${prompt.trimEnd()}\n${line}`;
+}
+
+/* ------------------------------------------------------------------------------------------ */
+/*  Stage 82 — CONTINUOUS ACTION (persistent world, one unbroken event)                         */
+/*                                                                                             */
+/*  Requirement 3: the WHOLE episode should read as a single, continuous piece of action — the  */
+/*  same world, the same characters, the same light and the same event carrying on in time —    */
+/*  while the camera simply cuts to different vantage points inside it. Continuity lives at the  */
+/*  level of the world and the action, NOT at the level of a fixed frame composition or pose.   */
+/* ------------------------------------------------------------------------------------------ */
+
+export const CONTINUOUS_ACTION_LINE =
+  "CONTINUOUS ACTION: this shot is one more vantage point on a single, unbroken event that runs across the whole episode — the same world, the same characters (same faces, wardrobe, hair, build), the same location, light and time of day, the same action simply carrying on in real time from the previous shot. The cut is only the camera jumping to another angle or spot inside that ongoing moment; time never resets, nobody is re-posed to match a frame, and the life on screen (movement, gestures, speech, ambient sound) continues without a break.";
+
+/**
+ * Append the CONTINUOUS ACTION directive for a CONTINUING scene (continuity "last_frame" / "text_only").
+ * Scene 1 / parallel ("none") starts a fresh vantage with no prior shot to carry on from, so it is left
+ * untouched. A manual override is returned unchanged. Idempotent.
+ */
+export function applyContinuousAction(
+  prompt: string,
+  opts: { hasOverride: boolean; continuity: Continuity }
+): string {
+  if (opts.hasOverride) return prompt;
+  if (opts.continuity === "none") return prompt;
+  if (prompt.includes(CONTINUOUS_ACTION_LINE)) return prompt;
+  return `${prompt.trimEnd()}\n${CONTINUOUS_ACTION_LINE}`;
 }
 
 /* ------------------------------------------------------------------------------------------ */

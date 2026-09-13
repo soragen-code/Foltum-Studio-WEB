@@ -24,7 +24,7 @@ import { nextChainScene, chainStopMessage, CHAIN_INSUFFICIENT_CREDITS } from "@/
 import { resolvePowerTier, SCENE_RESOLUTION } from "@/lib/power-tier";
 import { sceneProgressStage, SCENE_STAGE_PROGRESS, SCENE_STAGE_MESSAGE } from "@/lib/scene-progress";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
-import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, resolveContinuity, TEXT_ONLY_CONTINUITY_MESSAGE, type Continuity } from "@/lib/prompt-seam";
+import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, resolveContinuity, TEXT_ONLY_CONTINUITY_MESSAGE, type Continuity } from "@/lib/prompt-seam";
 
 export interface VideoJobParams {
   jobId: string;
@@ -259,6 +259,9 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     // Same transforms as the GET prompt preview; a manual override is untouched.
     prompt = applyReframeDirective(applySeamDirectives(prompt, { hasOverride: built.hasOverride }), built.retryRefs, { hasOverride: built.hasOverride });
     prompt = applyNewShotCameraMove(prompt, scene.number, { hasOverride: built.hasOverride, continuity });
+    // Stage 82: the whole episode is one continuous event — a continuing scene carries the previous
+    // shot's world/action on in real time (persistent world, not a frozen composition).
+    prompt = applyContinuousAction(prompt, { hasOverride: built.hasOverride, continuity });
     console.log("[video-job] continuity", JSON.stringify({ sceneId, sceneNumber: scene.number, continuity, previousFrameSceneId: built.previousFrameSceneId ?? null }));
     const basePrompt = built.basePrompt;
     const fallbackRefs = built.fallbackRefs;
