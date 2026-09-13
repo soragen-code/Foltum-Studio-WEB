@@ -13,6 +13,7 @@ import { StickyReviseBar } from '../../_components/sticky-revise-bar'
 import { JobProgressBar, SmoothProgress, useJobPolling, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
 import { RewritePlaceholder } from '../../_components/rewrite-placeholder'
 import { isEpisodeRevisePending } from '@/lib/episode-revise-state'
+import { SCENE_RESET_CONFIRM_MESSAGE, needsSceneResetConfirm } from '@/lib/scene-reset-confirm'
 import { rewriteViewState } from '@/lib/rewrite-view-state'
 import { CancelButton } from '../../_components/cancel-button'
 import { desiredTotalFrames, locationDetailLevel, locationDetailLabel, episodeLocations } from '@/lib/location-scale'
@@ -81,6 +82,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [reviseText, setReviseText] = useState('')
   const [revising, setRevising] = useState(false)
   const [reviseNotice, setReviseNotice] = useState<string | null>(null)
+  // Stage 83 — the episode-wide rewrite RESETS all scenes; ask before that destructive step when
+  // scenes already exist (per-scene «Изменить»/«Перегенерировать» stay instant, not gated here).
+  const [resetAsk, setResetAsk] = useState(false)
   // Stage 77 — the episode rewrite is a background season_script job; poll it and swap the old
   // script for a placeholder until the job is terminal (see RewritePlaceholder).
   const revisePoll = useJobPolling({
@@ -641,6 +645,17 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       setReviseText(''); await reloadEpisode(); setRevising(false)
     } catch (e: any) { setError(e?.message ?? 'Ошибка'); setRevising(false) }
   }
+
+  // Stage 83 — entry point for the sticky «Переписать» bar. Rewriting the episode plot/synopsis/
+  // script re-plans and RESETS every scene (and any generated clips). If scenes already exist, ask
+  // first; on confirm we run with force=true so the reset (incl. clips) goes through in one step.
+  // No scenes yet → nothing to lose → run immediately, exactly like before.
+  const askReviseEpisode = () => {
+    if (!reviseText.trim() || revising) return
+    if (needsSceneResetConfirm(scenes.length)) { setResetAsk(true); return }
+    void reviseEpisode()
+  }
+  const confirmReviseReset = () => { setResetAsk(false); void reviseEpisode(true) }
 
   // Stage 77 — resume the rewrite placeholder after a page reload: the latest season job from
   // GET /api/ai/season carries `resultData.revise.episodeIds`; if it is active and names THIS
@@ -1395,18 +1410,30 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         )}
       </main>
 
+      {/* Stage 83: confirm the destructive scene reset before an episode-wide rewrite (only when scenes exist). */}
+      {phase === 'script' && resetAsk && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" data-testid="scene-reset-confirm" role="dialog" aria-modal="true">
+          <div className="w-full max-w-md rounded-xl border border-border bg-background p-5 shadow-lg">
+            <p className="text-sm leading-relaxed">{SCENE_RESET_CONFIRM_MESSAGE}</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => setResetAsk(false)} className="rounded-lg border border-border px-4 py-2 text-sm" data-testid="scene-reset-cancel">Отмена</button>
+              <button onClick={confirmReviseReset} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" data-testid="scene-reset-yes">Да</button>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Stage 14 (D3): episode-level revise-by-prompt as a sticky bottom bar (whole episode or a named scene) */}
       {phase === 'script' && (
         <StickyReviseBar
           value={reviseText}
           onChange={setReviseText}
-          onSubmit={() => reviseEpisode()}
+          onSubmit={askReviseEpisode}
           busy={revising}
           testId="episode-revise"
           label="Изменить сценарий эпизода по промпту (весь эпизод или конкретную сцену)"
           placeholder="Например: убрать сцену на кухне, усилить конфликт в сцене 3…"
           submitLabel="Переписать"
-          hint="Правки применяются ко всему сценарию. Можно указать сцену по номеру. Ctrl/⌘+Enter — отправить."
+          hint="Правки применяются ко всему сценарию и пересобирают сцены заново (текущие сцены и их промпты сбрасываются). Можно указать сцену по номеру. Ctrl/⌘+Enter — отправить."
         />
       )}
 
