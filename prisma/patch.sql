@@ -239,3 +239,13 @@ ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "storyboardUrl" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "storyboardApproved" BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "storyboardPrompt" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "storyboardJobId" TEXT;
+
+
+-- Stage 72: storyboard mode removed from the app (single scene mode). Columns are kept for safety
+-- (never dropped); every episode is normalized back to 'text' so nothing depends on the old mode.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'Episode' AND column_name = 'sceneMode') THEN
+    UPDATE "Episode" SET "sceneMode" = 'text' WHERE "sceneMode" IS DISTINCT FROM 'text';
+  END IF;
+END $$;

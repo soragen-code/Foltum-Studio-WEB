@@ -56,13 +56,14 @@ export const LOCATION_INSIDE_NOTE =
 /** @deprecated alias kept for older imports — use REFERENCE_IMAGE_CAP. */
 export const MAX_REFERENCE_IMAGES = REFERENCE_IMAGE_CAP;
 /**
- * Stage 62 (Variant A) — the continuity note attached to the previous scene's LAST FRAME when this
- * scene CONTINUES the same location/sequence. It locks the object placement so the model keeps the
- * exact set dressing instead of re-inventing where everything is on every clip (the drift the user
- * reported). Only ever attached to the previous last-frame reference — never to characters/location.
+ * Stage 62 (Variant A) / Stage 72 — the continuity note attached to the previous scene's LAST FRAME
+ * when this scene CONTINUES the same location/sequence in CHAIN mode. It freezes the world of the
+ * previous shot's final instant (people, placement, wardrobe, props, light) while demanding a NEW
+ * camera on that instant. Only ever attached to the previous last-frame reference — never to
+ * characters/location.
  */
 export const LAST_FRAME_CONTINUITY_NOTE =
-  "This frame is the LAST FRAME of the previous shot in the SAME location — this scene continues directly from it. Keep every object in the SAME position; do not move any furniture or props; do not add or remove any object that is not already in this frame; identical set dressing, lighting and colour palette. Only the camera angle and the ongoing action advance.";
+  "This frame is the EXACT FINAL INSTANT of the previous shot — this shot starts on that same instant. Keep the same people at the same spots in the same phase of movement, with the same wardrobe, props, set dressing, light and time of day; do not add, remove or move anything. BUT this shot is a NEW CAMERA on that instant: change at least two of shot scale / camera height / angle — never reproduce the previous framing.";
 
 export interface ScenePromptScene {
   id: string;
@@ -238,30 +239,12 @@ export interface BuildScenePromptInput {
    */
   props?: PropRegistryEntry[];
   /**
-   * Stage 64 — the episode's scene-generation mode. In "storyboard" mode the scene's APPROVED
-   * storyboard frame (`storyboardUrl`) is sent as the FIRST reference (Image1) and the previous
-   * scene's last frame is not sent at all. Omitted / "text" / no storyboardUrl → the Stage 62
-   * text-mode path, byte for byte.
+   * Stage 72 — the episode's scene-generation order. The previous scene's LAST FRAME is sent as a
+   * continuity reference ONLY in "chain" mode (scenes render one after another, so the frame exists).
+   * Omitted / "parallel" → no previous_frame reference (all scenes render simultaneously).
    */
-  sceneMode?: "text" | "storyboard" | null;
-  /** Stage 64 — the scene's storyboard frame URL (used only when sceneMode === "storyboard"). */
-  storyboardUrl?: string | null;
+  chainMode?: "parallel" | "chain" | null;
 }
-
-/** Stage 64 — note attached to the storyboard frame (Image1) in storyboard mode. */
-export const STORYBOARD_FIRST_FRAME_NOTE =
-  "This is the FIRST FRAME of this scene — open on exactly this composition, placement of every person and object, set dressing, light and palette; from here the described action and camera cuts proceed.";
-/** Stage 64 — the REFERENCE MAP entry for the storyboard frame (always Image1 in storyboard mode). */
-export const STORYBOARD_REFERENCE_MAP_ENTRY = "Image1 = first frame of this scene (storyboard)";
-/**
- * Stage 65 — the short image-to-video lead used INSTEAD of the full visual body when the scene is in
- * storyboard mode (no manual override). The attached first frame [Image1] already carries the whole
- * composition, so the text neither re-describes nor re-stages it — it only tells the model to animate
- * naturally from that frame. This removes the "charged image + violent staging text" combination that
- * tripped provider moderation (E005) in storyboard mode.
- */
-export const STORYBOARD_VIDEO_LEAD =
-  "This clip is animated from the attached first frame [Image1], which is the exact opening composition of the scene: the same people, faces, clothing, props, set dressing and camera framing are already established there. Do not restage, re-describe or re-explain the setting — simply continue naturally from that frame, letting the people move and speak as written below over the next few seconds.";
 
 /**
  * Stage 36 removed the first-frame (`image`) path; Stage 38 removed the "previous_frame" reference
@@ -367,7 +350,7 @@ export function buildPeopleCounter(individuals: { name: string }[], hasCrowd: bo
  * about the location — its full description stays on the reference photo and is NEVER re-typed here.
  */
 export function buildReferenceMap(individuals: { name: string }[], locationName: string | null, crowds: { name: string }[], leading?: string): string {
-  // Stage 64: `leading` is the storyboard frame entry ("Image1 = first frame …") — every character index shifts by one.
+  // `leading` (optional) is a fixed first entry — every character index shifts by one.
   const offset = leading ? 1 : 0;
   const parts = individuals
     .map((c, i) => ({ nm: (c.name ?? "").trim(), i }))
@@ -408,15 +391,15 @@ export function buildNegatives(isNarration: boolean): string {
   return `${SCENE_SECTION.negatives}: ${base}${extra}.`;
 }
 
-/** The single video/storyboard anchor photo of a character: the styled full-body frame, else the legacy front portrait (Stage 53). */
+/** The single video anchor photo of a character: the styled full-body frame, else the legacy front portrait (Stage 53). */
 export function characterAnchorUrl(c: ScenePromptCharacterLink): string {
   return isStyledAsset(c.imageFull) ? c.imageFull! : c.imageFront!;
 }
-/** Stage 64 — identity note attached to every character reference (shared by the video and storyboard prompts). */
+/** Identity note attached to every character reference. */
 export function characterReferenceNote(name: string): string {
   return `defines ${name}'s photorealistic appearance and identity; use the scene's staging and camera.`;
 }
-/** Stage 64 — note attached to every location angle reference (shared by the video and storyboard prompts). */
+/** Note attached to every location angle reference. */
 export function locationReferenceNote(locationName: string, angle: string): string {
   return `the location "${locationName}" — ${angle} angle. Same place, same time of day, same light and palette in every shot. Keep the camera inside this location and match this lighting exactly.`;
 }
@@ -478,19 +461,14 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // frame URL is missing (scene rendered out of order, or the previous clip has no last frame yet) nothing
   // is added and the scene behaves exactly as before (continuity rests on the script text). Never added
   // for a sequence break (a new arrangement starts) nor in text-only mode (no references are sent at all).
-  const continuesSameLocation = !!previous && !breaksSequence(scene.continuesFrom);
+  // Stage 72 — ONLY in chain mode (scenes render one after another, so the previous frame exists); in
+  // parallel mode all scenes render simultaneously and no last frame is ever sent.
+  const chainMode = input.chainMode === "chain";
+  const continuesSameLocation = chainMode && !!previous && !breaksSequence(scene.continuesFrom);
   const previousLastFrameUrl = continuesSameLocation ? (previous!.lastFrameUrl ?? "").trim() : "";
-  const lastFrameRefsAll: Ref[] = previousLastFrameUrl
+  const lastFrameRefs: Ref[] = previousLastFrameUrl
     ? [{ url: previousLastFrameUrl, kind: "previous_frame", id: previous!.id, note: LAST_FRAME_CONTINUITY_NOTE }]
     : [];
-  // Stage 64 — storyboard mode: the scene's approved storyboard still is the FIRST reference (the first
-  // frame of the clip) and REPLACES the previous scene's last frame (continuity is carried by the
-  // storyboard itself, which was generated from that frame). Only when the episode is in storyboard
-  // mode AND the scene has a storyboard URL; otherwise this is a no-op and the Stage 62 path is intact.
-  const storyboardUrl = (input.storyboardUrl ?? "").trim();
-  const storyboardMode = input.sceneMode === "storyboard" && storyboardUrl.length > 0;
-  const storyboardRefs: Ref[] = storyboardMode ? [{ url: storyboardUrl, kind: "storyboard", id: scene.id, note: STORYBOARD_FIRST_FRAME_NOTE }] : [];
-  const lastFrameRefs: Ref[] = storyboardMode ? [] : lastFrameRefsAll;
   // Reduced set (individual characters + the wide location angle) kept for diagnostics.
   const fallbackRefs: SceneReference[] = [...characterRefs, ...locationRefs.slice(0, 1)].slice(0, REFERENCE_IMAGE_CAP).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
 
@@ -500,9 +478,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   //  • CLOTHING & PROPS — the episode registry props shown in THIS scene, substituted VERBATIM;
   //  • NEGATIVES — the fixed do-not block (appended after the body).
   const matchedProps = matchPropsInText(input.props ?? [], mentionText);
-  const referenceMap = storyboardMode
-    ? buildReferenceMap(individuals, effectiveLocation ? effectiveLocation.name : null, crowds, STORYBOARD_REFERENCE_MAP_ENTRY)
-    : buildReferenceMap(individuals, effectiveLocation ? effectiveLocation.name : null, crowds);
+  const referenceMap = buildReferenceMap(individuals, effectiveLocation ? effectiveLocation.name : null, crowds);
   const peopleCounter = buildPeopleCounter(characters.filter(c => c.tier !== "CROWD"), characters.some(c => c.tier === "CROWD"));
   const propsSection = buildPropsSection(matchedProps);
   const structureBlock = [referenceMap, peopleCounter, propsSection].filter(Boolean).join("\n");
@@ -512,16 +488,11 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // staging block INSTEAD of the talking-scene PACE_DIRECTION; a dialogue scene gets PACE_DIRECTION
   // plus the universal "confrontation is staged face to face" sentence. Narration is unchanged.
   const isAction = !isNarration && scene.sceneKind === "action";
-  // Stage 65 — storyboard mode: the staging lives in the attached frame, so the pace stays neutral
-  // (PACE_DIRECTION only) — never the combat-pace nor the confrontation staging sentence, whose
-  // violence lexicon combined with the charged frame tripped provider moderation (E005).
-  const direction = storyboardMode
+  const direction = isNarration
     ? PACE_DIRECTION
-    : isNarration
-      ? PACE_DIRECTION
-      : isAction
-        ? ACTION_PACE_DIRECTION
-        : `${PACE_DIRECTION} ${CONFRONTATION_STAGING_SENTENCE}`;
+    : isAction
+      ? ACTION_PACE_DIRECTION
+      : `${PACE_DIRECTION} ${CONFRONTATION_STAGING_SENTENCE}`;
   // Stage 40 — scripted / actual end-state hand-off: when this scene continues the previous one
   // (not a location-change / new-sequence), the previous scene's end state opens the prompt so the
   // model starts frame 1 exactly where the last clip ended. The previous frame IMAGE is still never sent.
@@ -543,15 +514,9 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // OPENING/END STATE prefixes (Stage 40/41) and the body still begins with "\n\n[SHOT TYPE]".
   const statesJoined = stateBlocks.length ? stateBlocks.join("\n") : "";
   const preBody = [statesJoined, structureBlock].filter(Boolean).join("\n\n");
-  // Stage 65 — storyboard mode: the attached first frame [Image1] already establishes the composition,
-  // so the visual text collapses to the short image-to-video lead — the OPENING/END STATE blocks, the
-  // structure block (REFERENCE MAP / PEOPLE / PROPS) and the reused 9-tag body are all dropped (the
-  // frame carries them). Only the AUDIO TRACK (dialogue / narration) and the pace direction follow.
-  const visualWithOpening = storyboardMode
-    ? STORYBOARD_VIDEO_LEAD
-    : preBody
-      ? `${preBody}\n\n${stripSlowDirections(visualPrompt)}`
-      : stripSlowDirections(visualPrompt);
+  const visualWithOpening = preBody
+    ? `${preBody}\n\n${stripSlowDirections(visualPrompt)}`
+    : stripSlowDirections(visualPrompt);
   // Sanitize visual descriptions BEFORE adding speech: never rewrite scripted dialogue / narration.
   let prompt = isNarration
     ? `${buildNarrationAudioPrompt(visualWithOpening, scene.voiceover)}\n\n${direction}`
@@ -622,7 +587,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     // after a provider block that the text alone cannot explain.
     reference = { mode: "text_only", sceneId: scene.id };
     referenceKind = "text_only";
-  } else if (characterRefs.length || locationRefs.length || crowdRefs.length || storyboardRefs.length) {
+  } else if (characterRefs.length || locationRefs.length || crowdRefs.length) {
     // Stage 51 (46B-0 known-good) + Stage 62 continuity. Priority order, highest first — the trim
     // (Seedance keeps the first REFERENCE_IMAGE_CAP=30) drops from the TAIL, so the order IS the
     // priority:
@@ -634,9 +599,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     //   5. crowds.
     // So the trim drops crowds → extra angles → base angles → last-frame, never the characters. With no
     // last-frame this collapses to the exact previous order (characters → base+extra location → crowds).
-    // Stage 64 — storyboard mode: the storyboard frame goes FIRST (never dropped by the trim, since the
-    // characters alone never reach the cap); lastFrameRefs is empty in that mode.
-    const ordered: Ref[] = [...storyboardRefs, ...characterRefs, ...lastFrameRefs, ...baseLocationRefs, ...extraLocationRefs, ...crowdRefs];
+    const ordered: Ref[] = [...characterRefs, ...lastFrameRefs, ...baseLocationRefs, ...extraLocationRefs, ...crowdRefs];
     const refs: Ref[] = ordered.slice(0, REFERENCE_IMAGE_CAP);
     const keptLocation = refs.filter(r => r.kind === "location");
     const keptLastFrame = refs.some(r => r.kind === "previous_frame");
@@ -649,7 +612,6 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
       locationId: keptLocation.length ? effectiveLocation!.id : null,
       kinds: refs.map(r => r.kind),
       previousFrameSceneId, // Stage 62: the previous scene's id when its last frame is a continuity ref, else null
-      ...(storyboardMode ? { storyboardUrl } : {}), // Stage 64: the storyboard frame sent as Image1
     };
     referenceKind = "character_references";
     // With a manual override the producer owns the full text — never append the reference notes

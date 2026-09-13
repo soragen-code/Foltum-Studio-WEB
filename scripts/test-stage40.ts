@@ -37,15 +37,15 @@ const loc = { id: "loc", name: "Kitchen", imageUrl: styledUrl("k-wide"), imageRe
   ok(resolveOpeningState(scene, { ...previous, endState: "   ", endStateActual: null }) === null, "A: blank endState → null");
   ok(breaksSequence("location-change") && breaksSequence("new-sequence") && !breaksSequence("character-moves") && !breaksSequence(null), "A: breaksSequence table");
 
-  const b = buildScenePrompt({ scene, characters: cast, location: loc, previous, provider: "seedance" });
+  const b = buildScenePrompt({ scene, characters: cast, location: loc, previous, provider: "seedance", chainMode: "chain" });
   ok(b.openingState === scripted && b.prompt.startsWith(OPENING_STATE_PREFIX + scripted), "A: prompt opens with OPENING STATE from the scripted endState");
-  ok(b.referenceKind === "character_references" && b.previousFrameSceneId === "s2" && b.retryRefs.some(r => r.kind === "previous_frame"), "A: continuation scene sends the previous_frame reference (Stage 62)");
+  ok(b.referenceKind === "character_references" && b.previousFrameSceneId === "s2" && b.retryRefs.some(r => r.kind === "previous_frame"), "A: continuation scene sends the previous_frame reference (Stage 62; Stage 72: chain order)");
   ok(b.referenceImages.includes(previous.lastFrameUrl), "A: last frame URL is sent as an image on a continuation seam");
-  const b2 = buildScenePrompt({ scene, characters: cast, location: loc, previous: { ...previous, endStateActual: actual }, provider: "seedance" });
+  const b2 = buildScenePrompt({ scene, characters: cast, location: loc, previous: { ...previous, endStateActual: actual }, provider: "seedance", chainMode: "chain" });
   ok(b2.openingState === actual && b2.prompt.includes(actual) && !b2.prompt.includes(scripted), "A: actual description replaces the scripted one in the prompt");
-  const b3 = buildScenePrompt({ scene: { ...scene, continuesFrom: "location-change" }, characters: cast, location: loc, previous, provider: "seedance" });
+  const b3 = buildScenePrompt({ scene: { ...scene, continuesFrom: "location-change" }, characters: cast, location: loc, previous, provider: "seedance", chainMode: "chain" });
   ok(b3.openingState === null && !b3.prompt.includes(OPENING_STATE_PREFIX), "A: location-change → no OPENING STATE line");
-  const b4 = buildScenePrompt({ scene: { ...scene, promptOverride: "MY PROMPT" }, characters: cast, location: loc, previous, provider: "seedance" });
+  const b4 = buildScenePrompt({ scene: { ...scene, promptOverride: "MY PROMPT" }, characters: cast, location: loc, previous, provider: "seedance", chainMode: "chain" });
   ok(b4.prompt === "MY PROMPT", "A: manual override is verbatim (no opening state injected)");
 }
 

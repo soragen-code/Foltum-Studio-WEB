@@ -2,7 +2,8 @@
  * Stage 62 (Variant A) — scene continuity checks. When a scene CONTINUES the same location/sequence
  * (a previous scene exists AND it is not a sequence break), the previous scene's LAST FRAME is added
  * back as ONE continuity reference (with the lock-placement note), prioritized above crowds / extra
- * angles but never above characters or base angles, never in text-only mode, never after a break, and
+ * angles but never above characters or base angles, never in text-only mode, never after a break, only in
+ * chain order (Stage 72: parallel order relies on the scripted frame states alone), and
  * never exposing the real URL in the prompt text. Pure assertions, no I/O.
  * Run: npx tsx --tsconfig tsconfig.json scripts/test-stage62.ts
  */
@@ -49,12 +50,17 @@ const build = (opts: {
   prev?: ScenePromptPrevious | null;
   sceneOver?: Partial<ScenePromptScene>;
   textOnly?: boolean;
+  /** Stage 72 — the last frame is fed only in chain order; default 'chain' so the continuity cases below exercise it. */
+  chainMode?: "parallel" | "chain" | null;
+  /** Pass the chainMode key through as absent (tests the omitted case). */
+  omitChainMode?: boolean;
 } = {}) => buildScenePrompt({
   scene: scene(opts.sceneOver),
   characters: opts.characters ?? [mkChar("a", "Anna"), mkChar("m", "Mark")],
   location: opts.loc === undefined ? location() : opts.loc,
   previous: opts.prev === undefined ? previous() : opts.prev,
   textOnlyWhenNoReferences: opts.textOnly ?? false,
+  ...(opts.omitChainMode ? {} : { chainMode: opts.chainMode === undefined ? "chain" : opts.chainMode }),
 });
 
 // ── A. continuation scene: previous exists, not a break, last frame present ─────────────────────────
@@ -124,6 +130,22 @@ const build = (opts: {
   ok(r.previousFrameSceneId === "s1", "F: previousFrameSceneId set because the last frame survived the cap");
   // 25 chars are never dropped; they all remain.
   ok(many.every(c => r.referenceImages.includes(styledUrl("char-" + c.characterId))), "F: no character reference is dropped by the cap");
+}
+
+// ── G. Stage 72 — PARALLEL order (or omitted chainMode) → NO previous_frame ref, no note ─────────────
+{
+  for (const mode of ["parallel", null, undefined] as const) {
+    const r = mode === undefined ? build({ omitChainMode: true }) : build({ chainMode: mode });
+    const label = mode === undefined ? "omitted" : String(mode);
+    ok(!r.referenceImages.includes(LAST_FRAME), `G: chainMode ${label} does NOT send the previous last frame`);
+    ok(!r.prompt.includes(LAST_FRAME_CONTINUITY_NOTE), `G: chainMode ${label} does NOT add the continuity note`);
+    ok(r.previousFrameSceneId === null, `G: chainMode ${label} leaves previousFrameSceneId null`);
+    ok(!r.retryRefs.some(x => x.kind === "previous_frame"), `G: chainMode ${label} has no previous_frame retryRef`);
+    ok(r.referenceImages.length > 0, `G: chainMode ${label} still sends characters + location normally`);
+  }
+  const rChain = build({ chainMode: "chain" });
+  ok(rChain.referenceImages.includes(LAST_FRAME), "G: explicit chainMode 'chain' sends the last frame (control)");
+  ok(LAST_FRAME_CONTINUITY_NOTE.toLowerCase().includes("camera"), "G: the continuity note demands a NEW camera on the same instant");
 }
 
 console.log(`\nAll ${pass} Stage 62 assertions passed.`);

@@ -38,7 +38,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   let scene: any | undefined;
   if (job.type === "characters") {
     characters = await prisma.character.findMany({ where: { projectId: job.projectId }, orderBy: { createdAt: "asc" } });
-  } else if ((job.type === "video" || job.type === "storyboard") && job.sceneId) {
+  } else if (job.type === "video" && job.sceneId) {
     scene = await prisma.scene.findUnique({ where: { id: job.sceneId } });
   }
 

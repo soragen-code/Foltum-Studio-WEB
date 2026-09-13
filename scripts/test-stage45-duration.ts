@@ -18,7 +18,7 @@ const ok = (c: unknown, m: string) => { assert(c, m); console.log("ok:", m); pas
 
 // ── A. Doubled limits + inventory in every prompt that carries the state rules ──────────────────
 {
-  ok(STATE_MIN_SENTENCES === 24 && STATE_MAX_SENTENCES === 40 && STATE_MIN_WORDS === 300, "A: limits doubled (24–40 sentences, ≥300 words)");
+  ok(STATE_MIN_SENTENCES === 36 && STATE_MAX_SENTENCES === 60 && STATE_MIN_WORDS === 450, "A: limits raised ~1.5x (Stage 72: 36–60 sentences, ≥450 words)");
   const size = `${STATE_MIN_SENTENCES}–${STATE_MAX_SENTENCES} sentences, AT LEAST ${STATE_MIN_WORDS} words`;
   ok(START_STATE_RULE.includes(size) && END_STATE_RULE.includes(size), "A: START/END_STATE_RULE carry the doubled size");
   ok(!START_STATE_RULE.includes("12–20") && !END_STATE_RULE.includes("150 words"), "A: old 12–20 / 150-word wording is gone from the rules");

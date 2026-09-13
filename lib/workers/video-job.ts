@@ -71,7 +71,7 @@ export interface VideoJobState {
   /** character_references | new_scene_reference | text_only */
   referenceKind?: string;
   /** Counts of the reference images actually sent (Stage 38: `chained` is always false — the previous frame is never sent; kept for old state records). */
-  refCounts?: { characters: number; location: number; crowd: number; scene: number; chained: boolean; storyboard?: number };
+  refCounts?: { characters: number; location: number; crowd: number; scene: number; chained: boolean };
   /** Width the references were downscaled to before submission. */
   referenceWidth?: number;
   /** Stage 36: the exact ordered list of reference images sent (768px URLs), for UI previews. */
@@ -165,18 +165,12 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     }) : null;
     const episodeLoc = await prisma.episode.findUnique({ where: { id: scene.episodeId }, select: {
       id: true,
-      sceneMode: true, // Stage 64: "text" | "storyboard"
+      chainMode: true, // Stage 72: "parallel" | "chain" — the previous last frame is a reference only in chain mode
       script: true, // Stage 54: source text the prop registry is extracted from
       propRegistry: true, // Stage 54: cached registry JSON ({hash, props}) reused across the episode's scenes
       location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true } },
       season: { select: { project: { select: { isTest: true } } } },
     } });
-
-    // Stage 64 — storyboard mode: the video may only be generated from an APPROVED storyboard frame.
-    const storyboardMode = episodeLoc?.sceneMode === "storyboard";
-    if (storyboardMode && !(scene.storyboardApproved && (scene.storyboardUrl ?? "").trim())) {
-      throw new Error("Сначала утвердите кадр сториборда");
-    }
 
     // Stage 4: speech is ALWAYS English. `dialogueEn` holds the voiced lines; legacy scenes written in
     // another language are translated once HERE (worker-only, network) and the translation is saved.
@@ -239,9 +233,8 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       props: episodeProps, // Stage 54: canonical episode props, substituted VERBATIM per scene
       // Stage 40: a test episode has no linked characters/location → plain text-to-video, no Flux still.
       textOnlyWhenNoReferences: Boolean(episodeLoc?.season?.project?.isTest),
-      // Stage 64: in storyboard mode the approved frame is Image1 and the previous last frame is not sent.
-      sceneMode: storyboardMode ? "storyboard" : "text",
-      storyboardUrl: storyboardMode ? scene.storyboardUrl : null,
+      // Stage 72: the previous scene's last frame is a continuity reference ONLY in chain mode.
+      chainMode: episodeLoc?.chainMode === "chain" ? "chain" : "parallel",
     });
     let prompt = built.prompt;
     const basePrompt = built.basePrompt;
@@ -317,7 +310,6 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       crowd: retryRefs.filter(r => r.kind === "crowd").length,
       scene: retryRefs.filter(r => r.kind === "scene").length,
       chained: false, // Stage 38: the previous scene's last frame is never sent as a reference.
-      storyboard: retryRefs.filter(r => r.kind === "storyboard").length, // Stage 64: the approved storyboard frame (Image1)
     };
     // Exact submitted list (downscaled URLs, same order as [ImageN]) for the scene-card previews.
     const submittedReferences = referenceImages.map((url, i) => ({ url, kind: retryRefs[i]?.kind ?? "reference" }));
@@ -326,25 +318,6 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       referenceWidth: REFERENCE_WIDTH, referenceImageCount: referenceImages.length,
       previousFrameSceneId: built.previousFrameSceneId,
     };
-    // Stage 71 — storyboard mode: the scene video is an image-to-video transition FROM this scene's
-    // approved storyboard frame (first frame = `image`) TO the NEXT scene's approved storyboard frame
-    // (last frame = `last_image`). The "next scene" is the scene in the SAME episode with the smallest
-    // `number` strictly greater than this one, whose storyboard frame is approved and non-empty. If there
-    // is no such frame (last scene, or the next one isn't approved yet) we submit with only `image` and
-    // do NOT block. In storyboard mode reference_images are never sent (the frames carry the composition).
-    let storyboardFirstImage: string | undefined;
-    let storyboardLastImage: string | undefined;
-    if (storyboardMode) {
-      storyboardFirstImage = (scene.storyboardUrl ?? "").trim() || undefined;
-      const nextScene = await prisma.scene.findFirst({
-        where: { episodeId: scene.episodeId, number: { gt: scene.number }, storyboardApproved: true },
-        orderBy: { number: "asc" },
-        select: { id: true, number: true, storyboardUrl: true, storyboardApproved: true },
-      });
-      const nextUrl = (nextScene?.storyboardUrl ?? "").trim();
-      if (nextScene?.storyboardApproved === true && nextUrl) storyboardLastImage = nextUrl;
-    }
-
     // Stage 46B: scenes are always rendered at 480p — the requested `params.resolution` is ignored.
     const input = {
       prompt, model: modelSlug, duration: clipDuration, resolution: SCENE_RESOLUTION,
@@ -355,14 +328,8 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       style: VISUAL_STYLE_ID, language: scene.language || "en", input: safeDiagnosticInput({ ...input, reference, ...submission }),
     };
     diagnostics.push(attempt); await persist(); logAttempt(attempt);
-    // Stage 71: storyboard mode → image-to-video (first frame + optional last frame), no reference_images.
-    // Text mode → text-to-video; Stage 40: `reference_images` omitted entirely for text-only submissions.
-    predictionId = await startVideoPrediction({
-      ...input,
-      ...(storyboardMode
-        ? { image: storyboardFirstImage, ...(storyboardLastImage ? { last_image: storyboardLastImage } : {}) }
-        : (referenceImages.length ? { reference_images: referenceImages } : {})),
-    });
+    // Stage 40: `reference_images` is omitted entirely for text-only submissions (never sent as []).
+    predictionId = await startVideoPrediction({ ...input, ...(referenceImages.length ? { reference_images: referenceImages } : {}) });
     pipelineExtra.provider = "seedance";
     submitMessage = SCENE_STAGE_MESSAGE.queued; // Stage 46B: «В очереди» until the provider reports processing
     // Retry plan is still persisted for diagnostics, but moderation is now fail-fast:
@@ -521,9 +488,9 @@ async function moderationMessage(sceneId: string, error: unknown, state?: VideoJ
   const hints = moderationHints(submitted);
   const counts = state?.refCounts;
   // Stage 38: the previous scene's frame is never sent, so the message lists only portraits / location angles / crowd.
-  const imagesSent = counts ? counts.characters + counts.location + counts.crowd + counts.scene + (counts.storyboard ?? 0) : null;
+  const imagesSent = counts ? counts.characters + counts.location + counts.crowd + counts.scene : null;
   const countsText = counts
-    ? ` Отправлено изображений: ${imagesSent} — портретов: ${counts.characters}, ракурсов локации: ${counts.location}, массовки: ${counts.crowd}${counts.scene ? `, кадр сцены: ${counts.scene}` : ""}${counts.storyboard ? `, кадр сториборда: ${counts.storyboard}` : ""}.`
+    ? ` Отправлено изображений: ${imagesSent} — портретов: ${counts.characters}, ракурсов локации: ${counts.location}, массовки: ${counts.crowd}${counts.scene ? `, кадр сцены: ${counts.scene}` : ""}.`
     : "";
   let message: string;
   if (state?.hasOverride && !hints.length && state.referenceKind !== "text_only") {
