@@ -20,6 +20,7 @@ import { EpisodeNavGrid } from './episode-nav-grid'
 import { locationExtraLabel } from '@/lib/visual-style'
 import { episodeTotalSeconds, EPISODE_MAX_TOTAL_SECONDS } from '@/lib/season'
 import { ASSEMBLE_QUALITIES, ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY, DEFAULT_ASSEMBLE_FPS, type AssembleQuality, type AssembleFps } from '@/lib/assemble-options'
+import { ProviderPicker } from '@/app/project/[id]/_components/provider-picker'
 
 type EpisodePhase = 'script' | 'references' | 'scenes'
 
@@ -1153,6 +1154,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             </div>
             {chainModeSaving && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
           </div>
+          {/* Stage 73: generation providers (references / scenes) — same control as the project header. */}
+          <ProviderPicker projectId={project.id} imageProvider={project?.imageProvider} videoProvider={project?.videoProvider} compact />
           {chainRunActive && <span className="inline-flex items-center gap-1 text-xs text-primary" data-testid="chain-run-active"><Loader2 className="h-3 w-3 animate-spin" /> Цепочка идёт: сцены генерируются по очереди</span>}
           <p className="w-full text-xs text-muted-foreground" data-testid="scenes-hint">
             {isChain

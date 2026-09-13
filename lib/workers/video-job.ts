@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db";
-// Stage 70: scene video generation moved to WaveSpeed; scene-still (Seedream image) stays on Replicate.
-import { startImagePrediction, getPredictionState } from "@/lib/replicate";
-import { startVideoPrediction, getVideoPredictionState, cancelVideoPrediction } from "@/lib/wavespeed";
+// Stage 73: scene video and scene-still transports are routed through the per-project provider layer
+// (replicate | wavespeed | modelark). Prompt building, refs and chain logic are unchanged.
+import { startImageGeneration, getImageGenerationState } from "@/lib/providers/image-provider";
+import { startVideoGeneration, getVideoGenerationState, cancelVideoGeneration } from "@/lib/providers/video-provider";
+import { isGenerationProvider, type GenerationProvider } from "@/lib/validations";
 import { translateDialogue, detectSpokenLanguage } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
 import { extractLastFrameBuffer } from "@/lib/ffmpeg";
@@ -59,8 +61,8 @@ export interface VideoJobState {
   moderationRetries?: number;
   /** Model that actually produced the final video, persisted to scene.videoModel on success. */
   videoModel?: string;
-  /** Provider the prediction was submitted to — always "seedance" (Stage 63 removed the Kling path). */
-  provider?: "seedance";
+  /** Stage 73: generation provider the video was submitted to (replicate | wavespeed | modelark). Legacy rows carry "seedance" (= WaveSpeed since Stage 70). */
+  provider?: string;
   /** Everything needed to resubmit the same scene with a softer prompt. */
   retry?: ModerationRetryInput;
   /* --- Stage 33/36: what was ACTUALLY submitted, for honest moderation diagnostics --- */
@@ -169,8 +171,11 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       script: true, // Stage 54: source text the prop registry is extracted from
       propRegistry: true, // Stage 54: cached registry JSON ({hash, props}) reused across the episode's scenes
       location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true } },
-      season: { select: { project: { select: { isTest: true } } } },
+      season: { select: { project: { select: { isTest: true, imageProvider: true, videoProvider: true } } } },
     } });
+    // Stage 73: per-project generation providers (transport only).
+    const imageProvider: GenerationProvider = isGenerationProvider(episodeLoc?.season?.project?.imageProvider) ? episodeLoc.season.project.imageProvider : "replicate";
+    const videoProvider: GenerationProvider = isGenerationProvider(episodeLoc?.season?.project?.videoProvider) ? episodeLoc.season.project.videoProvider : "wavespeed";
 
     // Stage 4: speech is ALWAYS English. `dialogueEn` holds the voiced lines; legacy scenes written in
     // another language are translated once HERE (worker-only, network) and the translation is saved.
@@ -254,17 +259,17 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
         input: safeDiagnosticInput({ prompt: referencePrompt, aspect_ratio: "9:16", safety_tolerance: 2, source: "original_scene_description" }),
       };
       diagnostics.push(attempt); await persist(); logAttempt(attempt);
-      attempt.predictionId = await startImagePrediction({ prompt: referencePrompt, aspect_ratio: "9:16" });
+      attempt.predictionId = (await startImageGeneration(imageProvider, { prompt: referencePrompt, aspect_ratio: "9:16", kind: "scene_still" })).id;
       attempt.status = "processing"; await persist(); logAttempt(attempt);
       const started = Date.now();
       let referenceUrl = "";
       while (!referenceUrl) {
-        const prediction = await getPredictionState(attempt.predictionId);
-        if (prediction.status === "succeeded" && prediction.url) {
-          referenceUrl = prediction.url; attempt.status = "succeeded"; await persist(); logAttempt(attempt); break;
+        const prediction = await getImageGenerationState(imageProvider, attempt.predictionId);
+        if (prediction.status === "succeeded" && prediction.outputUrl) {
+          referenceUrl = prediction.outputUrl; attempt.status = "succeeded"; await persist(); logAttempt(attempt); break;
         }
-        if (prediction.status === "failed" || prediction.status === "canceled") {
-          attempt.status = prediction.status;
+        if (prediction.status === "failed") {
+          attempt.status = "failed";
           throw new Error(prediction.error || "Reference model failed");
         }
         if (Date.now() - started > 180_000) throw new Error("Reference model timed out; no automatic resubmission");
@@ -329,8 +334,8 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     };
     diagnostics.push(attempt); await persist(); logAttempt(attempt);
     // Stage 40: `reference_images` is omitted entirely for text-only submissions (never sent as []).
-    predictionId = await startVideoPrediction({ ...input, ...(referenceImages.length ? { reference_images: referenceImages } : {}) });
-    pipelineExtra.provider = "seedance";
+    predictionId = await startVideoGeneration(videoProvider, { ...input, ...(referenceImages.length ? { reference_images: referenceImages } : {}) });
+    pipelineExtra.provider = videoProvider;
     submitMessage = SCENE_STAGE_MESSAGE.queued; // Stage 46B: «В очереди» until the provider reports processing
     // Retry plan is still persisted for diagnostics, but moderation is now fail-fast:
     // no automatic rewrite/resubmit happens (see resumeVideoJob). The user edits the prompt manually.
@@ -550,8 +555,10 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
   try {
     // «Отменить генерацию» — check the flag BEFORE the provider status GET, so a cancel goes through even
     // while the provider is unreachable or its status read keeps failing (otherwise the card spun forever).
-    const getState = (s: VideoJobState): Promise<PredictionState> => getVideoPredictionState(s.predictionId);
-    const cancelState = (s: VideoJobState): Promise<void> => cancelVideoPrediction(s.predictionId);
+    // Stage 73: poll/cancel on the provider the job was submitted to (legacy "seedance" rows = WaveSpeed).
+    const providerOf = (s: VideoJobState): GenerationProvider => (isGenerationProvider(s.provider) ? s.provider : "wavespeed");
+    const getState = (s: VideoJobState): Promise<PredictionState> => getVideoGenerationState(providerOf(s), s.predictionId);
+    const cancelState = (s: VideoJobState): Promise<void> => cancelVideoGeneration(providerOf(s), s.predictionId);
     if (fresh.cancelRequested === true || await isCancelRequested(job.id)) {
       await cancelState(state).catch(() => {});
       await handleFailure(job.id, state, new Error("Генерация отменена автором"), state);

@@ -87,6 +87,9 @@ model Project {
   // Stage 59: durable "new 4-step flow" marker. New projects set it true; legacy rows stay false (classic flow).
   // The wizard needs this because at stage=synopsis/early-structure charactersApproved is still false.
   newFlow     Boolean  @default(false)
+  // Stage 73: generation provider for reference images / scene videos: replicate | wavespeed | modelark
+  imageProvider String @default("replicate")
+  videoProvider String @default("wavespeed")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

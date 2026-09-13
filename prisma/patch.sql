@@ -249,3 +249,8 @@ BEGIN
     UPDATE "Episode" SET "sceneMode" = 'text' WHERE "sceneMode" IS DISTINCT FROM 'text';
   END IF;
 END $$;
+
+
+-- Stage 73: per-project generation provider (reference images / scene videos): replicate | wavespeed | modelark
+ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "imageProvider" TEXT NOT NULL DEFAULT 'replicate';
+ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "videoProvider" TEXT NOT NULL DEFAULT 'wavespeed';

@@ -4,6 +4,7 @@ import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { locationExtraAnglePrompt, parseLocationExtra, VISUAL_STYLE_ID } from "@/lib/visual-style";
 import { detectC2paFromUrl } from "@/lib/c2pa";
+import { loadProjectImageProvider } from "@/lib/providers/project-provider";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -46,6 +47,7 @@ export async function runLocationExtraImagesJob({ jobId, projectId, locationId, 
     const loc = await prisma.location.findFirst({ where: { id: locationId, projectId } });
     if (!loc) { await failJob(jobId, "Локация не найдена"); return; }
     if (!loc.imageUrl) { await failJob(jobId, "Сначала сгенерируйте базовые референсы локации"); return; }
+    const imageProvider = await loadProjectImageProvider(projectId); // Stage 73: transport provider only
 
     const visual = loc.visualPrompt ?? loc.description ?? loc.name;
     const existing = parseLocationExtra(loc.imageExtra);
@@ -73,7 +75,7 @@ export async function runLocationExtraImagesJob({ jobId, projectId, locationId, 
           aspect_ratio: "9:16",
           image_input: extraJobImageInputs(loc, [...existing, ...added]),
         };
-        const remote = await generateImage(input, { jobId, imageModel, shouldCancel: canceled });
+        const remote = await generateImage(input, { jobId, imageModel, shouldCancel: canceled, provider: imageProvider });
         if (await canceled()) throw new GenerationCanceledError(); // discard the plate, keep imageExtra as is
         const url = await uploadRemoteToS3(remote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-extra-${Date.now()}-${startIndex + i}.png`, "image/png");
         added.push(url);

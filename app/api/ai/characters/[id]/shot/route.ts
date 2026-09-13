@@ -16,6 +16,7 @@ import { VISUAL_STYLE_ID, isChildAppearance, type CharacterRefKind } from "@/lib
 import { characterShotPrompt, characterExtraShotPrompt } from "@/lib/full-body-prompt";
 import { parseImageArray } from "@/lib/reference-counts";
 import { CHARACTER_REFERENCE_COST } from "@/lib/power-tier";
+import { loadProjectImageProvider } from "@/lib/providers/project-provider";
 
 /** Job type of a single-shot regeneration — distinct from "characters" so the full-set polling ignores it. */
 export const CHARACTER_SHOT_JOB_TYPE = "character_shot";
@@ -108,7 +109,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         const appearance = char.appearance ?? "";
         const front = char.imageFront;
         const full = char.imageFull;
-        const ctx = { jobId: job.id, characterId, imageModel };
+        const ctx = { jobId: job.id, characterId, imageModel, provider: await loadProjectImageProvider(char.projectId) }; // Stage 73
         let remote: string;
         let s3Key: string;
         if (shot === "extra") {

@@ -10,6 +10,7 @@ import { generateImage } from "@/lib/replicate";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { artifactImagePrompt, VISUAL_STYLE_ID } from "@/lib/visual-style";
 import { detectC2paFromUrl } from "@/lib/c2pa";
+import { loadProjectImageProvider } from "@/lib/providers/project-provider";
 
 /**
  * POST /api/ai/artifacts/[id]/revise  { instruction }
@@ -39,11 +40,12 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
 
     runInBackground(async () => {
       try {
-        const remote0 = await generateImage({ prompt: artifactImagePrompt(newVisual, artifact.name, 0), aspect_ratio: "1:1" });
+        const imageProvider = await loadProjectImageProvider(artifact.projectId); // Stage 73
+        const remote0 = await generateImage({ prompt: artifactImagePrompt(newVisual, artifact.name, 0), aspect_ratio: "1:1" }, { provider: imageProvider });
         const url0 = await uploadRemoteToS3(remote0, `media/public/artifacts/${artifact.projectId}/${id}/${VISUAL_STYLE_ID}/frame0-${Date.now()}.png`, "image/png");
         await prisma.artifact.update({ where: { id }, data: { imageUrl: url0 } });
         await detectC2paFromUrl(url0).catch(() => {});
-        const remote1 = await generateImage({ prompt: artifactImagePrompt(newVisual, artifact.name, 1), aspect_ratio: "1:1", image_input: [url0] });
+        const remote1 = await generateImage({ prompt: artifactImagePrompt(newVisual, artifact.name, 1), aspect_ratio: "1:1", image_input: [url0] }, { provider: imageProvider });
         const url1 = await uploadRemoteToS3(remote1, `media/public/artifacts/${artifact.projectId}/${id}/${VISUAL_STYLE_ID}/frame1-${Date.now()}.png`, "image/png");
         await prisma.artifact.update({ where: { id }, data: { imageExtra: JSON.stringify([url1]) } });
         await detectC2paFromUrl(url1).catch(() => {});

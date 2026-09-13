@@ -9,6 +9,7 @@ import { characterShotPrompt, clampPromptToLimit } from "@/lib/full-body-prompt"
 import { detectC2paFromUrl } from "@/lib/c2pa";
 import { checkFullBodyImage, fullBodyPasses, fullBodyScore, fullBodyCorrectionSuffix, evaluateProportions, type FullBodyCheck, type ProportionDefect } from "@/lib/full-body-check";
 import { REF_BATCH_CONCURRENCY, runWithConcurrency } from "@/lib/reference-counts";
+import { loadProjectImageProvider } from "@/lib/providers/project-provider";
 
 // Stage 53: a character reference is a SINGLE photo — the full-body FRONT shot (imageFull). The front
 // portrait, the profile and the extra angles are no longer auto-generated; they are only produced when
@@ -85,6 +86,7 @@ type C2paCheck = { characterId: string; shot: string; ok: boolean; signatures: s
  */
 export async function runCharacterImagesJob({ jobId, projectId, characterIds, imageModel }: CharacterImagesJobParams): Promise<void> {
   try {
+    const imageProvider = await loadProjectImageProvider(projectId); // Stage 73: transport provider only
     const characters = await prisma.character.findMany({
       where: { id: { in: characterIds }, projectId },
       orderBy: { createdAt: "asc" },
@@ -122,7 +124,7 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
         // previously nulled the full-body photo). A prompt already within the limit is passed through unchanged.
         const gen = (prompt: string) => generateImage(
           { prompt: clampPromptToLimit(prompt), aspect_ratio: ASPECT_RATIOS[shot], ...(chained ? { image_input: [ref!] } : {}) },
-          { jobId, characterId: char.id, imageModel }
+          { jobId, characterId: char.id, imageModel, provider: imageProvider }
         );
         let replicateUrl: string;
         // Proportion guard for the full-body shot (people only): the chained face close-up pulls the model

@@ -1,6 +1,8 @@
 import Replicate from "replicate";
 import { GenerationAttempt, safeDiagnosticInput, safeProviderError, classifyProviderError, logAttempt } from "@/lib/generation-diagnostics";
 import { VISUAL_STYLE_ID } from "@/lib/visual-style";
+import type { GenerationProvider } from "@/lib/validations";
+import { startImageGeneration, getImageGenerationState, cancelImageGeneration } from "@/lib/providers/image-provider";
 
 let _client: Replicate | null = null;
 
@@ -269,27 +271,40 @@ export class GenerationCanceledError extends Error {
   constructor(message = "Генерация отменена пользователем") { super(message); this.name = "GenerationCanceledError"; }
 }
 
-export async function generateImage(input: FluxInput, context: { jobId?: string; characterId?: string; imageModel?: string; shouldCancel?: () => Promise<boolean> } = {}): Promise<string> {
-  const { imageModel, shouldCancel, ...logContext } = context;
+export async function generateImage(input: FluxInput, context: { jobId?: string; characterId?: string; imageModel?: string; shouldCancel?: () => Promise<boolean>; provider?: GenerationProvider } = {}): Promise<string> {
+  const { imageModel, shouldCancel, provider: providerOpt, ...logContext } = context;
+  // Stage 73: per-project image provider. `replicate` (or unset) keeps the original Replicate path
+  // byte-for-byte; other providers go through lib/providers/image-provider.ts (transport only).
+  const provider: GenerationProvider = providerOpt && providerOpt !== "replicate" ? providerOpt : "replicate";
+  const viaLayer = provider !== "replicate";
   // Cancel is checked BEFORE the prediction is created so a canceled job never pays for a new one.
   if (shouldCancel && (await shouldCancel())) throw new GenerationCanceledError();
   const attempt: GenerationAttempt = {
     ...logContext, attempt: 1, phase: "reference", model: SEEDREAM_MODEL,
     status: "submitting", style: VISUAL_STYLE_ID,
-    input: safeDiagnosticInput({ prompt: input.prompt, aspect_ratio: input.aspect_ratio ?? "9:16", size: "2K" }),
+    input: safeDiagnosticInput({ prompt: input.prompt, aspect_ratio: input.aspect_ratio ?? "9:16", size: "2K", ...(viaLayer ? { provider } : {}) }),
   };
   logAttempt(attempt);
   try {
-    attempt.predictionId = await startImagePrediction(input, imageModel);
+    attempt.predictionId = viaLayer ? (await startImageGeneration(provider, input, imageModel)).id : await startImagePrediction(input, imageModel);
     attempt.status = "processing"; logAttempt(attempt);
     const started = Date.now();
     while (true) {
       // User cancel (cancelRequested on the job): stop the provider prediction and bail out — the caller
       // discards the result, refunds and marks the job canceled.
       if (shouldCancel && (await shouldCancel())) {
-        await cancelPrediction(attempt.predictionId).catch(() => {});
+        if (viaLayer) await cancelImageGeneration(provider, attempt.predictionId).catch(() => {});
+        else await cancelPrediction(attempt.predictionId).catch(() => {});
         attempt.status = "canceled"; logAttempt(attempt);
         throw new GenerationCanceledError();
+      }
+      if (viaLayer) {
+        const st = await getImageGenerationState(provider, attempt.predictionId);
+        if (st.status === "succeeded" && st.outputUrl) { attempt.status = "succeeded"; logAttempt(attempt); return st.outputUrl; }
+        if (st.status === "failed") throw new Error(st.error || "Image model failed");
+        if (Date.now() - started > 180_000) throw new Error("Image model timed out; no automatic resubmission");
+        await sleep(2_000);
+        continue;
       }
       const p = await getPredictionState(attempt.predictionId);
       if (p.status === "succeeded" && p.url) {

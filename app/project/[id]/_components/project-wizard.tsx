@@ -11,6 +11,7 @@ import { ScenesStage } from './scenes-stage'
 import { IdeaStage } from './idea-stage'
 import { ReferencesStage } from './references-stage'
 import { StoryStage } from './story-stage'
+import { ProviderPicker } from './provider-picker'
 import { SCENE_RESOLUTION } from '@/lib/power-tier'
 import { Gauge, ArrowLeft } from 'lucide-react'
 import { motion } from 'framer-motion'
@@ -59,6 +60,11 @@ export function ProjectWizard({ project: initialProject }: { project: any }) {
               {SCENE_RESOLUTION}
             </span>
             <span className="hidden sm:inline">сцены {SCENE_RESOLUTION} · качество серии — при сборке</span>
+          </div>
+          {/* Stage 73: per-project generation providers (references / scenes), always visible. */}
+          <div className="mt-3">
+            <ProviderPicker projectId={project.id} imageProvider={project?.imageProvider} videoProvider={project?.videoProvider}
+              onChange={(v) => setProject((p: any) => ({ ...p, ...v }))} />
           </div>
         </div>
 

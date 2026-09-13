@@ -6,6 +6,7 @@ import { chatJSON } from "@/lib/ai";
 import { artifactImagePrompt, VISUAL_STYLE_ID } from "@/lib/visual-style";
 import { detectC2paFromUrl } from "@/lib/c2pa";
 import { ARTIFACT_FRAME_COUNT, REF_BATCH_CONCURRENCY, runWithConcurrency, parseImageArray } from "@/lib/reference-counts";
+import { loadProjectImageProvider } from "@/lib/providers/project-provider";
 
 // Stage 14 (E): "important objects" / artifacts of an episode. Each gets 2 photoreal
 // reference frames (a clean isolated shot + one in realistic in-story context, chained on
@@ -55,6 +56,7 @@ export async function runArtifactImagesJob({ jobId, projectId, episodeId }: Arti
   try {
     const project = await prisma.project.findUnique({ where: { id: projectId }, select: { language: true } });
     const language = project?.language ?? "en";
+    const imageProvider = await loadProjectImageProvider(projectId); // Stage 73: transport provider only
     const episode = await prisma.episode.findFirst({
       where: { id: episodeId },
       include: { artifacts: { include: { artifact: true } } },
@@ -116,7 +118,7 @@ export async function runArtifactImagesJob({ jobId, projectId, episodeId }: Arti
       try {
         const remote = await generateImage(
           { prompt: artifactImagePrompt(art.visualPrompt ?? art.name, art.name, 0), aspect_ratio: "1:1" },
-          { jobId }
+          { jobId, provider: imageProvider }
         );
         const url = await uploadRemoteToS3(remote, `media/public/artifacts/${projectId}/${art.id}/${VISUAL_STYLE_ID}/frame0-${Date.now()}.png`, "image/png");
         await prisma.artifact.update({ where: { id: art.id }, data: { imageUrl: url } });
@@ -142,7 +144,7 @@ export async function runArtifactImagesJob({ jobId, projectId, episodeId }: Arti
           try {
             const remote = await generateImage(
               { prompt: artifactImagePrompt(art.visualPrompt ?? art.name, art.name, frame), aspect_ratio: "1:1", image_input: [s.primary] },
-              { jobId }
+              { jobId, provider: imageProvider }
             );
             const url = await uploadRemoteToS3(remote, `media/public/artifacts/${projectId}/${art.id}/${VISUAL_STYLE_ID}/frame${frame}-${Date.now()}.png`, "image/png");
             s.extra.push(url);

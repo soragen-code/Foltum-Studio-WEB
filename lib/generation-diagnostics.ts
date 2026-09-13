@@ -19,6 +19,8 @@ export function classifyProviderError(error: unknown): FailureKind {
     if (/output\s+video|video.*copyright/.test(text)) return "copyright_video";
     return "copyright";
   }
+  // Stage 73: ModelArk / Replicate moderation codes (text is lowercased above).
+  if (/inputimagesensitivecontentdetected|outputvideosensitivecontentdetected|outputimagesensitivecontentdetected|contentfilter|sensitivecontent/.test(text)) return "moderation";
   if (/moderation|content policy|sensitive|flagged|safety|risk|violat|nsfw|prohibited|blocked|not allowed/.test(text)) return "moderation";
   return "provider";
 }

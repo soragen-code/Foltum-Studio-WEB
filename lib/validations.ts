@@ -243,3 +243,17 @@ export const locationFrameDeleteSchema = z.object({
   slot: z.enum(["master", "reverse", "detail", "extra"]),
   index: z.number().int().min(0).max(19).optional(),
 });
+
+// ---- Stage 73 ----
+/** Generation providers selectable per project (reference images and scene videos separately). */
+export const GENERATION_PROVIDERS = ["replicate", "wavespeed", "modelark"] as const;
+export type GenerationProvider = (typeof GENERATION_PROVIDERS)[number];
+export function isGenerationProvider(v: unknown): v is GenerationProvider {
+  return typeof v === "string" && (GENERATION_PROVIDERS as readonly string[]).includes(v);
+}
+/** Human-readable provider labels for the UI. */
+export const GENERATION_PROVIDER_LABELS: Record<GenerationProvider, string> = {
+  replicate: "Replicate",
+  wavespeed: "WaveSpeed",
+  modelark: "ModelArk",
+};
