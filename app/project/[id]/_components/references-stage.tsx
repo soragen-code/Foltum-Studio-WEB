@@ -12,6 +12,7 @@ import { CancelButton } from './cancel-button'
 import { CHARACTER_REFERENCE_COST } from '@/lib/power-tier'
 import { TIER_LABELS, groupByTier, tierOf, type Tier, type LocationCardData, LocationCard, AddLocationForm } from './cast-and-locations'
 import { locationExtraLabel } from '@/lib/visual-style'
+import { ProviderPicker } from './provider-picker'
 
 interface RefCharacter extends CharacterCardData {
   imageFront?: string | null
@@ -377,9 +378,13 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
   return (
     <div className="space-y-6">
       <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
-        <h2 className="flex items-center gap-2 font-display text-xl font-bold">
-          <Users className="h-5 w-5 text-primary" /> {optional ? 'Референсы' : 'Шаг 2 — Персонажи (референсы)'}
-        </h2>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <h2 className="flex items-center gap-2 font-display text-xl font-bold">
+            <Users className="h-5 w-5 text-primary" /> {optional ? 'Референсы' : 'Шаг 2 — Персонажи (референсы)'}
+          </h2>
+          {/* Stage 74: reference-image provider (transport only; model fixed to Seedream 5.0 Pro). Always visible. */}
+          <ProviderPicker kind="image" projectId={project.id} value={project?.imageProvider} compact onChange={onRefresh} />
+        </div>
         {optional && (
           <p className="mt-1 text-sm text-muted-foreground">
             Референсы не обязательны для сценария — они нужны для генерации видео сцен: персонажи и локации будут выглядеть одинаково во всех кадрах.

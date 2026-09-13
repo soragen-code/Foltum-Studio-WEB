@@ -5,7 +5,7 @@ import { generateImageSync, modelArkImageSize } from "@/lib/modelark";
 /* ------------------------------------------------------------------ */
 /*  Stage 73: reference-image generation provider layer (transport).    */
 /*  replicate  — the existing lib/replicate.ts path, byte-for-byte.     */
-/*  wavespeed  — Seedream 5.0 Lite on WaveSpeed (t2i, or /edit when     */
+/*  wavespeed  — Seedream 5.0 Pro on WaveSpeed  (t2i, or /edit when     */
 /*               reference images are present; max 10 refs).           */
 /*  modelark   — Seedream 5.0 on ModelArk, synchronous; the result is  */
 /*               parked in-memory under a synthetic id so the shared   */
@@ -24,9 +24,9 @@ export interface ImageGenerationState {
 }
 
 const WAVESPEED_BASE = "https://api.wavespeed.ai/api/v3";
-/** WaveSpeed Seedream 5.0 Lite endpoints (text-to-image / multi-reference edit). */
-export const WAVESPEED_SEEDREAM_T2I = "bytedance/seedream-v5.0-lite";
-export const WAVESPEED_SEEDREAM_EDIT = "bytedance/seedream-v5.0-lite/edit";
+/** WaveSpeed Seedream 5.0 Pro endpoints (text-to-image / multi-reference edit). Stage 74: Lite → Pro. */
+export const WAVESPEED_SEEDREAM_T2I = "bytedance/seedream-v5.0-pro";
+export const WAVESPEED_SEEDREAM_EDIT = "bytedance/seedream-v5.0-pro/edit";
 const WAVESPEED_IMAGE_MAX_REFS = 10;
 
 function wavespeedKey(): string {

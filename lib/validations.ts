@@ -124,7 +124,7 @@ export const charactersReferencesSchema = z.object({
   projectId: cuidSchema,
   tiers: z.array(z.enum(["MAIN", "SUPPORTING", "MINOR", "CROWD"])).optional(),
   characterIds: z.array(cuidSchema).max(100).optional(),
-  /** Producer-picked image model (see lib/ai-models.ts). Currently only "seedream-5-lite". */
+  /** Producer-picked image model (see lib/ai-models.ts). Currently only "seedream-5-pro". */
   imageModel: z.string().max(60).optional().nullable(),
 });
 

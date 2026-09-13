@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Loader2, Play, Check, RefreshCw, Edit2, Film, ChevronDown, ChevronRight, Zap } from 'lucide-react'
 import { JobProgressBar, SmoothProgress, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from './use-job-polling'
+import { ProviderPicker } from './provider-picker'
 
 const VIDEO_EXPECTED_SEC = 600 // ~10 min: Seedance renders a 15 s clip with native audio + upload
 
@@ -412,7 +413,11 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
   return (
     <div className="space-y-6">
       <div className="rounded-xl border border-border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
-        <h2 className="font-display text-xl font-bold">Stage 4 — Scenes & Video</h2>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <h2 className="font-display text-xl font-bold">Stage 4 — Scenes & Video</h2>
+          {/* Stage 74: scene-video provider (transport only; model fixed to Seedance 2.5). Always visible. */}
+          <ProviderPicker kind="video" projectId={project.id} value={project?.videoProvider} compact onChange={onRefresh} />
+        </div>
         <p className="mt-1 text-sm text-muted-foreground">
           Select an episode, generate scenes, then generate video for each scene.
         </p>

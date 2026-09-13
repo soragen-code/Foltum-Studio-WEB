@@ -185,17 +185,18 @@ export async function runFrameInterpolation(input: FrameInterpolationInput): Pro
 }
 
 /* ------------------------------------------------------------------ */
-/*  Seedream 5.0 Lite — photorealistic reference image generation     */
+/*  Seedream 5.0 Pro — photorealistic reference image generation      */
 /* ------------------------------------------------------------------ */
 
-/** Real Replicate slug + pinned version for Seedream 5.0 Lite (verified via API). */
-export const SEEDREAM_MODEL = "bytedance/seedream-5-lite";
-const SEEDREAM_VERSION_ID =
+/** Real Replicate slug for Seedream 5.0 Pro (verified via API; Stage 74 — same input shape as the former Lite). */
+export const SEEDREAM_MODEL = "bytedance/seedream-5-pro";
+/** Pinned Replicate version of bytedance/seedream-5-pro (latest_version at Stage 74; Lite pin was eeb2857d…). */
+export const SEEDREAM_VERSION_ID =
   (process.env.REPLICATE_SEEDREAM_VERSION as string | undefined) ??
-  "eeb2857d94c49a5bcbc9d6c6057416e1d3b1a2735a16e08e4def9bf7ee22ec71";
+  "91daad99b90f0bcf3d59f1600b3850a7b60f882ea103d31936b24e3d957b2c79";
 
 /**
- * Start a Seedream 5.0 Lite image prediction (photorealistic references).
+ * Start a Seedream 5.0 Pro image prediction (photorealistic references).
  * Seedream has NO watermark-disable parameter — its PNG output carries a C2PA
  * content-credentials watermark in metadata (no visible pixel logo). We KEEP that
  * watermark: marking the reference as AI-generated content can help the downstream
@@ -203,7 +204,7 @@ const SEEDREAM_VERSION_ID =
  * Note: Seedream's only image output format is png/jpeg (no webp) and it has no seed input.
  */
 export async function startImagePrediction(input: FluxInput, model?: string): Promise<string> {
-  // Only Seedream 5.0 Lite is wired for image generation. `model` is accepted so the whole
+  // Only Seedream 5.0 Pro is wired for image generation. `model` is accepted so the whole
   // reference pipeline (routes → workers → here) carries the producer's picked image model;
   // any other/unknown id resolves to Seedream. Add a branch here to support more models.
   void model;
@@ -246,7 +247,7 @@ export async function getPredictionState(id: string): Promise<PredictionState> {
 
 /* ------------------------------------------------------------------ */
 /*  Image generation (character portraits + scene references)         */
-/*  Backed by Seedream 5.0 Lite (photorealistic) via startImagePrediction. */
+/*  Backed by Seedream 5.0 Pro (photorealistic) via startImagePrediction. */
 /* ------------------------------------------------------------------ */
 
 export interface FluxInput {
@@ -263,7 +264,7 @@ export interface FluxInput {
 }
 
 /**
- * Generate a photorealistic reference image (Seedream 5.0 Lite) via Replicate.
+ * Generate a photorealistic reference image (Seedream 5.0 Pro) via Replicate.
  * Returns the URL of the generated image. Logs each prediction; no paid automatic retries.
  */
 /** Thrown by generateImage when `shouldCancel` reports a user cancellation mid-prediction. */

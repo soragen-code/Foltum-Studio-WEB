@@ -69,7 +69,7 @@ export interface CharacterImagesJobParams {
   jobId: string;
   projectId: string;
   characterIds: string[];
-  /** Producer-picked image model (currently only "seedream-5-lite"); passed to the image model. */
+  /** Producer-picked image model (currently only "seedream-5-pro"); passed to the image model. */
   imageModel?: string;
 }
 

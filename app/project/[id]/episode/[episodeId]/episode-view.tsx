@@ -1154,8 +1154,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             </div>
             {chainModeSaving && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
           </div>
-          {/* Stage 73: generation providers (references / scenes) — same control as the project header. */}
-          <ProviderPicker projectId={project.id} imageProvider={project?.imageProvider} videoProvider={project?.videoProvider} compact />
+          {/* Stage 74: scene-video provider only (the image picker lives on the references stage). */}
+          <ProviderPicker kind="video" projectId={project.id} value={project?.videoProvider} compact />
           {chainRunActive && <span className="inline-flex items-center gap-1 text-xs text-primary" data-testid="chain-run-active"><Loader2 className="h-3 w-3 animate-spin" /> Цепочка идёт: сцены генерируются по очереди</span>}
           <p className="w-full text-xs text-muted-foreground" data-testid="scenes-hint">
             {isChain

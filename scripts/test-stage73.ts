@@ -49,9 +49,10 @@ t("ModelArk image body: ≤14 refs, explicit size closest to aspect, url format,
 });
 t("WaveSpeed image request: t2i slug without refs, /edit slug with ≤10 refs, size uses W*H", () => {
   const a = buildWaveSpeedImageRequest({ prompt: "p", aspect_ratio: "9:16" });
-  assert.equal(a.slug, WAVESPEED_SEEDREAM_T2I); assert.equal(a.body.size, "1440*2560"); assert.equal("images" in a.body, false);
+  assert.equal(a.slug, WAVESPEED_SEEDREAM_T2I); assert.equal(a.slug, "bytedance/seedream-v5.0-pro"); // Stage 74: Pro
+  assert.equal(a.body.size, "1440*2560"); assert.equal("images" in a.body, false);
   const b = buildWaveSpeedImageRequest({ prompt: "p", image_input: Array.from({ length: 12 }, (_, i) => url(i)) });
-  assert.equal(b.slug, WAVESPEED_SEEDREAM_EDIT); assert.equal((b.body.images as string[]).length, 10);
+  assert.equal(b.slug, WAVESPEED_SEEDREAM_EDIT); assert.equal(b.slug, "bytedance/seedream-v5.0-pro/edit"); assert.equal((b.body.images as string[]).length, 10);
 });
 t("isGenerationProvider accepts replicate|wavespeed|modelark and rejects others", () => {
   assert.deepEqual([...GENERATION_PROVIDERS], ["replicate", "wavespeed", "modelark"]);
