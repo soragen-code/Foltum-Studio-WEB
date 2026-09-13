@@ -1701,16 +1701,14 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             </div>
 
             <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-5 py-4">
-              {promptHasOverride && (
-                <button
-                  onClick={() => savePromptOverride(true)}
-                  disabled={promptSaving || promptLoading}
-                  className="mr-auto inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
-                  data-testid="scene-reset-prompt"
-                >
-                  {promptSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />} Сбросить к авто
-                </button>
-              )}
+              <button
+                onClick={() => savePromptOverride(true)}
+                disabled={promptSaving || promptLoading}
+                className="mr-auto inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
+                data-testid="scene-reset-prompt"
+              >
+                {promptSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />} Сбросить к авто
+              </button>
               <button
                 onClick={copyPromptModal}
                 disabled={promptLoading || !promptText}
