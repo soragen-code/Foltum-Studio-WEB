@@ -1706,6 +1706,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                 disabled={promptSaving || promptLoading}
                 className="mr-auto inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
                 data-testid="scene-reset-prompt"
+                title="Переписать промпт с нуля по текущим правилам и сценарию"
               >
                 {promptSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />} Сбросить к авто
               </button>
