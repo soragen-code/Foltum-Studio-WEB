@@ -12,6 +12,7 @@ import { prisma } from "@/lib/db";
 import { completeJob, failJob, heartbeatJob, isCancelRequested, markCanceled, updateJob } from "@/lib/jobs";
 import { generateImage, GenerationCanceledError } from "@/lib/replicate";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
+import { getBucketConfig } from "@/lib/aws-config";
 import { downscaleReferences } from "@/lib/reference-downscale";
 import { buildPropRegistry, parsePropRegistry } from "@/lib/prop-registry";
 import { buildStoryboardPrompt, type BuildStoryboardPromptResult } from "@/lib/storyboard-prompt";
@@ -153,7 +154,12 @@ export async function runStoryboardJob(params: StoryboardJobParams): Promise<"co
     );
 
     await updateJob(jobId, { progress: 85, message: "Загрузка кадра…" });
-    const storyboardUrl = await uploadRemoteToS3(remote, `public/storyboards/${projectId}/${sceneId}-${jobId}.jpg`, "image/jpeg");
+    // Stage 64b — the key MUST start with the bucket folder prefix like every other published asset
+    // (videos, last frames, downscaled references): objects outside `${folderPrefix}public/` are not covered
+    // by the bucket's public-read policy, the provider gets 403 on the previous_storyboard reference and the
+    // next continuation frame fails with «Input validation error: 403 Forbidden».
+    const { folderPrefix } = getBucketConfig();
+    const storyboardUrl = await uploadRemoteToS3(remote, `${folderPrefix}public/storyboards/${projectId}/${sceneId}-${jobId}.jpg`, "image/jpeg");
 
     // A fresh frame is never pre-approved — the author must look at it first.
     const scene = await prisma.scene.update({
