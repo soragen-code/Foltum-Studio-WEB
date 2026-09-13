@@ -563,8 +563,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     referenceKind = "text_only";
   } else if (characterRefs.length || locationRefs.length || crowdRefs.length) {
     // Stage 51 (46B-0 known-good) + Stage 62 continuity. Priority order, highest first — the trim
-    // (Seedance keeps the first REFERENCE_IMAGE_CAP=30; Kling keeps only the first
-    // KLING_MAX_REFERENCE_IMAGES=7, see capKlingReferences) drops from the TAIL, so the order IS the
+    // (Seedance keeps the first REFERENCE_IMAGE_CAP=30) drops from the TAIL, so the order IS the
     // priority:
     //   1. one-per-character front refs (never dropped);
     //   2. the previous scene's LAST FRAME (Stage 62) — above the base location angles so it is never

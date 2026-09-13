@@ -12,7 +12,6 @@ import {
   type ScenePromptScene, type ScenePromptCharacterLink, type ScenePromptLocation, type ScenePromptPrevious,
 } from "../lib/scene-prompt";
 import { VISUAL_STYLE_ID } from "../lib/visual-style";
-import { capKlingReferences, KLING_MAX_REFERENCE_IMAGES } from "../lib/kling";
 
 let pass = 0;
 const ok = (c: unknown, m: string) => { assert(c, m); console.log("ok:", m); pass++; };
@@ -125,22 +124,6 @@ const build = (opts: {
   ok(r.previousFrameSceneId === "s1", "F: previousFrameSceneId set because the last frame survived the cap");
   // 25 chars are never dropped; they all remain.
   ok(many.every(c => r.referenceImages.includes(styledUrl("char-" + c.characterId))), "F: no character reference is dropped by the cap");
-}
-
-// ── G. Kling cap (7): order = priority; last frame survives while base angles/crowds drop ────────────
-{
-  // 6 characters + last-frame + 3 base + crowds. Kling keeps the first 7 in order.
-  const six = Array.from({ length: 6 }, (_, i) => mkChar("c" + i, "Person" + i));
-  const r = build({ characters: [...six, mkCrowd("k0", "Crowd0")], loc: location() });
-  const kling = capKlingReferences(r.referenceImages);
-  ok(kling.length === KLING_MAX_REFERENCE_IMAGES, "G: Kling keeps exactly 7 references");
-  ok(kling.includes(LAST_FRAME), "G: with 6 characters the last frame is still within Kling's first 7 (above base angles)");
-  ok(!kling.includes(styledUrl("loc-wide")), "G: the base location angles are dropped before the last frame under Kling's cap");
-  // 7 characters → characters fill all 7 slots; the last frame is correctly dropped (characters never sacrificed).
-  const seven = Array.from({ length: 7 }, (_, i) => mkChar("c" + i, "Person" + i));
-  const r2 = build({ characters: seven, loc: location() });
-  const kling2 = capKlingReferences(r2.referenceImages);
-  ok(kling2.length === 7 && !kling2.includes(LAST_FRAME), "G: with 7 characters the last frame is dropped — characters are never sacrificed for it");
 }
 
 console.log(`\nAll ${pass} Stage 62 assertions passed.`);

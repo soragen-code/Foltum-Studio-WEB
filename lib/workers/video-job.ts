@@ -5,9 +5,6 @@ import { translateDialogue, detectSpokenLanguage } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
 import { extractLastFrameBuffer } from "@/lib/ffmpeg";
 import { normalizeVideoModel, videoModelSlug } from "@/lib/ai-models";
-import { startKlingVideo, getKlingTaskState, cancelKlingTask, clampKlingDuration, klingDurationNote, capKlingReferences, fitKlingPrompt, KLING_MODEL_NAME, KLING_RESOLUTION } from "@/lib/kling";
-import { chat } from "@/lib/ai";
-import { normalizeVideoProvider, type VideoProvider } from "@/lib/video-provider";
 import type { PredictionState } from "@/lib/replicate";
 import { getBucketConfig } from "@/lib/aws-config";
 import { VISUAL_STYLE_ID } from "@/lib/visual-style";
@@ -60,13 +57,8 @@ export interface VideoJobState {
   moderationRetries?: number;
   /** Model that actually produced the final video, persisted to scene.videoModel on success. */
   videoModel?: string;
-  /** Stage 47: which provider the prediction was submitted to ("seedance" when absent — legacy state). */
-  provider?: VideoProvider;
-  /** Stage 47: provider-specific notice for the UI, e.g. «Kling: длительность ограничена 15 с». */
-  providerNote?: string;
-  /** Stage 48: the Kling-fitted (≤3000 chars) prompt actually submitted; undefined for Seedance. */
-  klingPrompt?: string;
-  klingPromptChars?: { original: number; submitted: number; truncated: boolean };
+  /** Provider the prediction was submitted to — always "seedance" (Stage 63 removed the Kling path). */
+  provider?: "seedance";
   /** Everything needed to resubmit the same scene with a softer prompt. */
   retry?: ModerationRetryInput;
   /* --- Stage 33/36: what was ACTUALLY submitted, for honest moderation diagnostics --- */
@@ -175,7 +167,6 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       propRegistry: true, // Stage 54: cached registry JSON ({hash, props}) reused across the episode's scenes
       location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true } },
       season: { select: { project: { select: { isTest: true } } } },
-      videoProvider: true, // Stage 47: seedance | kling, read once at job start
     } });
 
     // Stage 4: speech is ALWAYS English. `dialogueEn` holds the voiced lines; legacy scenes written in
@@ -288,12 +279,8 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     // Stage 33: Seedance 2.5 is the only video model (native audio, up to 30 s per clip).
     const provider = normalizeVideoModel(params.provider);
     const modelSlug = videoModelSlug(provider);
-    // Stage 47: per-episode video provider. Kling 3.0 Omni takes the same prompt + ordered reference
-    // list (multi-image reference) and is polled through the same job state; Seedance stays default.
-    const useKling = normalizeVideoProvider(episodeLoc?.videoProvider) === "kling";
     let predictionId: string;
     let attempt: GenerationAttempt;
-    let klingPrompt: string | undefined; // Stage 48: set only on the Kling branch
     let submitMessage: string;
     // Extra state persisted alongside the prediction (moderation auto-recovery).
     const pipelineExtra: Partial<VideoJobState> = {};
@@ -327,10 +314,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       previousFrameSceneId: built.previousFrameSceneId,
     };
     // Stage 46B: scenes are always rendered at 480p — the requested `params.resolution` is ignored.
-    const input = useKling ? {
-      prompt, model: KLING_MODEL_NAME, duration: clampKlingDuration(clipDuration), resolution: KLING_RESOLUTION,
-      aspect_ratio: "9:16", generate_audio: true, watermark: false,
-    } : {
+    const input = {
       prompt, model: modelSlug, duration: clipDuration, resolution: SCENE_RESOLUTION,
       aspect_ratio: "9:16", generate_audio: true, watermark: false,
     };
@@ -339,27 +323,9 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       style: VISUAL_STYLE_ID, language: scene.language || "en", input: safeDiagnosticInput({ ...input, reference, ...submission }),
     };
     diagnostics.push(attempt); await persist(); logAttempt(attempt);
-    if (useKling) {
-      // Kling 3.0 Omni: duration 3–15 s (clamped, noted for the UI), at most 7 reference images (same [ImageN] order).
-      const klingRefs = capKlingReferences(referenceImages);
-      // Stage 48: Kling caps the prompt at 3072 chars → shorten (LLM, then sentence-boundary cut) to 3000.
-      // Only shortening — no censoring/softening. The full prompt stays in `basePrompt`/scene text.
-      const fit = await fitKlingPrompt(prompt, (system, user) => chat(system, user, { temperature: 0.2, maxTokens: 2000 }), { imageCount: klingRefs.length });
-      klingPrompt = fit.prompt;
-      predictionId = await startKlingVideo({ prompt: klingPrompt, referenceImages: klingRefs, durationSeconds: clipDuration });
-      pipelineExtra.provider = "kling";
-      pipelineExtra.videoModel = KLING_MODEL_NAME;
-      pipelineExtra.klingPrompt = klingPrompt;
-      pipelineExtra.klingPromptChars = { original: fit.originalChars, submitted: klingPrompt.length, truncated: fit.truncated };
-      const notes = [klingDurationNote(clipDuration), fit.note].filter((n): n is string => !!n);
-      if (notes.length) pipelineExtra.providerNote = notes.join("; ");
-      // Scene badge shows the real model while the clip is still rendering (finalize re-persists it on success).
-      await prisma.scene.update({ where: { id: sceneId }, data: { videoModel: KLING_MODEL_NAME } }).catch(() => {});
-    } else {
-      // Stage 40: `reference_images` is omitted entirely for text-only submissions (never sent as []).
-      predictionId = await startVideoPrediction({ ...input, ...(referenceImages.length ? { reference_images: referenceImages } : {}) });
-      pipelineExtra.provider = "seedance";
-    }
+    // Stage 40: `reference_images` is omitted entirely for text-only submissions (never sent as []).
+    predictionId = await startVideoPrediction({ ...input, ...(referenceImages.length ? { reference_images: referenceImages } : {}) });
+    pipelineExtra.provider = "seedance";
     submitMessage = SCENE_STAGE_MESSAGE.queued; // Stage 46B: «В очереди» until the provider reports processing
     // Retry plan is still persisted for diagnostics, but moderation is now fail-fast:
     // no automatic rewrite/resubmit happens (see resumeVideoJob). The user edits the prompt manually.
@@ -369,8 +335,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     pipelineExtra.moderationRetries = 0;
     // What was ACTUALLY submitted — handleFailure builds its moderation message from this, never
     // from the scene's stored text (which may differ from a manual override).
-    // For Kling this is the compressed text that actually went out (Stage 48), so «Смотреть промпт» is truthful.
-    pipelineExtra.submittedPrompt = klingPrompt ?? prompt;
+    pipelineExtra.submittedPrompt = prompt;
     pipelineExtra.hasOverride = built.hasOverride;
     pipelineExtra.referenceKind = built.referenceKind;
     pipelineExtra.refCounts = refCounts;
@@ -580,11 +545,8 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
   try {
     // «Отменить генерацию» — check the flag BEFORE the provider status GET, so a cancel goes through even
     // while the provider is unreachable or its status read keeps failing (otherwise the card spun forever).
-    // Stage 47: the prediction is polled/canceled on the provider it was submitted to.
-    const getState = (s: VideoJobState): Promise<PredictionState> =>
-      s.provider === "kling" ? getKlingTaskState(s.predictionId) : getPredictionState(s.predictionId);
-    const cancelState = (s: VideoJobState): Promise<void> =>
-      s.provider === "kling" ? cancelKlingTask(s.predictionId) : cancelVideoPrediction(s.predictionId);
+    const getState = (s: VideoJobState): Promise<PredictionState> => getPredictionState(s.predictionId);
+    const cancelState = (s: VideoJobState): Promise<void> => cancelVideoPrediction(s.predictionId);
     if (fresh.cancelRequested === true || await isCancelRequested(job.id)) {
       await cancelState(state).catch(() => {});
       await handleFailure(job.id, state, new Error("Генерация отменена автором"), state);

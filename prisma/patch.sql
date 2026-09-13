@@ -149,8 +149,7 @@ ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "refLocked" BOOLEAN NOT NULL DE
 ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "refLocked" BOOLEAN NOT NULL DEFAULT false;
 
 
--- Model picker: persist the chosen video model / provider per scene so batch continuation
--- and single-scene regeneration reuse the producer's choice ("seedance" default, or "kling").
+-- Persist the video model per scene (always "seedance" — Seedance 2.5; Stage 63 removed the Kling option).
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "videoModel" TEXT;
 
 
@@ -212,8 +211,9 @@ ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "lookStale" BOOLEAN NOT NULL DEFAUL
 ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "promptOverride" TEXT;
 ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "visualPromptAuto" TEXT;
 
--- Stage 47: per-episode video provider (seedance | kling)
-ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "videoProvider" TEXT NOT NULL DEFAULT 'seedance';
+-- Stage 63: Kling and the per-episode video provider selection are gone — Seedance is the only video path.
+-- (The Stage 47 "Episode"."videoProvider" column is no longer read; it is dropped in a follow-up patch
+-- applied only after this code is live, so the previous deployment never sees a missing column.)
 
 
 -- Stage 54: cached JSON snapshot of the episode prop registry (verbatim prop substitution)
