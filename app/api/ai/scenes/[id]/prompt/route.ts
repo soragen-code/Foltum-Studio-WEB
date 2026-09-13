@@ -35,7 +35,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     where: { id, episode: { season: { project: { userId: session.user.id } } } },
     include: {
       characters: { include: { character: true } },
-      episode: { select: { id: true, location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true } }, season: { select: { project: { select: { isTest: true } } } } } },
+      episode: { select: { id: true, sceneMode: true, location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true } }, season: { select: { project: { select: { isTest: true } } } } } },
     },
   });
   if (!scene) return NextResponse.json({ error: "Сцена не найдена" }, { status: 404 });
@@ -55,6 +55,9 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     // Stage 33: always Seedance 2.5 (legacy stored ids are normalized the same way in the worker).
     provider: scene.videoModel,
     textOnlyWhenNoReferences: Boolean(scene.episode.season?.project?.isTest),
+    // Stage 64: storyboard mode → the (approved) frame is Image1 and the previous last frame is not sent.
+    sceneMode: scene.episode.sceneMode === "storyboard" ? "storyboard" : "text",
+    storyboardUrl: scene.episode.sceneMode === "storyboard" ? scene.storyboardUrl : null,
   });
 
   return NextResponse.json({

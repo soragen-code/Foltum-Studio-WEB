@@ -61,6 +61,10 @@ export async function POST(request: Request) {
     const provider = normalizeVideoModel(parsed.data.provider ?? sceneData.videoModel);
     if (!sceneData.videoPrompt)
       return NextResponse.json({ error: "Scene has no video prompt" }, { status: 400 });
+    // Stage 64 — storyboard mode: the video may only start from an APPROVED storyboard frame.
+    const sceneEpisode = await prisma.episode.findUnique({ where: { id: sceneData.episodeId }, select: { sceneMode: true } });
+    if (sceneEpisode?.sceneMode === "storyboard" && !(sceneData.storyboardApproved && (sceneData.storyboardUrl ?? "").trim()))
+      return NextResponse.json({ error: "Сначала утвердите кадр сториборда" }, { status: 400 });
 
     // Episode must run at least EPISODE_MIN_SECONDS in total → each scene gets its share,
     // never shorter than the tier's base duration. Credits scale with the extra seconds.

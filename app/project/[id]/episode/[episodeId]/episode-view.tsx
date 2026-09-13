@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Header } from '@/components/header'
-import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Copy, Check, FileText, RotateCcw, Save, Plus, Undo2 } from 'lucide-react'
+import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Copy, Check, FileText, RotateCcw, Save, Plus, Undo2, Image as ImageIcon, CircleCheck, Clapperboard, Type } from 'lucide-react'
 import { FrameToolbar, DownloadAllButton } from '@/app/project/[id]/_components/frame-toolbar'
 import { PromptModal, CHARACTER_PROMPT_DESCRIPTION, LOCATION_PROMPT_DESCRIPTION } from '@/app/project/[id]/_components/prompt-modal'
 import { referenceFileName } from '@/lib/download-name'
@@ -24,6 +24,8 @@ import { ASSEMBLE_QUALITIES, ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY, DEFAULT_ASS
 type EpisodePhase = 'script' | 'references' | 'scenes'
 
 const VIDEO_EXPECTED_SEC = 600
+// Stage 64: a Seedream 9:16 storyboard frame takes ~1–2 min including reference download + S3 upload.
+const STORYBOARD_EXPECTED_SEC = 90
 const REF_POLL_MS = 3500
 // Stage 53: full-body front is the primary photo, shown first; front/profile are optional manual slots.
 const SHOT_LABELS = ['В полный рост (референс)', 'Портрет (лицо)', 'Левый профиль']
@@ -35,6 +37,7 @@ const REFERENCE_KIND_LABELS: Record<string, string> = {
   crowd: 'Массовка',
   previous_frame: 'Кадр предыдущей сцены',
   scene: 'Кадр сцены',
+  storyboard: 'Кадр сториборда',
 }
 const referenceKindLabel = (kind: string) => REFERENCE_KIND_LABELS[kind] ?? 'Референс'
 const CHAR_EXTRA_MIN = Math.max(0, CHARACTER_PHOTO_COUNT - 3) // extra angles beyond the 3 base shots → 0 (3 photos)
@@ -64,7 +67,7 @@ const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.ima
 // Stage 17: top up location extras in serverless-safe chunks (a single 12-frame job can overrun the
 // serverless window and get killed — chunking + re-firing guarantees the target is actually reached).
 
-type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; lookStale?: boolean | null; videoModel?: string | null; status: string; hasUndo?: boolean | null; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
+type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; lookStale?: boolean | null; videoModel?: string | null; status: string; hasUndo?: boolean | null; storyboardUrl?: string | null; storyboardApproved?: boolean | null; storyboardPrompt?: string | null; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null }
 
 export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits }: { episode: any; project: any; siblings?: Sibling[]; credits: number }) {
@@ -122,6 +125,16 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [activeGen, setActiveGen] = useState<Record<string, boolean>>({})
   const [videoJobs, setVideoJobs] = useState<Record<string, JobInfo>>({})
   const pollTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  // Stage 64 — storyboard mode: per-scene 9:16 frame jobs (type "storyboard") polled separately from video jobs.
+  const [sbActive, setSbActive] = useState<Record<string, boolean>>({})
+  const [sbJobs, setSbJobs] = useState<Record<string, JobInfo>>({})
+  const sbTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
+  const [sbBusy, setSbBusy] = useState<Record<string, boolean>>({}) // approve / unapprove PATCH in flight
+  const [sbAllStarting, setSbAllStarting] = useState(false)
+  const [modeSaving, setModeSaving] = useState(false)
+  // Read-only «Промпт кадра» modal (storyboard prompt preview).
+  const [sbPromptModal, setSbPromptModal] = useState<{ sceneId: string; number: number; prompt: string; loading: boolean; err: string | null; copied: boolean } | null>(null)
+  const isStoryboardMode = episode?.sceneMode === 'storyboard'
 
   // Stage 12: per-episode references (characters + locations) with a single "generate all" button.
   const initialChars: any[] = (initial.characters?.length ? initial.characters.map((ec: any) => ec.character) : (project.characters ?? []))
@@ -176,6 +189,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const patchScene = (sceneId: string, patch: Partial<Scene>) => setScenes((prev) => prev.map((s) => (s.id === sceneId ? { ...s, ...patch } : s)))
   const stopPolling = (sceneId: string) => { const t = pollTimers.current[sceneId]; if (t) clearTimeout(t); delete pollTimers.current[sceneId] }
   const clearGen = (sceneId: string) => setActiveGen((p) => { const n = { ...p }; delete n[sceneId]; return n })
+  const stopSbPolling = (sceneId: string) => { const t = sbTimers.current[sceneId]; if (t) clearTimeout(t); delete sbTimers.current[sceneId] }
+  const clearSb = (sceneId: string) => setSbActive((p) => { const n = { ...p }; delete n[sceneId]; return n })
+  // Stage 64: the video button unlocks only from an APPROVED storyboard frame.
+  const storyboardReady = (s: Scene) => !!s.storyboardApproved && validUrl(s.storyboardUrl)
 
   const refreshCredits = useCallback(async () => {
     try { const r = await fetch('/api/user/credits', { cache: 'no-store' }); if (r.ok) { const d = await r.json(); if (typeof d?.credits === 'number') setCredits(d.credits) } } catch {}
@@ -245,6 +262,113 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       for (const j of data?.jobs ?? []) if (j?.sceneId && ids.has(j.sceneId) && !pollTimers.current[j.sceneId]) { setActiveGen((p) => ({ ...p, [j.sceneId]: true })); setVideoJobs((p) => ({ ...p, [j.sceneId]: j })); pollVideoJob(j.sceneId, j.id) }
     }).catch(() => {})
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Stage 64 — poll one scene's storyboard job until terminal (same stable-spinner logic as pollVideoJob).
+  const pollStoryboardJob = (sceneId: string, jobId: string) => {
+    stopSbPolling(sceneId)
+    const tick = async () => {
+      try {
+        const res = await fetch(`/api/jobs/${jobId}`, { cache: 'no-store' })
+        if (res.status === 404) { stopSbPolling(sceneId); clearSb(sceneId); return }
+        const data: JobPollResponse = await res.json()
+        if (data?.job) {
+          setSbJobs((prev) => ({ ...prev, [sceneId]: data.job }))
+          if (data.job.status === 'completed' || data.job.status === 'failed' || data.job.status === 'canceled') {
+            stopSbPolling(sceneId); clearSb(sceneId)
+            if (data.job.status === 'failed') setSceneError((prev) => ({ ...prev, [sceneId]: data.job.error ?? 'Не удалось сгенерировать кадр' }))
+            const updated = data.scene ?? data.job.result?.scene
+            if (updated) patchScene(sceneId, updated)
+            void refreshCredits()
+            setTimeout(() => setSbJobs((prev) => { const n = { ...prev }; if (n[sceneId]?.id === jobId) delete n[sceneId]; return n }), 2500)
+            return
+          }
+        }
+      } catch {}
+      sbTimers.current[sceneId] = setTimeout(tick, JOB_POLL_INTERVAL_MS)
+    }
+    tick()
+  }
+  useEffect(() => () => { Object.values(sbTimers.current).forEach(clearTimeout) }, [])
+  // Resume polling for active storyboard jobs after reload.
+  useEffect(() => {
+    fetch(`/api/jobs?projectId=${project.id}&type=storyboard&active=1`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).then((data) => {
+      const ids = new Set(scenes.map((s) => s.id))
+      for (const j of data?.jobs ?? []) if (j?.sceneId && ids.has(j.sceneId) && !sbTimers.current[j.sceneId]) { setSbActive((p) => ({ ...p, [j.sceneId]: true })); setSbJobs((p) => ({ ...p, [j.sceneId]: j })); pollStoryboardJob(j.sceneId, j.id) }
+    }).catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Stage 64 — per-episode scene-generation mode («Текстовый» / «Сториборд»). Switching never touches
+  // rendered scenes: only the way NEW scene videos are produced changes.
+  const setSceneMode = async (sceneMode: 'text' | 'storyboard') => {
+    if (episode?.sceneMode === sceneMode || modeSaving) return
+    setModeSaving(true); setError(null)
+    try {
+      const res = await fetch(`/api/ai/episodes/${episode.id}/scene-mode`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sceneMode }) })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d?.error ?? 'Не удалось сменить режим')
+      setEpisode((p: any) => ({ ...p, sceneMode: d?.sceneMode ?? sceneMode }))
+    } catch (e: any) { setError(e?.message ?? 'Ошибка') }
+    finally { setModeSaving(false) }
+  }
+  // «Сгенерировать кадр» / «Перегенерировать кадр» — POST /api/ai/scenes/[id]/storyboard → {jobId}, then poll.
+  const generateStoryboard = async (sceneId: string) => {
+    setSbActive((p) => ({ ...p, [sceneId]: true })); setError(null)
+    setSceneError((prev) => { const n = { ...prev }; delete n[sceneId]; return n })
+    try {
+      const res = await postJobStart(`/api/ai/scenes/${sceneId}/storyboard`, {})
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data?.jobId) throw new Error(data?.error ?? 'Не удалось запустить генерацию кадра')
+      pollStoryboardJob(sceneId, data.jobId)
+      if (typeof data?.creditsRemaining === 'number') setCredits(data.creditsRemaining); else void refreshCredits()
+    } catch (e: any) { clearSb(sceneId); setSceneError((prev) => ({ ...prev, [sceneId]: e?.message ?? 'Ошибка' })) }
+  }
+  // «Утвердить» / «Снять утверждение» — PATCH {approved} → {scene}.
+  const approveStoryboard = async (sceneId: string, approved: boolean) => {
+    setSbBusy((p) => ({ ...p, [sceneId]: true })); setError(null)
+    try {
+      const res = await fetch(`/api/ai/scenes/${sceneId}/storyboard`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ approved }) })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error ?? 'Не удалось обновить утверждение')
+      if (data?.scene) patchScene(sceneId, data.scene); else patchScene(sceneId, { storyboardApproved: approved })
+    } catch (e: any) { setSceneError((prev) => ({ ...prev, [sceneId]: e?.message ?? 'Ошибка' })) }
+    finally { setSbBusy((p) => { const n = { ...p }; delete n[sceneId]; return n }) }
+  }
+  // «Промпт кадра» — GET /api/ai/scenes/[id]/storyboard → {prompt, renderedPrompt}; read-only modal.
+  const openStoryboardPrompt = async (scene: Scene) => {
+    setSbPromptModal({ sceneId: scene.id, number: scene.number, prompt: '', loading: true, err: null, copied: false })
+    try {
+      const res = await fetch(`/api/ai/scenes/${scene.id}/storyboard`, { cache: 'no-store' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error ?? 'Не удалось загрузить промпт кадра')
+      const text = String(data.prompt ?? data.renderedPrompt ?? '')
+      setSbPromptModal((m) => (m && m.sceneId === scene.id ? { ...m, prompt: text, loading: false } : m))
+    } catch (e: any) {
+      setSbPromptModal((m) => (m && m.sceneId === scene.id ? { ...m, loading: false, err: e?.message ?? 'Не удалось загрузить промпт кадра' } : m))
+    }
+  }
+  const copyStoryboardPrompt = async () => {
+    if (!sbPromptModal?.prompt) return
+    try { await navigator.clipboard.writeText(sbPromptModal.prompt); setSbPromptModal((m) => (m ? { ...m, copied: true } : m)); setTimeout(() => setSbPromptModal((m) => (m ? { ...m, copied: false } : m)), 1500) } catch {}
+  }
+  // «Сгенерировать все кадры» — POST /api/ai/episodes/[id]/storyboard-all → {jobs, insufficient, creditsRemaining}.
+  const generateAllStoryboards = async () => {
+    setSbAllStarting(true); setError(null)
+    try {
+      const res = await postJobStart(`/api/ai/episodes/${episode.id}/storyboard-all`, {})
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok || !Array.isArray(d?.jobs)) throw new Error(d?.error ?? 'Не удалось запустить генерацию кадров')
+      for (const j of d.jobs as Array<{ sceneId: string; jobId: string }>) {
+        setSbActive((p) => ({ ...p, [j.sceneId]: true }))
+        setSceneError((prev) => { const n = { ...prev }; delete n[j.sceneId]; return n })
+        pollStoryboardJob(j.sceneId, j.jobId)
+      }
+      for (const u of (d.insufficient ?? []) as Array<{ sceneId: string; error?: string }>) {
+        setSceneError((prev) => ({ ...prev, [u.sceneId]: u.error ?? 'Недостаточно кредитов' }))
+      }
+      if (typeof d?.creditsRemaining === 'number') setCredits(d.creditsRemaining); else void refreshCredits()
+    } catch (e: any) { setError(e?.message ?? 'Ошибка') }
+    finally { setSbAllStarting(false) }
+  }
 
   // ---- References: refresh characters + locations from the project, drive extra-angle follow-ups ----
   const refreshRefs = useCallback(async () => {
@@ -1085,6 +1209,38 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             {refLocs.length === 0 && <p className="text-sm text-muted-foreground">У эпизода нет привязанных локаций.</p>}
           </div>
 
+          {/* Stage 64 — per-episode scene-generation mode picker (persisted via PATCH scene-mode). */}
+          <div className="mt-6 border-t border-border pt-4" data-testid="scene-mode-picker">
+            <h3 className="font-semibold">Режим генерации сцен</h3>
+            <p className="mt-1 text-xs text-muted-foreground">Выбор действует на все новые генерации сцен этого эпизода; уже готовые ролики не меняются.</p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              {([
+                { id: 'text' as const, title: 'Текстовый', caption: 'Видео сцены генерируется по тексту и референсам, как сейчас', Icon: Type },
+                { id: 'storyboard' as const, title: 'Сториборд', caption: 'Сначала для каждой сцены создаётся кадр 9:16, вы его утверждаете, затем видео генерируется от утверждённого кадра', Icon: Clapperboard },
+              ]).map(({ id, title, caption, Icon }) => {
+                const active = (episode?.sceneMode ?? 'text') === id
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setSceneMode(id)}
+                    disabled={modeSaving}
+                    aria-pressed={active}
+                    className={`flex items-start gap-3 rounded-xl border p-4 text-left transition disabled:opacity-60 ${active ? 'border-primary bg-primary/10 ring-1 ring-primary' : 'border-border bg-card hover:bg-muted'}`}
+                    data-testid={`scene-mode-${id}`}
+                  >
+                    <Icon className={`mt-0.5 h-5 w-5 shrink-0 ${active ? 'text-primary' : 'text-muted-foreground'}`} />
+                    <span className="min-w-0">
+                      <span className="flex items-center gap-2 font-semibold">{title}{active && <span className="inline-flex items-center gap-1 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary"><CircleCheck className="h-3 w-3" /> выбран</span>}</span>
+                      <span className="mt-1 block text-xs text-muted-foreground">{caption}</span>
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+            {modeSaving && <p className="mt-2 inline-flex items-center gap-1 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> Сохраняю режим…</p>}
+          </div>
+
           {/* Stage 59 navigation — Референсы is step 2: back to script · forward to scenes.
               The forward button is enabled once all references (characters + locations) are ready. */}
           <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
@@ -1112,12 +1268,19 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               {genAllStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Сгенерировать все сцены
             </button>
           )}
+          {/* Stage 64 — storyboard mode: start a 9:16 frame for every scene without an approved frame. */}
+          {isStoryboardMode && (
+            <button onClick={generateAllStoryboards} disabled={sbAllStarting || Object.values(sbActive).some(Boolean)} className="inline-flex items-center gap-2 rounded-lg border border-primary/60 px-4 py-2 text-sm font-medium text-primary hover:bg-primary/10 disabled:opacity-50" data-testid="generate-all-storyboards" title="Сгенерировать кадры сториборда для всех сцен без утверждённого кадра">
+              {sbAllStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />} Сгенерировать все кадры
+            </button>
+          )}
           <button onClick={() => setAssembleDialogOpen(true)} disabled={!allReady || stitching} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? 'Склеить готовые сцены в один эпизод' : 'Доступно, когда все сцены готовы'}>
             {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Собрать
           </button>
           <span className="text-xs text-muted-foreground" data-testid="batch-status">{scenes.filter((s) => validUrl(s.videoUrl)).length} из {scenes.length} сцен готово{generatingCount > 0 ? ` · генерируется: ${generatingCount}` : ''}{isAssembled ? ' · эпизод собран' : ''}</span>
           {chainRunActive && <span className="inline-flex items-center gap-1 text-xs text-primary" data-testid="chain-run-active"><Loader2 className="h-3 w-3 animate-spin" /> Цепочка идёт: сцены генерируются по очереди</span>}
           <p className="w-full text-xs text-muted-foreground" data-testid="scenes-hint">
+            {isStoryboardMode && (<><b>Режим «Сториборд»:</b> сначала для каждой сцены генерируется кадр 9:16 («Сгенерировать кадр» на карточке или <b>Сгенерировать все кадры</b>), вы его утверждаете, и только затем видео сцены генерируется от утверждённого кадра. Режим меняется на вкладке «Референсы».{' '}</>)}
             Все сцены стартуют сразу, стыковка между сценами — по сценарному описанию финального кадра предыдущей сцены («Финал кадра»). <b>Сгенерировать все сцены:</b> запускает все ещё не готовые сцены сразу (кредиты списываются за каждую сцену).{' '}
             <b>Собрать:</b> склеивает готовые ролики всех сцен в один эпизод без перегенерации — доступно, когда все сцены готовы. Качество серии (480p/720p/1080p, 30/60 кадров/с) и фоновая музыка выбираются при сборке.
           </p>
@@ -1199,6 +1362,72 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                 </div>
                 </div>
 
+                {/* Stage 64 — storyboard mode: the 9:16 frame slot + generate / approve / prompt buttons (always visible). */}
+                {isStoryboardMode && (() => {
+                  const sbGen = !!sbActive[scene.id]
+                  const sbJob = sbJobs[scene.id]
+                  const hasFrame = validUrl(scene.storyboardUrl)
+                  const approved = storyboardReady(scene)
+                  return (
+                    <div className="mt-3 rounded-lg border border-border bg-background/50 p-3" data-testid="scene-storyboard" data-storyboard-status={sbGen ? 'generating' : approved ? 'approved' : hasFrame ? 'ready' : 'empty'}>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="inline-flex items-center gap-1.5 text-sm font-medium"><ImageIcon className="h-4 w-4" /> Кадр сториборда</div>
+                        {approved && <span className="inline-flex items-center gap-1 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-600" data-testid="storyboard-approved-badge"><CircleCheck className="h-3 w-3" /> Утверждён</span>}
+                      </div>
+                      <div className="mt-2 flex gap-3">
+                        <button
+                          type="button"
+                          onClick={() => hasFrame && openLightbox([scene.storyboardUrl], 0, `Кадр сториборда · Сцена ${scene.number}`)}
+                          className={`aspect-[9/16] h-[200px] shrink-0 overflow-hidden rounded-lg bg-black/80 ${hasFrame ? 'cursor-zoom-in' : 'cursor-default'}`}
+                          data-testid="storyboard-thumb"
+                          title={hasFrame ? 'Открыть кадр' : 'Кадр ещё не сгенерирован'}
+                        >
+                          {sbGen ? (
+                            <div className="flex h-full flex-col items-center justify-center gap-2 p-2 text-center" data-testid="storyboard-spinner">
+                              <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                              <div className="text-[11px] text-muted-foreground">{sbJob?.message ?? 'В очереди…'}</div>
+                            </div>
+                          ) : hasFrame ? (
+                            <img src={scene.storyboardUrl as string} alt={`Кадр сториборда · Сцена ${scene.number}`} className="h-full w-full object-cover" />
+                          ) : (
+                            <div className="flex h-full flex-col items-center justify-center gap-1 p-2 text-center text-[11px] text-muted-foreground"><ImageOff className="h-5 w-5" /> Кадр не сгенерирован</div>
+                          )}
+                        </button>
+                        <div className="flex min-w-0 flex-1 flex-col gap-2">
+                          {sbGen && sbJob && <div data-testid="storyboard-progress"><SmoothProgress job={sbJob} expectedTotalSec={STORYBOARD_EXPECTED_SEC} className="w-full" /></div>}
+                          <button
+                            onClick={() => generateStoryboard(scene.id)}
+                            disabled={sbGen || gen || !scene.videoPrompt}
+                            className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+                            data-testid="storyboard-generate"
+                            title={hasFrame ? 'Сгенерировать новый кадр (текущее утверждение снимается)' : 'Сгенерировать кадр 9:16 для этой сцены'}
+                          >
+                            {sbGen ? <Loader2 className="h-4 w-4 animate-spin" /> : hasFrame ? <RefreshCw className="h-4 w-4" /> : <ImageIcon className="h-4 w-4" />} {hasFrame ? 'Перегенерировать кадр' : 'Сгенерировать кадр'}
+                          </button>
+                          <button
+                            onClick={() => approveStoryboard(scene.id, !approved)}
+                            disabled={sbGen || gen || !hasFrame || !!sbBusy[scene.id]}
+                            className={`inline-flex w-full items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium disabled:opacity-50 ${approved ? 'border-border hover:bg-muted' : 'border-emerald-600/60 text-emerald-700 hover:bg-emerald-500/10'}`}
+                            data-testid="storyboard-approve"
+                            title={approved ? 'Снять утверждение кадра' : hasFrame ? 'Утвердить кадр — после этого можно генерировать видео сцены' : 'Сначала сгенерируйте кадр'}
+                          >
+                            {sbBusy[scene.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : approved ? <X className="h-4 w-4" /> : <CircleCheck className="h-4 w-4" />} {approved ? 'Снять утверждение' : 'Утвердить'}
+                          </button>
+                          <button
+                            onClick={() => openStoryboardPrompt(scene)}
+                            disabled={!scene.videoPrompt}
+                            className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
+                            data-testid="storyboard-view-prompt"
+                            title="Посмотреть промпт кадра сториборда"
+                          >
+                            <FileText className="h-4 w-4" /> Промпт кадра
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })()}
+
                 {sceneError[scene.id] && (
                   <div className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
                     <p data-testid="scene-error">{sceneError[scene.id]}</p>
@@ -1230,14 +1459,19 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                         {cancelling[scene.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />} {cancelling[scene.id] ? 'Останавливаю...' : 'Отменить генерацию'}
                       </button>
                     ) : !ready ? (
-                      <button
-                        onClick={() => generateScene(scene.id, true)}
-                        className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-                        data-testid="scene-generate"
-                        title="Сгенерировать эту сцену"
-                      >
-                        <Wand2 className="h-4 w-4" /> Сгенерировать сцену
-                      </button>
+                      <div className="flex w-full flex-col gap-1">
+                        <button
+                          onClick={() => generateScene(scene.id, true)}
+                          disabled={isStoryboardMode && !storyboardReady(scene)}
+                          className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+                          data-testid="scene-generate"
+                          title={isStoryboardMode && !storyboardReady(scene) ? 'Сначала утвердите кадр сториборда' : 'Сгенерировать эту сцену'}
+                        >
+                          <Wand2 className="h-4 w-4" /> Сгенерировать сцену
+                        </button>
+                        {/* Stage 64: in storyboard mode the video starts only from an approved frame. */}
+                        {isStoryboardMode && !storyboardReady(scene) && <span className="text-center text-[11px] text-muted-foreground" data-testid="scene-generate-gate">Сначала утвердите кадр</span>}
+                      </div>
                     ) : (
                       <button
                         onClick={() => setRegenAsk(scene.id)}
@@ -1494,6 +1728,37 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                 {promptSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : promptSaved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />} {promptSaved ? 'Сохранено' : 'Сохранить'}
               </button>
               <button onClick={() => setPromptModal(null)} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted">Закрыть</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stage 64 — read-only «Промпт кадра» modal: the exact Seedream prompt of the scene's storyboard frame. */}
+      {sbPromptModal && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" data-testid="storyboard-prompt-modal">
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-xl border border-border bg-card shadow-xl">
+            <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
+              <div>
+                <h3 className="flex items-center gap-2 font-display text-lg font-bold"><ImageIcon className="h-5 w-5" /> Промпт кадра · Сцена {sbPromptModal.number}</h3>
+                <p className="mt-1 text-xs text-muted-foreground">Текст, по которому генерируется кадр сториборда 9:16 этой сцены. Референсы показаны как <code className="rounded bg-muted px-1">[Image1]…[ImageN]</code>. Только просмотр и копирование.</p>
+              </div>
+              <button onClick={() => setSbPromptModal(null)} className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Закрыть" data-testid="storyboard-prompt-close"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+              {sbPromptModal.loading ? (
+                <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /> Загрузка промпта…</div>
+              ) : (
+                <>
+                  {sbPromptModal.err && <p className="mb-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive" data-testid="storyboard-prompt-error">{sbPromptModal.err}</p>}
+                  <textarea value={sbPromptModal.prompt} readOnly spellCheck={false} className="h-[45vh] w-full resize-none whitespace-pre-wrap rounded-lg border border-border bg-background px-3 py-2 font-mono text-xs leading-relaxed" data-testid="storyboard-prompt-text" placeholder="Промпт кадра…" />
+                </>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-5 py-4">
+              <button onClick={copyStoryboardPrompt} disabled={sbPromptModal.loading || !sbPromptModal.prompt} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50" data-testid="storyboard-copy-prompt">
+                {sbPromptModal.copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />} {sbPromptModal.copied ? 'Скопировано' : 'Копировать'}
+              </button>
+              <button onClick={() => setSbPromptModal(null)} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted">Закрыть</button>
             </div>
           </div>
         </div>

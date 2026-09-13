@@ -41,12 +41,14 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   if (!episode) return NextResponse.json({ error: "Episode not found" }, { status: 404 });
   const user = await prisma.user.findUnique({ where: { id: session.user.id }, select: { credits: true } });
   const tier = resolvePowerTier(episode.season.project);
-  const pendingScenes = episode.scenes.filter((s) => !s.videoUrl && s.status !== "generating");
+  // Stage 64: in storyboard mode only scenes with an APPROVED frame can be generated.
+  const storyboardReady = (s: { storyboardApproved: boolean; storyboardUrl: string | null }) => episode.sceneMode !== "storyboard" || (s.storyboardApproved && !!(s.storyboardUrl ?? "").trim());
+  const pendingScenes = episode.scenes.filter((s) => !s.videoUrl && s.status !== "generating" && storyboardReady(s));
   const plan = sceneClipPlan(tier.id, pendingScenes.length ? pendingScenes : episode.scenes);
   const { clips: _clips, ...rest } = plan;
   return NextResponse.json({ sceneCount: episode.scenes.length, pendingCount: pendingScenes.length, ...rest, total: pendingScenes.length ? plan.total : 0, credits: user?.credits ?? 0, tier: tier.id, resolution: tier.resolution,
     // Stage 40: generation order of this episode and the (in-order) scenes a chain run would go through.
-    chainMode: episode.chainMode, chainRunActive: episode.chainRunActive, chainRunNote: episode.chainRunNote,
+    sceneMode: episode.sceneMode, chainMode: episode.chainMode, chainRunActive: episode.chainRunActive, chainRunNote: episode.chainRunNote,
     chainSceneNumbers: chainOrder(episode.scenes).map((s) => s.number) });
 }
 
@@ -77,6 +79,12 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   const project = episode.season.project;
   const user = await prisma.user.findUniqueOrThrow({ where: { id: session.user.id } });
   const tier = resolvePowerTier(project);
+  // Stage 64 — STORYBOARD MODE: only scenes with an APPROVED storyboard frame may be generated (text mode: every scene).
+  const storyboardMode = episode.sceneMode === "storyboard";
+  const storyboardReady = (s: { storyboardApproved: boolean; storyboardUrl: string | null }) => !storyboardMode || (s.storyboardApproved && !!(s.storyboardUrl ?? "").trim());
+  if (storyboardMode && !episode.scenes.some((s) => storyboardReady(s) && s.videoPrompt)) {
+    return NextResponse.json({ error: "Нет сцен с утверждённым кадром сториборда — сначала утвердите кадры" }, { status: 400 });
+  }
 
   // Stage 40 — CHAIN MODE: strictly one scene at a time. Only the first pending scene is charged and
   // started here; the worker charges and starts each following scene when the previous one is
@@ -90,7 +98,8 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       const scene = episode.scenes.find((s) => s.id === running.sceneId);
       return NextResponse.json({ chain: true, jobs: [{ sceneId: running.sceneId, sceneNumber: scene?.number ?? 0, jobId: running.id, resumed: true }], started: 0, insufficient: [], plan: null, creditsRemaining: user.credits ?? 0 });
     }
-    const candidates = force ? episode.scenes.map((s) => ({ ...s, videoUrl: null })) : episode.scenes;
+    const chainScenes = episode.scenes.filter((s) => storyboardReady(s));
+    const candidates = force ? chainScenes.map((s) => ({ ...s, videoUrl: null })) : chainScenes;
     const first = nextChainScene(candidates);
     if (!first) return NextResponse.json({ error: "Все сцены эпизода уже сгенерированы" }, { status: 400 });
     const duration = sceneClipSeconds(tier.id, first.durationSec);
@@ -118,6 +127,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   const toStart: typeof episode.scenes = [];
   for (const scene of episode.scenes) {
     if (!scene.videoPrompt) continue;
+    if (!storyboardReady(scene)) continue; // Stage 64: unapproved storyboard → skipped, never charged
     await failStaleJobs({ sceneId: scene.id, type: "video" });
     const active = await prisma.generationJob.findFirst({ where: { sceneId: scene.id, type: "video", status: { in: ["pending", "processing"] } }, orderBy: { createdAt: "desc" } });
     if (active) { jobs.push({ sceneId: scene.id, sceneNumber: scene.number, jobId: active.id, resumed: true }); continue; }

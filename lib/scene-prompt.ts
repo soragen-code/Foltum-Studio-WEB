@@ -237,7 +237,22 @@ export interface BuildScenePromptInput {
    * (e.g. a blue tin) looks identical in every scene. Empty / omitted = no shared props.
    */
   props?: PropRegistryEntry[];
+  /**
+   * Stage 64 — the episode's scene-generation mode. In "storyboard" mode the scene's APPROVED
+   * storyboard frame (`storyboardUrl`) is sent as the FIRST reference (Image1) and the previous
+   * scene's last frame is not sent at all. Omitted / "text" / no storyboardUrl → the Stage 62
+   * text-mode path, byte for byte.
+   */
+  sceneMode?: "text" | "storyboard" | null;
+  /** Stage 64 — the scene's storyboard frame URL (used only when sceneMode === "storyboard"). */
+  storyboardUrl?: string | null;
 }
+
+/** Stage 64 — note attached to the storyboard frame (Image1) in storyboard mode. */
+export const STORYBOARD_FIRST_FRAME_NOTE =
+  "This is the FIRST FRAME of this scene — open on exactly this composition, placement of every person and object, set dressing, light and palette; from here the described action and camera cuts proceed.";
+/** Stage 64 — the REFERENCE MAP entry for the storyboard frame (always Image1 in storyboard mode). */
+export const STORYBOARD_REFERENCE_MAP_ENTRY = "Image1 = first frame of this scene (storyboard)";
 
 /**
  * Stage 36 removed the first-frame (`image`) path; Stage 38 removed the "previous_frame" reference
@@ -342,11 +357,14 @@ export function buildPeopleCounter(individuals: { name: string }[], hasCrowd: bo
  * without over-committing to indices the cap could shift. Only "same place, same light" is asserted
  * about the location — its full description stays on the reference photo and is NEVER re-typed here.
  */
-export function buildReferenceMap(individuals: { name: string }[], locationName: string | null, crowds: { name: string }[]): string {
+export function buildReferenceMap(individuals: { name: string }[], locationName: string | null, crowds: { name: string }[], leading?: string): string {
+  // Stage 64: `leading` is the storyboard frame entry ("Image1 = first frame …") — every character index shifts by one.
+  const offset = leading ? 1 : 0;
   const parts = individuals
     .map((c, i) => ({ nm: (c.name ?? "").trim(), i }))
     .filter(x => x.nm)
-    .map(x => `Image${x.i + 1} = ${x.nm}`);
+    .map(x => `Image${x.i + 1 + offset} = ${x.nm}`);
+  if (leading) parts.unshift(leading);
   const tail: string[] = [];
   if (locationName) tail.push(`the location "${locationName}" from several angles (same place, same light — only the camera angle changes between shots)`);
   crowds.forEach(c => { const nm = (c.name ?? "").trim(); if (nm) tail.push(`the crowd "${nm}" (extras)`); });
@@ -381,6 +399,19 @@ export function buildNegatives(isNarration: boolean): string {
   return `${SCENE_SECTION.negatives}: ${base}${extra}.`;
 }
 
+/** The single video/storyboard anchor photo of a character: the styled full-body frame, else the legacy front portrait (Stage 53). */
+export function characterAnchorUrl(c: ScenePromptCharacterLink): string {
+  return isStyledAsset(c.imageFull) ? c.imageFull! : c.imageFront!;
+}
+/** Stage 64 — identity note attached to every character reference (shared by the video and storyboard prompts). */
+export function characterReferenceNote(name: string): string {
+  return `defines ${name}'s photorealistic appearance and identity; use the scene's staging and camera.`;
+}
+/** Stage 64 — note attached to every location angle reference (shared by the video and storyboard prompts). */
+export function locationReferenceNote(locationName: string, angle: string): string {
+  return `the location "${locationName}" — ${angle} angle. Same place, same time of day, same light and palette in every shot. Keep the camera inside this location and match this lighting exactly.`;
+}
+
 /**
  * Assemble the final Seedance prompt for a scene. Pure and deterministic: identical inputs always
  * produce the identical prompt, with no side effects and no real reference URLs in the text.
@@ -404,7 +435,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // Stage 51/53 — reference SELECTION (single full-body anchor per character, all location angles,
   // crowds). Moved up in Stage 54 so the REFERENCE MAP / PEOPLE / PROPS sections can name what is sent.
   // The selection logic itself is UNCHANGED (see the strategy note further down).
-  const anchorUrl = (c: ScenePromptCharacterLink) => (isStyledAsset(c.imageFull) ? c.imageFull! : c.imageFront!);
+  const anchorUrl = characterAnchorUrl;
   const styled = characters.filter(c => isStyledAsset(c.imageFull) || isStyledAsset(c.imageFront));
   const individualsAll = styled.filter(c => c.tier !== "CROWD");
   const crowds = styled.filter(c => c.tier === "CROWD");
@@ -421,11 +452,11 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const locationExtras = location ? parseLocationExtra(location.imageExtra).slice(0, LOCATION_EXTRA_REF_CAP) : [];
   const effectiveLocation = locationAngles.length ? location : null;
   type Ref = SceneReference & { id: string };
-  const characterRefs: Ref[] = individuals.map(c => ({ url: anchorUrl(c), kind: "character", id: c.characterId, note: `defines ${c.name}'s photorealistic appearance and identity; use the scene's staging and camera.` }));
+  const characterRefs: Ref[] = individuals.map(c => ({ url: anchorUrl(c), kind: "character", id: c.characterId, note: characterReferenceNote(c.name) }));
   const locationRefs: Ref[] = [
     ...locationAngles.map(a => ({ url: a.url, angle: a.angle as string })),
     ...(effectiveLocation ? locationExtras.map((url, i) => ({ url, angle: locationExtraLabel(i) })) : []),
-  ].map(a => ({ url: a.url, kind: "location" as const, id: effectiveLocation!.id, note: `the location "${effectiveLocation!.name}" — ${a.angle} angle. Same place, same time of day, same light and palette in every shot. Keep the camera inside this location and match this lighting exactly.` }));
+  ].map(a => ({ url: a.url, kind: "location" as const, id: effectiveLocation!.id, note: locationReferenceNote(effectiveLocation!.name, a.angle) }));
   const crowdRefs: Ref[] = crowds.map(c => ({ url: anchorUrl(c), kind: "crowd", id: c.characterId, note: `defines the look of the group "${c.name}" (extras): who they are and how they are dressed.` }));
   // Stage 44 — the BASE photographed angles vs the extra angles are separated so the Stage 62 last-frame
   // ref can be prioritized above the extras (and above crowds) but not above the base angles.
@@ -440,9 +471,17 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // for a sequence break (a new arrangement starts) nor in text-only mode (no references are sent at all).
   const continuesSameLocation = !!previous && !breaksSequence(scene.continuesFrom);
   const previousLastFrameUrl = continuesSameLocation ? (previous!.lastFrameUrl ?? "").trim() : "";
-  const lastFrameRefs: Ref[] = previousLastFrameUrl
+  const lastFrameRefsAll: Ref[] = previousLastFrameUrl
     ? [{ url: previousLastFrameUrl, kind: "previous_frame", id: previous!.id, note: LAST_FRAME_CONTINUITY_NOTE }]
     : [];
+  // Stage 64 — storyboard mode: the scene's approved storyboard still is the FIRST reference (the first
+  // frame of the clip) and REPLACES the previous scene's last frame (continuity is carried by the
+  // storyboard itself, which was generated from that frame). Only when the episode is in storyboard
+  // mode AND the scene has a storyboard URL; otherwise this is a no-op and the Stage 62 path is intact.
+  const storyboardUrl = (input.storyboardUrl ?? "").trim();
+  const storyboardMode = input.sceneMode === "storyboard" && storyboardUrl.length > 0;
+  const storyboardRefs: Ref[] = storyboardMode ? [{ url: storyboardUrl, kind: "storyboard", id: scene.id, note: STORYBOARD_FIRST_FRAME_NOTE }] : [];
+  const lastFrameRefs: Ref[] = storyboardMode ? [] : lastFrameRefsAll;
   // Reduced set (individual characters + the wide location angle) kept for diagnostics.
   const fallbackRefs: SceneReference[] = [...characterRefs, ...locationRefs.slice(0, 1)].slice(0, REFERENCE_IMAGE_CAP).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
 
@@ -452,7 +491,9 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   //  • CLOTHING & PROPS — the episode registry props shown in THIS scene, substituted VERBATIM;
   //  • NEGATIVES — the fixed do-not block (appended after the body).
   const matchedProps = matchPropsInText(input.props ?? [], mentionText);
-  const referenceMap = buildReferenceMap(individuals, effectiveLocation ? effectiveLocation.name : null, crowds);
+  const referenceMap = storyboardMode
+    ? buildReferenceMap(individuals, effectiveLocation ? effectiveLocation.name : null, crowds, STORYBOARD_REFERENCE_MAP_ENTRY)
+    : buildReferenceMap(individuals, effectiveLocation ? effectiveLocation.name : null, crowds);
   const peopleCounter = buildPeopleCounter(characters.filter(c => c.tier !== "CROWD"), characters.some(c => c.tier === "CROWD"));
   const propsSection = buildPropsSection(matchedProps);
   const structureBlock = [referenceMap, peopleCounter, propsSection].filter(Boolean).join("\n");
@@ -561,7 +602,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     // after a provider block that the text alone cannot explain.
     reference = { mode: "text_only", sceneId: scene.id };
     referenceKind = "text_only";
-  } else if (characterRefs.length || locationRefs.length || crowdRefs.length) {
+  } else if (characterRefs.length || locationRefs.length || crowdRefs.length || storyboardRefs.length) {
     // Stage 51 (46B-0 known-good) + Stage 62 continuity. Priority order, highest first — the trim
     // (Seedance keeps the first REFERENCE_IMAGE_CAP=30) drops from the TAIL, so the order IS the
     // priority:
@@ -573,7 +614,9 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     //   5. crowds.
     // So the trim drops crowds → extra angles → base angles → last-frame, never the characters. With no
     // last-frame this collapses to the exact previous order (characters → base+extra location → crowds).
-    const ordered: Ref[] = [...characterRefs, ...lastFrameRefs, ...baseLocationRefs, ...extraLocationRefs, ...crowdRefs];
+    // Stage 64 — storyboard mode: the storyboard frame goes FIRST (never dropped by the trim, since the
+    // characters alone never reach the cap); lastFrameRefs is empty in that mode.
+    const ordered: Ref[] = [...storyboardRefs, ...characterRefs, ...lastFrameRefs, ...baseLocationRefs, ...extraLocationRefs, ...crowdRefs];
     const refs: Ref[] = ordered.slice(0, REFERENCE_IMAGE_CAP);
     const keptLocation = refs.filter(r => r.kind === "location");
     const keptLastFrame = refs.some(r => r.kind === "previous_frame");
@@ -586,6 +629,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
       locationId: keptLocation.length ? effectiveLocation!.id : null,
       kinds: refs.map(r => r.kind),
       previousFrameSceneId, // Stage 62: the previous scene's id when its last frame is a continuity ref, else null
+      ...(storyboardMode ? { storyboardUrl } : {}), // Stage 64: the storyboard frame sent as Image1
     };
     referenceKind = "character_references";
     // With a manual override the producer owns the full text — never append the reference notes

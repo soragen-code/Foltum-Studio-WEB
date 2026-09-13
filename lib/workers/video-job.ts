@@ -69,7 +69,7 @@ export interface VideoJobState {
   /** character_references | new_scene_reference | text_only */
   referenceKind?: string;
   /** Counts of the reference images actually sent (Stage 38: `chained` is always false — the previous frame is never sent; kept for old state records). */
-  refCounts?: { characters: number; location: number; crowd: number; scene: number; chained: boolean };
+  refCounts?: { characters: number; location: number; crowd: number; scene: number; chained: boolean; storyboard?: number };
   /** Width the references were downscaled to before submission. */
   referenceWidth?: number;
   /** Stage 36: the exact ordered list of reference images sent (768px URLs), for UI previews. */
@@ -163,11 +163,18 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     }) : null;
     const episodeLoc = await prisma.episode.findUnique({ where: { id: scene.episodeId }, select: {
       id: true,
+      sceneMode: true, // Stage 64: "text" | "storyboard"
       script: true, // Stage 54: source text the prop registry is extracted from
       propRegistry: true, // Stage 54: cached registry JSON ({hash, props}) reused across the episode's scenes
       location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true } },
       season: { select: { project: { select: { isTest: true } } } },
     } });
+
+    // Stage 64 — storyboard mode: the video may only be generated from an APPROVED storyboard frame.
+    const storyboardMode = episodeLoc?.sceneMode === "storyboard";
+    if (storyboardMode && !(scene.storyboardApproved && (scene.storyboardUrl ?? "").trim())) {
+      throw new Error("Сначала утвердите кадр сториборда");
+    }
 
     // Stage 4: speech is ALWAYS English. `dialogueEn` holds the voiced lines; legacy scenes written in
     // another language are translated once HERE (worker-only, network) and the translation is saved.
@@ -230,6 +237,9 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       props: episodeProps, // Stage 54: canonical episode props, substituted VERBATIM per scene
       // Stage 40: a test episode has no linked characters/location → plain text-to-video, no Flux still.
       textOnlyWhenNoReferences: Boolean(episodeLoc?.season?.project?.isTest),
+      // Stage 64: in storyboard mode the approved frame is Image1 and the previous last frame is not sent.
+      sceneMode: storyboardMode ? "storyboard" : "text",
+      storyboardUrl: storyboardMode ? scene.storyboardUrl : null,
     });
     let prompt = built.prompt;
     const basePrompt = built.basePrompt;
@@ -305,6 +315,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       crowd: retryRefs.filter(r => r.kind === "crowd").length,
       scene: retryRefs.filter(r => r.kind === "scene").length,
       chained: false, // Stage 38: the previous scene's last frame is never sent as a reference.
+      storyboard: retryRefs.filter(r => r.kind === "storyboard").length, // Stage 64: the approved storyboard frame (Image1)
     };
     // Exact submitted list (downscaled URLs, same order as [ImageN]) for the scene-card previews.
     const submittedReferences = referenceImages.map((url, i) => ({ url, kind: retryRefs[i]?.kind ?? "reference" }));
@@ -483,9 +494,9 @@ async function moderationMessage(sceneId: string, error: unknown, state?: VideoJ
   const hints = moderationHints(submitted);
   const counts = state?.refCounts;
   // Stage 38: the previous scene's frame is never sent, so the message lists only portraits / location angles / crowd.
-  const imagesSent = counts ? counts.characters + counts.location + counts.crowd + counts.scene : null;
+  const imagesSent = counts ? counts.characters + counts.location + counts.crowd + counts.scene + (counts.storyboard ?? 0) : null;
   const countsText = counts
-    ? ` Отправлено изображений: ${imagesSent} — портретов: ${counts.characters}, ракурсов локации: ${counts.location}, массовки: ${counts.crowd}${counts.scene ? `, кадр сцены: ${counts.scene}` : ""}.`
+    ? ` Отправлено изображений: ${imagesSent} — портретов: ${counts.characters}, ракурсов локации: ${counts.location}, массовки: ${counts.crowd}${counts.scene ? `, кадр сцены: ${counts.scene}` : ""}${counts.storyboard ? `, кадр сториборда: ${counts.storyboard}` : ""}.`
     : "";
   let message: string;
   if (state?.hasOverride && !hints.length && state.referenceKind !== "text_only") {

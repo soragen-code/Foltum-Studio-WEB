@@ -177,6 +177,7 @@ model Episode {
   chainMode     String   @default("parallel") // stage 40: scene generation order — "parallel" (all at once, scripted end-state hand-off) | "chain" (one after another, the actual last frame is described and fed to the next scene)
   chainRunActive Boolean @default(false) // stage 40: a «Сгенерировать все» chain run is in progress — the worker starts the next pending scene after each finished one
   chainRunNote  String?  @db.Text // stage 40: why the last chain run stopped («Цепочка остановлена на сцене N: …»), null while running / after a clean finish
+  sceneMode     String   @default("text") // stage 64: scene generation mode — "text" (video from text + references) | "storyboard" (a 9:16 still frame per scene is generated and approved first, then the video opens on that frame)
   propRegistry  String?  @db.Text // stage 54: cached JSON snapshot of the episode PROP REGISTRY ({hash, props:[{id,name,description}]}) — auto-extracted from the script, re-built when the hash changes, substituted VERBATIM into each scene's CLOTHING & PROPS section. DATA cache, not a behaviour toggle.
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -296,6 +297,10 @@ model Scene {
   lookCache     String?  @db.Text // stage 46B-1: JSON {hash, videoPrompt, startState, endState, openingState} — scene text rewritten to the CURRENT character look
   lookStale     Boolean  @default(false) // stage 46B-1: a linked character's appearance changed after this scene's video was rendered
   prevSnapshot  Json?    // stage 60: one previous version for one-step undo
+  storyboardUrl      String?  // stage 64: 9:16 storyboard still frame of this scene (S3) — the FIRST FRAME reference of the video in storyboard mode
+  storyboardApproved Boolean  @default(false) // stage 64: the author approved the storyboard frame — video generation in storyboard mode is allowed only then
+  storyboardPrompt   String?  @db.Text // stage 64: the exact Seedream prompt text the storyboard frame was generated from
+  storyboardJobId    String?  // stage 64: GenerationJob id of the last storyboard frame job
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

@@ -243,3 +243,13 @@ export const locationFrameDeleteSchema = z.object({
   slot: z.enum(["master", "reverse", "detail", "extra"]),
   index: z.number().int().min(0).max(19).optional(),
 });
+
+// ---- Stage 64 ----
+/** PATCH /api/ai/episodes/[id]/scene-mode — per-episode scene generation mode. */
+export const sceneModeSchema = z.object({
+  sceneMode: z.enum(["text", "storyboard"]),
+});
+/** PATCH /api/ai/scenes/[id]/storyboard — approve / un-approve the rendered storyboard frame. */
+export const storyboardApproveSchema = z.object({
+  approved: z.boolean(),
+});

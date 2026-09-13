@@ -231,3 +231,11 @@ ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "newFlow" BOOLEAN NOT NULL DEFAUL
 ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "prevSnapshot" JSONB;
 ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "prevSnapshot" JSONB;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "prevSnapshot" JSONB;
+
+
+-- Stage 64: storyboard scene-generation mode (per-episode mode + per-scene approved 9:16 frame)
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "sceneMode" TEXT NOT NULL DEFAULT 'text';
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "storyboardUrl" TEXT;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "storyboardApproved" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "storyboardPrompt" TEXT;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "storyboardJobId" TEXT;
