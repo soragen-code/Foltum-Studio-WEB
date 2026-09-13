@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db";
-import { startVideoPrediction, startImagePrediction, getPredictionState, cancelVideoPrediction } from "@/lib/replicate";
+// Stage 70: scene video generation moved to WaveSpeed; scene-still (Seedream image) stays on Replicate.
+import { startImagePrediction, getPredictionState } from "@/lib/replicate";
+import { startVideoPrediction, getVideoPredictionState, cancelVideoPrediction } from "@/lib/wavespeed";
 import { translateDialogue, detectSpokenLanguage } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
 import { extractLastFrameBuffer } from "@/lib/ffmpeg";
@@ -556,7 +558,7 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
   try {
     // «Отменить генерацию» — check the flag BEFORE the provider status GET, so a cancel goes through even
     // while the provider is unreachable or its status read keeps failing (otherwise the card spun forever).
-    const getState = (s: VideoJobState): Promise<PredictionState> => getPredictionState(s.predictionId);
+    const getState = (s: VideoJobState): Promise<PredictionState> => getVideoPredictionState(s.predictionId);
     const cancelState = (s: VideoJobState): Promise<void> => cancelVideoPrediction(s.predictionId);
     if (fresh.cancelRequested === true || await isCancelRequested(job.id)) {
       await cancelState(state).catch(() => {});

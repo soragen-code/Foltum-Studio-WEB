@@ -19,7 +19,7 @@ export function classifyProviderError(error: unknown): FailureKind {
     if (/output\s+video|video.*copyright/.test(text)) return "copyright_video";
     return "copyright";
   }
-  if (/moderation|content policy|sensitive|flagged|safety/.test(text)) return "moderation";
+  if (/moderation|content policy|sensitive|flagged|safety|risk|violat|nsfw|prohibited|blocked|not allowed/.test(text)) return "moderation";
   return "provider";
 }
 
