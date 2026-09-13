@@ -101,7 +101,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   })
   const [sceneEdit, setSceneEdit] = useState<Record<string, string>>({})
   const [sceneBusy, setSceneBusy] = useState<Record<string, boolean>>({})
-  const [regenAsk, setRegenAsk] = useState<string | null>(null) // sceneId awaiting paid regen confirmation
   const [cancelAsk, setCancelAsk] = useState<string | null>(null) // sceneId awaiting «Отменить генерацию» confirmation
   const [cancelling, setCancelling] = useState<Record<string, boolean>>({}) // per-scene: cancel request in flight
   const [sceneError, setSceneError] = useState<Record<string, string>>({}) // per-scene generation error shown on the card
@@ -667,7 +666,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const res = await fetch(`/api/ai/scenes/${scene.id}/revise`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instruction }) })
       const data = await res.json(); if (!res.ok) throw new Error(data?.error ?? 'Не удалось изменить сцену')
-      patchScene(scene.id, { ...data.scene, hasUndo: true }); setSceneEdit((t) => ({ ...t, [scene.id]: '' })); setRegenAsk(scene.id)
+      patchScene(scene.id, { ...data.scene, hasUndo: true }); setSceneEdit((t) => ({ ...t, [scene.id]: '' }))
+      // Stage 79a: no confirmation — «Изменить» rewrites the scene AND re-renders the clip at once.
+      await regenScene(scene.id)
     } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setSceneBusy((b) => { const n = { ...b }; delete n[scene.id]; return n }) }
   }
 
@@ -685,7 +686,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // Single-scene background generation (POST /api/ai/generate-video → runVideoJob).
   // Stage 33: Seedance 2.5 is the only video model — no `provider` is sent; the route resolves it.
   const generateScene = async (sceneId: string, _withModel: boolean) => {
-    setRegenAsk(null); setActiveGen((p) => ({ ...p, [sceneId]: true })); setError(null)
+    setActiveGen((p) => ({ ...p, [sceneId]: true })); setError(null)
     setSceneError((prev) => { const n = { ...prev }; delete n[sceneId]; return n })
     setSceneErrorRefs((prev) => { const n = { ...prev }; delete n[sceneId]; return n })
     try {
@@ -1341,8 +1342,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       </div>
                     ) : (
                       <button
-                        onClick={() => setRegenAsk(scene.id)}
-                        disabled={regenAsk === scene.id}
+                        onClick={() => regenScene(scene.id)}
+                        disabled={gen}
+                        title="Перегенерировать ролик сразу, без подтверждения"
                         className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
                         data-testid="scene-regenerate"
                       >
@@ -1378,15 +1380,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       <div className="mt-2 flex gap-2">
                         <button onClick={() => cancelSceneGen(scene.id)} className="inline-flex items-center gap-1 rounded-lg bg-destructive px-3 py-1.5 text-destructive-foreground" data-testid="cancel-ok"><X className="h-4 w-4" /> Да, отменить</button>
                         <button onClick={() => setCancelAsk(null)} className="rounded-lg border border-border px-3 py-1.5" data-testid="cancel-keep">Продолжить генерацию</button>
-                      </div>
-                    </div>
-                  )}
-                  {regenAsk === scene.id && (
-                    <div className="rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm" data-testid="regen-confirm">
-                      Сцена переписана. Перегенерировать ролик?
-                      <div className="mt-2 flex gap-2">
-                        <button onClick={() => regenScene(scene.id)} disabled={gen} className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-primary-foreground disabled:opacity-50" data-testid="regen-ok">{gen ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Перегенерировать</button>
-                        <button onClick={() => setRegenAsk(null)} className="rounded-lg border border-border px-3 py-1.5">Позже</button>
                       </div>
                     </div>
                   )}
