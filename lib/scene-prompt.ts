@@ -253,6 +253,15 @@ export const STORYBOARD_FIRST_FRAME_NOTE =
   "This is the FIRST FRAME of this scene — open on exactly this composition, placement of every person and object, set dressing, light and palette; from here the described action and camera cuts proceed.";
 /** Stage 64 — the REFERENCE MAP entry for the storyboard frame (always Image1 in storyboard mode). */
 export const STORYBOARD_REFERENCE_MAP_ENTRY = "Image1 = first frame of this scene (storyboard)";
+/**
+ * Stage 65 — the short image-to-video lead used INSTEAD of the full visual body when the scene is in
+ * storyboard mode (no manual override). The attached first frame [Image1] already carries the whole
+ * composition, so the text neither re-describes nor re-stages it — it only tells the model to animate
+ * naturally from that frame. This removes the "charged image + violent staging text" combination that
+ * tripped provider moderation (E005) in storyboard mode.
+ */
+export const STORYBOARD_VIDEO_LEAD =
+  "This clip is animated from the attached first frame [Image1], which is the exact opening composition of the scene: the same people, faces, clothing, props, set dressing and camera framing are already established there. Do not restage, re-describe or re-explain the setting — simply continue naturally from that frame, letting the people move and speak as written below over the next few seconds.";
 
 /**
  * Stage 36 removed the first-frame (`image`) path; Stage 38 removed the "previous_frame" reference
@@ -503,11 +512,16 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // staging block INSTEAD of the talking-scene PACE_DIRECTION; a dialogue scene gets PACE_DIRECTION
   // plus the universal "confrontation is staged face to face" sentence. Narration is unchanged.
   const isAction = !isNarration && scene.sceneKind === "action";
-  const direction = isNarration
+  // Stage 65 — storyboard mode: the staging lives in the attached frame, so the pace stays neutral
+  // (PACE_DIRECTION only) — never the combat-pace nor the confrontation staging sentence, whose
+  // violence lexicon combined with the charged frame tripped provider moderation (E005).
+  const direction = storyboardMode
     ? PACE_DIRECTION
-    : isAction
-      ? ACTION_PACE_DIRECTION
-      : `${PACE_DIRECTION} ${CONFRONTATION_STAGING_SENTENCE}`;
+    : isNarration
+      ? PACE_DIRECTION
+      : isAction
+        ? ACTION_PACE_DIRECTION
+        : `${PACE_DIRECTION} ${CONFRONTATION_STAGING_SENTENCE}`;
   // Stage 40 — scripted / actual end-state hand-off: when this scene continues the previous one
   // (not a location-change / new-sequence), the previous scene's end state opens the prompt so the
   // model starts frame 1 exactly where the last clip ended. The previous frame IMAGE is still never sent.
@@ -529,9 +543,15 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // OPENING/END STATE prefixes (Stage 40/41) and the body still begins with "\n\n[SHOT TYPE]".
   const statesJoined = stateBlocks.length ? stateBlocks.join("\n") : "";
   const preBody = [statesJoined, structureBlock].filter(Boolean).join("\n\n");
-  const visualWithOpening = preBody
-    ? `${preBody}\n\n${stripSlowDirections(visualPrompt)}`
-    : stripSlowDirections(visualPrompt);
+  // Stage 65 — storyboard mode: the attached first frame [Image1] already establishes the composition,
+  // so the visual text collapses to the short image-to-video lead — the OPENING/END STATE blocks, the
+  // structure block (REFERENCE MAP / PEOPLE / PROPS) and the reused 9-tag body are all dropped (the
+  // frame carries them). Only the AUDIO TRACK (dialogue / narration) and the pace direction follow.
+  const visualWithOpening = storyboardMode
+    ? STORYBOARD_VIDEO_LEAD
+    : preBody
+      ? `${preBody}\n\n${stripSlowDirections(visualPrompt)}`
+      : stripSlowDirections(visualPrompt);
   // Sanitize visual descriptions BEFORE adding speech: never rewrite scripted dialogue / narration.
   let prompt = isNarration
     ? `${buildNarrationAudioPrompt(visualWithOpening, scene.voiceover)}\n\n${direction}`

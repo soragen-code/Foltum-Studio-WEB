@@ -10,8 +10,10 @@
 import assert from "node:assert";
 import {
   buildScenePrompt, REFERENCE_IMAGE_CAP, LAST_FRAME_CONTINUITY_NOTE, STORYBOARD_FIRST_FRAME_NOTE, STORYBOARD_REFERENCE_MAP_ENTRY, SCENE_SECTION,
+  STORYBOARD_VIDEO_LEAD, OPENING_STATE_PREFIX, END_STATE_PREFIX,
   type ScenePromptScene, type ScenePromptCharacterLink, type ScenePromptLocation, type ScenePromptPrevious, type BuildScenePromptInput,
 } from "../lib/scene-prompt";
+import { CONFRONTATION_STAGING_SENTENCE } from "../lib/season";
 import { buildStoryboardPrompt, SEEDREAM_IMAGE_INPUT_CAP, PREVIOUS_STORYBOARD_NOTE, STORYBOARD_FRAME_DIRECTIVE, STORYBOARD_PROMPT_MAX_CHARS, clampStoryboardOpening } from "../lib/storyboard-prompt";
 import { VISUAL_STYLE_ID } from "../lib/visual-style";
 import type { PropRegistryEntry } from "../lib/prop-registry";
@@ -92,7 +94,11 @@ const build = (opts: {
   ok(r.referenceImages.includes(styledUrl("char-a")) && r.referenceImages.includes(styledUrl("char-m")), "B: both character anchors are kept");
   ok(r.referenceImages.includes(styledUrl("loc-wide")) && r.referenceImages.includes(styledUrl("loc-extra1")), "B: location base + extra angles are kept");
   ok(r.referenceImages[1] === styledUrl("char-a") && r.referenceImages[2] === styledUrl("char-m"), "B: characters follow the storyboard frame in cast order");
-  ok(r.prompt.includes(`${STORYBOARD_REFERENCE_MAP_ENTRY}, Image2 = Anna, Image3 = Mark`), "B: REFERENCE MAP = 'Image1 = first frame of this scene (storyboard), Image2 = Anna, Image3 = Mark'");
+  // Stage 65 supersedes the Stage-64 in-text REFERENCE MAP: the structure block is dropped from the
+  // storyboard video prompt (the attached frame carries identity) — see section E. The frame is still
+  // Image1 in the reference SET, and buildReferenceMap still supports the storyboard-lead entry (unit-checked below).
+  ok(!r.prompt.includes(`${SCENE_SECTION.referenceMap}:`), "B: Stage 65 — the REFERENCE MAP structure block is no longer injected into the storyboard video prompt");
+  ok(STORYBOARD_REFERENCE_MAP_ENTRY === "Image1 = first frame of this scene (storyboard)", "B: the storyboard REFERENCE MAP entry const is unchanged");
   ok(!r.prompt.includes(STORYBOARD) && !r.prompt.includes(SCHEME), "B: no real URL leaks into the prompt text");
   ok(((r.reference as { kinds?: string[] }).kinds ?? []).includes("storyboard"), "B: reference.kinds records the storyboard ref");
   // Cap: storyboard + 25 chars + 3 base + 2 extra + 6 crowds = 37 → 30; the storyboard is never dropped.
@@ -164,6 +170,45 @@ const build = (opts: {
   ok(clampStoryboardOpening("short text", 100) === "short text", "D: clampStoryboardOpening is identity when it fits");
   const c = clampStoryboardOpening(`First one. Second one. Third one. ${camera}`, camera.length + 25);
   ok(c === `First one. Second one. ${camera}`, "D: clampStoryboardOpening cuts whole sentences from the end of WORLD and keeps CAMERA");
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// E. Stage 65 — short image-to-video prompt in storyboard mode (no override). The attached first frame
+//    [Image1] carries the whole composition, so the visual text collapses to STORYBOARD_VIDEO_LEAD: the
+//    OPENING/END STATE blocks, the structure block (REFERENCE MAP / PEOPLE / PROPS) and the reused 9-tag
+//    body are dropped, and the pace stays neutral (no confrontation staging). Dialogue is still voiced,
+//    the [Image1] first-frame note is still appended, and text mode is unchanged (covered by A).
+{
+  const DLINE = "Give me the folder now.";
+  const sb = build({ mode: "storyboard", storyboardUrl: STORYBOARD, sceneOver: { dialogue: DLINE } });
+  const text = build({ sceneOver: { dialogue: DLINE } });
+  // The visual body IS the short lead.
+  ok(sb.prompt.includes(STORYBOARD_VIDEO_LEAD), "E: storyboard prompt uses the short image-to-video lead (STORYBOARD_VIDEO_LEAD)");
+  ok(text.prompt.includes(STORYBOARD_VIDEO_LEAD) === false, "E: text mode never carries the short lead");
+  // Everything the frame already carries is dropped from the text.
+  ok(!sb.prompt.includes(OPENING_STATE_PREFIX), "E: no OPENING STATE block in storyboard mode");
+  ok(!sb.prompt.includes(END_STATE_PREFIX), "E: no END STATE block in storyboard mode");
+  ok(!sb.prompt.includes(`${SCENE_SECTION.referenceMap}:`), "E: no REFERENCE MAP structure block in storyboard mode");
+  ok(!sb.prompt.includes(`${SCENE_SECTION.people}:`), "E: no PEOPLE IN FRAME structure block in storyboard mode");
+  ok(!sb.prompt.includes(`${SCENE_SECTION.props}:`), "E: no CLOTHING & PROPS structure block in storyboard mode");
+  ok(!sb.prompt.includes("[VISUAL STYLE]") && !sb.prompt.includes("[ACTION]") && !sb.prompt.includes("[TRANSITION]"), "E: the reused 9-tag body is dropped in storyboard mode");
+  // The confrontation staging sentence (violence lexicon) is gone; the text one keeps it.
+  ok(!sb.prompt.includes(CONFRONTATION_STAGING_SENTENCE), "E: the confrontation staging sentence is not in the storyboard prompt");
+  ok(text.prompt.includes(CONFRONTATION_STAGING_SENTENCE), "E: a dialogue scene DOES carry the confrontation staging sentence in text mode (control)");
+  // Dialogue is still voiced, and the NEGATIVES closing block still closes the prompt.
+  ok(sb.prompt.includes(DLINE), "E: scripted dialogue is still voiced in the storyboard prompt");
+  ok(sb.prompt.includes(`${SCENE_SECTION.negatives}:`), "E: the NEGATIVES closing block still closes the storyboard prompt");
+  // The storyboard frame is still Image1 and its first-frame note is still appended below.
+  ok(sb.referenceImages[0] === STORYBOARD && sb.prompt.includes(STORYBOARD_FIRST_FRAME_NOTE), "E: the storyboard frame is still Image1 with its first-frame note appended");
+  // openingState / endState are still COMPUTED (diagnostics) even though they are not injected into the text.
+  ok(typeof sb.openingState === "string" && sb.openingState.length > 0, "E: openingState is still computed as a diagnostic field");
+  // The prompt is short and much smaller than the full text-mode prompt of the same scene.
+  // Both prompts still carry the same shared [ImageN] reference notes (unchanged), so the saving is the
+  // dropped visual body: OPENING/END STATE + structure block + 9-tag body + confrontation staging.
+  ok(sb.prompt.length < text.prompt.length && text.prompt.length - sb.prompt.length > 1000, `E: the storyboard prompt is substantially shorter than the full text-mode prompt (${sb.prompt.length} vs ${text.prompt.length}, saved ${text.prompt.length - sb.prompt.length})`);
+  // A manual override still wins over the short lead (short prompt is only for storyboard mode WITHOUT override).
+  const ovr = build({ mode: "storyboard", storyboardUrl: STORYBOARD, sceneOver: { dialogue: DLINE, promptOverride: "MANUAL: a bespoke prompt." } });
+  ok(ovr.prompt === "MANUAL: a bespoke prompt." && !ovr.prompt.includes(STORYBOARD_VIDEO_LEAD), "E: a manual override replaces the short lead verbatim (storyboard short prompt only when no override)");
 }
 
 console.log(`\nStage 64: ${pass} checks passed`);
