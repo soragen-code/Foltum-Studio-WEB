@@ -2,11 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, Wand2, ArrowRight, Check, BookOpen } from 'lucide-react'
+import { Loader2, Wand2, ArrowRight, BookOpen } from 'lucide-react'
 import { JOB_POLL_INTERVAL_MS } from './use-job-polling'
 import { CancelButton } from './cancel-button'
-import { StickyReviseBar } from './sticky-revise-bar'
-import { episodeStatusLabel, CharacterAvatars, type SeasonEpisode } from './season-stage'
+import { type SeasonEpisode } from './season-stage'
 
 // Fixed episode-boundary bars written by the LLM (see lib/season.ts fullStoryFormatRules).
 const START_MARK = '═══'
@@ -240,62 +239,6 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
         {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
       </div>
 
-      {season && total > 0 && (
-        <div className="rounded-xl border border-border bg-card p-4 sm:p-6" data-testid="episode-nav">
-          <h3 className="font-display text-lg font-bold">Эпизоды</h3>
-          <p className="mt-1 text-sm text-muted-foreground">Открывайте любой эпизод — референсы, сцены и сборка делаются на его экране. Эпизоды можно готовить в любом порядке.</p>
-          <div className="mt-3 space-y-2">
-            {season.episodes.map((ep) => {
-              const ready = !!ep.script
-              return (
-                <div key={ep.id} className="flex items-center gap-3 rounded-lg border border-border/60 p-3" data-testid="episode-nav-item">
-                  <span className="shrink-0 text-xs font-semibold uppercase text-muted-foreground">Эп. {ep.number}</span>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate font-medium">{ep.title}</div>
-                    <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
-                      <span className="rounded bg-muted px-1.5 py-0.5" data-testid="episode-nav-status">{!ready && jobActive ? 'пишется...' : episodeStatusLabel(ep)}</span>
-                      <CharacterAvatars chars={ep.characters} size="h-5 w-5" />
-                    </div>
-                  </div>
-                  {ready ? (
-                    <Link href={`/project/${project.id}/episode/${ep.id}`} onClick={() => setOpeningEpisode(ep.id)} aria-disabled={openingEpisode === ep.id} className={`inline-flex shrink-0 items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted ${openingEpisode === ep.id ? 'pointer-events-none opacity-60' : ''}`} data-testid="open-episode">
-                      {openingEpisode === ep.id ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Открыть <ArrowRight className="h-4 w-4" />
-                    </Link>
-                  ) : (
-                    <span className="shrink-0 text-xs text-muted-foreground">{jobActive ? 'сценарий пишется' : 'ожидает'}</span>
-                  )}
-                </div>
-              )
-            })}
-          </div>
-          {scriptsDone === total && total > 0 && <p className="mt-3 inline-flex items-center gap-1 text-sm text-primary"><Check className="h-4 w-4" /> Все {total} сценариев готовы</p>}
-          {/* Stage 59 (step 3 → step 4): identical jump-to-first-episode button at the bottom of the list. */}
-          {firstEpisode && (
-            <Link
-              href={`/project/${project.id}/episode/${firstEpisode.id}`}
-              className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
-              data-testid="go-first-episode-bottom"
-            >
-              Перейти к первому эпизоду <ArrowRight className="h-4 w-4" />
-            </Link>
-          )}
-        </div>
-      )}
-
-      {season && (
-        <StickyReviseBar
-          value={storyText}
-          onChange={setStoryText}
-          onSubmit={() => reviseStory({ instruction: storyText })}
-          busy={storyBusy}
-          onCancel={cancelRevise}
-          label="Что изменить в сюжете"
-          placeholder="Например: сделай 6 эпизодов вместо 8; измени эпизод 2 — добавь сцену погони; добавь линию с сестрой героя"
-          submitLabel="Изменить сюжет"
-          hint="ИИ перепишет историю и синхронизирует структуру (в т.ч. число эпизодов). Переписываются только затронутые эпизоды — остальные и их ассеты не тронуты."
-          testId="story-revise"
-        />
-      )}
     </div>
   )
 }

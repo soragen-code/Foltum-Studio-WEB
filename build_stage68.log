@@ -1,0 +1,137 @@
+
+> build
+> prisma generate && (prisma db execute --schema prisma/schema.prisma --file prisma/patch.sql || echo 'patch.sql skipped') && next build --webpack
+
+Prisma schema loaded from prisma/schema.prisma
+Warning: You did not specify an output path for your `generator` in schema.prisma. This behavior is deprecated and will no longer be supported in Prisma 7.0.0. To learn more visit https://pris.ly/cli/output-path
+
+✔ Generated Prisma Client (v6.7.0) to ./node_modules/@prisma/client in 168ms
+
+Start by importing your Prisma Client (See: https://pris.ly/d/importing-client)
+
+Help us improve the Prisma ORM for everyone. Share your feedback in a short 2-min survey: https://pris.ly/orm/survey/release-5-22
+
+Error: Prisma schema validation - (get-config wasm)
+Error code: P1012
+error: Environment variable not found: DATABASE_URL.
+  -->  prisma/schema.prisma:8
+   | 
+ 7 |     provider = "postgresql"
+ 8 |     url      = env("DATABASE_URL")
+   | 
+
+Validation Error Count: 1
+[Context: getConfig]
+
+Prisma CLI Version : 6.7.0
+patch.sql skipped
+▲ Next.js 16.3.3 (webpack)
+- Environments: .env.local
+✓ Running next.config.js took 32ms
+
+⚠ The "middleware" file convention is deprecated. Please use "proxy" instead.
+
+  To migrate automatically, run:
+  npx @next/codemod@canary middleware-to-proxy .
+
+  Learn more: https://nextjs.org/docs/messages/middleware-to-proxy
+  Creating an optimized production build ...
+✓ Compiled successfully in 10.6s
+  Skipping validation of types
+  Finished TypeScript config validation in 8ms ...
+  Collecting page data using 1 worker ...
+  Generating static pages using 1 worker (0/1) ...
+✓ Generating static pages using 1 worker (1/1) in 1412ms
+  Finalizing page optimization ...
+  Collecting build traces ...
+
+Route (app)
+┌ ƒ /
+├ ƒ /_not-found
+├ ƒ /api/ai/accept-scene
+├ ƒ /api/ai/artifacts/[id]/revise
+├ ƒ /api/ai/assemble-episode
+├ ƒ /api/ai/assemble-episode/polish
+├ ƒ /api/ai/assemble-episode/status
+├ ƒ /api/ai/characters
+├ ƒ /api/ai/characters/[id]/prompt
+├ ƒ /api/ai/characters/[id]/shot
+├ ƒ /api/ai/characters/[id]/undo
+├ ƒ /api/ai/characters/add
+├ ƒ /api/ai/characters/appearance
+├ ƒ /api/ai/characters/lock
+├ ƒ /api/ai/characters/references
+├ ƒ /api/ai/characters/regenerate
+├ ƒ /api/ai/characters/revise
+├ ƒ /api/ai/episodes/[episodeId]/artifacts
+├ ƒ /api/ai/episodes/[id]/chain-mode
+├ ƒ /api/ai/episodes/[id]/generate-all
+├ ƒ /api/ai/episodes/[id]/generate-all/cancel
+├ ƒ /api/ai/episodes/[id]/generate-all/continue
+├ ƒ /api/ai/episodes/[id]/location/revise
+├ ƒ /api/ai/episodes/[id]/revise
+├ ƒ /api/ai/episodes/[id]/scene-mode
+├ ƒ /api/ai/episodes/[id]/storyboard-all
+├ ƒ /api/ai/generate-episode-videos
+├ ƒ /api/ai/generate-video
+├ ƒ /api/ai/idea
+├ ƒ /api/ai/idea/parse-file
+├ ƒ /api/ai/idea/revise
+├ ƒ /api/ai/jobs/[id]/cancel
+├ ƒ /api/ai/locations
+├ ƒ /api/ai/locations/[id]/extra-images
+├ ƒ /api/ai/locations/[id]/frame
+├ ƒ /api/ai/locations/[id]/image
+├ ƒ /api/ai/locations/[id]/lock
+├ ƒ /api/ai/locations/[id]/prompt
+├ ƒ /api/ai/locations/[id]/revise
+├ ƒ /api/ai/locations/[id]/shot
+├ ƒ /api/ai/locations/[id]/undo
+├ ƒ /api/ai/scenes
+├ ƒ /api/ai/scenes/[id]/prompt
+├ ƒ /api/ai/scenes/[id]/revise
+├ ƒ /api/ai/scenes/[id]/storyboard
+├ ƒ /api/ai/scenes/[id]/undo
+├ ƒ /api/ai/season
+├ ƒ /api/ai/season/full-story/revise
+├ ƒ /api/ai/season/revise
+├ ƒ /api/ai/short-synopsis
+├ ƒ /api/ai/structure
+├ ƒ /api/ai/synopsis
+├ ƒ /api/ai/test-scene
+├ ƒ /api/ai/workers/character-images
+├ ƒ /api/ai/workers/generate-video
+├ ƒ /api/auth/[...nextauth]
+├ ƒ /api/auth/login
+├ ƒ /api/credits/add
+├ ƒ /api/files/download
+├ ƒ /api/files/download-zip
+├ ƒ /api/jobs
+├ ƒ /api/jobs/[id]
+├ ƒ /api/payment/wayforpay/callback
+├ ƒ /api/payment/wayforpay/create
+├ ƒ /api/payment/wayforpay/status
+├ ƒ /api/projects
+├ ƒ /api/projects/[id]
+├ ƒ /api/projects/[id]/approve-idea
+├ ƒ /api/projects/[id]/approve-structure
+├ ƒ /api/projects/[id]/approve-synopsis
+├ ƒ /api/projects/[id]/continue-to-script
+├ ƒ /api/projects/[id]/lock-characters
+├ ƒ /api/projects/[id]/test-episode
+├ ƒ /api/signup
+├ ƒ /api/upload/presigned
+├ ƒ /api/user/credits
+├ ƒ /dashboard
+├ ƒ /login
+├ ƒ /pricing
+├ ƒ /project/[id]
+├ ƒ /project/[id]/episode/[episodeId]
+├ ƒ /project/new
+└ ƒ /signup
+
+
+ƒ Proxy (Middleware)
+
+ƒ  (Dynamic)  server-rendered on demand
+
