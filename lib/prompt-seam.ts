@@ -80,6 +80,61 @@ export function applyReframeDirective(
 }
 
 /* ------------------------------------------------------------------------------------------ */
+/*  Stage 81 — NEW-SHOT CAMERA MOVE                                                             */
+/*                                                                                             */
+/*  RE-FRAME (Part D) only moves the camera to a different ANGLE for frame 1, but the clip then */
+/*  inherited the static, locked-off framing of the previous scene's final frame — the new     */
+/*  scene "froze" on the seam (user report: «камера сцены стоит так же, как в конце предыдущей»).*/
+/*  This directive gives EVERY continuing scene its OWN camera motion that is already underway  */
+/*  on the first frame and runs through the whole clip, so the shot never opens on a held,      */
+/*  static composition. The starting frame is still shared for continuity — only the camera     */
+/*  work is fresh. The concrete move rotates deterministically by scene number for variety.     */
+/* ------------------------------------------------------------------------------------------ */
+
+/** Distinct camera moves, rotated by scene number so consecutive scenes don't repeat the same motion. */
+export const NEW_SHOT_CAMERA_MOVES = [
+  "a slow push-in, the camera gliding toward the subjects",
+  "a steady dolly-out, the camera easing back to open up the space",
+  "a lateral tracking move, the camera gliding sideways across the scene",
+  "a smooth pan sweeping across the setting",
+  "a gentle arc, the camera orbiting around the subjects",
+  "a slow crane with a subtle tilt that reveals the surroundings",
+] as const;
+
+/** Pick the camera move for a scene (1-based); deterministic, cycles through NEW_SHOT_CAMERA_MOVES. */
+export function cameraMoveForScene(sceneNumber: number): string {
+  const n = Number.isFinite(sceneNumber) && sceneNumber > 0 ? Math.floor(sceneNumber) : 1;
+  return NEW_SHOT_CAMERA_MOVES[(n - 1) % NEW_SHOT_CAMERA_MOVES.length];
+}
+
+/** The NEW-SHOT CAMERA MOVE directive line for a given scene number. */
+export function newShotCameraMoveLine(sceneNumber: number): string {
+  return (
+    `NEW-SHOT CAMERA MOVE: this shot has its OWN camera work — ${cameraMoveForScene(sceneNumber)} — ` +
+    `that is ALREADY IN MOTION on the very first frame and continues throughout the clip. ` +
+    `The camera does NOT hold, copy or settle back into the static, locked-off framing of the previous shot's final frame; ` +
+    `it establishes this scene's own angle and momentum from frame 1 and keeps moving — the shot never freezes on a still composition at the start.`
+  );
+}
+
+/**
+ * Append the NEW-SHOT CAMERA MOVE directive for a CONTINUING scene (continuity "last_frame" or
+ * "text_only" — i.e. any scene that carries over from a previous one). Scene 1 / parallel ("none")
+ * already frames freely, so it is left untouched. A manual override is returned unchanged. Idempotent.
+ */
+export function applyNewShotCameraMove(
+  prompt: string,
+  sceneNumber: number,
+  opts: { hasOverride: boolean; continuity: Continuity }
+): string {
+  if (opts.hasOverride) return prompt;
+  if (opts.continuity === "none") return prompt;
+  const line = newShotCameraMoveLine(sceneNumber);
+  if (prompt.includes(line)) return prompt;
+  return `${prompt.trimEnd()}\n${line}`;
+}
+
+/* ------------------------------------------------------------------------------------------ */
 /*  Part C — continuity channel of a scene submission                                          */
 /* ------------------------------------------------------------------------------------------ */
 

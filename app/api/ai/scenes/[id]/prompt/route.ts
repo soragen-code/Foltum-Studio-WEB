@@ -5,7 +5,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { buildScenePrompt } from "@/lib/scene-prompt";
-import { applySeamDirectives, applyReframeDirective, resolveContinuity } from "@/lib/prompt-seam";
+import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, resolveContinuity } from "@/lib/prompt-seam";
 import { normalizePromptOverride } from "@/lib/prompt-override";
 
 /**
@@ -59,14 +59,19 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     // Stage 72: the previous scene's last frame is a continuity reference ONLY in chain mode.
     chainMode: scene.episode.chainMode === "chain" ? "chain" : "parallel",
   });
-  // Stage 78: the preview shows EXACTLY what the worker submits — same seam / RE-FRAME transforms.
-  const prompt = applyReframeDirective(applySeamDirectives(built.prompt, { hasOverride: built.hasOverride }), built.retryRefs, { hasOverride: built.hasOverride });
   const continuity = resolveContinuity({
     chainMode: scene.episode.chainMode === "chain" ? "chain" : "parallel",
     sceneNumber: scene.number,
     previousFrameSceneId: built.previousFrameSceneId,
     refs: built.retryRefs,
   });
+  // Stage 78/81: the preview shows EXACTLY what the worker submits — same seam / RE-FRAME transforms
+  // plus the Stage 81 NEW-SHOT CAMERA MOVE for a continuing scene.
+  const prompt = applyNewShotCameraMove(
+    applyReframeDirective(applySeamDirectives(built.prompt, { hasOverride: built.hasOverride }), built.retryRefs, { hasOverride: built.hasOverride }),
+    scene.number,
+    { hasOverride: built.hasOverride, continuity },
+  );
 
   return NextResponse.json({
     prompt,

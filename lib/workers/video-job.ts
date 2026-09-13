@@ -24,7 +24,7 @@ import { nextChainScene, chainStopMessage, CHAIN_INSUFFICIENT_CREDITS } from "@/
 import { resolvePowerTier, SCENE_RESOLUTION } from "@/lib/power-tier";
 import { sceneProgressStage, SCENE_STAGE_PROGRESS, SCENE_STAGE_MESSAGE } from "@/lib/scene-progress";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
-import { applySeamDirectives, applyReframeDirective, resolveContinuity, TEXT_ONLY_CONTINUITY_MESSAGE, type Continuity } from "@/lib/prompt-seam";
+import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, resolveContinuity, TEXT_ONLY_CONTINUITY_MESSAGE, type Continuity } from "@/lib/prompt-seam";
 
 export interface VideoJobParams {
   jobId: string;
@@ -245,9 +245,6 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       chainMode: episodeLoc?.chainMode === "chain" ? "chain" : "parallel",
     });
     let prompt = built.prompt;
-    // Stage 78: seam directives (motion to the last frame, no silent beat) + RE-FRAME of the previous
-    // scene's last frame. Same transforms as the GET prompt preview; a manual override is untouched.
-    prompt = applyReframeDirective(applySeamDirectives(prompt, { hasOverride: built.hasOverride }), built.retryRefs, { hasOverride: built.hasOverride });
     // Stage 78 (Part C): continuity channel — the previous last frame as an image, text only (chain
     // mode, frame not ready yet), or none (scene 1 / parallel mode).
     const continuity: Continuity = resolveContinuity({
@@ -256,6 +253,12 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       previousFrameSceneId: built.previousFrameSceneId,
       refs: built.retryRefs,
     });
+    // Stage 78: seam directives (motion to the last frame, no silent beat) + RE-FRAME of the previous
+    // scene's last frame. Stage 81: a NEW-SHOT CAMERA MOVE so a continuing scene starts its own camera
+    // motion from frame 1 instead of inheriting the static end framing of the previous scene.
+    // Same transforms as the GET prompt preview; a manual override is untouched.
+    prompt = applyReframeDirective(applySeamDirectives(prompt, { hasOverride: built.hasOverride }), built.retryRefs, { hasOverride: built.hasOverride });
+    prompt = applyNewShotCameraMove(prompt, scene.number, { hasOverride: built.hasOverride, continuity });
     console.log("[video-job] continuity", JSON.stringify({ sceneId, sceneNumber: scene.number, continuity, previousFrameSceneId: built.previousFrameSceneId ?? null }));
     const basePrompt = built.basePrompt;
     const fallbackRefs = built.fallbackRefs;
