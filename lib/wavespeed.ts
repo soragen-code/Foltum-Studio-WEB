@@ -13,6 +13,18 @@ import type { PredictionState, SeedanceInput } from "@/lib/replicate";
 
 const WAVESPEED_BASE = "https://api.wavespeed.ai/api/v3";
 const SEEDANCE_ENDPOINT = `${WAVESPEED_BASE}/bytedance/seedance-2.5/text-to-video`;
+// Stage 71: storyboard mode transitions FROM the current approved frame (`image`)
+// TO the next scene's approved frame (`last_image`) via Seedance 2.5 image-to-video.
+const SEEDANCE_I2V_ENDPOINT = `${WAVESPEED_BASE}/bytedance/seedance-2.5/image-to-video`;
+
+/**
+ * Input for a WaveSpeed scene-video submission. Extends the shared SeedanceInput
+ * with the optional image-to-video frames used by storyboard mode:
+ * - `image`      first (source) frame URL — the current scene's approved storyboard frame
+ * - `last_image` last (target) frame URL — the NEXT scene's approved storyboard frame
+ * When `image` is set, the image-to-video endpoint is used (no reference_images).
+ */
+export type WaveVideoInput = SeedanceInput & { image?: string; last_image?: string };
 
 /** Read the WaveSpeed API key from the environment (never hard-coded). */
 function getKey(): string {
@@ -49,7 +61,8 @@ function providerErrorText(body: any, httpStatus?: number): string {
  * `input.model` is ignored (the endpoint is fixed). `reference_images` is sent
  * ONLY when non-empty (an empty array is never sent, matching the Replicate path).
  */
-export async function startVideoPrediction(input: SeedanceInput): Promise<string> {
+export async function startVideoPrediction(input: WaveVideoInput): Promise<string> {
+  // Shared scalar fields for both endpoints.
   const body: Record<string, unknown> = {
     prompt: input.prompt,
     aspect_ratio: input.aspect_ratio ?? "9:16",
@@ -57,11 +70,24 @@ export async function startVideoPrediction(input: SeedanceInput): Promise<string
     duration: input.duration ?? 5,
     generate_audio: true,
   };
-  if (input.reference_images?.length) body.reference_images = input.reference_images;
+
+  // Stage 71: when a first frame is provided we run image-to-video (storyboard mode).
+  // The two frames carry the composition, so reference_images is NOT sent on this path.
+  // Without `image` we keep the existing text-to-video path (reference_images when non-empty).
+  const useImageToVideo = typeof input.image === "string" && input.image.trim().length > 0;
+  const endpoint = useImageToVideo ? SEEDANCE_I2V_ENDPOINT : SEEDANCE_ENDPOINT;
+  if (useImageToVideo) {
+    body.image = input.image;
+    if (typeof input.last_image === "string" && input.last_image.trim().length > 0) {
+      body.last_image = input.last_image;
+    }
+  } else if (input.reference_images?.length) {
+    body.reference_images = input.reference_images;
+  }
 
   let res: Response;
   try {
-    res = await fetch(SEEDANCE_ENDPOINT, {
+    res = await fetch(endpoint, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${getKey()}`,

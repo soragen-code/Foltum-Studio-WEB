@@ -326,6 +326,25 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       referenceWidth: REFERENCE_WIDTH, referenceImageCount: referenceImages.length,
       previousFrameSceneId: built.previousFrameSceneId,
     };
+    // Stage 71 — storyboard mode: the scene video is an image-to-video transition FROM this scene's
+    // approved storyboard frame (first frame = `image`) TO the NEXT scene's approved storyboard frame
+    // (last frame = `last_image`). The "next scene" is the scene in the SAME episode with the smallest
+    // `number` strictly greater than this one, whose storyboard frame is approved and non-empty. If there
+    // is no such frame (last scene, or the next one isn't approved yet) we submit with only `image` and
+    // do NOT block. In storyboard mode reference_images are never sent (the frames carry the composition).
+    let storyboardFirstImage: string | undefined;
+    let storyboardLastImage: string | undefined;
+    if (storyboardMode) {
+      storyboardFirstImage = (scene.storyboardUrl ?? "").trim() || undefined;
+      const nextScene = await prisma.scene.findFirst({
+        where: { episodeId: scene.episodeId, number: { gt: scene.number }, storyboardApproved: true },
+        orderBy: { number: "asc" },
+        select: { id: true, number: true, storyboardUrl: true, storyboardApproved: true },
+      });
+      const nextUrl = (nextScene?.storyboardUrl ?? "").trim();
+      if (nextScene?.storyboardApproved === true && nextUrl) storyboardLastImage = nextUrl;
+    }
+
     // Stage 46B: scenes are always rendered at 480p — the requested `params.resolution` is ignored.
     const input = {
       prompt, model: modelSlug, duration: clipDuration, resolution: SCENE_RESOLUTION,
@@ -336,8 +355,14 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       style: VISUAL_STYLE_ID, language: scene.language || "en", input: safeDiagnosticInput({ ...input, reference, ...submission }),
     };
     diagnostics.push(attempt); await persist(); logAttempt(attempt);
-    // Stage 40: `reference_images` is omitted entirely for text-only submissions (never sent as []).
-    predictionId = await startVideoPrediction({ ...input, ...(referenceImages.length ? { reference_images: referenceImages } : {}) });
+    // Stage 71: storyboard mode → image-to-video (first frame + optional last frame), no reference_images.
+    // Text mode → text-to-video; Stage 40: `reference_images` omitted entirely for text-only submissions.
+    predictionId = await startVideoPrediction({
+      ...input,
+      ...(storyboardMode
+        ? { image: storyboardFirstImage, ...(storyboardLastImage ? { last_image: storyboardLastImage } : {}) }
+        : (referenceImages.length ? { reference_images: referenceImages } : {})),
+    });
     pipelineExtra.provider = "seedance";
     submitMessage = SCENE_STAGE_MESSAGE.queued; // Stage 46B: «В очереди» until the provider reports processing
     // Retry plan is still persisted for diagnostics, but moderation is now fail-fast:
