@@ -212,8 +212,9 @@ ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "promptOverride" TEXT;
 ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "visualPromptAuto" TEXT;
 
 -- Stage 63: Kling and the per-episode video provider selection are gone — Seedance is the only video path.
--- (The Stage 47 "Episode"."videoProvider" column is no longer read; it is dropped in a follow-up patch
--- applied only after this code is live, so the previous deployment never sees a missing column.)
+-- The Stage 47 "Episode"."videoProvider" column is no longer read by any code path (applied to prod
+-- only after the Stage 63 code went live, so no running deployment ever saw a missing column).
+ALTER TABLE "Episode" DROP COLUMN IF EXISTS "videoProvider";
 
 
 -- Stage 54: cached JSON snapshot of the episode prop registry (verbatim prop substitution)
