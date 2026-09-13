@@ -24,6 +24,7 @@ import { nextChainScene, chainStopMessage, CHAIN_INSUFFICIENT_CREDITS } from "@/
 import { resolvePowerTier, SCENE_RESOLUTION } from "@/lib/power-tier";
 import { sceneProgressStage, SCENE_STAGE_PROGRESS, SCENE_STAGE_MESSAGE } from "@/lib/scene-progress";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
+import { applySeamDirectives, applyReframeDirective, resolveContinuity, TEXT_ONLY_CONTINUITY_MESSAGE, type Continuity } from "@/lib/prompt-seam";
 
 export interface VideoJobParams {
   jobId: string;
@@ -80,6 +81,8 @@ export interface VideoJobState {
   submittedReferences?: { url: string; kind: string }[];
   /** Stage 36 legacy: id of the previous scene whose last frame was sent as a reference (Stage 38: always null). */
   previousFrameSceneId?: string | null;
+  /** Stage 78: how this scene was tied to the previous one (last frame image / text only / none). */
+  continuity?: Continuity;
 }
 
 export interface ModerationRetryInput {
@@ -242,6 +245,18 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       chainMode: episodeLoc?.chainMode === "chain" ? "chain" : "parallel",
     });
     let prompt = built.prompt;
+    // Stage 78: seam directives (motion to the last frame, no silent beat) + RE-FRAME of the previous
+    // scene's last frame. Same transforms as the GET prompt preview; a manual override is untouched.
+    prompt = applyReframeDirective(applySeamDirectives(prompt, { hasOverride: built.hasOverride }), built.retryRefs, { hasOverride: built.hasOverride });
+    // Stage 78 (Part C): continuity channel — the previous last frame as an image, text only (chain
+    // mode, frame not ready yet), or none (scene 1 / parallel mode).
+    const continuity: Continuity = resolveContinuity({
+      chainMode: episodeLoc?.chainMode === "chain" ? "chain" : "parallel",
+      sceneNumber: scene.number,
+      previousFrameSceneId: built.previousFrameSceneId,
+      refs: built.retryRefs,
+    });
+    console.log("[video-job] continuity", JSON.stringify({ sceneId, sceneNumber: scene.number, continuity, previousFrameSceneId: built.previousFrameSceneId ?? null }));
     const basePrompt = built.basePrompt;
     const fallbackRefs = built.fallbackRefs;
     let referenceImages = built.referenceImages;
@@ -321,7 +336,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     const submission = {
       hasOverride: built.hasOverride, referenceKind: built.referenceKind, refCounts,
       referenceWidth: REFERENCE_WIDTH, referenceImageCount: referenceImages.length,
-      previousFrameSceneId: built.previousFrameSceneId,
+      previousFrameSceneId: built.previousFrameSceneId, continuity,
     };
     // Stage 46B: scenes are always rendered at 480p — the requested `params.resolution` is ignored.
     const input = {
@@ -336,7 +351,9 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     // Stage 40: `reference_images` is omitted entirely for text-only submissions (never sent as []).
     predictionId = await startVideoGeneration(videoProvider, { ...input, ...(referenceImages.length ? { reference_images: referenceImages } : {}) });
     pipelineExtra.provider = videoProvider;
-    submitMessage = SCENE_STAGE_MESSAGE.queued; // Stage 46B: «В очереди» until the provider reports processing
+    // Stage 46B: «В очереди» until the provider reports processing; Stage 78: in chain mode without the
+    // previous last frame the card says once that the scene is generated from the description only.
+    submitMessage = continuity === "text_only" ? TEXT_ONLY_CONTINUITY_MESSAGE : SCENE_STAGE_MESSAGE.queued;
     // Retry plan is still persisted for diagnostics, but moderation is now fail-fast:
     // no automatic rewrite/resubmit happens (see resumeVideoJob). The user edits the prompt manually.
     pipelineExtra.retry = {
@@ -352,6 +369,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     pipelineExtra.referenceWidth = REFERENCE_WIDTH;
     pipelineExtra.submittedReferences = submittedReferences;
     pipelineExtra.previousFrameSceneId = built.previousFrameSceneId;
+    pipelineExtra.continuity = continuity;
     attempt.predictionId = predictionId; attempt.status = "processing";
     state = { predictionId, sceneId, projectId, userId, cost, startedAt: Date.now(), diagnostics, ...(lookWarning ? { lookWarning } : {}), ...pipelineExtra };
     // This checkpoint MUST succeed: never swallow the prediction ID write.

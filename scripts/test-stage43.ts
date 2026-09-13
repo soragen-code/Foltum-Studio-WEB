@@ -1,6 +1,6 @@
 /**
  * Stage 43 checks — seamless hard-cut episode assembly (default): no FILM bridges, no visible
- * dissolves; ~0.08s video xfade + audio acrossfade on the seam only.
+ * dissolves; Stage 78: pure hard cut with a 0.35s tail trim per clip (except the last), 0.03s audio edge fades.
  * Runs REAL ffmpeg on 3 synthetic 9:16 clips (testsrc + sine, 2s each) served over a local HTTP
  * server. Run: npx tsx --tsconfig tsconfig.json scripts/test-stage43.ts
  */
@@ -13,7 +13,7 @@ import { promisify } from "node:util";
 import { promises as fs } from "node:fs";
 import {
   assembleEpisodeLocally, buildSeamlessCutGraph, stitchLocalClipsSeamless, probeMedia,
-  DEFAULT_STITCH_MODE, SEAMLESS_BLEND_SEC, SEAMLESS_BLEND_MAX_VIDEO_SEC, SEAMLESS_BLEND_MAX_AUDIO_SEC,
+  DEFAULT_STITCH_MODE, SEAMLESS_BLEND_SEC, SEAMLESS_BLEND_MAX_VIDEO_SEC, SEAMLESS_BLEND_MAX_AUDIO_SEC, SEAM_TAIL_TRIM_SEC,
   type MediaInfo,
 } from "../lib/ffmpeg";
 
@@ -27,19 +27,18 @@ function graphChecks() {
   ok(SEAMLESS_BLEND_SEC <= SEAMLESS_BLEND_MAX_VIDEO_SEC && SEAMLESS_BLEND_SEC <= SEAMLESS_BLEND_MAX_AUDIO_SEC, "A: blend constant within hard limits (<=0.12 video, <=0.08 audio)");
   const infos: MediaInfo[] = [2, 3, 2.5].map((d) => ({ duration: d, hasVideo: true, hasAudio: true, width: 720, height: 1280, fps: 30 } as MediaInfo));
   const g = buildSeamlessCutGraph(infos);
-  const xf = [...g.filter.matchAll(/xfade=transition=fade:duration=([\d.]+):offset=([\d.]+)/g)];
-  const af = [...g.filter.matchAll(/acrossfade=d=([\d.]+):c1=tri:c2=tri/g)];
-  ok(xf.length === 2 && af.length === 2, "A: N-1 xfade + N-1 acrossfade filters for 3 clips");
-  ok(xf.every((m) => Number(m[1]) <= 0.12 + 1e-9), "A: every xfade duration <= 0.12s");
-  ok(af.every((m) => Number(m[1]) <= 0.08 + 1e-9), "A: every acrossfade <= 0.08s");
-  ok(xf.every((m, i) => m[1] === af[i][1]), "A: video and audio overlaps are identical (A/V stay in sync)");
-  ok(!g.filter.includes("afade="), "A: no edge afade in the seamless graph (acrossfade alone kills the click)");
-  ok(Math.abs(g.expectedDuration - (7.5 - 2 * g.blend)) < 1e-9, "A: expectedDuration = sum − (N−1)·blend");
-  ok(Math.abs(g.seamOffsets[0] - (2 - g.blend)) < 1e-9 && Math.abs(g.seamOffsets[1] - (2 + 3 - 2 * g.blend)) < 1e-9, "A: seam offsets follow sum(d) − k·blend");
+  // Stage 78: pure hard cut — no xfade/acrossfade, tail trim on every clip except the last.
+  ok(!g.filter.includes("xfade=") && !g.filter.includes("acrossfade="), "A: no xfade / acrossfade in the seamless graph (Stage 78 hard cut)");
+  ok(g.filter.includes("concat=n=3:v=1:a=1"), "A: single concat=n=3:v=1:a=1 joins the clips");
+  ok(g.blend === 0, "A: video blend is 0 (hard cut)");
+  const trimmed = [2 - SEAM_TAIL_TRIM_SEC, 3 - SEAM_TAIL_TRIM_SEC, 2.5];
+  ok(g.clipDurations.every((d, i) => Math.abs(d - trimmed[i]) < 1e-9), "A: clipDurations = duration − 0.35 for all but the last clip");
+  ok(Math.abs(g.expectedDuration - trimmed.reduce((a, b) => a + b, 0)) < 1e-9, "A: expectedDuration = sum of trimmed clip durations");
+  ok(Math.abs(g.seamOffsets[0] - trimmed[0]) < 1e-9 && Math.abs(g.seamOffsets[1] - (trimmed[0] + trimmed[1])) < 1e-9, "A: seam offsets are cumulative trimmed durations");
   ok(g.filter.includes("scale=720:1280") && g.filter.includes("fps=30") && g.filter.includes("settb=AVTB"), "A: inputs normalized to 9:16 geometry / fps / timebase");
-  // Very short clips: blend is clamped to 1/4 of the shortest clip.
+  // Very short clips are never trimmed (below SEAM_TAIL_TRIM_MIN_CLIP_SEC the whole clip is kept).
   const short = buildSeamlessCutGraph([{ ...infos[0], duration: 0.2 }, infos[1]]);
-  ok(short.blend <= 0.05 + 1e-9 && short.blend > 0, "A: blend clamped for very short clips");
+  ok(Math.abs(short.clipDurations[0] - 0.2) < 1e-9 && short.blend === 0, "A: very short clip keeps its full length, blend stays 0");
 }
 
 // ── B/C. real ffmpeg on synthetic clips ──────────────────────────────────────────────────────────
@@ -93,8 +92,8 @@ async function ffmpegChecks() {
     try {
       ok(filmCalls === 0, "B: interpolate (FILM) was never called by the default mode");
       ok(res.info.hasVideo && res.info.hasAudio, "B: assembled episode has one video + one audio stream");
-      const expected = 6 - 2 * SEAMLESS_BLEND_SEC;
-      ok(Math.abs(res.info.duration - expected) < 0.15, `B: duration ${res.info.duration.toFixed(3)}s ≈ expected ${expected.toFixed(3)}s (sum − 2·blend)`);
+      const expected = 6 - 2 * SEAM_TAIL_TRIM_SEC; // Stage 78: two trimmed tails, no overlap
+      ok(Math.abs(res.info.duration - expected) < 0.15, `B: duration ${res.info.duration.toFixed(3)}s ≈ expected ${expected.toFixed(3)}s (sum − 2·tail trim)`);
       ok(res.info.width === 720 && res.info.height === 1280, "B: output keeps 9:16 720x1280");
       const { stdout } = await execFileAsync("ffprobe", ["-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0", res.outputPath]);
       const types = stdout.trim().split("\n").filter(Boolean);
@@ -106,7 +105,7 @@ async function ffmpegChecks() {
     // (c) exported local helper works on plain files and reports the plan.
     const out = path.join(dir, "joined.mp4");
     const r = await stitchLocalClipsSeamless(files, out);
-    ok(Math.abs(r.blend - SEAMLESS_BLEND_SEC) < 1e-9, "C: stitchLocalClipsSeamless uses the default blend");
+    ok(r.blend === 0, "C: stitchLocalClipsSeamless reports blend 0 (hard cut)");
     ok(Math.abs(r.info.duration - r.expectedDuration) < 0.15, `C: local stitch duration ${r.info.duration.toFixed(3)} ≈ expected ${r.expectedDuration.toFixed(3)}`);
     ok(r.seamOffsets.length === 2 && r.info.hasAudio && r.info.hasVideo, "C: two seams, A+V present");
     const info = await probeMedia(out);

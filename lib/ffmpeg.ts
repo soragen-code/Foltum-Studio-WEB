@@ -204,12 +204,63 @@ async function extractFirstFrameLocal(videoPath: string, outPath: string): Promi
 export interface MediaInfo {
   hasVideo: boolean;
   hasAudio: boolean;
-  /** Container duration in seconds (0 if unknown). */
+  /** Container duration in seconds (0 if unknown) — max of the video/audio streams. Kept for compatibility. */
   duration: number;
+  /**
+   * Stage 78: duration of the VIDEO stream itself (0 if unknown). Seedance clips often carry an audio
+   * track a few hundred ms longer than the picture; cutting on the container duration then leaves a
+   * frozen last frame on every seam. The seamless-cut graph and normalizeClip use THIS value.
+   */
+  videoDuration: number;
   /** Video geometry / frame rate (0 if unknown). */
   width: number;
   height: number;
   fps: number;
+}
+
+/** Resolve an ffprobe binary: env override → PATH. Returns null when none is configured (ffmpeg-static ships no ffprobe). */
+function getFfprobePath(): string {
+  return process.env.FFPROBE_PATH || "ffprobe";
+}
+
+/**
+ * Stage 78 — duration of the first VIDEO stream. Primary: `ffprobe -select_streams v:0 -show_entries
+ * stream=duration,nb_frames,r_frame_rate` (stream duration, else nb_frames / r_frame_rate). Fallback when
+ * ffprobe is missing / fails / returns 0: decode the video stream with ffmpeg (`-an -f null -`) and read the
+ * final `time=` progress stamp — exact, and available wherever ffmpeg-static is. Returns 0 when unknown.
+ */
+export async function probeVideoDuration(file: string): Promise<number> {
+  try {
+    const { stdout } = await execFileAsync(getFfprobePath(), [
+      "-v", "error", "-select_streams", "v:0",
+      "-show_entries", "stream=duration,nb_frames,r_frame_rate",
+      "-of", "json", file,
+    ], { maxBuffer: 1024 * 1024 });
+    const parsed = JSON.parse(stdout || "{}");
+    const st = parsed?.streams?.[0] ?? {};
+    const d = Number(st.duration);
+    if (Number.isFinite(d) && d > 0) return d;
+    const nb = Number(st.nb_frames);
+    const [num, den] = String(st.r_frame_rate ?? "").split("/").map(Number);
+    if (nb > 0 && num > 0 && den > 0) return nb / (num / den);
+  } catch {
+    /* ffprobe unavailable — fall through to the ffmpeg decode */
+  }
+  try {
+    let out = "";
+    try {
+      const { stderr } = await execFileAsync(getFfmpegPath(), ["-hide_banner", "-nostdin", "-i", file, "-map", "0:v:0", "-an", "-f", "null", "-"], { maxBuffer: 8 * 1024 * 1024 });
+      out = stderr ?? "";
+    } catch (err: any) {
+      out = String(err?.stderr ?? "");
+    }
+    const stamps = [...out.matchAll(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/g)];
+    const last = stamps[stamps.length - 1];
+    if (last) return Number(last[1]) * 3600 + Number(last[2]) * 60 + Number(last[3]);
+  } catch {
+    /* unknown */
+  }
+  return 0;
 }
 
 /** Probe a media file using ffmpeg's `-i` listing (ffmpeg-static ships no ffprobe). */
@@ -230,10 +281,15 @@ export async function probeMedia(file: string): Promise<MediaInfo> {
   const videoLine = out.match(/Stream #\d+:\d+.*?: Video:.*$/m)?.[0] ?? "";
   const dim = videoLine.match(/[ ,](\d{2,5})x(\d{2,5})(?:[ ,\[]|$)/);
   const fpsM = videoLine.match(/(\d+(?:\.\d+)?)\s*fps/);
+  const hasVideo = videoLine.length > 0;
+  // Stage 78: the video stream length (falls back to the container duration when it cannot be measured).
+  const measured = hasVideo ? await probeVideoDuration(file) : 0;
+  const videoDuration = measured > 0 ? measured : duration;
   return {
-    hasVideo: videoLine.length > 0,
+    hasVideo,
     hasAudio: /Stream #\d+:\d+.*?: Audio:/.test(out),
     duration,
+    videoDuration,
     width: dim ? Number(dim[1]) : 0,
     height: dim ? Number(dim[2]) : 0,
     fps: fpsM ? Number(fpsM[1]) : 0,
@@ -261,23 +317,33 @@ export interface AssembleResult {
   musicApplied: boolean;
 }
 
+/** Stage 78: default constant frame rate of the normalized clips when the source fps is unknown. */
+export const NORMALIZE_DEFAULT_FPS = 24;
+
 /**
- * Build one uniform clip: video stream copied, audio always present as AAC 44.1kHz stereo.
+ * Build one uniform clip: video re-encoded to a CONSTANT frame rate (Stage 78 — the seam math needs
+ * exact, frame-aligned durations; `-c:v copy` kept variable-rate timestamps and let a frozen tail
+ * frame survive at the cut), audio always present as AAC 44.1kHz stereo.
  * - voiceover present  → mux the voiceover (clip's native audio, if any, is ignored)
  * - no voiceover       → keep native audio if the clip has one, else add a silent track
- * Audio is trimmed to the video length so scene timing stays intact.
+ * Audio is cut to EXACTLY the video-stream length (`-t videoDuration`, apad when shorter) so an audio
+ * track that outlives the picture can never stretch the clip with a held frame.
  */
 async function normalizeClip(
   videoPath: string,
   audioPath: string | null,
-  outPath: string
+  outPath: string,
+  targetFps?: number
 ): Promise<"voiceover" | "native" | "silence"> {
   const audioArgs = ["-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2"];
   const info = await probeMedia(videoPath);
-  // Clip length is dictated by the VIDEO: a shorter voiceover is padded with silence
-  // (`apad`), a longer one is cut at the video end (`-t`). Never `-shortest` alone — it
+  const fps = targetFps && targetFps > 0 ? Math.round(targetFps) : info.fps > 0 ? Math.round(info.fps) : NORMALIZE_DEFAULT_FPS;
+  const videoArgs = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-r", String(fps), "-vsync", "cfr"];
+  // Clip length is dictated by the VIDEO STREAM: a shorter voiceover / native track is padded with
+  // silence (`apad`), a longer one is cut at the video end (`-t`). Never `-shortest` alone — it
   // would truncate the video to a short voiceover.
-  const lengthArgs = info.duration > 0 ? ["-t", info.duration.toFixed(3)] : ["-shortest"];
+  const videoLen = info.videoDuration > 0 ? info.videoDuration : info.duration;
+  const lengthArgs = videoLen > 0 ? ["-t", videoLen.toFixed(3)] : ["-shortest"];
 
   if (audioPath) {
     await runFfmpeg(
@@ -286,7 +352,7 @@ async function normalizeClip(
         "-i", audioPath,
         "-map", "0:v:0", "-map", "1:a:0",
         "-af", "apad",
-        "-c:v", "copy", ...audioArgs,
+        ...videoArgs, ...audioArgs,
         ...lengthArgs,
         "-movflags", "+faststart",
         outPath,
@@ -298,7 +364,7 @@ async function normalizeClip(
 
   if (info.hasAudio) {
     await runFfmpeg(
-      ["-i", videoPath, "-map", "0:v:0", "-map", "0:a:0", "-c:v", "copy", ...audioArgs, "-movflags", "+faststart", outPath],
+      ["-i", videoPath, "-map", "0:v:0", "-map", "0:a:0", "-af", "apad", ...videoArgs, ...audioArgs, ...lengthArgs, "-movflags", "+faststart", outPath],
       "normalize native audio"
     );
     return "native";
@@ -309,8 +375,8 @@ async function normalizeClip(
       "-i", videoPath,
       "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
       "-map", "0:v:0", "-map", "1:a:0",
-      "-c:v", "copy", ...audioArgs,
-      "-shortest",
+      ...videoArgs, ...audioArgs,
+      ...(videoLen > 0 ? lengthArgs : ["-shortest"]),
       "-movflags", "+faststart",
       outPath,
     ],
@@ -435,82 +501,138 @@ export type StitchMode = "seamless-cut" | "film" | "crossfade" | "concat";
 export const DEFAULT_STITCH_MODE: StitchMode = "seamless-cut";
 
 /**
- * Length of the micro-blend on every seam, in seconds — used for BOTH the video `xfade`
- * and the audio `acrossfade` so the two streams overlap identically and stay in sync.
- * 0.08s ≈ 2 frames @ 24fps / 2.4 frames @ 30fps: far too short to read as a dissolve, but
- * enough to soften the single-frame "jerk" of a hard cut and to kill the audio click / gap.
+ * Length of the micro-blend on every seam, in seconds — Stage 43 constant kept for compatibility
+ * (hard limits still enforced by scripts/test-stage43.ts). Stage 78 no longer blends the VIDEO at all:
+ * the seam is a frame-exact hard cut (`concat`), because even a 2-frame xfade held the previous clip's
+ * final frame over the seam and read as a freeze. The audio uses tiny edge afades instead of an overlap
+ * so the audio and video timelines stay exactly the same length.
  * HARD LIMIT: must stay ≤ 0.12s (video) and ≤ 0.08s (audio) — see scripts/test-stage43.ts.
  */
 export const SEAMLESS_BLEND_SEC = 0.08;
 export const SEAMLESS_BLEND_MAX_VIDEO_SEC = 0.12;
 export const SEAMLESS_BLEND_MAX_AUDIO_SEC = 0.08;
 
+/**
+ * Stage 78 — seconds trimmed from the TAIL of every clip except the last. Seedance clips end on a
+ * settled / frozen beat (the model "lands" its last frame and the audio outlives the picture); cutting
+ * ~0.35 s early makes the cut land mid-motion. Skipped for clips that would drop below 1.0 s.
+ */
+export const SEAM_TAIL_TRIM_SEC = 0.35;
+/** Stage 78 — minimum clip length that still gets a tail trim. */
+export const SEAM_TAIL_TRIM_MIN_CLIP_SEC = 1.0;
+/** Stage 78 — edge afade (s) applied at each clip's tail / next clip's head to kill the click (no overlap). */
+export const SEAM_AUDIO_FADE_SEC = 0.03;
+
 export interface SeamlessCutGraph {
   /** ffmpeg `-filter_complex` string; outputs are `[vout]` and `[aout]`. */
   filter: string;
-  /** Blend actually used on every seam (s). */
+  /** Video blend actually used on every seam (s). Stage 78: always 0 — hard cut. */
   blend: number;
-  /** Expected output duration: sum(clip durations) − (N−1)·blend. */
+  /** Stage 78: edge afade length (s) on each side of a seam (audio is not overlapped). */
+  audioFade: number;
+  /** Stage 78: tail trim (s) applied to the non-last clips (0 when disabled). */
+  tailTrimSec: number;
+  /** Stage 78: effective per-clip durations after the tail trim (same order as the inputs). */
+  clipDurations: number[];
+  /** Expected output duration: sum(clipDurations). */
   expectedDuration: number;
-  /** Seam positions in the OUTPUT timeline (start of each blend), for markers / music offsets. */
+  /** Seam positions in the OUTPUT timeline (the cut instants), for markers / music offsets. */
   seamOffsets: number[];
   width: number;
   height: number;
   fps: number;
 }
 
+export interface SeamlessCutGraphOptions {
+  /** Tail trim per non-last clip (s). Default SEAM_TAIL_TRIM_SEC; 0 disables. */
+  tailTrimSec?: number;
+  /** Video blend (s). Stage 78: ignored — the cut is always hard (kept for signature compatibility). */
+  videoBlend?: number;
+}
+
+/** Duration of a clip as the seam math sees it: the VIDEO stream, falling back to the container. */
+function seamClipDuration(i: MediaInfo): number {
+  return i.videoDuration > 0 ? i.videoDuration : i.duration;
+}
+
 /**
  * Pure builder for the seamless-cut filtergraph (unit-testable, no ffmpeg run).
- * Every input is normalized to the geometry / fps / timebase of the first clip (xfade needs
- * identical size, fps and timebase), then N−1 chained `xfade=transition=fade` + `acrossfade`
- * filters join them with a `blend`-second overlap each. The k-th seam starts at
- * `sum(d_0..d_{k-1}) − k·blend` in the output.
+ * Stage 78: every input is normalized to the geometry / fps / timebase of the first clip; every clip
+ * except the LAST is trimmed by `tailTrimSec` at the tail (only when the remainder stays ≥ 1.0 s), the
+ * PTS are re-based, the audio gets a 0.03 s fade-out at each tail and fade-in at each head (except the
+ * very first head / very last tail), and the streams are joined with `concat=n=N:v=1:a=1` — a hard cut,
+ * no xfade, no acrossfade, so the audio and video are exactly the same length. The k-th seam sits at
+ * `sum(clipDurations[0..k-1])` in the output. `blend` (video) is reported as 0.
+ * Signature-compatible with Stage 43: `(infos, blend?, opts?)` — `blend` is accepted and ignored.
  */
-export function buildSeamlessCutGraph(infos: MediaInfo[], blend: number = SEAMLESS_BLEND_SEC): SeamlessCutGraph {
+export function buildSeamlessCutGraph(
+  infos: MediaInfo[],
+  _blend: number = SEAMLESS_BLEND_SEC,
+  opts: SeamlessCutGraphOptions = {}
+): SeamlessCutGraph {
   const n = infos.length;
   if (n < 2) throw new Error("buildSeamlessCutGraph needs at least 2 clips");
   const ref = infos[0];
   const w = ref.width || 720;
   const h = ref.height || 1280;
   const fps = ref.fps > 0 ? Math.round(ref.fps) : 24;
-  // Clamp: never longer than the hard limits, never more than 1/4 of the shortest clip.
-  const minDur = Math.min(...infos.map((i) => i.duration).filter((d) => d > 0));
-  const d = Math.max(
-    0.01,
-    Math.min(blend, SEAMLESS_BLEND_MAX_AUDIO_SEC, SEAMLESS_BLEND_MAX_VIDEO_SEC, (Number.isFinite(minDur) ? minDur : blend) / 4)
-  );
+  const tailTrim = Math.max(0, opts.tailTrimSec ?? SEAM_TAIL_TRIM_SEC);
+  const fade = SEAM_AUDIO_FADE_SEC;
+
+  // Effective durations: trim the tail of every clip but the last when the clip stays ≥ 1.0 s.
+  const clipDurations = infos.map((info, i) => {
+    const dur = seamClipDuration(info);
+    if (i === n - 1 || tailTrim <= 0 || dur <= 0) return dur;
+    const trimmed = dur - tailTrim;
+    return trimmed >= SEAM_TAIL_TRIM_MIN_CLIP_SEC ? trimmed : dur;
+  });
 
   const parts: string[] = [];
   for (let i = 0; i < n; i++) {
+    const dur = clipDurations[i];
+    const trimmed = i !== n - 1 && tailTrim > 0 && dur > 0 && dur < seamClipDuration(infos[i]);
+    const vTrim = trimmed ? `trim=0:${dur.toFixed(3)},` : "";
+    const aTrim = trimmed ? `atrim=0:${dur.toFixed(3)},` : "";
     parts.push(
       `[${i}:v:0]scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
-        `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,setpts=PTS-STARTPTS,fps=${fps},format=yuv420p,settb=AVTB[v${i}]`
+        `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},${vTrim}setpts=PTS-STARTPTS,format=yuv420p,settb=AVTB[v${i}]`
     );
-    parts.push(`[${i}:a:0]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,asetpts=PTS-STARTPTS[a${i}]`);
+    // Edge fades instead of an overlap: fade-in on every head but the first, fade-out on every tail
+    // but the last (the fade-out starts `fade` seconds before the trimmed end).
+    const fadeIn = i > 0 ? `afade=t=in:st=0:d=${fade.toFixed(3)},` : "";
+    const fadeOut = i < n - 1 && dur > fade
+      ? `afade=t=out:st=${(dur - fade).toFixed(3)}:d=${fade.toFixed(3)},`
+      : "";
+    parts.push(
+      `[${i}:a:0]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,${aTrim}asetpts=PTS-STARTPTS,${fadeIn}${fadeOut}anull[a${i}]`
+    );
   }
-
-  let vPrev = "v0";
-  let aPrev = "a0";
-  let elapsed = infos[0].duration;
   const seamOffsets: number[] = [];
-  for (let i = 1; i < n; i++) {
-    const offset = Math.max(0, elapsed - d);
-    seamOffsets.push(offset);
-    const vOut = i === n - 1 ? "vout" : `vx${i}`;
-    const aOut = i === n - 1 ? "aout" : `ax${i}`;
-    parts.push(`[${vPrev}][v${i}]xfade=transition=fade:duration=${d.toFixed(3)}:offset=${offset.toFixed(3)}[${vOut}]`);
-    parts.push(`[${aPrev}][a${i}]acrossfade=d=${d.toFixed(3)}:c1=tri:c2=tri[${aOut}]`);
-    vPrev = vOut;
-    aPrev = aOut;
-    elapsed = elapsed + infos[i].duration - d;
+  let elapsed = 0;
+  for (let i = 0; i < n - 1; i++) {
+    elapsed += clipDurations[i];
+    seamOffsets.push(Number(elapsed.toFixed(6)));
   }
-  return { filter: parts.join(";"), blend: d, expectedDuration: elapsed, seamOffsets, width: w, height: h, fps };
+  const expectedDuration = Number(clipDurations.reduce((a, d) => a + d, 0).toFixed(6));
+  const inputs = infos.map((_, i) => `[v${i}][a${i}]`).join("");
+  parts.push(`${inputs}concat=n=${n}:v=1:a=1[vout][aout]`);
+  return {
+    filter: parts.join(";"),
+    blend: 0,
+    audioFade: fade,
+    tailTrimSec: tailTrim,
+    clipDurations,
+    expectedDuration,
+    seamOffsets,
+    width: w,
+    height: h,
+    fps,
+  };
 }
 
 /**
- * Join uniform clips with a seamless hard cut (see SEAMLESS_BLEND_SEC). Clips keep their full
- * length except for the `blend` overlap on each seam; no edge afades are applied (the
- * acrossfade alone removes the click), no bridge frames are synthesized.
+ * Join uniform clips with a seamless hard cut (Stage 78): tail-trimmed clips, frame-exact `concat`,
+ * edge afades on the audio, constant frame rate on the output. No bridge frames are synthesized.
  */
 async function seamlessCutClips(clips: string[], infos: MediaInfo[], outPath: string): Promise<SeamlessCutGraph> {
   const g = buildSeamlessCutGraph(infos);
@@ -519,7 +641,7 @@ async function seamlessCutClips(clips: string[], infos: MediaInfo[], outPath: st
       ...clips.flatMap((c) => ["-i", c]),
       "-filter_complex", g.filter,
       "-map", "[vout]", "-map", "[aout]",
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-r", String(g.fps),
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-r", String(g.fps), "-vsync", "cfr",
       "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
       "-movflags", "+faststart",
       outPath,
@@ -550,7 +672,7 @@ export async function stitchLocalClipsSeamless(
     }
     const infos = await Promise.all(normalized.map((c) => probeMedia(c)));
     let blend = 0;
-    let expectedDuration = infos.reduce((a, i) => a + i.duration, 0);
+    let expectedDuration = infos.reduce((a, i) => a + (i.videoDuration > 0 ? i.videoDuration : i.duration), 0);
     let seamOffsets: number[] = [];
     if (normalized.length === 1) {
       await fs.copyFile(normalized[0], outPath);
@@ -905,19 +1027,25 @@ export async function assembleEpisodeLocally(scenes: SceneClipInput[], opts: Ass
   // real «k/N» progress event after each one.
   let downloaded = 0;
   opts.onProgress?.({ stage: "download", done: 0, total: scenes.length });
-  const prepared = await mapWithConcurrency(scenes, opts.downloadConcurrency ?? DOWNLOAD_CONCURRENCY, async (s, i) => {
+  const concurrency = opts.downloadConcurrency ?? DOWNLOAD_CONCURRENCY;
+  // Stage 78: download first, then normalize every clip to ONE constant frame rate (the first clip's,
+  // fallback 24) — the seam math needs frame-aligned, identical-rate inputs.
+  const downloadedFiles = await mapWithConcurrency(scenes, concurrency, async (s, i) => {
     const idx = String(i + 1).padStart(3, "0");
     const videoPath = path.join(workDir, `scene_${idx}.mp4`);
     await downloadToFile(s.videoUrl, videoPath);
-
     let audioPath: string | null = null;
     if (s.audioUrl) {
       audioPath = path.join(workDir, `scene_${idx}_voice.audio`);
       await downloadToFile(s.audioUrl, audioPath);
     }
-
+    return { idx, videoPath, audioPath };
+  });
+  const firstInfo = await probeMedia(downloadedFiles[0].videoPath);
+  const targetFps = firstInfo.fps > 0 ? Math.round(firstInfo.fps) : NORMALIZE_DEFAULT_FPS;
+  const prepared = await mapWithConcurrency(downloadedFiles, concurrency, async ({ idx, videoPath, audioPath }) => {
     const outPath = path.join(workDir, `clip_${idx}.mp4`);
-    const source = await normalizeClip(videoPath, audioPath, outPath);
+    const source = await normalizeClip(videoPath, audioPath, outPath, targetFps);
 
     // Free disk early — /tmp on serverless is limited.
     await fs.rm(videoPath, { force: true });
@@ -954,7 +1082,7 @@ export async function assembleEpisodeLocally(scenes: SceneClipInput[], opts: Ass
     // no visible dissolve. If the ultra-short xfade fails for any reason → frame-exact concat.
     try {
       const g = await seamlessCutClips(normalized, infos, joinedPath);
-      console.log(`[ffmpeg] seamless cut: ${normalized.length} clips, blend=${g.blend.toFixed(3)}s, expected=${g.expectedDuration.toFixed(2)}s`);
+      console.log(`[ffmpeg] seamless cut: ${normalized.length} clips, hard cut (blend=0), tailTrim=${g.tailTrimSec.toFixed(2)}s, audioFade=${g.audioFade.toFixed(3)}s, expected=${g.expectedDuration.toFixed(2)}s`);
     } catch (err) {
       console.warn("[ffmpeg] seamless cut failed — falling back to hard concat:", (err as Error).message);
       await fs.rm(joinedPath, { force: true });

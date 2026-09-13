@@ -104,13 +104,13 @@ const mk = (n: number, opts: { continuesFrom?: (string | undefined)[]; startCame
   for (const [n, r] of [["START", START_STATE_RULE], ["END", END_STATE_RULE]] as const) {
     ok(!/frozen still|no motion/i.test(r) && /continuing motion/i.test(r), `D: ${n}_STATE_RULE has no frozen-still wording, poses are an instant of continuing motion`);
     ok(/WORLD/.test(r) && /CAMERA/.test(r) && /at least TWO of the three/i.test(r) && /never repeat the previous framing/i.test(r), `D: ${n}_STATE_RULE: same WORLD, camera differs in ≥2 of 3`);
-    ok(/mid-word or mid-sentence/i.test(r) && /~1 second before the cut/i.test(r), `D: ${n}_STATE_RULE carries the speech rule`);
+    ok(/mid-word or mid-sentence/i.test(r) && /never split across two scenes/i.test(r) && !/~1 second before the cut/i.test(r), `D: ${n}_STATE_RULE carries the speech rule (Stage 78: a line may end on the cut, no silent beat)`);
     ok(/AT LEAST 300 words/.test(r), `D: ${n}_STATE_RULE carries the (Stage 45 doubled) ≥300 words requirement`);
   }
   ok(/architecture, materials, surfaces/i.test(FRAME_STATE_ASPECTS), "D: WORLD block demands a detailed location description");
   const sys = episodeScriptSystemPrompt("en", 1);
   ok(/MATCH CUT ON ACTION/.test(sys) && /Repeating the previous framing is an error/.test(sys), "D: R10 rewritten to same-WORLD / new-CAMERA semantics");
-  ok(!/equals the previous scene's endState exactly/.test(sys) && /startState WORLD equals the previous scene's endState WORLD/.test(sys) && /no line of dialogue is split between two scenes/.test(sys), "D: final checklist: WORLD equal, CAMERA differs, no split lines");
+  ok(!/equals the previous scene's endState exactly/.test(sys) && /startState WORLD equals the previous scene's endState WORLD/.test(sys) && /never split across two scenes; characters never fall silent or freeze before the cut/.test(sys), "D: final checklist: WORLD equal, CAMERA differs, no split lines (Stage 78 wording)");
   ok(/flat backdrop with figures in front of it is an ERROR/.test(sys) && /DIFFERENT from the previous scene's final camera/.test(sys), "D: [SHOT TYPE]/[BLOCKING]: characters inside the space, opening scale differs from previous end");
   const revise = sceneReviseSystemPrompt("en");
   ok(/WORLD block must still equal the PREVIOUS shot's endState WORLD/.test(revise) && /CAMERA block is a DIFFERENT setup/.test(revise), "D: scene-revise prompt uses WORLD-same / CAMERA-different semantics");
