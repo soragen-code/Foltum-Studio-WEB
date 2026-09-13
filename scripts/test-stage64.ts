@@ -12,7 +12,7 @@ import {
   buildScenePrompt, REFERENCE_IMAGE_CAP, LAST_FRAME_CONTINUITY_NOTE, STORYBOARD_FIRST_FRAME_NOTE, STORYBOARD_REFERENCE_MAP_ENTRY, SCENE_SECTION,
   type ScenePromptScene, type ScenePromptCharacterLink, type ScenePromptLocation, type ScenePromptPrevious, type BuildScenePromptInput,
 } from "../lib/scene-prompt";
-import { buildStoryboardPrompt, SEEDREAM_IMAGE_INPUT_CAP, PREVIOUS_STORYBOARD_NOTE, STORYBOARD_FRAME_DIRECTIVE } from "../lib/storyboard-prompt";
+import { buildStoryboardPrompt, SEEDREAM_IMAGE_INPUT_CAP, PREVIOUS_STORYBOARD_NOTE, STORYBOARD_FRAME_DIRECTIVE, STORYBOARD_PROMPT_MAX_CHARS, clampStoryboardOpening } from "../lib/storyboard-prompt";
 import { VISUAL_STYLE_ID } from "../lib/visual-style";
 import type { PropRegistryEntry } from "../lib/prop-registry";
 
@@ -137,6 +137,33 @@ const build = (opts: {
   ok(cap.referenceImages.length === SEEDREAM_IMAGE_INPUT_CAP, `C: capped to ${SEEDREAM_IMAGE_INPUT_CAP} image inputs`);
   ok(cap.referenceImages[0] === PREV_STORYBOARD && five.every(c => cap.referenceImages.includes(styledUrl("char-" + c.characterId))), "C: previous storyboard + all characters survive the cap");
   ok(cap.referenceImages.includes(styledUrl("ex0")) && cap.referenceImages.includes(styledUrl("ex4")) && !cap.referenceImages.includes(styledUrl("ex5")), "C: the LAST extra angle is the one trimmed (tail first)");
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// D. Stage 64a — provider limit: Seedream rejects prompts > 4000 chars (HTTP 422). A scripted startState is
+//    itself ~4000 chars, so the assembled prompt must be clamped: CAMERA block + roster + placements kept,
+//    set dressing trimmed first, the rest of the prompt (style, lighting, people, props, notes) untouched.
+// ---------------------------------------------------------------------------------------------------------------
+{
+  const sbScene = { id: "s2", number: 2, videoPrompt: scene().videoPrompt, continuesFrom: "same-location-continuation", startState: "" };
+  const placements = Array.from({ length: 6 }, (_, i) => `Person${i} occupies frame LEFT in the foreground beside the coffin, faces north, and holds a folded sheet in the left hand while the empty right hand rests on the lid.`);
+  const dressing = Array.from({ length: 16 }, (_, i) => `Dressing sentence ${i}: a walnut sideboard with a brass lamp and a stack of ivory letters stands against the east wall under a rain-streaked window with heavy velvet curtains.`);
+  const camera = "CAMERA: A wide establishing composition looks north along the hall at high camera height with a natural wide-angle lens feel; the vertical 9:16 frame reveals the floor from the threshold to the pocket doors.";
+  const longStart = `WORLD: IN FRAME: ${Array.from({ length: 6 }, (_, i) => "Person" + i).join(", ")}. NOT IN FRAME: none. ${placements.join(" ")} ${dressing.join(" ")} ${camera}`;
+  ok(longStart.length > 3500, `D: fixture startState is ~scripted size (${longStart.length} chars)`);
+  const six = Array.from({ length: 6 }, (_, i) => mkChar("c" + i, "Person" + i));
+  const big = buildStoryboardPrompt({ scene: { ...sbScene, startState: longStart }, characters: six, location: location(), previous: { id: "s1", storyboardUrl: PREV_STORYBOARD }, props: PROPS });
+  ok(big.prompt.length <= STORYBOARD_PROMPT_MAX_CHARS && STORYBOARD_PROMPT_MAX_CHARS < 4000, `D: clamped prompt fits the provider limit (${big.prompt.length} ≤ ${STORYBOARD_PROMPT_MAX_CHARS} < 4000)`);
+  const opening = big.prompt.split("\n")[0];
+  ok(opening.includes(camera), "D: the CAMERA block survives verbatim");
+  ok(opening.includes("IN FRAME: Person0") && placements.every(pl => opening.includes(pl)), "D: roster + all 6 character placements survive");
+  ok(!opening.includes("Dressing sentence 15"), "D: set dressing is what gets trimmed (from the end)");
+  ok(big.prompt.includes(STORYBOARD_FRAME_DIRECTIVE) && big.prompt.split("\n").filter(l => l.startsWith("[Image")).length === big.refs.length && big.refs.length === 1 + 6 + 3, "D: directive, all [ImageN] notes and all references are intact after clamping");
+  const small = buildStoryboardPrompt({ scene: { ...sbScene, startState: "WORLD: Anna stands by the window. CAMERA: medium shot, eye level." }, characters: [mkChar("a", "Anna")], location: location(), previous: null });
+  ok(small.prompt.includes("WORLD: Anna stands by the window. CAMERA: medium shot, eye level."), "D: a short opening is passed through unchanged");
+  ok(clampStoryboardOpening("short text", 100) === "short text", "D: clampStoryboardOpening is identity when it fits");
+  const c = clampStoryboardOpening(`First one. Second one. Third one. ${camera}`, camera.length + 25);
+  ok(c === `First one. Second one. ${camera}`, "D: clampStoryboardOpening cuts whole sentences from the end of WORLD and keeps CAMERA");
 }
 
 console.log(`\nStage 64: ${pass} checks passed`);

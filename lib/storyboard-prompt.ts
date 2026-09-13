@@ -32,6 +32,40 @@ export const SEEDREAM_IMAGE_INPUT_CAP = 14;
 const STORYBOARD_LOCATION_EXTRA_CAP = 6;
 
 export const STORYBOARD_OPENING_PREFIX = "OPENING STATE (this exact instant is the still frame): ";
+/**
+ * Stage 64a — Seedream rejects prompts longer than 4000 characters (HTTP 422 «input.prompt: String length must
+ * be less than or equal to 4000»). A scripted startState alone is ~4000 chars (WORLD + CAMERA blocks), so the
+ * assembled storyboard prompt (opening + style + lighting + people + props + [ImageN] notes) overflowed. Budget
+ * 3900 leaves headroom, like lib/full-body-prompt.ts PROMPT_MAX_CHARS.
+ */
+export const STORYBOARD_PROMPT_MAX_CHARS = 3900;
+
+/**
+ * Shorten the opening state to `room` characters WITHOUT touching the CAMERA block (the still's framing) or the
+ * IN FRAME / NOT IN FRAME roster and the per-character placements that open the WORLD block: the WORLD text is
+ * cut from its END at sentence boundaries, so set dressing goes first (the location references and the previous
+ * storyboard carry it), placements last. Returns the opening unchanged when it already fits.
+ */
+export function clampStoryboardOpening(opening: string, room: number): string {
+  if (opening.length <= room) return opening;
+  if (room <= 0) return "";
+  const camIdx = opening.search(/\bCAMERA\s*:/);
+  const camera = camIdx >= 0 ? opening.slice(camIdx).trim() : "";
+  let world = camIdx >= 0 ? opening.slice(0, camIdx).trim() : opening;
+  const worldRoom = camera ? room - camera.length - 1 : room;
+  if (worldRoom <= 0) return camera.slice(0, room); // pathological: even the camera alone is over budget
+  if (world.length > worldRoom) {
+    // Drop whole sentences from the end of the WORLD block while it does not fit.
+    const sentences = world.match(/[^.!?]+[.!?]+(\s+|$)|[^.!?]+$/g) ?? [world];
+    let kept = "";
+    for (const sentence of sentences) {
+      if ((kept + sentence).trimEnd().length > worldRoom) break;
+      kept += sentence;
+    }
+    world = kept.trimEnd() || world.slice(0, worldRoom).trimEnd();
+  }
+  return camera ? `${world} ${camera}` : world;
+}
 export const STORYBOARD_FRAME_DIRECTIVE = "Vertical 9:16 single still frame, photorealistic, no text, no watermark.";
 export const PREVIOUS_STORYBOARD_NOTE =
   "previous shot's frame in the same location — keep every object in the same position, same set dressing, light and palette; only the camera and the action advance.";
@@ -146,16 +180,27 @@ export function buildStoryboardPrompt(input: BuildStoryboardPromptInput): BuildS
   const peopleCounter = buildPeopleCounter(characters.filter(c => c.tier !== "CROWD"), characters.some(c => c.tier === "CROWD"));
   const propsSection = buildPropsSection(matchPropsInText(input.props ?? [], mentionText));
   void crowds;
-  const lines = [
-    opening ? `${STORYBOARD_OPENING_PREFIX}${opening}` : "",
-    visualStyleLine,
-    lightingLine,
-    peopleCounter,
-    propsSection,
-    STORYBOARD_FRAME_DIRECTIVE,
-  ].filter(Boolean);
-  let prompt = lines.join("\n");
-  if (refs.length) prompt += "\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
+  const noteLines = refs.map((r, i) => `[Image${i + 1}] ${r.note}`);
+  const assemble = (openingText: string) => {
+    const lines = [
+      openingText ? `${STORYBOARD_OPENING_PREFIX}${openingText}` : "",
+      visualStyleLine,
+      lightingLine,
+      peopleCounter,
+      propsSection,
+      STORYBOARD_FRAME_DIRECTIVE,
+      ...noteLines,
+    ].filter(Boolean);
+    return lines.join("\n");
+  };
+  // Stage 64a — fit the provider's 4000-char limit: everything except the opening is fixed, so the opening
+  // gets whatever room is left (CAMERA block and character placements preserved, set dressing trimmed first).
+  let prompt = assemble(opening);
+  if (prompt.length > STORYBOARD_PROMPT_MAX_CHARS) {
+    const fixedLength = assemble("").length + (opening ? STORYBOARD_OPENING_PREFIX.length + 1 : 0);
+    prompt = assemble(clampStoryboardOpening(opening, STORYBOARD_PROMPT_MAX_CHARS - fixedLength));
+    if (prompt.length > STORYBOARD_PROMPT_MAX_CHARS) prompt = prompt.slice(0, STORYBOARD_PROMPT_MAX_CHARS); // last resort
+  }
 
   return { prompt, referenceImages: refs.map(r => r.url), refs, continuesPrevious };
 }
