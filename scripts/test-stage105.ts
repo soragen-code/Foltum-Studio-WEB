@@ -19,13 +19,13 @@ const root = path.resolve(__dirname, "..");
 const read = (p: string) => fs.readFileSync(path.join(root, p), "utf8");
 
 const E1 = [
-  "SHOT 1 (30 s): Night, a rain-soaked dugout. Sergeant Orlov counts the last three flares while a radio crackles with a voice he refuses to answer.",
-  "SHOT 2 (30 s): The voice names his dead brother. Orlov grabs the handset and demands proof; the answer is a childhood nickname only two people knew.",
-  "CLIFFHANGER (last frame): Orlov's hand freezes on the handset as a pair of glowing eyes opens in the dark corner of the dugout.",
+  "SHOT 1 (30 s): Night, a rain-soaked dugout. Sergeant Orlov counts three flares while a radio crackles with a voice he refuses to answer.",
+  "SHOT 2 (30 s): The voice names his dead brother. Orlov grabs the handset and demands proof; the answer is a childhood nickname.",
+  "CLIFFHANGER (last frame): Orlov's hand freezes on the handset as glowing eyes open in the dark corner.",
 ].join("\n");
 const E2 = [
-  "SHOT 1 (30 s): OPENS ON: Orlov's hand freezes on the handset as a pair of glowing eyes opens in the dark corner of the dugout. He raises the flare gun; the eyes belong to a starving dog with a collar tag bearing his brother's name.",
-  "SHOT 2 (30 s): The radio voice laughs and says the dog found its way home. Orlov reads the coordinates scratched into the tag out loud.",
+  "SHOT 1 (30 s): OPENS ON: Orlov's hand freezes on the handset as glowing eyes open in the dark corner. He raises the flare gun; the eyes belong to a starving dog wearing his brother's collar tag.",
+  "SHOT 2 (30 s): The radio voice laughs: the dog found its way home. Orlov reads the coordinates scratched into the tag aloud.",
   "CLIFFHANGER (last frame): The coordinates match the dugout — and footsteps stop right above the hatch.",
 ].join("\n");
 
@@ -48,7 +48,7 @@ async function main() {
   ];
   ok(validateEpisodeDescriptions(valid as any).length === 0, "validate: valid 2-episode pair passes");
   const long = E1.replace("SHOT 2 (30 s):", "SHOT 2 (30 s): " + Array(EPISODE_FOOTAGE_MAX_WORDS).fill("word").join(" "));
-  ok(validateEpisodeDescriptions([{ number: 1, description: long }] as any).length > 0, "validate: >120 words fails");
+  ok(validateEpisodeDescriptions([{ number: 1, description: long }] as any).length > 0, "validate: over the word budget fails");
   ok(validateEpisodeDescriptions([{ number: 1, description: "SHOT 1 (30 s): only one line here and nothing else at all." }] as any).length > 0, "validate: missing labels fails");
   const e2NoOpen = E2.replace("OPENS ON: ", "");
   ok(validateEpisodeDescriptions([valid[0], { number: 2, description: e2NoOpen }] as any).some((s) => /OPENS ON/i.test(s)), "validate: E2 without OPENS ON fails");
@@ -99,3 +99,17 @@ async function main() {
   console.log(`\nStage 105: ${pass} checks passed`);
 }
 main().catch((e) => { console.error("FAIL:", e?.message ?? e); process.exit(1); });
+
+// Stage 105b — tighter budget: the prod descriptions (79–96 words, 5 named characters in SHOT 1) must now FAIL validation.
+{
+  const season = require("../lib/season");
+  const prod1 = "SHOT 1 (30 s): Alex Winters заводит группу за баррикады, желая поймать ответ на радиостанцию; Emma Clarke перевязывает его рану, Liam Johnson прячется за ней, Marcus Reed размечает маршрут, Sara Mitchell требует искать топливо вместо чужих голосов. SHOT 2 (30 s): Среди помех звучит приглашение в отапливаемое убежище, а за снежным валом поднимаются пять светящихся пар глаз. CLIFFHANGER (last frame): Голос обещает: «Не выключайте маяк. По нему вас найдут». За баррикадой одна из тварей поворачивает голову точно к радиостанции.";
+  const problems = season.validateEpisodeDescriptions([{ number: 1, description: prod1 }]);
+  if (!problems.some((p: string) => /SHOT 1 has/.test(p))) { console.error("FAIL: Stage 105b — long prod SHOT 1 must fail per-line cap", problems); process.exit(1); }
+  const tight = "SHOT 1 (30 s): Alex's team climbs down into the dugout; his wife patches his wound, a man tunes the radio, the kids stand shivering. SHOT 2 (30 s): The radio locks onto a voice announcing a new shelter; everyone freezes and listens. CLIFFHANGER (last frame): Over the rim of the dugout, five pairs of glowing eyes open in the dark.";
+  const tight2 = "SHOT 1 (30 s): OPENS ON: Over the rim of the dugout, five pairs of glowing eyes open in the dark. A child screams; the creatures pour over the rim into the dugout. SHOT 2 (30 s): The team fights back with a rifle butt, a shovel and the radio while the wife drags the kids into the corner. CLIFFHANGER (last frame): A clawed hand closes around the child's ankle as the lamp goes out.";
+  const p2 = season.validateEpisodeDescriptions([{ number: 1, description: tight }, { number: 2, description: tight2 }]);
+  if (p2.length) { console.error("FAIL: Stage 105b — example descriptions must pass", p2); process.exit(1); }
+  if (season.EPISODE_FOOTAGE_MAX_WORDS !== 60) { console.error("FAIL: max words must be 60"); process.exit(1); }
+  console.log("OK: Stage 105b tight budget (60 total / 24 per shot / 16 cliffhanger)");
+}
