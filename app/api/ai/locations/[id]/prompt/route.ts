@@ -26,19 +26,19 @@ function view(loc: { visualPrompt: string | null; visualPromptAuto: string | nul
 
 export async function GET(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
-  if (!session?.user?.id) return NextResponse.json({ error: "Требуется вход" }, { status: 401 });
+  if (!session?.user?.id) return NextResponse.json({ error: "Login required" }, { status: 401 });
   const limited = rateLimitByUser(request, "ai:location-prompt", session.user.email ?? session.user.id, RATE_LIMITS.ai);
   if (limited) return limited;
 
   const { id } = await ctx.params;
   const loc = await prisma.location.findFirst({ where: { id, project: { userId: session.user.id } }, select: { visualPrompt: true, visualPromptAuto: true } });
-  if (!loc) return NextResponse.json({ error: "Локация не найдена" }, { status: 404 });
+  if (!loc) return NextResponse.json({ error: "Location not found" }, { status: 404 });
   return NextResponse.json(view(loc));
 }
 
 export async function PUT(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
-  if (!session?.user?.id) return NextResponse.json({ error: "Требуется вход" }, { status: 401 });
+  if (!session?.user?.id) return NextResponse.json({ error: "Login required" }, { status: 401 });
   const limited = rateLimitByUser(request, "ai:location-prompt", session.user.email ?? session.user.id, RATE_LIMITS.ai);
   if (limited) return limited;
 
@@ -47,7 +47,7 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
   if (!parsed.ok) return parsed.response;
 
   const loc = await prisma.location.findFirst({ where: { id, project: { userId: session.user.id } }, include: { project: { select: { language: true, synopsis: true } } } });
-  if (!loc) return NextResponse.json({ error: "Локация не найдена" }, { status: 404 });
+  if (!loc) return NextResponse.json({ error: "Location not found" }, { status: 404 });
 
   if (parsed.data.reset) {
     if (loc.visualPromptAuto && loc.visualPromptAuto.trim()) {
@@ -68,13 +68,13 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
         card = sanitizeLocationCard(locationCardSchema.parse(raw));
       } catch (e: any) { lastError = e?.message ?? String(e); }
     }
-    if (!card) return NextResponse.json({ error: "Не удалось пересобрать промпт: " + lastError }, { status: 502 });
+    if (!card) return NextResponse.json({ error: "Failed to rebuild prompt: " + lastError }, { status: 502 });
     const updated = await prisma.location.update({ where: { id: loc.id }, data: { visualPrompt: card.visualPrompt, visualPromptAuto: card.visualPrompt }, select: { visualPrompt: true, visualPromptAuto: true } });
     return NextResponse.json({ ...view(updated), regenerated: true });
   }
 
   const prompt = (parsed.data.prompt ?? "").replace(/\r\n?/g, "\n").trim();
-  if (!prompt) return NextResponse.json({ error: "Промпт не может быть пустым — для возврата к авто используйте «Сбросить на авто»" }, { status: 400 });
+  if (!prompt) return NextResponse.json({ error: "Prompt cannot be empty — use 'Reset to auto' to revert to auto" }, { status: 400 });
   const updated = await prisma.location.update({ where: { id: loc.id }, data: { visualPrompt: prompt }, select: { visualPrompt: true, visualPromptAuto: true } });
   return NextResponse.json(view(updated));
 }

@@ -2,7 +2,7 @@
  * Stage 36 — hygiene for the manual per-scene prompt override.
  *
  * Producers paste LLM answers into the override verbatim, so the saved text used to carry a chatty
- * preamble ("Сделал проще: …") and a ```text … ``` Markdown fence — all of which was then submitted
+ * preamble ("Made it simpler: …") and a ```text … ``` Markdown fence — all of which was then submitted
  * to the video model as part of the prompt. `normalizePromptOverride` is a PURE function that keeps
  * only the prompt itself:
  *   1. if the text contains a fenced code block (``` or ```lang), ONLY the content of the first fence

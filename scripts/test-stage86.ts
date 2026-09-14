@@ -97,7 +97,7 @@ const secClose = refs.indexOf("</section>", locStart);
 const locSection = refs.slice(secOpen, secClose);
 ok("B: location section is order-first (rendered first regardless of DB record order)", /order-first/.test(locSection));
 ok("B: location section is rendered from the dedicated locations relation", /locations\.map\(\(loc\)/.test(refs));
-ok("B: location section highlighted + base-layer emphasis retained (Stage 85)", /border-primary\/40/.test(locSection) && /Базовый слой сцены/.test(locSection));
+ok("B: location section highlighted + base-layer emphasis retained (Stage 85)", /border-primary\/40/.test(locSection) && /Base scene layer/.test(locSection));
 ok("B: character groups render from the tier groups, never mixed with locations", /groups\.map\(\(g\)/.test(refs) && /data-testid=\{`ref-group-\$\{g\.tier\}`\}/.test(refs));
 ok("B: the type-based, retroactive intent is documented for old projects", /regardless of the order records were created/.test(refs) && /OLD projects/.test(refs));
 

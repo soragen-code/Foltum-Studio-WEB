@@ -5,7 +5,7 @@ import { Loader2, RefreshCw, Download, Trash2 } from 'lucide-react'
 
 /**
  * Stage 46E — compact, ALWAYS-visible toolbar at the bottom of a reference photo / frame:
- * «Перегенерировать» · «Скачать» · «Удалить» (optional, locations only). Every control has a text label
+ * «Regenerate · Download · Delete (optional, locations only). Every control has a text label
  * (touch-screen users get no hover). Rendered with spans (role=button) so it can live inside a clickable
  * photo `<button>` without invalid nesting; clicks never bubble to the photo (lightbox).
  */
@@ -44,46 +44,46 @@ export function FrameToolbar({ regen, download, del }: FrameToolbarProps) {
     <span className="absolute inset-x-1 bottom-1 flex flex-col gap-0.5" onClick={stop} data-testid="frame-toolbar">
       <span
         role="button"
-        aria-label="Перегенерировать"
-        title="Перегенерировать (1 кредит)"
+        aria-label="Regenerate"
+        title="Regenerate (1 credit)"
         aria-disabled={regenOff}
         data-testid={regen.testId}
         onClick={(e) => { stop(e); if (!regenOff) regen.onClick() }}
         className={`${ROW} ${regen.busy && !regen.spinning ? 'pointer-events-none opacity-40' : ''}`}
       >
         {regen.spinning ? <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin" /> : <RefreshCw className="h-3 w-3 flex-shrink-0" />}
-        <span className="truncate">Перегенерировать</span>
+        <span className="truncate">Regenerate</span>
       </span>
       {download && (
         <span
           role="button"
-          aria-label="Скачать"
-          title={`Скачать ${download.name}`}
+          aria-label="Download"
+          title={`Download ${download.name}`}
           data-testid="download-frame"
           onClick={(e) => { stop(e); triggerDownload(downloadUrl(download.url, download.name), download.name) }}
           className={ROW}
         >
-          <Download className="h-3 w-3 flex-shrink-0" /> <span className="truncate">Скачать</span>
+          <Download className="h-3 w-3 flex-shrink-0" /> <span className="truncate">Download</span>
         </span>
       )}
       {del && (
         <span
           role="button"
-          aria-label="Удалить"
-          title={delOff ? (del.disabledTitle ?? 'Сейчас нельзя удалить') : 'Удалить кадр'}
+          aria-label="Delete"
+          title={delOff ? (del.disabledTitle ?? "Can't delete right now") : "Delete frame"}
           aria-disabled={delOff}
           data-testid={del.testId}
           onClick={async (e) => { stop(e); if (delOff) return; setDeleting(true); try { await del.onClick() } finally { setDeleting(false) } }}
           className={`${ROW} ${delOff ? 'pointer-events-none opacity-40' : 'hover:bg-red-700/80'}`}
         >
-          {deleting ? <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin" /> : <Trash2 className="h-3 w-3 flex-shrink-0" />} <span className="truncate">Удалить</span>
+          {deleting ? <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin" /> : <Trash2 className="h-3 w-3 flex-shrink-0" />} <span className="truncate">Delete</span>
         </span>
       )}
     </span>
   )
 }
 
-/** «Скачать все» — one zip of every frame of a character / location. */
+/** «"Download all" — one zip of every frame of a character / location. */
 export function DownloadAllButton({ kind, id, count, className = '' }: { kind: 'character' | 'location'; id: string; count: number; className?: string }) {
   return (
     <button
@@ -92,9 +92,9 @@ export function DownloadAllButton({ kind, id, count, className = '' }: { kind: '
       onClick={() => triggerDownload(`/api/files/download-zip?${kind}=${encodeURIComponent(id)}`)}
       className={`inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50 ${className}`}
       data-testid="download-all"
-      title={count === 0 ? 'Нет кадров для скачивания' : `Скачать все кадры (${count}) одним zip-архивом`}
+      title={count === 0 ? 'No frames to download' : `Download all frames (${count}) as a single zip archive`}
     >
-      <Download className="h-3.5 w-3.5" /> Скачать все{count > 0 ? ` (${count})` : ''}
+      <Download className="h-3.5 w-3.5" /> Download all{count > 0 ? ` (${count})` : ''}
     </button>
   )
 }

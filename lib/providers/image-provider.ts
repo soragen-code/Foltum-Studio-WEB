@@ -31,7 +31,7 @@ const WAVESPEED_IMAGE_MAX_REFS = 10;
 
 function wavespeedKey(): string {
   const key = process.env.WAVESPEED_API_KEY;
-  if (!key) throw new Error("Не задан ключ провайдера WaveSpeed (WAVESPEED_API_KEY)");
+  if (!key) throw new Error("WaveSpeed provider key not set (WAVESPEED_API_KEY)");
   return key;
 }
 

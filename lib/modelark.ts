@@ -21,7 +21,7 @@ export const MODELARK_VIDEO_MAX_REFS = 30;
 /** Read the ModelArk API key from the environment (never hard-coded, never logged). */
 function getKey(): string {
   const key = process.env.MODELARK_API_KEY;
-  if (!key) throw new Error("Не задан ключ провайдера ModelArk (MODELARK_API_KEY)");
+  if (!key) throw new Error("ModelArk provider key not set (MODELARK_API_KEY)");
   return key;
 }
 

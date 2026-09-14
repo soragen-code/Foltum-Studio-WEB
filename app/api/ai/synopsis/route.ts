@@ -12,7 +12,7 @@ import { runSynopsisCorrectionJob, SYNOPSIS_CORRECTION_JOB_TYPE } from "@/lib/wo
 /**
  * POST /api/ai/synopsis { projectId, prompt?, correction?, currentSynopsis? }
  *
- * Stage 69: «Переписать синопсис» on step 2 «Синопсис». This used to run the LLM synchronously and
+ * Stage 69: "Rewrite synopsis" on step 2 "Synopsis". This used to run the LLM synchronously and
  * hold the client's fetch open for the whole rewrite (no progress bar). It now creates a background
  * GenerationJob (type "synopsis_correction") and returns { jobId } immediately; the rewrite runs via
  * runSynopsisCorrectionJob() in the background of this invocation (after()), and the frontend polls
@@ -44,7 +44,7 @@ export async function POST(request: Request) {
     if (active) return NextResponse.json({ jobId: active.id, resumed: true });
 
     const job = await prisma.generationJob.create({
-      data: { type: SYNOPSIS_CORRECTION_JOB_TYPE, status: "pending", progress: 0, message: "Запуск…", projectId },
+      data: { type: SYNOPSIS_CORRECTION_JOB_TYPE, status: "pending", progress: 0, message: "Starting…", projectId },
     });
     runInBackground(() => runSynopsisCorrectionJob(job.id, projectId, { prompt, correction, currentSynopsis }));
     return NextResponse.json({ jobId: job.id, resumed: false });

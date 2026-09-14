@@ -67,7 +67,9 @@ ok("3: worker derives hasLocationRef via sceneHasLocationRef (Stage 86 retroacti
 ok("3: worker applies the directive after applyContinuousAction", worker.indexOf("applyLocationBaseLayer(prompt") > worker.indexOf("applyContinuousAction(prompt"));
 ok("3: preview route imports applyLocationBaseLayer", /applyLocationBaseLayer/.test(previewRoute));
 ok("3: preview route derives the same hasLocationRef signal via sceneHasLocationRef", /const hasLocationRef = sceneHasLocationRef\(/.test(previewRoute));
-ok("3: preview route applies applyLocationBaseLayer as the OUTERMOST wrapper", /const prompt = applyLocationBaseLayer\(\s*applyContinuousAction\(/.test(previewRoute));
+// Stage 87: applySeriesIntro is now the OUTERMOST wrapper; applyLocationBaseLayer is applied
+// immediately inside it (still outermost among the Stage 84 seam directives).
+ok("3: preview route applies applyLocationBaseLayer as the OUTERMOST seam wrapper (inside applySeriesIntro)", /const prompt = applySeriesIntro\(\s*applyLocationBaseLayer\(\s*applyContinuousAction\(/.test(previewRoute));
 
 // ---- (4) does not touch the protected [ImageN] ordering / notes -------------
 ok("4: directive explicitly does NOT reorder the [ImageN] reference set", /does NOT reorder the \[ImageN\] reference set/.test(seam));

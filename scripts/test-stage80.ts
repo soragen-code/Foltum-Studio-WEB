@@ -50,9 +50,9 @@ try {
   safeJsonParse("this is not json at all");
 } catch (e) {
   const msg = (e as Error).message;
-  threwFriendly = msg.includes("неполный ответ") && !/Unterminated string/i.test(msg);
+  threwFriendly = msg.includes("incomplete response") && !/Unterminated string/i.test(msg);
 }
-check("non-JSON throws friendly Russian error", threwFriendly);
+check("non-JSON throws friendly error (English, Stage 87)", threwFriendly);
 
 // 8. repairTruncatedJson returns null for non-JSON-looking text.
 check("repairTruncatedJson null for non-JSON", repairTruncatedJson("hello world") === null);

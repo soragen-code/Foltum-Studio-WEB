@@ -67,8 +67,8 @@ const ok = (c: unknown, m: string) => { assert(c, m); console.log("ok:", m); pas
   // ── E. UI source: gate hint removed, generate-all button present ──────────────────────────────
   {
     const src = readFileSync(join(__dirname, "..", "app", "project", "[id]", "episode", "[episodeId]", "episode-view.tsx"), "utf8");
-    ok(!src.includes("Сначала завершите предыдущую сцену") && !src.includes("scene-gate-hint") && !src.includes("prevReady"), "episode-view: sequential gate + hint removed");
-    ok(src.includes('data-testid="generate-all-scenes"') && src.includes("Сгенерировать все сцены"), "episode-view: «Сгенерировать все сцены» button present");
+    ok(!src.includes("Complete the previous scene first") && !src.includes("scene-gate-hint") && !src.includes("prevReady"), "episode-view: sequential gate + hint removed");
+    ok(src.includes('data-testid="generate-all-scenes"') && src.includes("Generate all scenes"), "episode-view: «Generate all scenes» button present");
     const route = readFileSync(join(__dirname, "..", "app", "api", "ai", "episodes", "[id]", "generate-all", "route.ts"), "utf8");
     ok(route.includes("fanOutAll(") && !route.includes("for (const item of queued)"), "generate-all route fans out instead of looping sequentially");
     ok(route.includes("insufficient"), "generate-all route reports unpaid scenes");

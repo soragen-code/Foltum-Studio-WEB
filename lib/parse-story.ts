@@ -55,7 +55,7 @@ async function parsePdf(buf: Buffer): Promise<string> {
  */
 export async function parseStoryFile(filename: string, buf: Buffer): Promise<{ kind: StoryKind; text: string }> {
   const kind = storyKindFromName(filename);
-  if (!kind) throw new Error("Неподдерживаемый формат. Загрузите .txt, .md, .docx или .pdf");
+  if (!kind) throw new Error("Unsupported format. Upload a .txt, .md, .docx or .pdf file.");
   let raw = "";
   if (kind === "txt" || kind === "md") {
     raw = buf.toString("utf8");
@@ -65,6 +65,6 @@ export async function parseStoryFile(filename: string, buf: Buffer): Promise<{ k
     raw = await parsePdf(buf);
   }
   const text = cleanStoryText(raw);
-  if (text.length < 20) throw new Error("Не удалось извлечь текст из файла (файл пуст, отсканирован как изображение или защищён).");
+  if (text.length < 20) throw new Error("Could not extract text from the file (the file is empty, scanned as an image, or protected).");
   return { kind, text };
 }

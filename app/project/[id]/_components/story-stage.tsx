@@ -80,8 +80,8 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
   const total = season?.episodes.length ?? 0
   const scriptsDone = season?.episodes.filter((e) => e.script).length ?? 0
   const episodeCount = total
-  // Stage 59 (step 3 «Сюжет сезона»): the first episode that already has a script — the entry point into
-  // step 4 (episode creation). Used by the identical «Перейти к первому эпизоду» buttons at top and bottom.
+  // Stage 59 (step 3 «Season plot): the first episode that already has a script — the entry point into
+  // step 4 (episode creation). Used by the identical «Go to first episode buttons at top and bottom.
   const firstEpisode = season?.episodes.find((e) => !!e.script) ?? null
 
   useEffect(() => { load() }, [load])
@@ -96,9 +96,9 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
     try {
       const res = await fetch('/api/ai/season', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, ...(typeof project.episodeCount === 'number' ? { episodeCount: project.episodeCount } : {}) }) })
       const data = await res.json()
-      if (!res.ok) throw new Error(data?.error ?? 'Не удалось запустить генерацию')
-      setJob({ id: data.jobId, status: 'processing', progress: 1, message: 'Запуск...' })
-    } catch (e: any) { setError(e?.message ?? 'Ошибка') }
+      if (!res.ok) throw new Error(data?.error ?? 'Failed to start generation')
+      setJob({ id: data.jobId, status: 'processing', progress: 1, message: 'Starting...' })
+    } catch (e: any) { setError(e?.message ?? 'Error') }
     finally { setStarting(false) }
   }
 
@@ -107,7 +107,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
     const res = await fetch(`/api/ai/jobs/${job.id}/cancel`, { method: 'POST' })
     if (res.ok) {
       continuedFor.current = job.id
-      setJob((j) => (j ? { ...j, status: 'canceled', message: 'Останавливаю генерацию...' } : j))
+      setJob((j) => (j ? { ...j, status: 'canceled', message: 'Stopping generation...' } : j))
       setTimeout(load, 1500)
     }
   }
@@ -127,7 +127,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
   }, [jobActive]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
-   * Story-screen edit-by-prompt («Что изменить в сюжете»). Stage 69: the whole operation now runs as a
+   * Story-screen edit-by-prompt («What to change in the plot"). Stage 69: the whole operation now runs as a
    * background GenerationJob (type "story_revise") with a smooth 0→100 % bar — prose rewrite + structure
    * sync — that then follows the handed-off season job for the affected-episode script rewrite. Only
    * changed episodes are rewritten; existing episodes/assets are otherwise kept.
@@ -141,7 +141,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
           const r = j.result || {}
           if (r.needsForce) {
             setStoryBusy(false)
-            if (confirm(`${r.error}\n\nПродолжить и переписать эти эпизоды?`)) {
+            if (confirm(`${r.error}\n\nContinue and rewrite these episodes?`)) {
               reviseStory({ instruction: lastInstructionRef.current, force: true })
             }
             return
@@ -149,8 +149,8 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
           const affected: number[] = Array.isArray(r.affected) ? r.affected : []
           setStoryText('')
           setStoryNotice(affected.length
-            ? `Сюжет обновлён. Переписываю эпизоды: ${affected.join(', ')} — остальные не тронуты.`
-            : 'Сюжет обновлён. Сценарии эпизодов не изменились.')
+            ? `Plot updated. Rewriting episodes: ${affected.join(', ')} — the rest are untouched.`
+            : 'Plot updated. Episode scripts were not changed.')
           void load() // refresh fullStory + any active season job
           if (r.seasonJobId) {
             revisePoll.start(r.seasonJobId) // keep the bar going through the episode-rewrite phase
@@ -158,9 +158,9 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
             setStoryBusy(false)
           }
         } else if (j.status === 'failed') {
-          setError(j.error ?? 'Не удалось изменить сюжет'); setStoryBusy(false)
+          setError(j.error ?? 'Failed to edit plot'); setStoryBusy(false)
         } else if (j.status === 'canceled') {
-          setStoryNotice('Изменение отменено.'); setStoryBusy(false)
+          setStoryNotice('Change canceled.'); setStoryBusy(false)
         }
       } else if (j.type === SEASON_JOB_TYPE) {
         // Phase 2 (affected-episode scripts) finished.
@@ -182,11 +182,11 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
         body: JSON.stringify({ projectId: project.id, instruction, force: !!opts.force }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data?.error ?? 'Не удалось изменить сюжет')
+      if (!res.ok) throw new Error(data?.error ?? 'Failed to edit plot')
       if (data?.jobId) { revisePoll.start(data.jobId) }
       else setStoryBusy(false)
     } catch (e: any) {
-      setError(e?.message ?? 'Ошибка'); setStoryBusy(false)
+      setError(e?.message ?? 'Error'); setStoryBusy(false)
     }
   }
 
@@ -215,11 +215,11 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
     <div className="space-y-6 pb-40" data-testid="story-stage">
       <div className="rounded-xl border border-border bg-card p-4 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-display text-xl font-bold">Сюжет сезона</h2>
-          {episodeCount > 0 && <span className="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-sm" data-testid="episode-count"><BookOpen className="h-4 w-4" /> {episodeCount} эпизодов</span>}
+          <h2 className="font-display text-xl font-bold">Season plot</h2>
+          {episodeCount > 0 && <span className="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-sm" data-testid="episode-count"><BookOpen className="h-4 w-4" /> {episodeCount} episodes</span>}
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          Полная история сезона одним текстом. Каждый эпизод начинается со своей метки-заголовка; локации и персонажи описаны прямо в тексте, а их референсы генерируются на экране эпизода. Правку сюжета вносите в панели внизу — она не ломает уже сгенерированные эпизоды и ассеты.
+          The full season story in one text. Each episode starts with its own header label; locations and characters are described directly in the text, and their references are generated on the episode screen. Make plot edits in the panel below — they won’t break already generated episodes or assets.
         </p>
         {season?.title && (
           <div className="mt-3">
@@ -235,14 +235,14 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
             className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
             data-testid="go-first-episode-top"
           >
-            Перейти к первому эпизоду <ArrowRight className="h-4 w-4" />
+            Go to first episode <ArrowRight className="h-4 w-4" />
           </Link>
         )}
 
         {!season && !jobActive && (
           <button onClick={start} disabled={starting} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="season-generate">
             {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-            Сгенерировать сезон
+            Generate season
           </button>
         )}
         {(jobActive || starting) && !storyBusy && (
@@ -250,8 +250,8 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
             <div className="flex items-center justify-between gap-2 text-sm">
               <span className="flex min-w-0 items-center gap-2">
                 <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-primary" />
-                <span className="truncate">{job?.message ?? 'Запуск...'}</span>
-                {total > 0 && <span className="flex-shrink-0 text-muted-foreground">· сценарии {scriptsDone}/{total}</span>}
+                <span className="truncate">{job?.message ?? 'Starting...'}</span>
+                {total > 0 && <span className="flex-shrink-0 text-muted-foreground">· scripts {scriptsDone}/{total}</span>}
               </span>
               {job?.id && !starting && <CancelButton onCancel={cancelSeason} testId="season-cancel" className="flex-shrink-0" />}
             </div>
@@ -262,23 +262,23 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
         )}
         {job?.status === 'canceled' && !jobActive && (
           <div className="mt-4 space-y-2" data-testid="season-canceled">
-            <p className="text-sm text-amber-500">{job.message ?? 'Генерация отменена'}</p>
+            <p className="text-sm text-amber-500">{job.message ?? 'Generation canceled'}</p>
             <button onClick={start} disabled={starting} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm" data-testid="season-continue">
-              <Wand2 className="h-4 w-4" /> Продолжить генерацию
+              <Wand2 className="h-4 w-4" /> Continue generation
             </button>
           </div>
         )}
         {job?.status === 'failed' && (
           <div className="mt-4 space-y-2">
-            <p className="text-sm text-destructive">Ошибка: {job.error ?? 'генерация прервана'}</p>
+            <p className="text-sm text-destructive">Error: {job.error ?? 'generation interrupted'}</p>
             <button onClick={start} disabled={starting} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm" data-testid="season-continue">
-              <Wand2 className="h-4 w-4" /> Продолжить генерацию
+              <Wand2 className="h-4 w-4" /> Continue generation
             </button>
           </div>
         )}
         {paused && !jobActive && (
           <button onClick={start} disabled={starting} className="mt-4 inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm" data-testid="season-continue">
-            <Wand2 className="h-4 w-4" /> Продолжить генерацию ({result?.remaining} эпизодов осталось)
+            <Wand2 className="h-4 w-4" /> Continue generation ({result?.remaining} episodes left)
           </button>
         )}
 
@@ -287,7 +287,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
           <RewritePlaceholder
             job={revisePoll.job}
             expectedTotalSec={revisePoll.job?.type === SEASON_JOB_TYPE ? SEASON_REWRITE_EXPECTED_SEC : STORY_REVISE_EXPECTED_SEC}
-            label="Переписываю сюжет…"
+            label="Rewriting plot…"
             testId="story-revise-progress"
             className="mt-5"
           />
@@ -299,7 +299,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
               </div>
             )}
             {season && !season.fullStory && !jobActive && (
-              <p className="mt-4 text-sm text-muted-foreground">Сюжет ещё не написан. Изменение ниже сгенерирует его.</p>
+              <p className="mt-4 text-sm text-muted-foreground">The plot hasn't been written yet. Editing below will generate it.</p>
             )}
           </>
         )}
@@ -307,16 +307,16 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
         {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
       </div>
 
-      {/* Compact bottom-docked «Что изменить в сюжете» field (Stage 69) — restored without the episode list. */}
+      {/* Compact bottom-docked «What to change in the plot" field (Stage 69) — restored without the episode list. */}
       <StickyReviseBar
         value={storyText}
         onChange={setStoryText}
         onSubmit={() => reviseStory({ instruction: storyText })}
         busy={storyBusy}
         disabled={jobActive || starting}
-        label="Что изменить в сюжете"
-        placeholder="Например: сделать финал драматичнее"
-        submitLabel="Изменить сюжет"
+        label="What to change in the plot"
+        placeholder="For example: make the ending more dramatic"
+        submitLabel="Edit story"
         testId="story-revise"
       />
     </div>

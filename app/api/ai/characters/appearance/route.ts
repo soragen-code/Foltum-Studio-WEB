@@ -16,7 +16,7 @@ import { sanitizeVideoPrompt } from "@/lib/sanitize-prompt";
 /**
  * POST /api/ai/characters/appearance  { characterId, instruction }
  *
- * "Изменить внешность" on the references step:
+ * "Edit appearance" on the references step:
  * 1. LLM rewrites the English appearance prompt per instruction
  * 2. Charges CHARACTER_REFERENCE_COST credits (refunded if every image fails)
  * 3. Starts the existing character-images job for THIS character only

@@ -17,7 +17,7 @@ export function StickyReviseBar({
   onCancel,
   placeholder,
   label,
-  submitLabel = 'Изменить',
+  submitLabel = 'Edit',
   hint,
   disabled,
   testId = 'sticky-revise',

@@ -11,7 +11,7 @@ const MAX_EXTRA_PER_REQUEST = LOCATION_TOTAL_MAX - LOCATION_BASE_FRAMES;
 
 export const LOCATION_JOB_TYPE = "location_image";
 export const LOCATION_EXTRA_JOB_TYPE = "location_extra_image";
-/** How many extra angle shots one «Добавить ещё ракурсы» request generates (base set stays 3). */
+/** How many extra angle shots one "Add more angles" request generates (base set stays 3). */
 export const EXTRA_ANGLES_PER_REQUEST = 3;
 
 /**
@@ -30,13 +30,13 @@ export async function startLocationImageJob(opts: { user: { id: string; credits:
   const locationIds = Array.from(new Set(opts.locationIds));
   const cost = locationIds.length * CHARACTER_REFERENCE_COST;
   if ((user.credits ?? 0) < cost)
-    return { error: `Недостаточно кредитов: нужно ${cost}, на балансе ${user.credits ?? 0}`, status: 402 as const };
+    return { error: `Insufficient credits: need ${cost}, balance ${user.credits ?? 0}`, status: 402 as const };
   const names = await prisma.location.findMany({ where: { id: { in: locationIds } }, select: { id: true, name: true, imageUrl: true } });
   const before = new Map(names.map((n) => [n.id, n.imageUrl]));
   await prisma.user.update({ where: { id: user.id }, data: { credits: { decrement: cost } } });
-  await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Референс локации: ${names.map((n) => n.name).join(", ")}` } });
+  await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Location reference: ${names.map((n) => n.name).join(", ")}` } });
   const job = await prisma.generationJob.create({
-    data: { type: LOCATION_JOB_TYPE, status: "processing", progress: 5, message: `Генерация референсов локаций (${locationIds.length})…`, projectId, resultData: JSON.stringify({ locationIds }) },
+    data: { type: LOCATION_JOB_TYPE, status: "processing", progress: 5, message: `Generating location references (${locationIds.length})…`, projectId, resultData: JSON.stringify({ locationIds }) },
   });
   runInBackground(async () => {
     await runLocationImagesJob({ jobId: job.id, projectId, locationIds, imageModel });
@@ -46,7 +46,7 @@ export async function startLocationImageJob(opts: { user: { id: string; credits:
       if (failed.length) {
         const refund = failed.length * CHARACTER_REFERENCE_COST;
         await prisma.user.update({ where: { id: user.id }, data: { credits: { increment: refund } } });
-        await prisma.creditTransaction.create({ data: { userId: user.id, amount: refund, description: `Возврат: референс локации не сгенерирован (${failed.map((l) => l.name).join(", ")})` } });
+        await prisma.creditTransaction.create({ data: { userId: user.id, amount: refund, description: `Refund: location reference was not generated (${failed.map((l) => l.name).join(", ")})` } });
       }
     } catch (e) { console.error("[location-refs] refund check failed:", e); }
   });
@@ -63,8 +63,8 @@ export async function startLocationExtraImageJob(opts: { user: { id: string; cre
   await failStaleJobs({ projectId, type: LOCATION_EXTRA_JOB_TYPE });
 
   const loc = await prisma.location.findFirst({ where: { id: locationId, projectId }, select: { id: true, name: true, imageUrl: true, imageExtra: true } });
-  if (!loc) return { error: "Локация не найдена", status: 404 as const };
-  if (!loc.imageUrl) return { error: "Сначала сгенерируйте базовые референсы локации", status: 409 as const };
+  if (!loc) return { error: "Location not found", status: 404 as const };
+  if (!loc.imageUrl) return { error: "First generate the base location references", status: 409 as const };
 
   // Don't start a duplicate for the same location while one is running.
   const active = await prisma.generationJob.findFirst({ where: { projectId, type: LOCATION_EXTRA_JOB_TYPE, status: { in: ["pending", "processing"] } }, orderBy: { createdAt: "desc" } });
@@ -76,13 +76,13 @@ export async function startLocationExtraImageJob(opts: { user: { id: string; cre
 
   const cost = count * CHARACTER_REFERENCE_COST;
   if ((user.credits ?? 0) < cost)
-    return { error: `Недостаточно кредитов: нужно ${cost}, на балансе ${user.credits ?? 0}`, status: 402 as const };
+    return { error: `Insufficient credits: need ${cost}, balance ${user.credits ?? 0}`, status: 402 as const };
 
   const beforeCount = parseLocationExtra(loc.imageExtra).length;
   await prisma.user.update({ where: { id: user.id }, data: { credits: { decrement: cost } } });
-  await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Доп. ракурсы локации: ${loc.name} (${count})` } });
+  await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Additional location angles: ${loc.name} (${count})` } });
   const job = await prisma.generationJob.create({
-    data: { type: LOCATION_EXTRA_JOB_TYPE, status: "processing", progress: 5, message: `Дополнительные ракурсы локации «${loc.name}» (${count})…`, projectId, resultData: JSON.stringify({ locationId, count }) },
+    data: { type: LOCATION_EXTRA_JOB_TYPE, status: "processing", progress: 5, message: `Additional location angles "${loc.name}» (${count})…`, projectId, resultData: JSON.stringify({ locationId, count }) },
   });
   runInBackground(async () => {
     await runLocationExtraImagesJob({ jobId: job.id, projectId, locationId, count, imageModel });
@@ -93,7 +93,7 @@ export async function startLocationExtraImageJob(opts: { user: { id: string; cre
       if (missing > 0) {
         const refund = missing * CHARACTER_REFERENCE_COST;
         await prisma.user.update({ where: { id: user.id }, data: { credits: { increment: refund } } });
-        await prisma.creditTransaction.create({ data: { userId: user.id, amount: refund, description: `Возврат: доп. ракурсы локации не сгенерированы (${loc.name}, ${missing})` } });
+        await prisma.creditTransaction.create({ data: { userId: user.id, amount: refund, description: `Refund: additional location angles were not generated (${loc.name}, ${missing})` } });
       }
     } catch (e) { console.error("[location-refs] extra refund check failed:", e); }
   });

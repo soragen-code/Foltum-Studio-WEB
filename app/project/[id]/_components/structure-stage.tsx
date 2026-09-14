@@ -14,13 +14,13 @@ export function StructureStage({ project, onRefresh }: { project: any; onRefresh
   const isApproved = project?.structureApproved ?? false
 
   const durationOptions = [
-    { value: 10, label: '~10 мин' },
-    { value: 15, label: '~15 мин' },
-    { value: 30, label: '~30 мин' },
-    { value: 45, label: '~45 мин' },
-    { value: 60, label: '~1 час' },
-    { value: 90, label: '~1.5 часа' },
-    { value: 120, label: '~2 часа' },
+    { value: 10, label: '~10 min' },
+    { value: 15, label: '~15 min' },
+    { value: 30, label: '~30 min' },
+    { value: 45, label: '~45 min' },
+    { value: 60, label: '~1 hour' },
+    { value: 90, label: '~1.5 hours' },
+    { value: 120, label: '~2 hours' },
   ]
 
   const generateStructure = async () => {
@@ -65,7 +65,7 @@ export function StructureStage({ project, onRefresh }: { project: any; onRefresh
           <div className="mt-4 space-y-4">
             <div>
               <label className="block text-sm font-medium mb-2">
-                Хронометраж сериала
+                Series runtime
               </label>
               <div className="flex flex-wrap gap-2">
                 {durationOptions.map((opt) => (
@@ -83,7 +83,7 @@ export function StructureStage({ project, onRefresh }: { project: any; onRefresh
                 ))}
               </div>
               <p className="mt-1.5 text-xs text-muted-foreground">
-                AI подберёт количество сезонов, эпизодов и длительность каждого эпизода
+                AI will choose the number of seasons, episodes, and the length of each episode
               </p>
             </div>
             <button

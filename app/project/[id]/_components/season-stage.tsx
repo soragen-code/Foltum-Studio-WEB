@@ -30,13 +30,13 @@ type Job = { id: string; status: string; progress: number; message?: string | nu
 const validUrl = (u?: string | null) => typeof u === 'string' && u.startsWith('http') && u.length > 10
 
 export function episodeStatusLabel(ep: SeasonEpisode): string {
-  if (ep.status === 'assembled' || ep.videoUrl) return 'собран'
+  if (ep.status === 'assembled' || ep.videoUrl) return 'assembled'
   const total = ep.scenes.length
   const ready = ep.scenes.filter((s) => s.videoUrl).length
-  if (total && ready === total) return 'все сцены готовы'
-  if (ready > 0) return `сцен готово ${ready}/${total}`
-  if (ep.script) return 'сценарий готов'
-  return 'ожидает сценарий'
+  if (total && ready === total) return 'all scenes are ready'
+  if (ready > 0) return `scenes ready ${ready}/${total}`
+  if (ep.script) return 'script ready'
+  return 'waiting for script'
 }
 
 /** Which episode the season worker is writing right now (first one without a script), or null. */
@@ -71,19 +71,19 @@ export function ScriptView({ text, scenes }: { text?: string | null; scenes?: { 
           const tech = (s.videoPrompt ?? '').split('\n').filter((l) => /^\[(LIGHTING|BLOCKING|GAZE|NON-VERBAL)\]/.test(l))
           return (
             <div key={s.number} className="rounded-lg border border-border/60 bg-muted/20 p-3">
-              <div className="font-semibold">Сцена {s.number} · {s.shotType} · ~{s.durationSec ?? 15}с</div>
+              <div className="font-semibold">Scene {s.number} · {s.shotType} · ~{s.durationSec ?? 15}s</div>
               <div className="text-xs text-muted-foreground">{s.locationDesc}</div>
               {s.action && <p className="mt-2 italic">{s.action}</p>}
               <pre className="mt-2 whitespace-pre-wrap break-words font-sans">{s.dialogue}</pre>
               {s.dialogueEn && s.dialogueEn.trim() !== (s.dialogue ?? '').trim() && (
                 <details className="mt-2 text-xs text-muted-foreground">
-                  <summary className="cursor-pointer">Озвучка (English) — текст сцены на языке сценария</summary>
+                  <summary className="cursor-pointer">Voiceover (English) — scene text in the script language</summary>
                   <pre className="mt-1 whitespace-pre-wrap break-words font-sans">{s.dialogueEn}</pre>
                 </details>
               )}
               {tech.length > 0 && (
                 <details className="mt-2 text-xs text-muted-foreground">
-                  <summary className="cursor-pointer">Кадр: свет / мизансцена / взгляд / невербалика</summary>
+                  <summary className="cursor-pointer">Shot: lighting / staging / gaze / nonverbal cues</summary>
                   <pre className="mt-1 whitespace-pre-wrap break-words font-sans">{tech.join('\n')}</pre>
                 </details>
               )}
@@ -93,8 +93,8 @@ export function ScriptView({ text, scenes }: { text?: string | null; scenes?: { 
       </div>
     )
   }
-  // Stage 40/41 — «Старт кадра: …» / «Финал кадра: …» service lines are rendered dim.
-  const isStateLine = (l: string) => l.startsWith('Старт кадра: ') || l.startsWith('Финал кадра: ')
+  // Stage 40/41 — «"Frame start: …" / "Frame end: …" service lines are rendered dim.
+  const isStateLine = (l: string) => l.startsWith('Frame start: ') || l.startsWith('End frame: ')
   return (
     <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed">
       {(text ?? '').split('\n').map((l, i) => (
@@ -105,10 +105,10 @@ export function ScriptView({ text, scenes }: { text?: string | null; scenes?: { 
 }
 
 /**
- * Stage 14 (D1/D2): the episode script rendered as flowing prose — "как по книге".
+ * Stage 14 (D1/D2): the episode script rendered as flowing prose — "as in the book".
  * Setting + action + dialogue are merged into readable text; dialogue is shown in the
  * story language (no English, no subtitles, no technical prompt lines). By default only the
- * key opening (first `keyCount` scenes) is shown; the rest is behind «Показать полностью».
+ * key opening (first `keyCount` scenes) is shown; the rest is behind «"Show full".
  */
 type BookScene = {
   number: number
@@ -152,7 +152,7 @@ export function BookScript({ text, scenes, keyCount = 2 }: { text?: string | nul
             data-testid="script-toggle-full"
             aria-expanded={full}
           >
-            {full ? <><ChevronDown className="h-3.5 w-3.5 rotate-180" /> Свернуть</> : <><ChevronDown className="h-3.5 w-3.5" /> Показать полностью (ещё {rest.length})</>}
+            {full ? <><ChevronDown className="h-3.5 w-3.5 rotate-180" /> Collapse</> : <><ChevronDown className="h-3.5 w-3.5" /> Show full (more {rest.length})</>}
           </button>
         )}
       </div>
@@ -174,7 +174,7 @@ export function BookScript({ text, scenes, keyCount = 2 }: { text?: string | nul
           data-testid="script-toggle-full"
           aria-expanded={full}
         >
-          {full ? <><ChevronDown className="h-3.5 w-3.5 rotate-180" /> Свернуть</> : <><ChevronDown className="h-3.5 w-3.5" /> Показать полностью</>}
+          {full ? <><ChevronDown className="h-3.5 w-3.5 rotate-180" /> Collapse</> : <><ChevronDown className="h-3.5 w-3.5" /> Show full</>}
         </button>
       )}
     </div>
@@ -236,9 +236,9 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
     try {
       const res = await fetch(`/api/ai/locations/${locationId}/image`, { method: 'POST' })
       const data = await res.json()
-      if (!res.ok) throw new Error(data?.error ?? 'Не удалось запустить генерацию референса локации')
+      if (!res.ok) throw new Error(data?.error ?? 'Failed to start generating the location reference')
     } catch (e: any) {
-      setError(e?.message ?? 'Ошибка')
+      setError(e?.message ?? 'Error')
       setLocGen((g) => { const n = { ...g }; delete n[locationId]; return n })
     }
   }
@@ -263,20 +263,20 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
     try {
       const res = await fetch('/api/ai/season', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id }) })
       const data = await res.json()
-      if (!res.ok) throw new Error(data?.error ?? 'Не удалось запустить генерацию')
-      setJob({ id: data.jobId, status: 'processing', progress: 1, message: 'Запуск…' })
-    } catch (e: any) { setError(e?.message ?? 'Ошибка') }
+      if (!res.ok) throw new Error(data?.error ?? 'Failed to start generation')
+      setJob({ id: data.jobId, status: 'processing', progress: 1, message: 'Starting…' })
+    } catch (e: any) { setError(e?.message ?? 'Error') }
     finally { setStarting(false) }
   }
 
   // Stage 11: request cancellation of the running season-script job. The worker stops before the
-  // next episode (already-written episodes are kept); the author can resume with «Продолжить».
+  // next episode (already-written episodes are kept); the author can resume with «Continue.
   const cancelSeason = async () => {
     if (!job?.id) return
     const res = await fetch(`/api/ai/jobs/${job.id}/cancel`, { method: 'POST' })
     if (res.ok) {
       continuedFor.current = job.id // suppress auto-continue for this job
-      setJob((j) => (j ? { ...j, status: 'canceled', message: 'Останавливаю генерацию…' } : j))
+      setJob((j) => (j ? { ...j, status: 'canceled', message: 'Stopping generation…' } : j))
       setTimeout(load, 1500) // pull the worker's final canceled state + kept episodes
     }
   }
@@ -306,18 +306,18 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
       })
       const data = await res.json()
       if (res.status === 409 && data?.needsForce) {
-        if (confirm(`${data.error}\n\nПродолжить и переписать эти эпизоды?`)) return reviseSeason({ ...opts, force: true })
+        if (confirm(`${data.error}\n\nContinue and rewrite these episodes?`)) return reviseSeason({ ...opts, force: true })
         return
       }
-      if (!res.ok) throw new Error(data?.error ?? 'Не удалось изменить сезон')
+      if (!res.ok) throw new Error(data?.error ?? 'Failed to edit season')
       setSeasonText(''); setIdeaChanged([])
       const affected: number[] = Array.isArray(data?.affected) ? data.affected : []
       setSeasonNotice(affected.length
-        ? `Структура сезона обновлена. Переписываю эпизоды: ${affected.join(', ')} — остальные не тронуты.`
-        : 'Структура сезона обновлена (названия/описания). Сценарии эпизодов не изменились.')
-      if (data?.jobId) setJob({ id: data.jobId, status: 'processing', progress: 1, message: 'Запуск…' })
+        ? `Season structure updated. Rewriting episodes: ${affected.join(', ')} — the rest are untouched.`
+        : 'Season structure updated (titles/descriptions). Episode scripts were not changed.')
+      if (data?.jobId) setJob({ id: data.jobId, status: 'processing', progress: 1, message: 'Starting…' })
       await load()
-    } catch (e: any) { setError(e?.message ?? 'Ошибка') }
+    } catch (e: any) { setError(e?.message ?? 'Error') }
     finally { setSeasonBusy(false) }
   }
 
@@ -333,12 +333,12 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
       {project?.synopsis && (
         <div className="rounded-xl border border-border bg-card p-4 sm:p-6" data-testid="season-idea-block">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="font-display text-xl font-bold">Идея сезона</h2>
+            <h2 className="font-display text-xl font-bold">Season idea</h2>
             <Link href={`/project/${project.id}?tab=references`} className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted" data-testid="open-references">
-              <Images className="h-4 w-4" /> Референсы и трейлер
+              <Images className="h-4 w-4" /> References and trailer
             </Link>
           </div>
-          <p className="mt-1 mb-3 text-sm text-muted-foreground">Синопсис, локации и персонажи — редактируются промптами. Раскройте блок, чтобы изменить.</p>
+          <p className="mt-1 mb-3 text-sm text-muted-foreground">Synopsis, locations, and characters are edited via prompts. Expand the block to make changes.</p>
           <IdeaEditor
             project={project}
             synopsis={project.synopsis}
@@ -351,18 +351,18 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
           />
           {ideaChanged.length > 0 && season && (!seasonLocked || seasonBusy) && (
             <div className="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm" data-testid="season-sync-hint">
-              <span>Идея изменилась — сценарий сезона пока не синхронизирован.</span>
+              <span>The idea has changed — the season script isn’t synced yet.</span>
               <button onClick={() => reviseSeason({ sync: true })} disabled={seasonBusy} className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="season-sync">
-                {seasonBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Применить изменения к сценарию сезона
+                {seasonBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Apply changes to the season script
               </button>
             </div>
           )}
         </div>
       )}
       <div className="rounded-xl border border-border bg-card p-4 sm:p-6">
-        <h2 className="font-display text-xl font-bold">Сценарий сезона</h2>
+        <h2 className="font-display text-xl font-bold">Season script</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Полный сценарий первого сезона: 6–10 эпизодов, в каждом 6–15 сцен (длину решает драматургия) с полноценными диалогами и раскадровкой для ИИ-экранизации. Эпизоды появляются по мере написания — готовые можно открыть и править на странице эпизода, не дожидаясь остальных.
+          Full script for the first season: 6–10 episodes, each with 6–15 scenes (the story determines the length), complete with full dialogue and storyboards for AI screen adaptation. Episodes appear as they are written — completed ones can be opened and edited on the episode page without waiting for the rest.
         </p>
         {season?.title && (
           <div className="mt-3">
@@ -380,16 +380,16 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
               data-testid="episode-list-toggle"
             >
               {listOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-              Список серий <span className="text-xs text-muted-foreground">({sortedEpisodes.filter((e) => e.script).length}/{sortedEpisodes.length})</span>
+              Episode list <span className="text-xs text-muted-foreground">({sortedEpisodes.filter((e) => e.script).length}/{sortedEpisodes.length})</span>
             </button>
             {listOpen && (
               <ul className="mt-2 divide-y divide-border rounded-lg border border-border" data-testid="episode-list">
                 {sortedEpisodes.map((ep) => (
                   <li key={ep.id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm" data-testid="episode-card">
-                    <span className="text-xs font-semibold uppercase text-muted-foreground">Эп. {ep.number}</span>
+                    <span className="text-xs font-semibold uppercase text-muted-foreground">Ep. {ep.number}</span>
                     <span className="min-w-0 flex-1 truncate font-medium">{ep.title}</span>
                     <span className="rounded bg-muted px-1.5 py-0.5 text-[11px]" data-testid="episode-status">
-                      {!ep.script && jobActive ? (writingNo === ep.number ? 'пишется...' : 'в очереди') : episodeStatusLabel(ep)}
+                      {!ep.script && jobActive ? (writingNo === ep.number ? 'writing...' : 'queued') : episodeStatusLabel(ep)}
                     </span>
                     {!ep.script && jobActive && writingNo === ep.number && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
                     {ep.locationId && ep.locationId in locImages && !validUrl(locImages[ep.locationId]) && (
@@ -397,20 +397,20 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
                         onClick={() => generateLocationRef(ep.locationId as string)}
                         disabled={!!locGen[ep.locationId]}
                         className="inline-flex items-center gap-1 rounded border border-border px-2 py-0.5 text-[11px] hover:bg-muted disabled:opacity-50"
-                        title="Локация пока без референса — сгенерировать фотореалистичный кадр (1 кредит)"
+                        title="Location has no reference yet — generate a photorealistic frame (1 credit)"
                         data-testid="location-ref-generate"
                       >
                         {locGen[ep.locationId] ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
-                        {locGen[ep.locationId] ? 'референс...' : 'Референс локации'}
+                        {locGen[ep.locationId] ? 'reference...' : 'Location reference'}
                       </button>
                     )}
                     {ep.locationId && validUrl(locImages[ep.locationId]) && (
-                      <img src={locImages[ep.locationId] as string} alt={ep.locationName ?? ''} className="h-6 w-6 rounded object-cover ring-1 ring-border" title="Референс локации" data-testid="location-ref-thumb" />
+                      <img src={locImages[ep.locationId] as string} alt={ep.locationName ?? ''} className="h-6 w-6 rounded object-cover ring-1 ring-border" title="Location reference" data-testid="location-ref-thumb" />
                     )}
                     <CharacterAvatars chars={ep.characters} size="h-5 w-5" />
                     {ep.script && (
                       <Link href={`/project/${project.id}/episode/${ep.id}`} onClick={() => setOpeningEpisode(ep.id)} aria-disabled={openingEpisode === ep.id} className={`inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs hover:bg-muted ${openingEpisode === ep.id ? 'pointer-events-none opacity-60' : ''}`} data-testid="open-episode">
-                        {openingEpisode === ep.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Film className="h-3 w-3" />} Открыть
+                        {openingEpisode === ep.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Film className="h-3 w-3" />} Open
                       </Link>
                     )}
                   </li>
@@ -422,7 +422,7 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
         {!season && !jobActive && (
           <button onClick={start} disabled={starting} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="season-generate">
             {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-            Сгенерировать сценарий сезона
+            Generate season script
           </button>
         )}
         {(jobActive || starting) && (
@@ -430,8 +430,8 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
             <div className="flex items-center justify-between gap-2 text-sm">
               <span className="flex min-w-0 items-center gap-2">
                 <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-primary" />
-                <span className="truncate">{writingNo ? `Пишу эпизод ${writingNo} из ${total}` : (job?.message ?? 'Запуск…')}</span>
-                {total > 0 && <span className="flex-shrink-0 text-muted-foreground">· готово {done} из {total}</span>}
+                <span className="truncate">{writingNo ? `Writing episode ${writingNo} of ${total}` : (job?.message ?? 'Starting…')}</span>
+                {total > 0 && <span className="flex-shrink-0 text-muted-foreground">· done {done} of {total}</span>}
               </span>
               {job?.id && !starting && <CancelButton onCancel={cancelSeason} testId="season-cancel" className="flex-shrink-0" />}
             </div>
@@ -442,40 +442,40 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
         )}
         {job?.status === 'canceled' && !jobActive && (
           <div className="mt-4 space-y-2" data-testid="season-canceled">
-            <p className="text-sm text-amber-500">{job.message ?? 'Генерация отменена'}{total > 0 && <span className="text-muted-foreground"> · сохранено {done} из {total} эпизодов</span>}</p>
+            <p className="text-sm text-amber-500">{job.message ?? 'Generation canceled'}{total > 0 && <span className="text-muted-foreground"> · saved {done} of {total} episodes</span>}</p>
             <button onClick={start} disabled={starting} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm" data-testid="season-continue">
-              <Wand2 className="h-4 w-4" /> Продолжить генерацию
+              <Wand2 className="h-4 w-4" /> Continue generation
             </button>
           </div>
         )}
         {job?.status === 'failed' && (
           <div className="mt-4 space-y-2">
-            <p className="text-sm text-destructive">Ошибка: {job.error ?? 'генерация прервана'}</p>
+            <p className="text-sm text-destructive">Error: {job.error ?? 'generation interrupted'}</p>
             <button onClick={start} disabled={starting} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm" data-testid="season-continue">
-              <Wand2 className="h-4 w-4" /> Продолжить генерацию
+              <Wand2 className="h-4 w-4" /> Continue generation
             </button>
           </div>
         )}
         {paused && !jobActive && (
           <button onClick={start} disabled={starting} className="mt-4 inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm" data-testid="season-continue">
-            <Wand2 className="h-4 w-4" /> Продолжить генерацию ({result?.remaining} эпизодов осталось)
+            <Wand2 className="h-4 w-4" /> Continue generation ({result?.remaining} episodes left)
           </button>
         )}
-        {allDone && !jobActive && <p className="mt-3 inline-flex items-center gap-1 text-sm text-primary"><Check className="h-4 w-4" /> Все {total} эпизодов написаны</p>}
+        {allDone && !jobActive && <p className="mt-3 inline-flex items-center gap-1 text-sm text-primary"><Check className="h-4 w-4" /> All {total} episodes written</p>}
         {season && allDone && !jobActive && (
           <div className="mt-4 space-y-2" data-testid="season-revise">
-            <label className="text-xs font-semibold text-muted-foreground">Что изменить в сезоне</label>
+            <label className="text-xs font-semibold text-muted-foreground">What to change in the season</label>
             <div className="flex flex-col gap-2 sm:flex-row">
               <textarea value={seasonText} onChange={(e) => setSeasonText(e.target.value)} rows={2} disabled={seasonBusy}
-                placeholder="Например: сделай финал 8-го эпизода открытым и добавь второстепенного персонажа-детектива…"
+                placeholder="For example: make the ending of episode 8 open-ended and add a supporting detective character…"
                 className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm" data-testid="season-revise-input" />
               <button onClick={() => reviseSeason({ instruction: seasonText.trim() })} disabled={seasonBusy || !seasonText.trim()}
                 className="inline-flex items-center justify-center gap-1 rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground disabled:opacity-50" data-testid="season-revise-submit">
-                {seasonBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Изменить сезон
+                {seasonBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Edit season
               </button>
             </div>
-            <p className="text-xs text-muted-foreground">ИИ перестроит структуру сезона (арки, локации, персонажи по эпизодам) и перепишет только затронутые эпизоды. Если в них уже есть видео — спросит подтверждение.</p>
-            {seasonBusy && <p className="text-xs text-muted-foreground">Перестраиваю структуру сезона (около минуты)…</p>}
+            <p className="text-xs text-muted-foreground">AI will rebuild the season structure (arcs, locations, characters by episode) and rewrite only the affected episodes. If they already have video, it will ask for confirmation.</p>
+            {seasonBusy && <p className="text-xs text-muted-foreground">Rebuilding season structure (about a minute)…</p>}
           </div>
         )}
         {seasonNotice && <p className="mt-3 text-sm text-primary" data-testid="season-notice">{seasonNotice}</p>}
@@ -492,7 +492,7 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
             data-testid="go-first-episode"
           >
             {openingEpisode === firstEpisode.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />}
-            Перейти к {firstEpisode.number} эпизоду <ArrowRight className="h-4 w-4" />
+            Go to {firstEpisode.number} episode <ArrowRight className="h-4 w-4" />
           </Link>
         </div>
       )}

@@ -23,7 +23,7 @@ const missingBase = (c: { imageFront: string | null; imageFull: string | null })
 /**
  * POST /api/ai/characters/references  { projectId, tiers?: [...], characterIds?: [...] }
  * Bulk reference generation for characters that still have no images
- * («Сгенерировать все главные / второстепенные / всех»). Charges CHARACTER_REFERENCE_COST
+ * ("Generate all main / supporting / all"). Charges CHARACTER_REFERENCE_COST
  * per character; one "characters" job for the batch (idempotent while a job is active).
  */
 export async function POST(request: Request) {
@@ -59,16 +59,16 @@ export async function POST(request: Request) {
 
     const cost = needBase.length * CHARACTER_REFERENCE_COST;
     if ((user.credits ?? 0) < cost)
-      return NextResponse.json({ error: `Недостаточно кредитов: нужно ${cost} (${needBase.length} × ${CHARACTER_REFERENCE_COST}), на балансе ${user.credits ?? 0}` }, { status: 402 });
+      return NextResponse.json({ error: `Insufficient credits: need ${cost} (${needBase.length} × ${CHARACTER_REFERENCE_COST}), balance ${user.credits ?? 0}` }, { status: 402 });
 
     if (cost > 0) {
       await prisma.user.update({ where: { id: user.id }, data: { credits: { decrement: cost } } });
-      await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Референсы персонажей: ${needBase.length} шт.` } });
+      await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Character references: ${needBase.length} pcs.` } });
     }
     await prisma.character.updateMany({ where: { id: { in: jobCharacterIds }, status: "draft" }, data: { status: "approved" } });
 
     const job = await prisma.generationJob.create({
-      data: { type: "characters", status: "processing", progress: 5, message: `Генерация референсов для ${jobCharacterIds.length} персонажей…`, projectId },
+      data: { type: "characters", status: "processing", progress: 5, message: `Generating references for ${jobCharacterIds.length} characters…`, projectId },
     });
     runInBackground(async () => {
       await runCharacterImagesJob({ jobId: job.id, projectId, characterIds: jobCharacterIds, imageModel: normalizeImageModel(imageModel) });
@@ -80,7 +80,7 @@ export async function POST(request: Request) {
         if (none.length) {
           const refund = none.length * CHARACTER_REFERENCE_COST;
           await prisma.user.update({ where: { id: user.id }, data: { credits: { increment: refund } } });
-          await prisma.creditTransaction.create({ data: { userId: user.id, amount: refund, description: `Возврат: референсы не сгенерированы (${none.map((c) => c.name).join(", ")})` } });
+          await prisma.creditTransaction.create({ data: { userId: user.id, amount: refund, description: `Refund: references were not generated (${none.map((c) => c.name).join(", ")})` } });
         }
       } catch (e) { console.error("[characters/references] refund check failed:", e); }
     });

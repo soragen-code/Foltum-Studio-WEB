@@ -4,7 +4,7 @@
  * synopsis step, or the test-scene step), else derived from the first words of the idea / prompt.
  */
 
-export const PLACEHOLDER_PROJECT_NAME = "Новый проект";
+export const PLACEHOLDER_PROJECT_NAME = "New project";
 export const PROJECT_NAME_MAX = 40;
 
 /** True when the project still carries the placeholder (or an empty) name, i.e. may be auto-renamed. */

@@ -10,7 +10,7 @@ const plans = [
   {
     id: 'basic',
     name: 'Basic',
-    price: '₴399',
+    price: '$9.99',
     period: '/month',
     credits: 100,
     icon: Zap,
@@ -22,7 +22,7 @@ const plans = [
   {
     id: 'pro',
     name: 'Pro',
-    price: '₴1199',
+    price: '$29.99',
     period: '/month',
     credits: 400,
     icon: Sparkles,
@@ -35,7 +35,7 @@ const plans = [
   {
     id: 'studio',
     name: 'Studio',
-    price: '₴3199',
+    price: '$79.99',
     period: '/month',
     credits: 1500,
     icon: Crown,
@@ -47,9 +47,9 @@ const plans = [
 ]
 
 const creditPacks = [
-  { id: 'pack50', credits: 50, price: '₴199' },
-  { id: 'pack200', credits: 200, price: '₴599' },
-  { id: 'pack500', credits: 500, price: '₴1199' },
+  { id: 'pack50', credits: 50, price: '$4.99' },
+  { id: 'pack200', credits: 200, price: '$14.99' },
+  { id: 'pack500', credits: 500, price: '$29.99' },
 ]
 
 function postToWayForPay(action: string, fields: Record<string, any>) {

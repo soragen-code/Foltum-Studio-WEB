@@ -17,7 +17,7 @@
 /* ------------------------------- Image models ------------------------------- */
 
 export const IMAGE_MODELS = [
-  { id: "seedream-5-pro", label: "Seedream 5.0 Pro — фотореализм" },
+  { id: "seedream-5-pro", label: "Seedream 5.0 Pro — photorealism" },
 ] as const;
 
 export type ImageModelId = (typeof IMAGE_MODELS)[number]["id"];
@@ -33,7 +33,7 @@ export function normalizeImageModel(v: unknown): ImageModelId {
 /* The id doubles as the video worker `provider` value. */
 
 export const VIDEO_MODELS = [
-  { id: "seedance", label: "Seedance 2.5 — со звуком" },
+  { id: "seedance", label: "Seedance 2.5 — with sound" },
 ] as const;
 
 export type VideoModelId = (typeof VIDEO_MODELS)[number]["id"];

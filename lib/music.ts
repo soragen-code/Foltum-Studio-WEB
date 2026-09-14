@@ -21,15 +21,15 @@ export const DEFAULT_MOOD: Mood = "mysterious";
 
 export const moodSchema = z.object({ mood: z.enum(MOODS) });
 
-/** Russian label for the job message («Подбор музыки: напряжённая»). */
+/** Russian label for the job message ("Music selection: tense"). */
 export const MOOD_LABELS: Record<Mood, string> = {
-  tense: "напряжённая",
-  romantic: "романтичная",
-  melancholic: "меланхоличная",
-  uplifting: "воодушевляющая",
-  dark: "мрачная",
-  mysterious: "загадочная",
-  action: "экшн",
+  tense: "tense",
+  romantic: "romantic",
+  melancholic: "melancholic",
+  uplifting: "uplifting",
+  dark: "dark",
+  mysterious: "mysterious",
+  action: "action",
 };
 
 /** Instrumental prompt per mood for MusicGen (short, no vocals, loop-friendly). */

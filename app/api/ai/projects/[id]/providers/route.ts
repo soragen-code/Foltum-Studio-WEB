@@ -13,25 +13,25 @@ import { isGenerationProvider } from "@/lib/validations";
  */
 export async function PATCH(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
-  if (!session?.user?.id) return NextResponse.json({ error: "Требуется вход" }, { status: 401 });
+  if (!session?.user?.id) return NextResponse.json({ error: "Login required" }, { status: 401 });
   const limited = rateLimitByUser(request, "ai:providers", session.user.email ?? session.user.id, RATE_LIMITS.ai);
   if (limited) return limited;
   const { id } = await ctx.params;
   const body = (await request.json().catch(() => null)) as { imageProvider?: unknown; videoProvider?: unknown } | null;
   if (!body || (body.imageProvider === undefined && body.videoProvider === undefined)) {
-    return NextResponse.json({ error: "Ожидается imageProvider и/или videoProvider" }, { status: 400 });
+    return NextResponse.json({ error: "Expected imageProvider and/or videoProvider" }, { status: 400 });
   }
   const data: { imageProvider?: string; videoProvider?: string } = {};
   if (body.imageProvider !== undefined) {
-    if (!isGenerationProvider(body.imageProvider)) return NextResponse.json({ error: "Некорректный провайдер изображений: ожидается replicate, wavespeed или modelark" }, { status: 400 });
+    if (!isGenerationProvider(body.imageProvider)) return NextResponse.json({ error: "Invalid image provider: expected replicate, wavespeed, or modelark" }, { status: 400 });
     data.imageProvider = body.imageProvider;
   }
   if (body.videoProvider !== undefined) {
-    if (!isGenerationProvider(body.videoProvider)) return NextResponse.json({ error: "Некорректный провайдер видео: ожидается replicate, wavespeed или modelark" }, { status: 400 });
+    if (!isGenerationProvider(body.videoProvider)) return NextResponse.json({ error: "Invalid video provider: expected replicate, wavespeed, or modelark" }, { status: 400 });
     data.videoProvider = body.videoProvider;
   }
   const project = await prisma.project.findFirst({ where: { id, userId: session.user.id }, select: { id: true } });
-  if (!project) return NextResponse.json({ error: "Проект не найден" }, { status: 404 });
+  if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
   const updated = await prisma.project.update({ where: { id: project.id }, data, select: { imageProvider: true, videoProvider: true } });
   return NextResponse.json({ ok: true, ...updated });
 }

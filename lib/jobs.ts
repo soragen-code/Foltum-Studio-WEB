@@ -144,7 +144,7 @@ export async function isCancelRequested(jobId: string): Promise<boolean> {
 }
 
 /** Mark a job as canceled (idempotent). Preserves whatever was already produced. */
-export async function markCanceled(jobId: string, message = "Генерация отменена"): Promise<void> {
+export async function markCanceled(jobId: string, message = "Generation canceled"): Promise<void> {
   await updateJob(jobId, { status: "canceled", message, error: null });
 }
 
@@ -157,7 +157,7 @@ export async function requestCancel(jobId: string): Promise<"canceled" | "reques
     const job = await prisma.generationJob.findUnique({ where: { id: jobId }, select: { status: true, cancelRequested: true } });
     if (!job) return "not-found";
     if (["completed", "failed", "canceled"].includes(job.status)) return "already-finished";
-    await prisma.generationJob.update({ where: { id: jobId }, data: { cancelRequested: true, message: "Останавливаю генерацию…" } });
+    await prisma.generationJob.update({ where: { id: jobId }, data: { cancelRequested: true, message: "Stopping generation…" } });
     return "requested";
   } catch (err) {
     console.error(`[jobs] requestCancel error for ${jobId}:`, err);

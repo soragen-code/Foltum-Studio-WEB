@@ -33,17 +33,17 @@ const VIDEO_EXPECTED_SEC = 600
 const EPISODE_REVISE_EXPECTED_SEC = 180
 const REF_POLL_MS = 3500
 // Stage 53: full-body front is the primary photo, shown first; front/profile are optional manual slots.
-const SHOT_LABELS = ['В полный рост (референс)', 'Портрет (лицо)', 'Левый профиль']
+const SHOT_LABELS = ['Full-body (reference)', 'Portrait (face)', 'Left profile']
 // Stage 36 — a reference image the video job actually submitted (job.result.submittedReferences).
 type SubmittedReference = { url: string; kind: string }
 const REFERENCE_KIND_LABELS: Record<string, string> = {
-  character: 'Портрет',
-  location: 'Локация',
-  crowd: 'Массовка',
-  previous_frame: 'Кадр предыдущей сцены',
-  scene: 'Кадр сцены',
+  character: 'Portrait',
+  location: 'Location',
+  crowd: 'Extras',
+  previous_frame: 'Previous scene frame',
+  scene: 'Scene frame',
 }
-const referenceKindLabel = (kind: string) => REFERENCE_KIND_LABELS[kind] ?? 'Референс'
+const referenceKindLabel = (kind: string) => REFERENCE_KIND_LABELS[kind] ?? 'Reference'
 const CHAR_EXTRA_MIN = Math.max(0, CHARACTER_PHOTO_COUNT - 3) // extra angles beyond the 3 base shots → 0 (3 photos)
 const validUrl = (u?: string | null) => typeof u === 'string' && u.startsWith('http') && u.length > 10
 function parseExtra(imageExtra?: string | null): string[] {
@@ -61,7 +61,7 @@ export function characterPhotoSlots(c: any): CharPhotoSlot[] {
   if (validUrl(c?.imageFull)) out.push({ url: c.imageFull, shot: 'full', label: SHOT_LABELS[0] })
   if (validUrl(c?.imageFront)) out.push({ url: c.imageFront, shot: 'front', label: SHOT_LABELS[1] })
   if (validUrl(c?.imageProfile)) out.push({ url: c.imageProfile, shot: 'profile', label: SHOT_LABELS[2] })
-  parseExtra(c?.imageExtra).forEach((u, i) => out.push({ url: u, shot: 'extra', idx: i, label: `Ракурс ${i + 1}` }))
+  parseExtra(c?.imageExtra).forEach((u, i) => out.push({ url: u, shot: 'extra', idx: i, label: `Angle ${i + 1}` }))
   return out
 }
 const charPhotos = (c: any): string[] => characterPhotoSlots(c).map((s) => s.url)
@@ -83,7 +83,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [revising, setRevising] = useState(false)
   const [reviseNotice, setReviseNotice] = useState<string | null>(null)
   // Stage 83 — the episode-wide rewrite RESETS all scenes; ask before that destructive step when
-  // scenes already exist (per-scene «Изменить»/«Перегенерировать» stay instant, not gated here).
+  // scenes already exist (per-scene «"Edit"/"Regenerate" stay instant, not gated here).
   const [resetAsk, setResetAsk] = useState(false)
   // Stage 77 — the episode rewrite is a background season_script job; poll it and swap the old
   // script for a placeholder until the job is terminal (see RewritePlaceholder).
@@ -95,41 +95,41 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         setReviseText('')
         setRevising(false)
       } else if (j.status === 'failed') {
-        setError(j.error ?? 'Не удалось переписать эпизод')
+        setError(j.error ?? 'Failed to rewrite episode')
         setRevising(false)
       } else if (j.status === 'canceled') {
-        setReviseNotice('Изменение отменено.')
+        setReviseNotice('Change canceled.')
         setRevising(false)
       }
     },
   })
   const [sceneEdit, setSceneEdit] = useState<Record<string, string>>({})
   const [sceneBusy, setSceneBusy] = useState<Record<string, boolean>>({})
-  const [cancelAsk, setCancelAsk] = useState<string | null>(null) // sceneId awaiting «Отменить генерацию» confirmation
+  const [cancelAsk, setCancelAsk] = useState<string | null>(null) // sceneId awaiting «Cancel generation confirmation
   const [cancelling, setCancelling] = useState<Record<string, boolean>>({}) // per-scene: cancel request in flight
   const [sceneError, setSceneError] = useState<Record<string, string>>({}) // per-scene generation error shown on the card
   // Stage 36 — the reference images the failed job actually submitted (from job.result.submittedReferences), for previews under the error.
   const [sceneErrorRefs, setSceneErrorRefs] = useState<Record<string, SubmittedReference[]>>({})
-  // Stage 31 — "Смотреть промпт" modal: view / copy / manually override the scene's final prompt.
+  // Stage 31 — "View prompt" modal: view / copy / manually override the scene's final prompt.
   const [promptModal, setPromptModal] = useState<{ sceneId: string; number: number } | null>(null)
   const [promptText, setPromptText] = useState('')          // editable textarea content
   const [promptLoading, setPromptLoading] = useState(false) // GET in flight
   const [promptErr, setPromptErr] = useState<string | null>(null)
   const [promptHasOverride, setPromptHasOverride] = useState(false) // scene currently uses a manual override
   const [promptSaving, setPromptSaving] = useState(false)   // PUT in flight (save or reset)
-  const [promptCopied, setPromptCopied] = useState(false)   // flashed «Скопировано» inside the modal
-  const [promptSaved, setPromptSaved] = useState(false)     // flashed «Сохранено» inside the modal
+  const [promptCopied, setPromptCopied] = useState(false)   // flashed «"Copied" inside the modal
+  const [promptSaved, setPromptSaved] = useState(false)     // flashed «"Saved" inside the modal
   // Reference strategy the builder resolved for this scene (character_references | new_scene_reference | text_only).
   const [promptRefKind, setPromptRefKind] = useState<string | null>(null)
-  // «Собрать» — pure concatenation of the ready scene clips into one episode (no audit / no polish / no re-gen).
+  // «"Assemble" — pure concatenation of the ready scene clips into one episode (no audit / no polish / no re-gen).
   const [stitching, setStitching] = useState(false)
-  // Stage 46B: «Собрать» opens a dialog — production quality / fps of the FINAL file (scenes are always 480p);
+  // Stage 46B: «"Assemble" opens a dialog — production quality / fps of the FINAL file (scenes are always 480p);
   // the stitch runs as a background job whose real stages are shown in a progress bar.
   const [assembleDialogOpen, setAssembleDialogOpen] = useState(false)
   const [assembleQuality, setAssembleQuality] = useState<AssembleQuality>(DEFAULT_ASSEMBLE_QUALITY)
   const [assembleFps, setAssembleFps] = useState<AssembleFps>(DEFAULT_ASSEMBLE_FPS)
   const [assembleNote, setAssembleNote] = useState<string | null>(null)
-  // Stage 79: music status of the LAST assembly, shown in the «Собрать» dialog.
+  // Stage 79: music status of the LAST assembly, shown in the «"Assemble" dialog.
   const [assembleMusic, setAssembleMusic] = useState<{ musicApplied?: boolean; musicSummary?: string | null; musicError?: string | null } | null>(null)
   const stitchJob = useJobPolling({
     onFinish: (res) => {
@@ -140,12 +140,12 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         setAssembleNote(j.result?.note ?? null)
         setAssembleMusic({ musicApplied: j.result?.musicApplied, musicSummary: j.result?.musicSummary ?? null, musicError: j.result?.musicError ?? null })
       } else {
-        setError(j.error ?? j.message ?? 'Не удалось собрать эпизод')
+        setError(j.error ?? j.message ?? "Couldn't assemble the episode")
       }
     },
   })
   // AI image model chosen for reference generation (EDIT 1). `refModalOpen` gates the picker
-  // shown before «Сгенерировать всё»; the ref keeps the choice available to the resume poll loop.
+  // shown before «Generate all"; the ref keeps the choice available to the resume poll loop.
   const [imageModel, setImageModel] = useState<ImageModelId>(DEFAULT_IMAGE_MODEL)
   const [refModalOpen, setRefModalOpen] = useState(false)
   const imageModelRef = useRef<ImageModelId>(DEFAULT_IMAGE_MODEL)
@@ -159,9 +159,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [refLocs, setRefLocs] = useState<any[]>(episodeLocations(initial, project.locations ?? []))
   const [refSession, setRefSession] = useState(false) // polling active while refs are generating
   const [refStarting, setRefStarting] = useState(false)
-  // Scope of the running reference session (Stage 46A): «Сгенерировать персонажей» (characters only —
-  // locations are never touched) or a locations session started from ONE location card («Сгенерировать
-  // мастер-кадр» / «+ Ракурс») — characters are never touched there.
+  // Scope of the running reference session (Stage 46A): «Generate characters" (characters only —
+  // locations are never touched) or a locations session started from ONE location card («Generate
+  // master frame" / "+ Angle") — characters are never touched there.
   const [refScope, setRefScope] = useState<'characters' | 'locations'>('characters')
   const refScopeRef = useRef<'characters' | 'locations'>('characters')
   // Server truth refreshed every tick: ids of locations with a running master-frame / extra-angle job,
@@ -172,7 +172,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [tickSeen, setTickSeen] = useState(false)
   const refJobs = useRef<{ char?: string; loc: Record<string, string>; extra: Record<string, string> }>({ loc: {}, extra: {} })
   const refCanceled = useRef(false)
-  // Per-location cancel («Отменить генерацию» on the location card): locations whose generation the
+  // Per-location cancel («Cancel generation on the location card): locations whose generation the
   // author canceled in the current session — the session loop starts no more angle chunks for them and
   // they no longer count as pending for the session-end check. Cleared when a new session starts.
   const locCanceled = useRef<Set<string>>(new Set())
@@ -197,8 +197,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // Old episodes that already have generated scenes open straight on the scenes step.
   const [phase, setPhase] = useState<EpisodePhase>(() => {
     const anyScene = ((initial.scenes ?? []) as Scene[]).some((s) => validUrl(s.videoUrl))
-    // Stage 59 (step 4): tabs are ordered Сценарий → Референсы → Сцены, so an unfilled episode opens on
-    // «Сценарий» by default; only jump straight to «Сцены» when the episode already has generated video.
+    // Stage 59 (step 4): tabs are ordered Script → References → Scenes, so an unfilled episode opens on
+    // «Script by default; only jump straight to Scenes when the episode already has generated video.
     return anyScene || validUrl(initial.videoUrl) ? 'scenes' : 'script'
   })
   const goPhase = (p: EpisodePhase) => { setPhase(p); if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' }) }
@@ -214,7 +214,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // ---- Reference readiness ----
   const locBaseReady = (l: any) => validUrl(l?.imageUrl)
   // Stage 46A: a location is "ready" with its MASTER frame alone — extra angles are optional and are
-  // added one by one with the «+ Ракурс» button. The scenes step unlocks as soon as every character
+  // added one by one with the «+ "Angle" button. The scenes step unlocks as soon as every character
   // has its full photo set and every episode location has a master frame.
   const refsReady = refChars.every(hasAllImages) && refLocs.every(locBaseReady)
   const refsCharsDone = refChars.filter(hasAllImages).length
@@ -250,7 +250,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               patchScene(sceneId, { status: 'pending' })
             }
             if (data.job.status === 'failed') {
-              setSceneError((prev) => ({ ...prev, [sceneId]: data.job.error ?? 'Генерация не удалась' }))
+              setSceneError((prev) => ({ ...prev, [sceneId]: data.job.error ?? 'Generation failed' }))
               // Stage 36: show which reference images were actually sent with the failed submission.
               const refs = Array.isArray(data.job.result?.submittedReferences) ? (data.job.result.submittedReferences as SubmittedReference[]).filter((r) => r && typeof r.url === 'string') : []
               setSceneErrorRefs((prev) => ({ ...prev, [sceneId]: refs }))
@@ -292,7 +292,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     } catch { return }
   }, [project.id, episode.id])
 
-  // ---- Stage 46B-2: per-photo «Перегенерировать» (one frame = CHARACTER_REFERENCE_COST), polled until done ----
+  // ---- Stage 46B-2: per-photo «Regenerate (one frame = CHARACTER_REFERENCE_COST), polled until done ----
   const [shotBusy, setShotBusy] = useState<Record<string, boolean>>({}) // key `${entityId}:${slot}`
   const regenShot = useCallback(async (kind: 'character' | 'location', entityId: string, slot: string, index?: number) => {
     const key = `${entityId}:${slot}${index !== undefined ? `-${index}` : ''}`
@@ -302,7 +302,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       const body = kind === 'character' ? { shot: slot, index, imageModel: imageModelRef.current } : { slot, index, imageModel: imageModelRef.current }
       const res = await fetch(`/api/ai/${kind === 'character' ? 'characters' : 'locations'}/${entityId}/shot`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok) { setError(d?.error ?? 'Не удалось перегенерировать фото'); return }
+      if (!res.ok) { setError(d?.error ?? 'Failed to regenerate photo'); return }
       if (typeof d?.creditsRemaining === 'number') setCredits(d.creditsRemaining)
       // Poll the single-shot job until it reaches a terminal state, then pull the fresh references.
       for (let i = 0; i < 400 && d?.jobId; i++) {
@@ -312,10 +312,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         const jd = await jr.json().catch(() => ({}))
         const st = jd?.job?.status
         if (st === 'completed') break
-        if (st === 'failed' || st === 'canceled') { setError(jd?.job?.error ?? 'Перегенерация фото не удалась'); break }
+        if (st === 'failed' || st === 'canceled') { setError(jd?.job?.error ?? 'Photo regeneration failed'); break }
       }
       await refreshRefs()
-    } catch { setError('Ошибка сети') } finally { setShotBusy((b) => { const n = { ...b }; delete n[key]; return n }) }
+    } catch { setError('Network error') } finally { setShotBusy((b) => { const n = { ...b }; delete n[key]; return n }) }
   }, [shotBusy, refreshRefs])
   const shotIsBusy = (entityId: string, slot: string, index?: number) => !!shotBusy[`${entityId}:${slot}${index !== undefined ? `-${index}` : ''}`]
   // ---- Stage 46E: prompt modal (characters + locations), delete location frame, reset location prompt ----
@@ -324,14 +324,14 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     setError('')
     const res = await fetch(`/api/ai/locations/${locationId}/frame`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ slot, index }) })
     const d = await res.json().catch(() => ({}))
-    if (!res.ok) { setError(d?.error ?? 'Не удалось удалить кадр'); return }
+    if (!res.ok) { setError(d?.error ?? "Couldn't delete the shot"); return }
     if (d?.location) setRefLocs((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...d.location } : l)))
   }, [])
   const resetLocationPrompt = useCallback(async (locationId: string) => {
     setError('')
     const res = await fetch(`/api/ai/locations/${locationId}/prompt`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reset: true }) })
     const d = await res.json().catch(() => ({}))
-    if (!res.ok) { setError(d?.error ?? 'Не удалось сбросить промпт'); return }
+    if (!res.ok) { setError(d?.error ?? "Couldn't reset the prompt"); return }
     setRefLocs((prev) => prev.map((l) => (l.id === locationId ? { ...l, visualPrompt: d.prompt, visualPromptAuto: d.autoPrompt } : l)))
   }, [])
   const [locResetting, setLocResetting] = useState<Record<string, boolean>>({})
@@ -343,7 +343,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const res = await fetch(`/api/ai/characters/${characterId}/prompt`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: '' }) })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok) { setError(d?.error ?? 'Не удалось сбросить промпт'); return }
+      if (!res.ok) { setError(d?.error ?? "Couldn't reset the prompt"); return }
       setRefChars((prev) => prev.map((c) => (c.id === characterId ? { ...c, promptOverride: null } : c)))
     } finally {
       setCharResetting((prev) => ({ ...prev, [characterId]: false }))
@@ -416,7 +416,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       }
 
       // Stage 46A: locations are NEVER topped up automatically — only the master frame requested by the
-      // author is generated; extra angles are added one at a time with «+ Ракурс».
+      // author is generated; extra angles are added one at a time with «+ Angle.
       void refLocs
       void refreshCredits()
     }
@@ -449,7 +449,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     if (initiated) { autoResumedRef.current = true; refCanceled.current = false; refScopeRef.current = 'characters'; setRefScope('characters'); setTickSeen(false); setRefSession(true) }
   }, [refSession, refStarting, refsCharsReady, refChars])
 
-  /** «Сгенерировать персонажей» (Stage 46A): generate every missing photo of this episode's CHARACTERS only.
+  /** «Generate characters" (Stage 46A): generate every missing photo of this episode's CHARACTERS only.
    *  Locations are never touched here. The AI image model chosen in the picker is threaded into the request. */
   const generateCharacterRefs = async () => {
     setRefModalOpen(false)
@@ -461,15 +461,15 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       if (missingChars.length === 0) return
       const res = await fetch('/api/ai/characters/references', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, characterIds: missingChars.map((c) => c.id), imageModel: model }) })
       const d = await res.json()
-      if (!res.ok) { setError(d?.error ?? 'Не удалось запустить генерацию персонажей'); return }
+      if (!res.ok) { setError(d?.error ?? 'Failed to start character generation'); return }
       if (d?.jobId) refJobs.current.char = d.jobId
       if (typeof d?.creditsRemaining === 'number') setCredits(d.creditsRemaining)
       setRefSession(true)
-    } catch { setError('Ошибка сети') } finally { setRefStarting(false) }
+    } catch { setError('Network error') } finally { setRefStarting(false) }
   }
 
-  /** «Сгенерировать мастер-кадр» on ONE location card (Stage 46A): exactly ONE master frame of this location,
-   *  nothing else — extra angles are added later, one per click, with «+ Ракурс». Characters are not touched. */
+  /** «Generate master frame" on ONE location card (Stage 46A): exactly ONE master frame of this location,
+   *  nothing else — extra angles are added later, one per click, with «+ Angle. Characters are not touched. */
   const generateLocationRefs = async (locationId: string) => {
     setError(''); setRefStarting(true); refCanceled.current = false; locCanceled.current = new Set()
     // Stage 60: a location may be generated WITHOUT waiting for a running character session.
@@ -482,17 +482,17 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const res = await fetch(`/api/ai/locations/${locationId}/image`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageModel: imageModelRef.current }) })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok) { setError(d?.error ?? 'Не удалось запустить генерацию локации'); return }
+      if (!res.ok) { setError(d?.error ?? 'Failed to start location generation'); return }
       if (d?.jobId) refJobs.current.loc[locationId] = d.jobId
       if (typeof d?.creditsRemaining === 'number') setCredits(d.creditsRemaining)
       // A new master frame replaces the whole photo set: drop the old angles locally (the server resets them too).
       setRefLocs((prev) => prev.map((l) => (l.id === locationId ? { ...l, imageReverse: null, imageDetail: null, imageExtra: null } : l)))
       setLocActive((p) => new Set(p).add(locationId))
       setRefSession(true)
-    } catch { setError('Ошибка сети') } finally { setRefStarting(false) }
+    } catch { setError('Network error') } finally { setRefStarting(false) }
   }
 
-  /** «+ Ракурс» (Stage 46A): ONE additional angle of a location, chained on its master frame. */
+  /** «+ "Angle" (Stage 46A): ONE additional angle of a location, chained on its master frame. */
   const addLocationAngle = async (locationId: string) => {
     setError(''); setRefStarting(true); refCanceled.current = false; locCanceled.current = new Set()
     // Stage 60: allow adding a location angle without waiting for a running character session.
@@ -502,12 +502,12 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const res = await fetch(`/api/ai/locations/${locationId}/extra-images`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 1, imageModel: imageModelRef.current }) })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok) { setError(d?.error ?? 'Не удалось запустить генерацию ракурса'); return }
+      if (!res.ok) { setError(d?.error ?? 'Failed to start angle generation'); return }
       if (d?.jobId) refJobs.current.extra[locationId] = d.jobId
       if (typeof d?.creditsRemaining === 'number') setCredits(d.creditsRemaining)
       setLocActive((p) => new Set(p).add(locationId))
       setRefSession(true)
-    } catch { setError('Ошибка сети') } finally { setRefStarting(false) }
+    } catch { setError('Network error') } finally { setRefStarting(false) }
   }
 
     const cancelRefs = async () => {
@@ -518,10 +518,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     void refreshRefs(); void refreshCredits()
   }
 
-  /** «Отменить генерацию» on ONE location card (confirmed): cancel the active master-frame / extra-angle
+  /** «Cancel generation on ONE location card (confirmed): cancel the active master-frame / extra-angle
    *  job(s) of this location via the jobs cancel API, stop the session loop for this location, and keep
-   *  the button in «Останавливаю...» until those jobs are terminal (canceled / failed / completed). In a
-   *  «Сгенерировать всё» session the other characters / locations keep going; a locations-only session
+   *  the button in «Stopping..." until those jobs are terminal (canceled / failed / completed). In a
+   *  «Generate all" session the other characters / locations keep going; a locations-only session
    *  (single-location button) ends because this location was its only work. */
   const cancelLocationGen = async (locationId: string) => {
     setLocCancelAsk(null)
@@ -575,11 +575,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const res = await fetch('/api/ai/characters/appearance', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ characterId, instruction }) })
       const d = await res.json()
-      if (!res.ok) { setError(d?.error ?? 'Не удалось изменить персонажа'); return }
+      if (!res.ok) { setError(d?.error ?? 'Failed to edit character'); return }
       if (d?.character) setRefChars((prev) => prev.map((c) => (c.id === characterId ? { ...c, ...d.character, hasUndo: true } : c)))
       setCharEdit((t) => ({ ...t, [characterId]: '' }))
       setRefSession(true) // poll until the new references land
-    } catch { setError('Ошибка сети') } finally { setCharBusy((b) => { const n = { ...b }; delete n[characterId]; return n }) }
+    } catch { setError('Network error') } finally { setCharBusy((b) => { const n = { ...b }; delete n[characterId]; return n }) }
   }
 
   // Stage 60: one-step undo — restore the previous character version (appearance + references).
@@ -588,9 +588,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const res = await fetch(`/api/ai/characters/${characterId}/undo`, { method: 'POST' })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok) { setError(d?.error ?? 'Не удалось отменить изменение'); return }
+      if (!res.ok) { setError(d?.error ?? 'Failed to undo change'); return }
       if (d?.character) setRefChars((prev) => prev.map((c) => (c.id === characterId ? { ...c, ...d.character, hasUndo: false } : c)))
-    } catch { setError('Ошибка сети') } finally { setCharBusy((b) => { const n = { ...b }; delete n[characterId]; return n }) }
+    } catch { setError('Network error') } finally { setCharBusy((b) => { const n = { ...b }; delete n[characterId]; return n }) }
   }
 
   /** Prompt-edit a location (regenerates its reference; C2PA preserved in the worker). */
@@ -600,11 +600,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const res = await fetch(`/api/ai/locations/${locationId}/revise`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instruction, regenerate: true }) })
       const d = await res.json()
-      if (!res.ok) { setError(d?.error ?? 'Не удалось изменить локацию'); return }
+      if (!res.ok) { setError(d?.error ?? 'Failed to edit location'); return }
       if (d?.location) setRefLocs((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...d.location, hasUndo: true } : l)))
       setLocEdit((t) => ({ ...t, [locationId]: '' }))
       if (d?.jobId) setRefSession(true) // poll only when a regeneration job actually started
-    } catch { setError('Ошибка сети') } finally { setLocBusy((b) => { const n = { ...b }; delete n[locationId]; return n }) }
+    } catch { setError('Network error') } finally { setLocBusy((b) => { const n = { ...b }; delete n[locationId]; return n }) }
   }
 
   // Stage 60: one-step undo — restore the previous location version (text + reference images).
@@ -613,9 +613,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const res = await fetch(`/api/ai/locations/${locationId}/undo`, { method: 'POST' })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok) { setError(d?.error ?? 'Не удалось отменить изменение'); return }
+      if (!res.ok) { setError(d?.error ?? 'Failed to undo change'); return }
       if (d?.location) setRefLocs((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...d.location, hasUndo: false } : l)))
-    } catch { setError('Ошибка сети') } finally { setLocBusy((b) => { const n = { ...b }; delete n[locationId]; return n }) }
+    } catch { setError('Network error') } finally { setLocBusy((b) => { const n = { ...b }; delete n[locationId]; return n }) }
   }
 
   const reloadEpisode = async () => {
@@ -636,17 +636,17 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const res = await fetch(`/api/ai/episodes/${episode.id}/revise`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instruction, force }) })
       const data = await res.json()
-      if (res.status === 409 && data?.needsForce) { if (confirm(`${data.error}\n\nПродолжить?`)) return reviseEpisode(true); setRevising(false); return }
-      if (!res.ok) throw new Error(data?.error ?? 'Не удалось переписать эпизод')
+      if (res.status === 409 && data?.needsForce) { if (confirm(`${data.error}\n\nContinue?`)) return reviseEpisode(true); setRevising(false); return }
+      if (!res.ok) throw new Error(data?.error ?? 'Failed to rewrite episode')
       // Stage 77: the route returns a background job — keep `revising` until the poll finishes
       // (revisePoll.onFinish reloads the episode and clears the instruction on success).
       if (data?.jobId) { revisePoll.start(data.jobId); return }
       // No jobId (unexpected) — fall back to the old immediate reload.
       setReviseText(''); await reloadEpisode(); setRevising(false)
-    } catch (e: any) { setError(e?.message ?? 'Ошибка'); setRevising(false) }
+    } catch (e: any) { setError(e?.message ?? 'Error'); setRevising(false) }
   }
 
-  // Stage 83 — entry point for the sticky «Переписать» bar. Rewriting the episode plot/synopsis/
+  // Stage 83 — entry point for the sticky «"Rewrite" bar. Rewriting the episode plot/synopsis/
   // script re-plans and RESETS every scene (and any generated clips). If scenes already exist, ask
   // first; on confirm we run with force=true so the reset (incl. clips) goes through in one step.
   // No scenes yet → nothing to lose → run immediately, exactly like before.
@@ -683,11 +683,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     setSceneBusy((b) => ({ ...b, [scene.id]: true })); setError(null)
     try {
       const res = await fetch(`/api/ai/scenes/${scene.id}/revise`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instruction }) })
-      const data = await res.json(); if (!res.ok) throw new Error(data?.error ?? 'Не удалось изменить сцену')
+      const data = await res.json(); if (!res.ok) throw new Error(data?.error ?? 'Failed to edit scene')
       patchScene(scene.id, { ...data.scene, hasUndo: true }); setSceneEdit((t) => ({ ...t, [scene.id]: '' }))
-      // Stage 79a: no confirmation — «Изменить» rewrites the scene AND re-renders the clip at once.
+      // Stage 79a: no confirmation — «"Edit" rewrites the scene AND re-renders the clip at once.
       await regenScene(scene.id)
-    } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setSceneBusy((b) => { const n = { ...b }; delete n[scene.id]; return n }) }
+    } catch (e: any) { setError(e?.message ?? 'Error') } finally { setSceneBusy((b) => { const n = { ...b }; delete n[scene.id]; return n }) }
   }
 
   // Stage 60: one-step undo — restore the previous scene version (text + previously rendered clip).
@@ -696,9 +696,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const res = await fetch(`/api/ai/scenes/${scene.id}/undo`, { method: 'POST' })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data?.error ?? 'Не удалось отменить изменение')
+      if (!res.ok) throw new Error(data?.error ?? 'Failed to undo change')
       patchScene(scene.id, { ...data.scene, hasUndo: false })
-    } catch (e: any) { setError(e?.message ?? 'Ошибка') } finally { setSceneBusy((b) => { const n = { ...b }; delete n[scene.id]; return n }) }
+    } catch (e: any) { setError(e?.message ?? 'Error') } finally { setSceneBusy((b) => { const n = { ...b }; delete n[scene.id]; return n }) }
   }
 
   // Single-scene background generation (POST /api/ai/generate-video → runVideoJob).
@@ -710,13 +710,13 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const body: Record<string, unknown> = { projectId: project.id, sceneId }
       const res = await postJobStart('/api/ai/generate-video', body)
-      const data = await res.json(); if (!res.ok) throw new Error(data?.error ?? 'Не удалось запустить генерацию')
+      const data = await res.json(); if (!res.ok) throw new Error(data?.error ?? 'Failed to start generation')
       patchScene(sceneId, { status: 'generating' }); pollVideoJob(sceneId, data.jobId); void refreshCredits()
-    } catch (e: any) { clearGen(sceneId); setError(e?.message ?? 'Ошибка') }
+    } catch (e: any) { clearGen(sceneId); setError(e?.message ?? 'Error') }
   }
   const regenScene = (sceneId: string) => generateScene(sceneId, false)
 
-  // «Отменить генерацию» (confirmed): flag the running video job; the worker cancels the provider
+  // «Cancel generation (confirmed): flag the running video job; the worker cancels the provider
   // prediction at its next check, refunds the credits and marks the job «canceled» — the poller then
   // clears the spinner. If the job is unknown/finished the card is unlocked immediately.
   const cancelSceneGen = async (sceneId: string) => {
@@ -727,7 +727,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const res = await fetch(`/api/ai/jobs/${jobId}/cancel`, { method: 'POST' })
       const data = await res.json().catch(() => null)
-      if (!res.ok) throw new Error(data?.error ?? 'Не удалось отменить генерацию')
+      if (!res.ok) throw new Error(data?.error ?? 'Failed to cancel generation')
       if (data?.result === 'already-finished' || data?.result === 'not-found') {
         // Nothing left to cancel — unlock the card right away.
         stopPolling(sceneId); clearGen(sceneId)
@@ -739,20 +739,20 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       // Otherwise keep polling: the job turns «canceled» within one worker tick and the poller cleans up.
     } catch (e: any) {
       setCancelling((p) => { const n = { ...p }; delete n[sceneId]; return n })
-      setError(e?.message ?? 'Ошибка')
+      setError(e?.message ?? 'Error')
     }
   }
 
-  // Stage 39 — «Сгенерировать все сцены»: POST /api/ai/episodes/[id]/generate-all starts EVERY pending /
+  // Stage 39 — «Generate all scenes": POST /api/ai/episodes/[id]/generate-all starts EVERY pending /
   // failed scene at once (server-side fan-out); the client polls all returned jobs simultaneously so each
   // card shows its own progress / error. `genAllAsk` holds the cost estimate for the confirmation box.
   const [genAllAsk, setGenAllAsk] = useState<{ pendingCount: number; total: number; costPerScene: number; credits: number } | null>(null)
   const [genAllStarting, setGenAllStarting] = useState(false)
   const generatingCount = Object.values(activeGen).filter(Boolean).length
-  // Stage 72 — the «По цепочке» switch is back (see chainMode below); the server-side chain run is reported here.
+  // Stage 72 — the «"In sequence" switch is back (see chainMode below); the server-side chain run is reported here.
   const [chainRunActive, setChainRunActive] = useState<boolean>(!!initial.chainRunActive)
   const [chainRunNote, setChainRunNote] = useState<string | null>(initial.chainRunNote ?? null)
-  // Stage 72 — «Порядок генерации»: parallel (all scenes at once, text-only continuity) | chain (one after
+  // Stage 72 — «"Generation order": parallel (all scenes at once, text-only continuity) | chain (one after
   // another, the previous scene's last frame is fed into the next one). Persisted via PATCH chain-mode.
   const chainMode: 'parallel' | 'chain' = episode?.chainMode === 'chain' ? 'chain' : 'parallel'
   const isChain = chainMode === 'chain'
@@ -764,11 +764,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const res = await fetch(`/api/ai/episodes/${episode.id}/chain-mode`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chainMode: next }) })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(d?.error ?? 'Не удалось сменить порядок генерации')
+      if (!res.ok) throw new Error(d?.error ?? "Couldn't change the generation order")
       setEpisode((p: any) => ({ ...p, chainMode: d?.chainMode ?? next }))
       if (typeof d?.chainRunActive === 'boolean') setChainRunActive(d.chainRunActive)
       if ('chainRunNote' in (d ?? {})) setChainRunNote(d.chainRunNote ?? null)
-    } catch (e: any) { setError(e?.message ?? 'Ошибка') }
+    } catch (e: any) { setError(e?.message ?? 'Error') }
     finally { setChainModeSaving(false) }
   }
   // While a chain run is active the server starts the next scene itself (after the previous one is
@@ -799,10 +799,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const res = await fetch(`/api/ai/episodes/${episode.id}/generate-all`, { cache: 'no-store' })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(d?.error ?? 'Не удалось получить оценку стоимости')
-      if (!d.pendingCount) { setError('Все сцены уже готовы или генерируются'); return }
+      if (!res.ok) throw new Error(d?.error ?? 'Failed to get cost estimate')
+      if (!d.pendingCount) { setError('All scenes are already ready or generating'); return }
       setGenAllAsk({ pendingCount: d.pendingCount, total: d.total ?? 0, costPerScene: d.costPerScene ?? 0, credits: d.credits ?? credits })
-    } catch (e: any) { setError(e?.message ?? 'Ошибка') }
+    } catch (e: any) { setError(e?.message ?? 'Error') }
     finally { setGenAllStarting(false) }
   }
   const generateAllScenes = async () => {
@@ -810,7 +810,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const res = await postJobStart(`/api/ai/episodes/${episode.id}/generate-all`, {})
       const d = await res.json().catch(() => ({}))
-      if (!res.ok || !Array.isArray(d?.jobs)) throw new Error(d?.error ?? 'Не удалось запустить генерацию')
+      if (!res.ok || !Array.isArray(d?.jobs)) throw new Error(d?.error ?? 'Failed to start generation')
       if (d.chain) { setChainRunActive(true); setChainRunNote(null) }
       for (const j of d.jobs as Array<{ sceneId: string; jobId: string }>) {
         setActiveGen((p) => ({ ...p, [j.sceneId]: true }))
@@ -819,16 +819,16 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         patchScene(j.sceneId, { status: 'generating' })
         pollVideoJob(j.sceneId, j.jobId)
       }
-      // Scenes the balance could not cover are reported per card as «Недостаточно кредитов».
+      // Scenes the balance could not cover are reported per card as «Not enough credits.
       for (const u of (d.insufficient ?? []) as Array<{ sceneId: string; error?: string }>) {
-        setSceneError((prev) => ({ ...prev, [u.sceneId]: u.error ?? 'Недостаточно кредитов' }))
+        setSceneError((prev) => ({ ...prev, [u.sceneId]: u.error ?? 'Not enough credits' }))
       }
       if (typeof d?.creditsRemaining === 'number') setCredits(d.creditsRemaining); else void refreshCredits()
-    } catch (e: any) { setError(e?.message ?? 'Ошибка') }
+    } catch (e: any) { setError(e?.message ?? 'Error') }
     finally { setGenAllStarting(false) }
   }
 
-  // Stage 31 — open the "Смотреть промпт" modal and load the scene's FINAL prompt (override if set,
+  // Stage 31 — open the "View prompt" modal and load the scene's FINAL prompt (override if set,
   // else the auto-assembled prompt). The prompt is exactly what the worker submits (with [ImageN]
   // placeholders instead of real reference URLs and no LLM translation).
   const openPromptModal = async (scene: Scene) => {
@@ -839,24 +839,24 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const res = await fetch(`/api/ai/scenes/${scene.id}/prompt`)
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data?.error || 'Не удалось загрузить промпт')
+      if (!res.ok) throw new Error(data?.error || 'Failed to load prompt')
       setPromptText(String(data.prompt ?? ''))
       setPromptHasOverride(!!data.hasOverride)
       setPromptRefKind(typeof data.referenceKind === 'string' ? data.referenceKind : null)
     } catch (e: any) {
-      setPromptErr(e?.message ?? 'Не удалось загрузить промпт')
+      setPromptErr(e?.message ?? 'Failed to load prompt')
     } finally {
       setPromptLoading(false)
     }
   }
 
-  // Copy the current textarea contents (so a hand-edited prompt is copied as shown) and flash «Скопировано».
+  // Copy the current textarea contents (so a hand-edited prompt is copied as shown) and flash «Copied.
   const copyPromptModal = async () => {
     try {
       await navigator.clipboard.writeText(promptText)
       setPromptCopied(true)
       setTimeout(() => setPromptCopied(false), 2000)
-    } catch { setPromptErr('Не удалось скопировать') }
+    } catch { setPromptErr("Couldn't copy") }
   }
 
 
@@ -872,7 +872,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         body: JSON.stringify({ prompt: reset ? '' : promptText }),
       })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data?.error || 'Не удалось сохранить')
+      if (!res.ok) throw new Error(data?.error || "Couldn't save")
       setPromptHasOverride(!!data.hasOverride)
       // Stage 36: the server normalizes the override (fences / preamble stripped) — reflect what was actually saved.
       const savedPrompt: string | null = reset ? null : (typeof data.prompt === 'string' && data.prompt.trim() ? data.prompt : null)
@@ -890,7 +890,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         setPromptModal(null)
       }
     } catch (e: any) {
-      setPromptErr(e?.message ?? 'Не удалось сохранить')
+      setPromptErr(e?.message ?? "Couldn't save")
     } finally {
       setPromptSaving(false)
     }
@@ -898,7 +898,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
 
   const allReady = scenes.length > 0 && scenes.every((s) => validUrl(s.videoUrl) && !activeGen[s.id])
 
-  // «Собрать» — pure concatenation of the ready scene clips into a single episode video.
+  // «"Assemble" — pure concatenation of the ready scene clips into a single episode video.
   // No audit, no polish, no re-generation: just stitches the existing clips together and
   // stores the result on the episode. The button is enabled only when every scene is ready.
   // Stage 46B: the POST returns a jobId; progress comes from GET /api/jobs/[id].
@@ -908,10 +908,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const res = await fetch('/api/ai/assemble-episode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ episodeId: episode.id, quality: assembleQuality, fps: assembleFps }) })
       const data = await res.json()
-      if (!res.ok) throw new Error(data?.error ?? 'Не удалось собрать эпизод')
-      if (!data?.jobId) throw new Error('Сборка не запустилась')
+      if (!res.ok) throw new Error(data?.error ?? "Couldn't assemble the episode")
+      if (!data?.jobId) throw new Error('Assembly did not start')
       stitchJob.start(data.jobId)
-    } catch (e: any) { setError(e?.message ?? 'Ошибка'); setStitching(false) }
+    } catch (e: any) { setError(e?.message ?? 'Error'); setStitching(false) }
   }
 
   const isAssembled = episode.status === 'assembled' || validUrl(episode.videoUrl)
@@ -922,23 +922,23 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       {/* Stage 76: project name in the sticky header (project comes from episode.season.project on the server). */}
       <Header projectName={project?.name} projectId={project?.id} />
       <main className={`mx-auto max-w-[1200px] px-4 py-6 ${phase === 'script' ? 'pb-44' : ''}`} data-testid="episode-page">
-        {/* Stage 14 (C): episode nav — right-aligned «Эпизоды» dropdown grid (10/row desktop), any order. */}
+        {/* Stage 14 (C): episode nav — right-aligned «Episodes" dropdown grid (10/row desktop), any order. */}
         <div className="flex flex-wrap items-center gap-4">
-          <Link href={`/project/${project.id}`} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> К сюжету сезона</Link>
+          <Link href={`/project/${project.id}`} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> To season story</Link>
           <EpisodeNavGrid projectId={project.id} episodes={siblings} currentId={episode.id} />
         </div>
         <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="text-xs font-semibold uppercase text-muted-foreground">Эпизод {episode.number}{episode.arcRole ? ` · ${episode.arcRole}` : ''}</div>
+            <div className="text-xs font-semibold uppercase text-muted-foreground">Episode {episode.number}{episode.arcRole ? ` · ${episode.arcRole}` : ''}</div>
             <h1 className="font-display text-2xl font-bold tracking-tight">{episode.title}</h1>
             {episode.logline && <p className="mt-1 text-sm text-muted-foreground">{episode.logline}</p>}
           </div>
-          <div className="text-sm text-muted-foreground">Кредиты: <span className="font-semibold text-foreground" data-testid="credits">{credits}</span></div>
+          <div className="text-sm text-muted-foreground">Credits: <span className="font-semibold text-foreground" data-testid="credits">{credits}</span></div>
         </div>
 
         {/* Stage 14 (D): guided steps — script → references → scenes */}
         <div className="mt-4 flex flex-wrap items-center gap-2 text-xs" data-testid="phase-steps">
-          {(([['script', '1 · Сценарий'], ['references', '2 · Референсы'], ['scenes', '3 · Сцены']]) as [EpisodePhase, string][]).map(([key, label]) => {
+          {(([['script', '1 · Script'], ['references', '2 · References'], ['scenes', '3 · Scenes']]) as [EpisodePhase, string][]).map(([key, label]) => {
             const reached = key === 'script' || key === 'references' || refsReady || scenes.some((s) => validUrl(s.videoUrl))
             const active = phase === key
             return (
@@ -960,18 +960,18 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         {/* Step 1 — episode script in book format (D1/D2) */}
         {phase === 'script' && (
           <div className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="phase-script">
-            <h2 className="mb-3 font-display text-xl font-bold">Сценарий эпизода</h2>
+            <h2 className="mb-3 font-display text-xl font-bold">Episode script</h2>
             {/* Stage 77: while the rewrite job runs the OLD script is hidden behind a placeholder. */}
             {rewriteViewState(revising, revisePoll.job?.status) === 'placeholder' ? (
-              <RewritePlaceholder job={revisePoll.job} expectedTotalSec={EPISODE_REVISE_EXPECTED_SEC} label="Переписываю сценарий эпизода…" testId="episode-revise-progress" />
+              <RewritePlaceholder job={revisePoll.job} expectedTotalSec={EPISODE_REVISE_EXPECTED_SEC} label="Rewriting episode script…" testId="episode-revise-progress" />
             ) : (
               <BookScript text={episode.script} scenes={scenes} />
             )}
             {reviseNotice && <p className="mt-3 text-sm text-primary" data-testid="episode-revise-notice">{reviseNotice}</p>}
-            {/* Stage 59 navigation — Сценарий is step 1: single forward button to references. */}
+            {/* Stage 59 navigation — Script is step 1: single forward button to references. */}
             <div className="mt-5 flex flex-wrap items-center justify-end gap-3 border-t border-border pt-4">
               <button onClick={() => goPhase('references')} disabled={revising} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:brightness-110 disabled:opacity-50" data-testid="script-to-references">
-                К референсам <ArrowRight className="h-4 w-4" />
+                To references <ArrowRight className="h-4 w-4" />
               </button>
             </div>
           </div>
@@ -981,27 +981,27 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         {phase === 'references' && (
         <section className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="episode-references">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="inline-flex items-center gap-2 font-display text-xl font-bold"><Images className="h-5 w-5 text-primary" /> Референсы эпизода</h2>
+            <h2 className="inline-flex items-center gap-2 font-display text-xl font-bold"><Images className="h-5 w-5 text-primary" /> Episode references</h2>
             {refSession ? (
               <span className="inline-flex items-center gap-2 text-xs text-muted-foreground" data-testid="refs-progress">
-                <Loader2 className="h-4 w-4 animate-spin text-primary" /> {refScope === 'locations' ? <>Генерирую локацию: {refsLocsDone}/{refLocs.length}</> : <>Генерирую персонажей: {refsCharsDone}/{refChars.length}</>}
-                <CancelButton onCancel={cancelRefs} testId="refs-cancel" label="Отменить" pendingLabel="Останавливаю…" />
+                <Loader2 className="h-4 w-4 animate-spin text-primary" /> {refScope === 'locations' ? <>Generating location: {refsLocsDone}/{refLocs.length}</> : <>Generating characters: {refsCharsDone}/{refChars.length}</>}
+                <CancelButton onCancel={cancelRefs} testId="refs-cancel" label="Cancel" pendingLabel="Stopping…" />
               </span>
             ) : (
               <span className="inline-flex flex-wrap items-center gap-2">
-                {refsReady && <span className="text-xs font-medium text-emerald-500" data-testid="refs-status">Все референсы готовы</span>}
+                {refsReady && <span className="text-xs font-medium text-emerald-500" data-testid="refs-status">All references are ready</span>}
                 {!refsCharsReady && (
-                  <button onClick={() => setRefModalOpen(true)} disabled={refStarting} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all-refs" title="Сгенерировать фото всех персонажей эпизода (локации — отдельно, на карточке локации)">
-                    {refStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Сгенерировать персонажей
+                  <button onClick={() => setRefModalOpen(true)} disabled={refStarting} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all-refs" title="Generate photos of all episode characters (locations — separately, on the location card)">
+                    {refStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Generate characters
                   </button>
                 )}
               </span>
             )}
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">Персонажи (несколько ракурсов) генерируются кнопкой «Сгенерировать персонажей». Локации — отдельно: один мастер-кадр по кнопке на карточке, дополнительные ракурсы — по «+». Все изображения с меткой C2PA. Нажмите на любой кадр, чтобы открыть на весь экран.</p>
+          <p className="mt-1 text-sm text-muted-foreground">Characters (multiple angles) are generated with the "Generate characters" button. Locations are separate: one master frame using the button on the card, additional angles with "+". All images are tagged with C2PA. Click any frame to open it full screen.</p>
 
           {/* Characters */}
-          <h3 className="mt-4 flex items-center gap-2 text-sm font-semibold"><Users className="h-4 w-4" /> Персонажи ({refChars.length})</h3>
+          <h3 className="mt-4 flex items-center gap-2 text-sm font-semibold"><Users className="h-4 w-4" /> Characters ({refChars.length})</h3>
           <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {refChars.map((c) => {
               const busy = !!charBusy[c.id] || (refSession && refScope === 'characters' && !hasAllImages(c))
@@ -1031,26 +1031,26 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       {busy ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : <ImageOff className="h-4 w-4 text-muted-foreground/40" />}
                     </div>
                   )}
-                  <div className="mt-2 truncate text-sm font-medium">{c.name} <span className="font-normal text-muted-foreground">· {photos.length} фото</span></div>
+                  <div className="mt-2 truncate text-sm font-medium">{c.name} <span className="font-normal text-muted-foreground">· {photos.length} photo</span></div>
                   {c.role && <div className="truncate text-xs text-muted-foreground">{c.role}</div>}
                       {/* Stage 46E: prompt view/edit + download all */}
                       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                        <button type="button" onClick={() => setPromptFor({ kind: 'character', id: c.id, name: c.name })} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs" data-testid="character-prompt" title="Посмотреть, скопировать или изменить промпт персонажа">
-                          <FileText className="h-3.5 w-3.5" /> Промпт
+                        <button type="button" onClick={() => setPromptFor({ kind: 'character', id: c.id, name: c.name })} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs" data-testid="character-prompt" title="View, copy, or edit the character prompt">
+                          <FileText className="h-3.5 w-3.5" /> Prompt
                         </button>
                         <DownloadAllButton kind="character" id={c.id} count={photos.length} />
-                        <button type="button" disabled={busy || !!charResetting[c.id]} onClick={() => resetCharacterPrompt(c.id)} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="char-prompt-reset" title="Убрать ручной промпт и вернуть автоматический">
-                            {charResetting[c.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Сбросить промпт на авто
+                        <button type="button" disabled={busy || !!charResetting[c.id]} onClick={() => resetCharacterPrompt(c.id)} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="char-prompt-reset" title="Remove manual prompt and restore automatic">
+                            {charResetting[c.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Reset prompt to auto
                           </button>
-                        {!!(c.promptOverride && String(c.promptOverride).trim()) && <span className="rounded bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="character-prompt-override">Промпт изменён вручную</span>}
+                        {!!(c.promptOverride && String(c.promptOverride).trim()) && <span className="rounded bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="character-prompt-override">Prompt changed manually</span>}
                       </div>
                       <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
-                        <input value={charEdit[c.id] ?? ''} onChange={(e) => setCharEdit((t) => ({ ...t, [c.id]: e.target.value }))} placeholder="Изменить по промпту…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-character-input" disabled={busy} />
-                        <button onClick={() => reviseCharacter(c.id)} disabled={busy || !(charEdit[c.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-character-submit" title="Изменить по промпту">
+                        <input value={charEdit[c.id] ?? ''} onChange={(e) => setCharEdit((t) => ({ ...t, [c.id]: e.target.value }))} placeholder="Edit by prompt…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-character-input" disabled={busy} />
+                        <button onClick={() => reviseCharacter(c.id)} disabled={busy || !(charEdit[c.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-character-submit" title="Edit by prompt">
                           {charBusy[c.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
                         </button>
                         {c.hasUndo && (
-                          <button onClick={() => undoCharacter(c.id)} disabled={busy} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="character-undo" title="Отменить последнее изменение">
+                          <button onClick={() => undoCharacter(c.id)} disabled={busy} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="character-undo" title="Undo last change">
                             <Undo2 className="h-3.5 w-3.5" />
                           </button>
                         )}
@@ -1058,15 +1058,15 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                 </div>
               )
             })}
-            {refChars.length === 0 && <p className="text-sm text-muted-foreground">У эпизода нет привязанных персонажей.</p>}
+            {refChars.length === 0 && <p className="text-sm text-muted-foreground">No characters are linked to this episode.</p>}
           </div>
 
           {/* Locations */}
-          <h3 className="mt-6 flex items-center gap-2 text-sm font-semibold"><MapPin className="h-4 w-4" /> Локации ({refLocs.length})</h3>
+          <h3 className="mt-6 flex items-center gap-2 text-sm font-semibold"><MapPin className="h-4 w-4" /> Locations ({refLocs.length})</h3>
           <div className="mt-2 grid gap-4 sm:grid-cols-2">
             {refLocs.map((l) => {
               const detail = locationDetailLevel(l)
-              const base = [{ url: l.imageUrl, label: 'Общий план', slot: 'master' }, { url: l.imageReverse, label: 'Обратный ракурс', slot: 'reverse' }, { url: l.imageDetail, label: 'Средний план', slot: 'detail' }].filter((a) => validUrl(a.url))
+              const base = [{ url: l.imageUrl, label: 'Wide shot', slot: 'master' }, { url: l.imageReverse, label: 'Reverse angle', slot: 'reverse' }, { url: l.imageDetail, label: 'Medium shot', slot: 'detail' }].filter((a) => validUrl(a.url))
               const extras = parseExtra(l.imageExtra)
               // This location has a running master-frame / extra-angle job (server truth; before the first tick — the job we just started).
               const locGen = refSession && !locCanceled.current.has(l.id) && (locActive.has(l.id) || (!tickSeen && (!!refJobs.current.loc[l.id] || !!refJobs.current.extra[l.id])))
@@ -1075,8 +1075,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               return (
                 <div key={l.id} className="rounded-lg border border-border/60 p-3" data-testid="ref-location">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0 truncate text-sm font-medium">{l.name} <span className="font-normal text-muted-foreground">· {locationFrames(l)} {locationFrames(l) === 1 ? 'кадр' : 'кадров'}</span></div>
-                    <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground" title="Рекомендуемое число кадров зависит от требуемой детализации локации; добавляйте ракурсы по «+» при необходимости" data-testid="location-detail-badge">детализация: {locationDetailLabel(detail)} · рекомендуется {desiredTotalFrames(l)}</span>
+                    <div className="min-w-0 truncate text-sm font-medium">{l.name} <span className="font-normal text-muted-foreground">· {locationFrames(l)} {locationFrames(l) === 1 ? 'frame' : 'frames'}</span></div>
+                    <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground" title="The recommended number of frames depends on the required location detail; add angles with '+' as needed" data-testid="location-detail-badge">detail: {locationDetailLabel(detail)} · recommended {desiredTotalFrames(l)}</span>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {(() => { const all = [...base.map((a) => ({ url: a.url as string, label: a.label, slot: a.slot, idx: undefined as number | undefined })), ...extras.map((u, i) => ({ url: u, label: `${i + 1}. ${locationExtraLabel(i)}`, slot: 'extra', idx: i }))]; const urls = all.map((a) => a.url); return base.length > 0 ? all.map((a, i) => (
@@ -1087,7 +1087,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                         <FrameToolbar
                           regen={{ testId: `regen-shot-${a.slot}${a.idx !== undefined ? `-${a.idx}` : ''}`, busy, spinning: shotIsBusy(l.id, a.slot, a.idx), onClick: () => regenShot('location', l.id, a.slot, a.idx) }}
                           download={{ url: a.url, name: referenceFileName('location', l.name, a.slot, a.url, a.idx) }}
-                          del={{ testId: `delete-shot-${a.slot}${a.idx !== undefined ? `-${a.idx}` : ''}`, onClick: () => deleteFrame(l.id, a.slot, a.idx), disabled: busy || all.length <= 1, disabledTitle: all.length <= 1 ? 'Минимум один кадр' : 'Дождитесь окончания генерации' }}
+                          del={{ testId: `delete-shot-${a.slot}${a.idx !== undefined ? `-${a.idx}` : ''}`, onClick: () => deleteFrame(l.id, a.slot, a.idx), disabled: busy || all.length <= 1, disabledTitle: all.length <= 1 ? 'At least one frame' : 'Wait for generation to finish' }}
                         />
                       </button>
                     )) : busy ? (
@@ -1098,8 +1098,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   </div>
                   {/* Stage 46E: prompt tools + download all */}
                   <div className="mt-2 flex flex-wrap items-center gap-1.5" data-testid="location-prompt-tools">
-                    <button type="button" onClick={() => setPromptFor({ kind: 'location', id: l.id, name: l.name })} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs" data-testid="location-prompt" title="Посмотреть, скопировать или изменить визуальный промпт локации">
-                      <FileText className="h-3.5 w-3.5" /> Промпт
+                    <button type="button" onClick={() => setPromptFor({ kind: 'location', id: l.id, name: l.name })} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs" data-testid="location-prompt" title="View, copy, or edit the location visual prompt">
+                      <FileText className="h-3.5 w-3.5" /> Prompt
                     </button>
                     <button
                       type="button"
@@ -1107,38 +1107,38 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       onClick={async () => { setLocResetting((m) => ({ ...m, [l.id]: true })); try { await resetLocationPrompt(l.id) } finally { setLocResetting((m) => { const n = { ...m }; delete n[l.id]; return n }) } }}
                       className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50"
                       data-testid="location-prompt-reset"
-                      title="Вернуть первоначальный промпт локации, написанный ИИ"
+                      title="Restore the original AI-written location prompt"
                     >
-                      {locResetting[l.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Сбросить промпт на авто
+                      {locResetting[l.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Reset prompt to auto
                     </button>
                     <DownloadAllButton kind="location" id={l.id} count={locationFrames(l)} />
-                    {locHasPromptOverride(l) && <span className="rounded bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="location-prompt-override">Промпт изменён вручную</span>}
+                    {locHasPromptOverride(l) && <span className="rounded bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="location-prompt-override">Prompt changed manually</span>}
                   </div>
                       {locGen || cancelling ? (
-                        /* While THIS location is generating the button becomes «Отменить генерацию» (confirmed below),
+                        /* While THIS location is generating the button becomes «Cancel generation (confirmed below),
                            mirroring the scene-video cancel. */
                         <button
                           onClick={() => setLocCancelAsk(l.id)}
                           disabled={cancelling || locCancelAsk === l.id}
                           className="mt-2 inline-flex w-full items-center justify-center gap-1 rounded-lg border border-destructive/50 px-2 py-1 text-xs font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50"
                           data-testid="ref-location-cancel"
-                          title="Остановить генерацию этой локации"
+                          title="Stop generation for this location"
                         >
                           {cancelling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <X className="h-3.5 w-3.5" />}
-                          {cancelling ? 'Останавливаю...' : 'Отменить генерацию'}
+                          {cancelling ? 'Stopping...' : 'Cancel generation'}
                         </button>
                       ) : (
-                        /* Stage 46A: «Сгенерировать» makes exactly ONE master frame of THIS location; «+ Ракурс» adds one angle. */
+                        /* Stage 46A: «Generate" makes exactly ONE master frame of THIS location; "+ Angle" adds one angle. */
                         <div className="mt-2 flex gap-1.5">
                           <button
                             onClick={() => generateLocationRefs(l.id)}
                             disabled={busy || refStarting}
                             className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg bg-primary px-2 py-1 text-xs font-medium text-primary-foreground disabled:opacity-50"
                             data-testid="ref-location-generate"
-                            title={locBaseReady(l) ? 'Снять новый мастер-кадр локации (старые ракурсы будут сброшены)' : 'Сгенерировать один мастер-кадр этой локации'}
+                            title={locBaseReady(l) ? 'Create a new location master frame (old angles will be reset)' : 'Generate one master frame for this location'}
                           >
                             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : locBaseReady(l) ? <RefreshCw className="h-3.5 w-3.5" /> : <Wand2 className="h-3.5 w-3.5" />}
-                            {busy ? 'Генерирую...' : `${locBaseReady(l) ? 'Перегенерировать' : 'Сгенерировать'} мастер-кадр (${CHARACTER_REFERENCE_COST} кр.)`}
+                            {busy ? 'Generating...' : `${locBaseReady(l) ? 'Regenerate' : 'Generate'} master frame (${CHARACTER_REFERENCE_COST} cr.)`}
                           </button>
                           {locBaseReady(l) && (
                             <button
@@ -1146,29 +1146,29 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                               disabled={busy || refStarting}
                               className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs font-medium disabled:opacity-50"
                               data-testid="ref-location-add-angle"
-                              title={`Добавить ещё один ракурс этой локации (${CHARACTER_REFERENCE_COST} кр.)`}
+                              title={`Add another angle of this location (${CHARACTER_REFERENCE_COST} cr.)`}
                             >
-                              <Plus className="h-3.5 w-3.5" /> Ракурс
+                              <Plus className="h-3.5 w-3.5" /> Angle
                             </button>
                           )}
                         </div>
                       )}
                       {locCancelAsk === l.id && locGen && (
                         <div className="mt-2 rounded-lg border border-destructive/40 bg-destructive/5 p-2 text-xs" data-testid="ref-location-cancel-confirm">
-                          Остановить генерацию этой локации? Кредиты за несделанные кадры вернутся.
+                          Stop generating this location? Credits for unfinished frames will be refunded.
                           <div className="mt-1.5 flex gap-1.5">
-                            <button onClick={() => cancelLocationGen(l.id)} className="inline-flex items-center gap-1 rounded-lg bg-destructive px-2 py-1 text-destructive-foreground" data-testid="ref-location-cancel-ok"><X className="h-3.5 w-3.5" /> Да, отменить</button>
-                            <button onClick={() => setLocCancelAsk(null)} className="rounded-lg border border-border px-2 py-1" data-testid="ref-location-cancel-keep">Продолжить генерацию</button>
+                            <button onClick={() => cancelLocationGen(l.id)} className="inline-flex items-center gap-1 rounded-lg bg-destructive px-2 py-1 text-destructive-foreground" data-testid="ref-location-cancel-ok"><X className="h-3.5 w-3.5" /> Yes, cancel</button>
+                            <button onClick={() => setLocCancelAsk(null)} className="rounded-lg border border-border px-2 py-1" data-testid="ref-location-cancel-keep">Continue generation</button>
                           </div>
                         </div>
                       )}
                       <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
-                        <input value={locEdit[l.id] ?? ''} onChange={(e) => setLocEdit((t) => ({ ...t, [l.id]: e.target.value }))} placeholder="Изменить локацию по промпту…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-location-input" disabled={busy} />
-                        <button onClick={() => reviseLocation(l.id)} disabled={busy || !(locEdit[l.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-location-submit" title="Изменить по промпту">
+                        <input value={locEdit[l.id] ?? ''} onChange={(e) => setLocEdit((t) => ({ ...t, [l.id]: e.target.value }))} placeholder="Edit location by prompt…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-location-input" disabled={busy} />
+                        <button onClick={() => reviseLocation(l.id)} disabled={busy || !(locEdit[l.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-location-submit" title="Edit by prompt">
                           {locBusy[l.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
                         </button>
                         {l.hasUndo && (
-                          <button onClick={() => undoLocation(l.id)} disabled={busy} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="location-undo" title="Отменить последнее изменение">
+                          <button onClick={() => undoLocation(l.id)} disabled={busy} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="location-undo" title="Undo last change">
                             <Undo2 className="h-3.5 w-3.5" />
                           </button>
                         )}
@@ -1176,52 +1176,52 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                 </div>
               )
             })}
-            {refLocs.length === 0 && <p className="text-sm text-muted-foreground">У эпизода нет привязанных локаций.</p>}
+            {refLocs.length === 0 && <p className="text-sm text-muted-foreground">No locations are linked to this episode.</p>}
           </div>
 
-          {/* Stage 59 navigation — Референсы is step 2: back to script · forward to scenes.
+          {/* Stage 59 navigation — References is step 2: back to script · forward to scenes.
               The forward button is enabled once all references (characters + locations) are ready. */}
           <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
             <button onClick={() => goPhase('script')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="refs-to-script">
-              <ArrowLeft className="h-4 w-4" /> Сценарий
+              <ArrowLeft className="h-4 w-4" /> Script
             </button>
-            <button onClick={() => goPhase('scenes')} disabled={!refsReady} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="refs-to-scenes" title={refsReady ? '' : 'Сначала сгенерируйте все референсы эпизода'}>
-              К сценам <ArrowRight className="h-4 w-4" />
+            <button onClick={() => goPhase('scenes')} disabled={!refsReady} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="refs-to-scenes" title={refsReady ? '' : 'Generate all episode references first'}>
+              To scenes <ArrowRight className="h-4 w-4" />
             </button>
           </div>
         </section>
         )}
 
-        {/* Step 3 — scenes: per-scene generation + «Сгенерировать все сцены» (parallel, Stage 39) + собрать */}
+        {/* Step 3 — scenes: per-scene generation + «Generate all scenes" (parallel, Stage 39) + assemble */}
         {phase === 'scenes' && (
         <>
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
-          {/* Stage 59 navigation — Сцены is step 3: back to references. */}
+          {/* Stage 59 navigation — Scenes is step 3: back to references. */}
           <button onClick={() => goPhase('references')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted" data-testid="back-to-references">
-            <ArrowLeft className="h-4 w-4" /> Референсы
+            <ArrowLeft className="h-4 w-4" /> References
           </button>
-          {/* Stage 39 — «Сгенерировать все сцены»: every pending / failed scene is started at once (parallel). */}
+          {/* Stage 39 — «Generate all scenes": every pending / failed scene is started at once (parallel). */}
           {!allReady && (
-            <button onClick={openGenerateAll} disabled={genAllStarting || genAllAsk !== null || chainRunActive} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all-scenes" title={isChain ? "Запустить генерацию всех ещё не готовых сцен по очереди" : "Запустить генерацию всех ещё не готовых сцен одновременно"}>
-              {genAllStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Сгенерировать все сцены
+            <button onClick={openGenerateAll} disabled={genAllStarting || genAllAsk !== null || chainRunActive} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all-scenes" title={isChain ? "Start generating all unfinished scenes one by one" : "Start generating all unfinished scenes at once"}>
+              {genAllStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Generate all scenes
             </button>
           )}
-          <button onClick={() => setAssembleDialogOpen(true)} disabled={!allReady || stitching} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? 'Склеить готовые сцены в один эпизод' : 'Доступно, когда все сцены готовы'}>
-            {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Собрать
+          <button onClick={() => setAssembleDialogOpen(true)} disabled={!allReady || stitching} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? 'Join completed scenes into one episode' : 'Available when all scenes are ready'}>
+            {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Assemble
           </button>
-          <span className="text-xs text-muted-foreground" data-testid="batch-status">{scenes.filter((s) => validUrl(s.videoUrl)).length} из {scenes.length} сцен готово{generatingCount > 0 ? ` · генерируется: ${generatingCount}` : ''}{isAssembled ? ' · эпизод собран' : ''}</span>
-          {/* Stage 72 — «Порядок генерации» segmented control (persisted via PATCH chain-mode). Locked while a
+          <span className="text-xs text-muted-foreground" data-testid="batch-status">{scenes.filter((s) => validUrl(s.videoUrl)).length} of {scenes.length} scenes ready{generatingCount > 0 ? ` · generating: ${generatingCount}` : ''}{isAssembled ? ' · episode assembled' : ''}</span>
+          {/* Stage 72 — «"Generation order" segmented control (persisted via PATCH chain-mode). Locked while a
               chain run is active or any scene is generating: switching mid-run would change how the NEXT scene starts. */}
           <div className="inline-flex items-center gap-2" data-testid="chain-mode-picker">
-            <span className="text-xs text-muted-foreground">Порядок генерации:</span>
-            <div className="inline-flex overflow-hidden rounded-lg border border-border text-xs" role="group" aria-label="Порядок генерации">
-              {([{ id: 'parallel' as const, label: 'Параллельно' }, { id: 'chain' as const, label: 'По цепочке' }]).map(({ id, label }) => {
+            <span className="text-xs text-muted-foreground">Generation order:</span>
+            <div className="inline-flex overflow-hidden rounded-lg border border-border text-xs" role="group" aria-label="Generation order">
+              {([{ id: 'parallel' as const, label: 'In parallel' }, { id: 'chain' as const, label: 'In sequence' }]).map(({ id, label }) => {
                 const active = chainMode === id
                 return (
                   <button key={id} type="button" onClick={() => setChainMode(id)} disabled={chainModeLocked || chainModeSaving} aria-pressed={active}
                     className={`px-3 py-1.5 font-medium transition disabled:cursor-not-allowed disabled:opacity-60 ${active ? 'bg-primary text-primary-foreground' : 'bg-card hover:bg-muted'}`}
                     data-testid={`chain-mode-${id}`}
-                    title={chainModeLocked ? 'Порядок нельзя менять, пока идёт генерация сцен' : id === 'parallel' ? 'Все сцены стартуют одновременно' : 'Сцены стартуют по очереди, каждая — от последнего кадра предыдущей'}>
+                    title={chainModeLocked ? 'The order can’t be changed while scenes are being generated' : id === 'parallel' ? 'All scenes start simultaneously' : 'Scenes start in sequence, each from the final frame of the previous one'}>
                     {label}
                   </button>
                 )
@@ -1231,12 +1231,12 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           </div>
           {/* Stage 74: scene-video provider only (the image picker lives on the references stage). */}
           <ProviderPicker kind="video" projectId={project.id} value={project?.videoProvider} compact />
-          {chainRunActive && <span className="inline-flex items-center gap-1 text-xs text-primary" data-testid="chain-run-active"><Loader2 className="h-3 w-3 animate-spin" /> Цепочка идёт: сцены генерируются по очереди</span>}
+          {chainRunActive && <span className="inline-flex items-center gap-1 text-xs text-primary" data-testid="chain-run-active"><Loader2 className="h-3 w-3 animate-spin" /> The chain continues: scenes are generated in sequence</span>}
           <p className="w-full text-xs text-muted-foreground" data-testid="scenes-hint">
             {isChain
-              ? <>Сцены генерируются по очереди: последний кадр предыдущей сцены передаётся в следующую, камера меняет положение. <b>Сгенерировать все сцены:</b> запускает все ещё не готовые сцены одна за другой (кредиты списываются за каждую сцену).{' '}</>
-              : <>Все сцены генерируются одновременно по описаниям первого и последнего кадра. <b>Сгенерировать все сцены:</b> запускает все ещё не готовые сцены сразу (кредиты списываются за каждую сцену).{' '}</>}
-            <b>Собрать:</b> склеивает готовые ролики всех сцен в один эпизод без перегенерации — доступно, когда все сцены готовы. Качество серии (480p/720p/1080p, 30/60 кадров/с) и фоновая музыка выбираются при сборке.
+              ? <>Scenes are generated in sequence: the final frame of the previous scene is passed to the next one, and the camera changes position. <b>Generate all scenes:</b> starts all scenes that are not ready yet one by one (credits are charged for each scene).{' '}</>
+              : <>All scenes are generated simultaneously from the descriptions of the first and last frames. <b>Generate all scenes:</b> starts all scenes that are not ready yet at once (credits are charged for each scene).{' '}</>}
+            <b>Assemble:</b> stitches the finished videos from all scenes into one episode without regenerating — available when all scenes are ready. Episode quality (480p/720p/1080p, 30/60 frames/s) and background music are selected during assembly.
           </p>
           {stitching && stitchJob.job && <div className="w-full" data-testid="assemble-progress"><JobProgressBar job={stitchJob.job} expectedTotalSec={180} /></div>}
           {assembleNote && <p className="w-full text-sm text-amber-400" data-testid="assemble-note">{assembleNote}</p>}
@@ -1247,13 +1247,13 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         {/* Assembled episode + go to next */}
         {validUrl(episode.videoUrl) && (
           <div className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="episode-video">
-            <h2 className="mb-2 inline-flex items-center gap-1 font-semibold"><Film className="h-4 w-4" /> Собранный эпизод{episode.assembleQuality ? <span className="ml-1 text-xs font-normal text-muted-foreground" data-testid="assembled-settings">· {episode.assembleQuality}{episode.assembleFps ? ` · ${episode.assembleFps} к/с` : ''}</span> : null}</h2>
+            <h2 className="mb-2 inline-flex items-center gap-1 font-semibold"><Film className="h-4 w-4" /> Assembled episode{episode.assembleQuality ? <span className="ml-1 text-xs font-normal text-muted-foreground" data-testid="assembled-settings">· {episode.assembleQuality}{episode.assembleFps ? ` · ${episode.assembleFps} fps` : ''}</span> : null}</h2>
             <video src={episode.videoUrl} controls playsInline className="mx-auto max-h-[70vh] w-full max-w-sm rounded-lg bg-black" />
             <div className="mt-2 flex flex-wrap items-center gap-4">
-              <a href={episode.videoUrl} download className="inline-flex items-center gap-1 text-sm text-primary"><Download className="h-4 w-4" /> Скачать mp4</a>
+              <a href={episode.videoUrl} download className="inline-flex items-center gap-1 text-sm text-primary"><Download className="h-4 w-4" /> Download mp4</a>
               {nextEpisode && (
                 <Link href={`/project/${project.id}/episode/${nextEpisode.id}`} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" data-testid="go-to-next-episode">
-                  Перейти к эпизоду {nextEpisode.number} <ArrowRight className="h-4 w-4" />
+                  Go to episode {nextEpisode.number} <ArrowRight className="h-4 w-4" />
                 </Link>
               )}
             </div>
@@ -1268,9 +1268,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           const mmss = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
           return (
             <div className="mt-8 flex flex-wrap items-baseline gap-x-4 gap-y-1">
-              <h2 className="font-display text-xl font-bold">Сцены ({scenes.length})</h2>
-              <span className={`text-sm ${over ? 'font-semibold text-destructive' : 'text-muted-foreground'}`} title={over ? 'Эпизод длиннее 2 минут — сократите сцены' : 'Лимит эпизода — 2 минуты'}>
-                Общая длительность: {mmss(total)} / {mmss(EPISODE_MAX_TOTAL_SECONDS)}{over ? ' — длиннее 2 минут, сократите сцены' : ''}
+              <h2 className="font-display text-xl font-bold">Scenes ({scenes.length})</h2>
+              <span className={`text-sm ${over ? 'font-semibold text-destructive' : 'text-muted-foreground'}`} title={over ? 'Episode is longer than 2 minutes — shorten the scenes' : 'Episode limit — 2 minutes'}>
+                Total duration: {mmss(total)} / {mmss(EPISODE_MAX_TOTAL_SECONDS)}{over ? ' — longer than 2 minutes, shorten the scenes' : ''}
               </span>
             </div>
           )
@@ -1286,14 +1286,14 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               <div key={scene.id} className="rounded-xl border border-border bg-card p-4" data-testid="scene-card" data-scene-status={gen ? 'generating' : validUrl(scene.videoUrl) ? 'ready' : 'pending'}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="font-semibold">Сцена {scene.number}
-                      {scene.sceneKind === 'narration' && <span className="ml-2 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary align-middle" data-testid="narration-badge">Закадровый голос</span>}
-                      {scene.sceneKind === 'action' && <span className="ml-2 rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-600 align-middle" data-testid="scene-kind-action">Экшен</span>}
-                      <span className="text-xs font-normal text-muted-foreground"> · ~{scene.durationSec ?? 15}с</span>
+                    <div className="font-semibold">Scene {scene.number}
+                      {scene.sceneKind === 'narration' && <span className="ml-2 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary align-middle" data-testid="narration-badge">Voiceover</span>}
+                      {scene.sceneKind === 'action' && <span className="ml-2 rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-600 align-middle" data-testid="scene-kind-action">Action</span>}
+                      <span className="text-xs font-normal text-muted-foreground"> · ~{scene.durationSec ?? 15}s</span>
                       {(validUrl(scene.videoUrl) || gen) && <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground align-middle" data-testid="scene-provider-badge">{VIDEO_MODEL_LABEL}</span>}
                     </div>
                     {scene.lookStale && validUrl(scene.videoUrl) && (
-                      <div className="mt-1 inline-flex items-center rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-700" data-testid="scene-look-stale">Облик персонажа изменён — перегенерируйте</div>
+                      <div className="mt-1 inline-flex items-center rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-700" data-testid="scene-look-stale">Character appearance changed — regenerate</div>
                     )}
                   </div>
                   <div className="flex -space-x-1">{scene.characters?.map(({ character: c }) => validUrl(c.imageFront) ? <img key={c.id} src={c.imageFront as string} alt={c.name} title={c.name} className="h-6 w-6 rounded-full border border-background object-cover" /> : null)}</div>
@@ -1305,13 +1305,13 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   {gen ? (
                     <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center" data-testid="scene-spinner">
                       <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                      <div className="text-xs text-muted-foreground">{job?.message ?? 'В очереди…'}</div>
+                      <div className="text-xs text-muted-foreground">{job?.message ?? 'In queue…'}</div>
                       {job && <SmoothProgress job={job} expectedTotalSec={VIDEO_EXPECTED_SEC} className="w-full" />}
                     </div>
                   ) : validUrl(scene.videoUrl) ? (
                     <SceneVideoPlayer videoUrl={scene.videoUrl as string} poster={scene.lastFrameUrl} className="h-full w-full object-contain" />
                   ) : (
-                    <div className="flex h-full items-center justify-center text-xs text-muted-foreground">Видео ещё не сгенерировано</div>
+                    <div className="flex h-full items-center justify-center text-xs text-muted-foreground">The video has not been generated yet</div>
                   )}
                 </div>
                 </div>
@@ -1333,19 +1333,19 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
 
                 <div className="mt-3 space-y-2">
                   {/* Stage 35 — one row, two half-width buttons under the preview: the primary action
-                      (generate / regenerate — Stage 39: no sequential gate) and «Смотреть промпт». */}
+                      (generate / regenerate — Stage 39: no sequential gate) and «View prompt. */}
                   <div className="grid grid-cols-2 gap-2">
                     {gen ? (
-                      /* While THIS scene is generating the primary button becomes «Отменить генерацию»
+                      /* While THIS scene is generating the primary button becomes «Cancel generation
                          (confirmed in the box below). */
                       <button
                         onClick={() => setCancelAsk(scene.id)}
                         disabled={cancelAsk === scene.id || !!cancelling[scene.id]}
                         className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-destructive/50 px-3 py-2 text-sm font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50"
                         data-testid="scene-cancel-gen"
-                        title="Остановить генерацию этой сцены"
+                        title="Stop generating this scene"
                       >
-                        {cancelling[scene.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />} {cancelling[scene.id] ? 'Останавливаю...' : 'Отменить генерацию'}
+                        {cancelling[scene.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />} {cancelling[scene.id] ? 'Stopping...' : 'Cancel generation'}
                       </button>
                     ) : !ready ? (
                       <div className="flex w-full flex-col gap-1">
@@ -1353,20 +1353,20 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                           onClick={() => generateScene(scene.id, true)}
                           className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
                           data-testid="scene-generate"
-                          title="Сгенерировать эту сцену"
+                          title="Generate this scene"
                         >
-                          <Wand2 className="h-4 w-4" /> Сгенерировать сцену
+                          <Wand2 className="h-4 w-4" /> Generate scene
                         </button>
                       </div>
                     ) : (
                       <button
                         onClick={() => regenScene(scene.id)}
                         disabled={gen}
-                        title="Перегенерировать ролик сразу, без подтверждения"
+                        title="Regenerate the video immediately, without confirmation"
                         className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
                         data-testid="scene-regenerate"
                       >
-                        <RefreshCw className="h-4 w-4" /> Перегенерировать
+                        <RefreshCw className="h-4 w-4" /> Regenerate
                       </button>
                     )}
                     <button
@@ -1374,30 +1374,30 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       disabled={!scene.videoPrompt}
                       className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
                       data-testid="scene-view-prompt"
-                      title="Посмотреть, скопировать или изменить полный промпт"
+                      title="View, copy, or edit the full prompt"
                     >
                       <FileText className="h-4 w-4 shrink-0" />
-                      Смотреть промпт
-                      {scene.promptOverride ? <span className="ml-1 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary" data-testid="scene-override-badge">изменён</span> : null}
+                      View prompt
+                      {scene.promptOverride ? <span className="ml-1 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary" data-testid="scene-override-badge">modified</span> : null}
                     </button>
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row">
-                    <input value={sceneEdit[scene.id] ?? ''} onChange={(e) => setSceneEdit((t) => ({ ...t, [scene.id]: e.target.value }))} placeholder="Изменить сцену: что поправить…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-sm" data-testid="scene-revise-input" disabled={gen} />
+                    <input value={sceneEdit[scene.id] ?? ''} onChange={(e) => setSceneEdit((t) => ({ ...t, [scene.id]: e.target.value }))} placeholder="Edit scene: what to adjust…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-sm" data-testid="scene-revise-input" disabled={gen} />
                     <button onClick={() => reviseScene(scene)} disabled={gen || !!sceneBusy[scene.id] || !(sceneEdit[scene.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-50" data-testid="scene-revise-submit">
-                      {sceneBusy[scene.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Изменить
+                      {sceneBusy[scene.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Edit
                     </button>
                     {scene.hasUndo && (
-                      <button onClick={() => undoScene(scene)} disabled={gen || !!sceneBusy[scene.id]} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-50" data-testid="scene-undo" title="Отменить последнее изменение">
-                        <Undo2 className="h-4 w-4" /> Отменить
+                      <button onClick={() => undoScene(scene)} disabled={gen || !!sceneBusy[scene.id]} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-50" data-testid="scene-undo" title="Undo last change">
+                        <Undo2 className="h-4 w-4" /> Cancel
                       </button>
                     )}
                   </div>
                   {cancelAsk === scene.id && gen && (
                     <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm" data-testid="cancel-confirm">
-                      Остановить генерацию этой сцены? Списанные кредиты вернутся.
+                      Stop generating this scene? Charged credits will be refunded.
                       <div className="mt-2 flex gap-2">
-                        <button onClick={() => cancelSceneGen(scene.id)} className="inline-flex items-center gap-1 rounded-lg bg-destructive px-3 py-1.5 text-destructive-foreground" data-testid="cancel-ok"><X className="h-4 w-4" /> Да, отменить</button>
-                        <button onClick={() => setCancelAsk(null)} className="rounded-lg border border-border px-3 py-1.5" data-testid="cancel-keep">Продолжить генерацию</button>
+                        <button onClick={() => cancelSceneGen(scene.id)} className="inline-flex items-center gap-1 rounded-lg bg-destructive px-3 py-1.5 text-destructive-foreground" data-testid="cancel-ok"><X className="h-4 w-4" /> Yes, cancel</button>
+                        <button onClick={() => setCancelAsk(null)} className="rounded-lg border border-border px-3 py-1.5" data-testid="cancel-keep">Continue generation</button>
                       </div>
                     </div>
                   )}
@@ -1416,8 +1416,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <div className="w-full max-w-md rounded-xl border border-border bg-background p-5 shadow-lg">
             <p className="text-sm leading-relaxed">{SCENE_RESET_CONFIRM_MESSAGE}</p>
             <div className="mt-4 flex justify-end gap-2">
-              <button onClick={() => setResetAsk(false)} className="rounded-lg border border-border px-4 py-2 text-sm" data-testid="scene-reset-cancel">Отмена</button>
-              <button onClick={confirmReviseReset} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" data-testid="scene-reset-yes">Да</button>
+              <button onClick={() => setResetAsk(false)} className="rounded-lg border border-border px-4 py-2 text-sm" data-testid="scene-reset-cancel">Cancel</button>
+              <button onClick={confirmReviseReset} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" data-testid="scene-reset-yes">Yes</button>
             </div>
           </div>
         </div>
@@ -1430,10 +1430,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           onSubmit={askReviseEpisode}
           busy={revising}
           testId="episode-revise"
-          label="Изменить сценарий эпизода по промпту (весь эпизод или конкретную сцену)"
-          placeholder="Например: убрать сцену на кухне, усилить конфликт в сцене 3…"
-          submitLabel="Переписать"
-          hint="Правки применяются ко всему сценарию и пересобирают сцены заново (текущие сцены и их промпты сбрасываются). Можно указать сцену по номеру. Ctrl/⌘+Enter — отправить."
+          label="Edit the episode script by prompt (the whole episode or a specific scene)"
+          placeholder="For example: remove the kitchen scene, heighten the conflict in scene 3…"
+          submitLabel="Rewrite"
+          hint="Edits apply to the entire script and rebuild the scenes from scratch (current scenes and their prompts are reset). You can specify a scene by number. Ctrl/⌘+Enter — send."
         />
       )}
 
@@ -1472,15 +1472,15 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       {genAllAsk && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" data-testid="generate-all-modal">
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-5">
-            <h3 className="font-display text-lg font-bold">Сгенерировать все сцены</h3>
+            <h3 className="font-display text-lg font-bold">Generate all scenes</h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              {isChain ? <>Будет запущено <b>{genAllAsk.pendingCount}</b> сцен по цепочке — одна за другой, каждая следующая стартует после публикации предыдущей — примерно</> : <>Будет запущено сразу <b>{genAllAsk.pendingCount}</b> сцен параллельно — примерно</>} <b>{genAllAsk.total}</b> кр. ({genAllAsk.costPerScene} кр. за сцену). На балансе: {genAllAsk.credits} кр.
-              {genAllAsk.credits < genAllAsk.total && <span className="mt-1 block text-destructive">Кредитов хватит не на все сцены: запустятся только те, которые можно оплатить, остальные будут отмечены «Недостаточно кредитов».</span>}
+              {isChain ? <>Will be started <b>{genAllAsk.pendingCount}</b> scenes in sequence — one after another, each next one starts after the previous one is published — approximately</> : <>Will start immediately <b>{genAllAsk.pendingCount}</b> scenes in parallel — approximately</>} <b>{genAllAsk.total}</b> cr. ({genAllAsk.costPerScene} cr. per scene). Balance: {genAllAsk.credits} cr.
+              {genAllAsk.credits < genAllAsk.total && <span className="mt-1 block text-destructive">There aren’t enough credits for all scenes: only the ones you can pay for will start, and the rest will be marked “Not enough credits.”</span>}
             </p>
             <div className="mt-4 flex justify-end gap-2">
-              <button onClick={() => setGenAllAsk(null)} className="rounded-lg border border-border px-3 py-1.5 text-sm">Отмена</button>
+              <button onClick={() => setGenAllAsk(null)} className="rounded-lg border border-border px-3 py-1.5 text-sm">Cancel</button>
               <button onClick={generateAllScenes} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="generate-all-ok">
-                <Wand2 className="h-4 w-4" /> Запустить
+                <Wand2 className="h-4 w-4" /> Start
               </button>
             </div>
           </div>
@@ -1491,9 +1491,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       {refModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" data-testid="ref-model-modal">
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-5">
-            <h3 className="font-display text-lg font-bold">Выберите модель ИИ</h3>
-            <p className="mt-1 text-sm text-muted-foreground">Модель, которой будут сгенерированы все референсы персонажей и локаций эпизода.</p>
-            <label className="mt-4 block text-sm font-medium" htmlFor="image-model-select">Модель ИИ (изображения)</label>
+            <h3 className="font-display text-lg font-bold">Select an AI model</h3>
+            <p className="mt-1 text-sm text-muted-foreground">The model that will generate all character and location references for the episode.</p>
+            <label className="mt-4 block text-sm font-medium" htmlFor="image-model-select">AI model (images)</label>
             <select
               id="image-model-select"
               data-testid="image-model-select"
@@ -1504,40 +1504,40 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               {IMAGE_MODELS.map((m) => (<option key={m.id} value={m.id}>{m.label}</option>))}
             </select>
             <div className="mt-4 flex justify-end gap-2">
-              <button onClick={() => setRefModalOpen(false)} className="rounded-lg border border-border px-3 py-1.5 text-sm">Отмена</button>
+              <button onClick={() => setRefModalOpen(false)} className="rounded-lg border border-border px-3 py-1.5 text-sm">Cancel</button>
               <button onClick={generateCharacterRefs} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="ref-model-ok">
-                <Wand2 className="h-4 w-4" /> Сгенерировать
+                <Wand2 className="h-4 w-4" /> Generate
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Stage 46B — «Собрать» dialog: production quality / fps of the final episode file. */}
+      {/* Stage 46B — «"Assemble" dialog: production quality / fps of the final episode file. */}
       {assembleDialogOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" data-testid="assemble-dialog">
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-5">
-            <h3 className="font-display text-lg font-bold">Собрать эпизод</h3>
-            <p className="mt-1 text-sm text-muted-foreground">Сцены отрендерены в 480p. Здесь выбирается качество готовой серии: масштабируется только собранный файл. 480p / 30 — без перекодирования, быстрее всего.</p>
-            <label className="mt-4 block text-sm font-medium" htmlFor="assemble-quality">Качество продакшн-серии</label>
+            <h3 className="font-display text-lg font-bold">Assemble episode</h3>
+            <p className="mt-1 text-sm text-muted-foreground">Scenes are rendered in 480p. Select the finished episode quality here: only the assembled file is upscaled. 480p / 30 — no transcoding, fastest.</p>
+            <label className="mt-4 block text-sm font-medium" htmlFor="assemble-quality">Production episode quality</label>
             <select id="assemble-quality" data-testid="assemble-quality" value={assembleQuality} onChange={(e) => setAssembleQuality(e.target.value as AssembleQuality)} className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
               {ASSEMBLE_QUALITIES.map((q) => (<option key={q} value={q}>{q}</option>))}
             </select>
-            <label className="mt-3 block text-sm font-medium" htmlFor="assemble-fps">Частота кадров</label>
+            <label className="mt-3 block text-sm font-medium" htmlFor="assemble-fps">Frame rate</label>
             <select id="assemble-fps" data-testid="assemble-fps" value={assembleFps} onChange={(e) => setAssembleFps(Number(e.target.value) as AssembleFps)} className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
-              {ASSEMBLE_FPS.map((f) => (<option key={f} value={f}>{f} кадров/с</option>))}
+              {ASSEMBLE_FPS.map((f) => (<option key={f} value={f}>{f} fps</option>))}
             </select>
             <p className="mt-3 text-xs text-muted-foreground" data-testid="assemble-music-status">
               {assembleMusic?.musicError
-                ? `Музыка недоступна: ${assembleMusic.musicError}`
+                ? `Music unavailable: ${assembleMusic.musicError}`
                 : assembleMusic?.musicApplied && assembleMusic.musicSummary
-                  ? `Музыка: ${assembleMusic.musicSummary}`
-                  : 'Музыка подбирается по моментам серии автоматически; если она недоступна, эпизод собирается без неё.'}
+                  ? `Music: ${assembleMusic.musicSummary}`
+                  : 'Music is selected automatically for moments in the episode; if it’s unavailable, the episode is assembled without it.'}
             </p>
             <div className="mt-4 flex justify-end gap-2">
-              <button onClick={() => setAssembleDialogOpen(false)} className="rounded-lg border border-border px-3 py-1.5 text-sm" data-testid="assemble-cancel">Отмена</button>
+              <button onClick={() => setAssembleDialogOpen(false)} className="rounded-lg border border-border px-3 py-1.5 text-sm" data-testid="assemble-cancel">Cancel</button>
               <button onClick={stitch} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground" data-testid="assemble-ok">
-                <Film className="h-4 w-4" /> Собрать
+                <Film className="h-4 w-4" /> Assemble
               </button>
             </div>
           </div>
@@ -1547,7 +1547,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       {/* Stage 46E — character / location prompt modal (shared component). */}
       {promptFor && (
         <PromptModal
-          title={promptFor.kind === 'character' ? `Промпт персонажа · ${promptFor.name}` : `Промпт локации · ${promptFor.name}`}
+          title={promptFor.kind === 'character' ? `Character prompt · ${promptFor.name}` : `Location prompt · ${promptFor.name}`}
           description={promptFor.kind === 'character' ? CHARACTER_PROMPT_DESCRIPTION : LOCATION_PROMPT_DESCRIPTION}
           endpoint={`/api/ai/${promptFor.kind === 'character' ? 'characters' : 'locations'}/${promptFor.id}/prompt`}
           resetBody={promptFor.kind === 'character' ? { prompt: '' } : { reset: true }}
@@ -1561,26 +1561,26 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         />
       )}
 
-      {/* Stage 31 — "Смотреть промпт" modal: view / copy / manually override the scene's final prompt. */}
+      {/* Stage 31 — "View prompt" modal: view / copy / manually override the scene's final prompt. */}
       {promptModal && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" data-testid="scene-prompt-modal">
           <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-xl border border-border bg-card shadow-xl">
             <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
               <div>
-                <h3 className="flex items-center gap-2 font-display text-lg font-bold"><FileText className="h-5 w-5" /> Полный промпт · Сцена {promptModal.number}</h3>
+                <h3 className="flex items-center gap-2 font-display text-lg font-bold"><FileText className="h-5 w-5" /> Full prompt · Scene {promptModal.number}</h3>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Это точный текст, который отправляется модели. Референсы показаны как <code className="rounded bg-muted px-1">[Image1]…[ImageN]</code>. Можно скопировать, изменить своим ИИ и сохранить — сохранённый текст будет использоваться при следующей генерации сцены (кадровая склейка сохраняется).
+                  This is the exact text sent to the model. References are shown as <code className="rounded bg-muted px-1">[Image1]…[ImageN]</code>. You can copy it, edit it with your AI, and save it — the saved text will be used the next time the scene is generated (frame stitching is preserved).
                 </p>
                 {promptHasOverride && (
-                  <p className="mt-2 inline-flex items-center gap-1 rounded bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary" data-testid="scene-prompt-override-indicator">Промпт изменён вручную</p>
+                  <p className="mt-2 inline-flex items-center gap-1 rounded bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary" data-testid="scene-prompt-override-indicator">Prompt changed manually</p>
                 )}
               </div>
-              <button onClick={() => setPromptModal(null)} className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Закрыть" data-testid="scene-prompt-close"><X className="h-5 w-5" /></button>
+              <button onClick={() => setPromptModal(null)} className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Close" data-testid="scene-prompt-close"><X className="h-5 w-5" /></button>
             </div>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
               {promptLoading ? (
-                <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /> Загрузка промпта…</div>
+                <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /> Loading prompt…</div>
               ) : (
                 <>
                   {promptErr && <p className="mb-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive" data-testid="scene-prompt-error">{promptErr}</p>}
@@ -1590,7 +1590,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                     spellCheck={false}
                     className="h-[45vh] w-full resize-none whitespace-pre-wrap rounded-lg border border-border bg-background px-3 py-2 font-mono text-xs leading-relaxed"
                     data-testid="scene-prompt-text"
-                    placeholder="Промпт сцены…"
+                    placeholder="Scene prompt…"
                   />
                 </>
               )}
@@ -1602,9 +1602,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                 disabled={promptSaving || promptLoading}
                 className="mr-auto inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
                 data-testid="scene-reset-prompt"
-                title="Переписать промпт с нуля по текущим правилам и сценарию"
+                title="Rewrite the prompt from scratch based on the current rules and script"
               >
-                {promptSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />} Сбросить к авто
+                {promptSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />} Reset to auto
               </button>
               <button
                 onClick={copyPromptModal}
@@ -1612,7 +1612,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                 className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
                 data-testid="scene-copy-prompt"
               >
-                {promptCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />} {promptCopied ? 'Скопировано' : 'Копировать'}
+                {promptCopied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />} {promptCopied ? 'Copied' : 'Copy'}
               </button>
               <button
                 onClick={() => savePromptOverride(false)}
@@ -1620,9 +1620,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                 className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50"
                 data-testid="scene-save-prompt"
               >
-                {promptSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : promptSaved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />} {promptSaved ? 'Сохранено' : 'Сохранить'}
+                {promptSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : promptSaved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />} {promptSaved ? 'Saved' : 'Save'}
               </button>
-              <button onClick={() => setPromptModal(null)} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted">Закрыть</button>
+              <button onClick={() => setPromptModal(null)} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted">Close</button>
             </div>
           </div>
         </div>

@@ -23,7 +23,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   const { id } = await ctx.params;
   const body = await request.json().catch(() => ({}));
   const instruction = String(body?.instruction ?? "").trim();
-  if (instruction.length < 3) return NextResponse.json({ error: "Опишите, что изменить в локации" }, { status: 400 });
+  if (instruction.length < 3) return NextResponse.json({ error: "Describe what to change in the location" }, { status: 400 });
 
   const episode = await prisma.episode.findFirst({
     where: { id, season: { project: { userId: session.user.id } } },

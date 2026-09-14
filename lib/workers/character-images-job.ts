@@ -110,7 +110,7 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
 
     const pct = () => 5 + Math.round((done / Math.max(total, 1)) * 95);
     const bump = async (label: string) => { await updateJob(jobId, { progress: pct(), message: `${label} (${done}/${total})` }); };
-    await updateJob(jobId, { status: "processing", progress: pct(), message: `Генерирую фото персонажей (${done}/${total})…` });
+    await updateJob(jobId, { status: "processing", progress: pct(), message: `Generating character photos (${done}/${total})…` });
 
     const canceled = () => isCancelRequested(jobId);
 
@@ -159,7 +159,7 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
         console.error(`[images-job] ${shot} failed for ${char.name}:`, e?.message ?? e);
       } finally {
         done += 1;
-        await bump("Базовые ракурсы");
+        await bump("Basic angles");
       }
     };
 
@@ -173,12 +173,12 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
       genBaseShot(char, "full", null, "face")
     );
 
-    if (await canceled()) { await markCanceled(jobId, `Отменено — готово ${done} из ${total} фото`); return; }
+    if (await canceled()) { await markCanceled(jobId, `Canceled — done ${done} of ${total} photos`); return; }
 
     await completeJob(
       jobId,
       { total, failed, c2paOk: c2paMissing === 0, c2paMissing, c2paChecks, ...(proportionsWarnings.length ? { proportionsWarnings } : {}), ...(userRefUse.length ? { userRefUse } : {}) },
-      failed > 0 ? `Готово — не удалось ${failed} из ${total} фото` : "Все фото персонажей готовы"
+      failed > 0 ? `Done — failed ${failed} of ${total} photos` : "All character photos are ready"
     );
   } catch (err: any) {
     console.error("[images-job] failed:", err);

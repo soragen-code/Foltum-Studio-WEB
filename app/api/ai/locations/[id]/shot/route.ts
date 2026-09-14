@@ -27,7 +27,7 @@ const FIELD: Record<"master" | "reverse" | "detail", "imageUrl" | "imageReverse"
 /**
  * POST /api/ai/locations/[id]/shot  { slot: "master"|"reverse"|"detail"|"extra", index?, imageModel? }
  *
- * Stage 46B-2: «Перегенерировать» on ONE location frame. Charges one frame (CHARACTER_REFERENCE_COST),
+ * Stage 46B-2: "Regenerate" on ONE location frame. Charges one frame (CHARACTER_REFERENCE_COST),
  * regenerates only that slot (master = text-to-image wide plate; reverse/detail chained on the master;
  * extra chained on the existing set) and writes ONLY that column — the other angles are kept.
  * Returns { jobId } — the UI polls /api/jobs/[id] and refreshes the references when done.
@@ -69,7 +69,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }
 
     if ((user.credits ?? 0) < CHARACTER_REFERENCE_COST)
-      return NextResponse.json({ error: `Недостаточно кредитов: нужно ${CHARACTER_REFERENCE_COST}, на балансе ${user.credits ?? 0}` }, { status: 402 });
+      return NextResponse.json({ error: `Insufficient credits: need ${CHARACTER_REFERENCE_COST}, balance ${user.credits ?? 0}` }, { status: 402 });
 
     await prisma.user.update({ where: { id: user.id }, data: { credits: { decrement: CHARACTER_REFERENCE_COST } } });
     await prisma.creditTransaction.create({
@@ -81,7 +81,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         type: LOCATION_SHOT_JOB_TYPE,
         status: "processing",
         progress: 10,
-        message: `Перегенерация кадра «${loc.name}» (${slotKey})...`,
+        message: `Regenerating frame "${loc.name}» (${slotKey})...`,
         projectId,
         resultData: JSON.stringify({ locationId, slot: slotKey }),
       },
@@ -113,7 +113,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         } else {
           await prisma.location.update({ where: { id: locationId }, data: { [FIELD[slot]]: url } });
         }
-        await completeJob(job.id, { locationId, slot: slotKey, url }, "Кадр готов");
+        await completeJob(job.id, { locationId, slot: slotKey, url }, "Frame is ready");
       } catch (e: any) {
         console.error(`[locations/shot] ${slotKey} failed for ${loc.name}:`, e?.message ?? e);
         await failJob(job.id, e?.message ?? "Shot regeneration failed");

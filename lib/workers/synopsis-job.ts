@@ -1,5 +1,5 @@
 /**
- * Background worker for Stage 1 «Идея» → synopsis generation.
+ * Background worker for Stage 1 "Idea" → synopsis generation.
  *
  * Mirrors the season-script job pattern (lib/workers/season-script-job.ts): the
  * user-facing route (app/api/ai/idea/route.ts) creates a GenerationJob, fires this
@@ -61,13 +61,13 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
     const storyLanguage: IdeaLanguage = storyText ? detectLanguage(storyText) : "ru";
     const autoLanguage: IdeaLanguage = extras && extras.trim() ? detectLanguage(extras) : "ru";
     const ideaForStore = fromStory
-      ? `[Файл-сюжет] ${storyText.slice(0, 280)}${storyText.length > 280 ? "…" : ""}`
+      ? `[Plot file] ${storyText.slice(0, 280)}${storyText.length > 280 ? "…" : ""}`
       : auto
-      ? `[Авто] Жанр: ${genresToEnglish(genres).join(", ") || "—"}${extras && extras.trim() ? `\nПожелания: ${extras.trim()}` : ""}`
+      ? `[Auto] Genre: ${genresToEnglish(genres).join(", ") || "—"}${extras && extras.trim() ? `\nRequests: ${extras.trim()}` : ""}`
       : idea ?? "";
 
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
-    await updateJob(jobId, { status: "processing", progress: 15, message: "Составляю синопсис сезона…" });
+    await updateJob(jobId, { status: "processing", progress: 15, message: "Drafting season synopsis…" });
 
     // One retry if the model returns malformed JSON / schema violations (same as the old sync route).
     let result: ReturnType<typeof normalizeIdeaResult> | null = null;
@@ -83,7 +83,7 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
           : await chatJSON(ideaSystemPrompt(), ideaUserPrompt(idea ?? ""), { temperature: 0.8, maxTokens: 3500 });
         result = normalizeIdeaResult(
           raw,
-          fromStory ? storyText : auto ? (extras && extras.trim() ? extras : autoLanguage === "ru" ? "русская история" : "story") : idea ?? ""
+          fromStory ? storyText : auto ? (extras && extras.trim() ? extras : autoLanguage === "ru" ? "Russian history" : "story") : idea ?? ""
         );
       } catch (e: any) {
         lastError = e?.message ?? String(e);
@@ -93,7 +93,7 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
     if (!result) { await failJob(jobId, "AI returned an invalid result: " + lastError); return; }
 
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
-    await updateJob(jobId, { progress: 80, message: "Сохраняю синопсис…" });
+    await updateJob(jobId, { progress: 80, message: "Saving synopsis…" });
 
     // Stage 59: this step ONLY produces the synopsis — no character/location rows here. Advancing the
     // project to stage="synopsis" makes the wizard auto-render the synopsis screen (step 2) on refresh.
@@ -117,7 +117,7 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
     await completeJob(
       jobId,
       { synopsis: result.synopsis, language: result.language, projectName: renamed?.name ?? null },
-      "Синопсис готов"
+      "Synopsis ready"
     );
   } catch (err: any) {
     console.error("[synopsis] job error:", err);
@@ -126,7 +126,7 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
 }
 
 // ---------------------------------------------------------------------------
-// Stage 69 — synopsis REWRITE («Переписать синопсис» on step 2 «Синопсис»)
+// Stage 69 — synopsis REWRITE ("Rewrite synopsis" on step 2 "Synopsis")
 // ---------------------------------------------------------------------------
 
 /** GenerationJob.type value for the step-2 synopsis rewrite (separate from the idea→synopsis job). */
@@ -168,7 +168,7 @@ export async function runSynopsisCorrectionJob(jobId: string, projectId: string,
     const currentSynopsis = (params.currentSynopsis ?? "").trim();
 
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
-    await updateJob(jobId, { status: "processing", progress: 15, message: "Переписываю синопсис…" });
+    await updateJob(jobId, { status: "processing", progress: 15, message: "Rewriting synopsis…" });
 
     const userMessage = correction && currentSynopsis
       ? `Here is the current synopsis:\n\n${currentSynopsis}\n\nPlease revise it based on this feedback: ${correction}`
@@ -179,10 +179,10 @@ export async function runSynopsisCorrectionJob(jobId: string, projectId: string,
     if (!synopsis || !synopsis.trim()) { await failJob(jobId, "AI returned an empty synopsis"); return; }
 
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
-    await updateJob(jobId, { progress: 80, message: "Сохраняю синопсис…" });
+    await updateJob(jobId, { progress: 80, message: "Saving synopsis…" });
 
     await prisma.project.update({ where: { id: projectId }, data: { synopsis } });
-    await completeJob(jobId, { synopsis }, "Синопсис обновлён");
+    await completeJob(jobId, { synopsis }, "Synopsis updated");
   } catch (err: any) {
     console.error("[synopsis-correction] job error:", err);
     await failJob(jobId, "Generation failed: " + (err?.message ?? "Unknown error"));

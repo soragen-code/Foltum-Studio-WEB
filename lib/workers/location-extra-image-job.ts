@@ -41,12 +41,12 @@ export async function runLocationExtraImagesJob({ jobId, projectId, locationId, 
   // and before a finished plate is written. Existing imageExtra stays as is; the caller's refund pass
   // returns the credits for every plate that was not added.
   const canceled = () => isCancelRequested(jobId);
-  const CANCEL_MSG = "Генерация отменена пользователем";
+  const CANCEL_MSG = "Generation canceled by the user";
   try {
     if (await canceled()) { await markCanceled(jobId, CANCEL_MSG); return; }
     const loc = await prisma.location.findFirst({ where: { id: locationId, projectId } });
-    if (!loc) { await failJob(jobId, "Локация не найдена"); return; }
-    if (!loc.imageUrl) { await failJob(jobId, "Сначала сгенерируйте базовые референсы локации"); return; }
+    if (!loc) { await failJob(jobId, "Location not found"); return; }
+    if (!loc.imageUrl) { await failJob(jobId, "First generate the base location references"); return; }
     const imageProvider = await loadProjectImageProvider(projectId); // Stage 73: transport provider only
 
     const visual = loc.visualPrompt ?? loc.description ?? loc.name;
@@ -57,14 +57,14 @@ export async function runLocationExtraImagesJob({ jobId, projectId, locationId, 
     let c2paMissing = 0;
     const c2paChecks: { angle: string; ok: boolean; signatures: string[]; bytes: number }[] = [];
 
-    await updateJob(jobId, { status: "processing", progress: 8, message: `Дополнительные ракурсы локации «${loc.name}» (0/${count})…` });
+    await updateJob(jobId, { status: "processing", progress: 8, message: `Additional location angles "${loc.name}» (0/${count})…` });
     for (let i = 0; i < count; i++) {
       // Stage 11: stop before the next extra angle. Already-added angles stay saved (persisted incrementally).
       if (await canceled()) {
-        await markCanceled(jobId, added.length ? `${CANCEL_MSG} — добавлено ${added.length} ракурсов` : CANCEL_MSG);
+        await markCanceled(jobId, added.length ? `${CANCEL_MSG} — added ${added.length} angles` : CANCEL_MSG);
         return;
       }
-      await updateJob(jobId, { progress: 8 + Math.round((i / Math.max(count, 1)) * 90), message: `Дополнительные ракурсы локации «${loc.name}» (${i + 1}/${count})…` });
+      await updateJob(jobId, { progress: 8 + Math.round((i / Math.max(count, 1)) * 90), message: `Additional location angles "${loc.name}» (${i + 1}/${count})…` });
       // Stage 44: EVERY extra plate is generated from the photographs of the place that already exist —
       // master wide shot first, then the other base angles, then the extras made so far — so the model
       // re-photographs the SAME place from the planned new position instead of inventing a new one.
@@ -86,7 +86,7 @@ export async function runLocationExtraImagesJob({ jobId, projectId, locationId, 
         if (!r.ok) { c2paMissing += 1; console.warn(`[location-extra-images] C2PA metadata MISSING on ${url}`); }
       } catch (e: any) {
         if (e instanceof GenerationCanceledError) {
-          await markCanceled(jobId, added.length ? `${CANCEL_MSG} — добавлено ${added.length} ракурсов` : CANCEL_MSG);
+          await markCanceled(jobId, added.length ? `${CANCEL_MSG} — added ${added.length} angles` : CANCEL_MSG);
           return;
         }
         console.error(`[location-extra-images] extra shot ${startIndex + i} failed for ${loc.name}:`, e?.message ?? e);
@@ -96,7 +96,7 @@ export async function runLocationExtraImagesJob({ jobId, projectId, locationId, 
     await completeJob(
       jobId,
       { locationId, requested: count, added: added.length, c2paOk: c2paMissing === 0, c2paMissing, c2paChecks },
-      added.length ? `Готово — ${added.length} доп. ракурсов` : "Не удалось сгенерировать доп. ракурсы"
+      added.length ? `Done — ${added.length} extra angles` : "Failed to generate additional angles"
     );
   } catch (err: any) {
     console.error("[location-extra-images] failed:", err);

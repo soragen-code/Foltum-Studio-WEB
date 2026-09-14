@@ -7,10 +7,10 @@ import { Loader2, Wand2, Pencil, X, MapPin, Users, FileText, RotateCcw, Undo2 } 
 export const TIERS = ['MAIN', 'SUPPORTING', 'MINOR', 'CROWD'] as const
 export type Tier = (typeof TIERS)[number]
 export const TIER_LABELS: Record<Tier, string> = {
-  MAIN: 'Главные',
-  SUPPORTING: 'Второстепенные (семья, окружение)',
-  MINOR: 'Эпизодические',
-  CROWD: 'Массовка и группы',
+  MAIN: 'Main',
+  SUPPORTING: 'Supporting (family, circle)',
+  MINOR: 'Episodic',
+  CROWD: 'Extras and groups',
 }
 export function tierOf(c: { tier?: string | null }): Tier {
   const t = (c.tier ?? 'MAIN').toUpperCase()
@@ -40,11 +40,11 @@ export interface LocationCardData {
 /** Tier badge (and group size for crowds) shown on character cards. */
 export function TierBadge({ char }: { char: { tier?: string | null; groupSize?: number | null } }) {
   const tier = tierOf(char)
-  const short: Record<Tier, string> = { MAIN: 'главный', SUPPORTING: 'второстепенный', MINOR: 'эпизодический', CROWD: 'группа' }
+  const short: Record<Tier, string> = { MAIN: 'main', SUPPORTING: 'supporting', MINOR: 'episodic', CROWD: 'group' }
   return (
     <span className="mb-2 inline-flex items-center gap-1 rounded bg-muted px-2 py-0.5 text-[11px] text-muted-foreground" data-testid="character-tier">
       {tier === 'CROWD' && <Users className="h-3 w-3" />}
-      {short[tier]}{tier === 'CROWD' && char.groupSize ? ` · ${char.groupSize} чел.` : ''}
+      {short[tier]}{tier === 'CROWD' && char.groupSize ? ` · ${char.groupSize} people` : ''}
     </span>
   )
 }
@@ -67,7 +67,7 @@ export function LocationCard({
   onUndo?: (locationId: string) => Promise<void>
   media?: React.ReactNode
   footer?: React.ReactNode
-  /** Stage 46E: prompt tools — «Промпт» (view / edit) and «Сбросить промпт на авто»; badge when the live prompt differs from auto. */
+  /** Stage 46E: prompt tools — «"Prompt" (view / edit) and "Reset prompt to auto"; badge when the live prompt differs from auto. */
   hasPromptOverride?: boolean
   onOpenPrompt?: () => void
   onResetPrompt?: () => Promise<void>
@@ -110,8 +110,8 @@ export function LocationCard({
               type="button"
               onClick={undo}
               disabled={busy || saving || undoing}
-              aria-label="Отменить последнее изменение"
-              title="Отменить последнее изменение"
+              aria-label="Undo last change"
+              title="Undo last change"
               data-testid="location-undo"
               className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition hover:text-foreground disabled:opacity-50"
             >
@@ -123,8 +123,8 @@ export function LocationCard({
               type="button"
               onClick={() => setEditing((v) => !v)}
               disabled={busy || saving}
-              aria-label="Изменить локацию по подсказке"
-              title="Изменить локацию по подсказке"
+              aria-label="Edit location using a hint"
+              title="Edit location using a hint"
               data-testid="location-edit"
               className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition hover:text-foreground disabled:opacity-50"
             >
@@ -135,14 +135,14 @@ export function LocationCard({
       </div>
       {media}
       <dl className="space-y-1.5 text-xs text-muted-foreground [overflow-wrap:anywhere]">
-        <div><dt className="inline font-medium text-foreground">Описание: </dt><dd className="inline">{loc.description || '—'}</dd></div>
-        <div><dt className="inline font-medium text-foreground">Визуал (EN): </dt><dd className="inline">{loc.visualPrompt || '—'}</dd></div>
+        <div><dt className="inline font-medium text-foreground">Description: </dt><dd className="inline">{loc.description || '—'}</dd></div>
+        <div><dt className="inline font-medium text-foreground">Visual (EN): </dt><dd className="inline">{loc.visualPrompt || '—'}</dd></div>
       </dl>
       {(onOpenPrompt || onResetPrompt) && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5" data-testid="location-prompt-tools">
           {onOpenPrompt && (
-            <button type="button" onClick={onOpenPrompt} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs" data-testid="location-prompt" title="Посмотреть, скопировать или изменить визуальный промпт локации">
-              <FileText className="h-3.5 w-3.5" /> Промпт
+            <button type="button" onClick={onOpenPrompt} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs" data-testid="location-prompt" title="View, copy, or edit the location visual prompt">
+              <FileText className="h-3.5 w-3.5" /> Prompt
             </button>
           )}
           {onResetPrompt && (
@@ -152,12 +152,12 @@ export function LocationCard({
               onClick={async () => { setResetting(true); try { await onResetPrompt() } finally { setResetting(false) } }}
               className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50"
               data-testid="location-prompt-reset"
-              title="Вернуть первоначальный промпт локации, написанный ИИ"
+              title="Restore the original AI-written location prompt"
             >
-              {resetting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Сбросить промпт на авто
+              {resetting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Reset prompt to auto
             </button>
           )}
-          {hasPromptOverride && <span className="rounded bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="location-prompt-override">Промпт изменён вручную</span>}
+          {hasPromptOverride && <span className="rounded bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="location-prompt-override">Prompt changed manually</span>}
         </div>
       )}
       {editing && onRevise && (
@@ -165,7 +165,7 @@ export function LocationCard({
           <textarea
             value={instruction}
             onChange={(e) => setInstruction(e.target.value)}
-            placeholder="Что изменить в локации? Например: сделать зиму и ночь, добавить старый причал"
+            placeholder="What to change in the location? For example: make it winter and night, add an old pier"
             rows={2}
             className="w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
             data-testid="location-edit-input"
@@ -178,7 +178,7 @@ export function LocationCard({
             data-testid="location-edit-submit"
           >
             {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />}
-            Переписать локацию
+            Rewrite location
           </button>
         </div>
       )}
@@ -197,24 +197,24 @@ export function AddLocationForm({ projectId, busy, onAdded, onError }: { project
     try {
       const res = await fetch('/api/ai/locations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId, name: name.trim() }) })
       const data = await res.json()
-      if (!res.ok) { onError(data?.error ?? 'Не удалось добавить локацию'); return }
+      if (!res.ok) { onError(data?.error ?? 'Failed to add location'); return }
       onAdded(data.location)
       setName('')
-    } catch { onError('Ошибка сети') } finally { setSaving(false) }
+    } catch { onError('Network error') } finally { setSaving(false) }
   }
   return (
     <div className="flex flex-col gap-2 sm:flex-row">
       <input
         value={name}
         onChange={(e) => setName(e.target.value)}
-        placeholder="Добавить локацию: например, «Кухня в квартире Анны»"
+        placeholder={`Add a location: for example, "Kitchen in Anna’s apartment"`}
         disabled={busy || saving}
         className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
         data-testid="location-add-input"
       />
       <button type="button" onClick={submit} disabled={busy || saving || name.trim().length < 2}
         className="flex items-center justify-center gap-2 rounded-lg bg-muted px-4 py-2 text-xs font-semibold transition hover:bg-muted/80 disabled:opacity-50" data-testid="location-add-submit">
-        {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <MapPin className="h-3 w-3" />} Добавить локацию
+        {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <MapPin className="h-3 w-3" />} Add location
       </button>
     </div>
   )

@@ -12,15 +12,15 @@ function validUrl(u?: string | null) {
 
 /** Short status label + colour for an episode cell. */
 function statusOf(s: NavEpisode): { label: string; done: boolean } {
-  if (s.status === 'assembled' || validUrl(s.videoUrl)) return { label: 'собран', done: true }
-  if (s.status === 'scenes_ready') return { label: 'сцены', done: false }
-  if (s.status === 'approved') return { label: 'рефы', done: false }
-  if (s.status === 'script_ready') return { label: 'сюжет', done: false }
+  if (s.status === 'assembled' || validUrl(s.videoUrl)) return { label: 'assembled', done: true }
+  if (s.status === 'scenes_ready') return { label: 'scenes', done: false }
+  if (s.status === 'approved') return { label: 'refs', done: false }
+  if (s.status === 'script_ready') return { label: 'plot', done: false }
   return { label: '—', done: false }
 }
 
 /**
- * Stage 14 (C) — episode navigation as a right-aligned «Эпизоды» dropdown that opens a GRID
+ * Stage 14 (C) — episode navigation as a right-aligned «Episodes" dropdown that opens a GRID
  * (up to 10 cells per row on desktop; fewer per row on smaller screens — never a horizontal
  * scroll). Each cell shows the episode number + its status and links to that episode; episodes
  * can be opened in any order. Replaces the old flat tab row.
@@ -53,7 +53,7 @@ export function EpisodeNavGrid({ projectId, episodes, currentId }: { projectId: 
         aria-expanded={open}
         aria-haspopup="true"
       >
-        Эпизоды
+        Episodes
         <span className="rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">{current ? current.number : '—'}/{sorted.length}</span>
         <ChevronDown className={`h-4 w-4 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -63,7 +63,7 @@ export function EpisodeNavGrid({ projectId, episodes, currentId }: { projectId: 
           data-testid="episode-nav-panel"
           role="menu"
         >
-          <p className="mb-2 px-0.5 text-xs text-muted-foreground">Откройте любой эпизод — в любом порядке.</p>
+          <p className="mb-2 px-0.5 text-xs text-muted-foreground">Open any episode — in any order.</p>
           <div className="grid grid-cols-5 gap-2 sm:grid-cols-8 md:grid-cols-10" data-testid="episode-nav-grid">
             {sorted.map((s) => {
               const active = s.id === currentId
@@ -76,7 +76,7 @@ export function EpisodeNavGrid({ projectId, episodes, currentId }: { projectId: 
                   aria-disabled={openingId === s.id}
                   data-testid="episode-nav-item"
                   data-active={active}
-                  title={`Эпизод ${s.number}: ${s.title} — ${st.label}`}
+                  title={`Episode ${s.number}: ${s.title} — ${st.label}`}
                   className={`flex aspect-square flex-col items-center justify-center gap-0.5 rounded-lg border p-1 text-center transition ${active ? 'border-primary bg-primary/10 font-semibold text-foreground' : 'border-border text-muted-foreground hover:border-primary/60 hover:text-foreground'} ${openingId === s.id ? 'pointer-events-none opacity-70' : ''}`}
                 >
                   {openingId === s.id ? (

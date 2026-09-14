@@ -20,7 +20,7 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
   const canceled = () => isCancelRequested(jobId);
   const imageProvider = await loadProjectImageProvider(projectId); // Stage 73: transport provider only
   const gen = (input: Parameters<typeof generateImage>[0]) => generateImage(input, { jobId, imageModel, shouldCancel: canceled, provider: imageProvider });
-  const CANCEL_MSG = "Генерация отменена пользователем";
+  const CANCEL_MSG = "Generation canceled by the user";
   try {
     if (await canceled()) { await markCanceled(jobId, CANCEL_MSG); return; }
     const locations = await prisma.location.findMany({ where: { id: { in: locationIds }, projectId }, orderBy: { createdAt: "asc" } });
@@ -39,14 +39,14 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
       }
     };
     const pct = () => 5 + Math.round((done / Math.max(total, 1)) * 95);
-    await updateJob(jobId, { status: "processing", progress: pct(), message: `Генерация ${total} референсов локаций…` });
+    await updateJob(jobId, { status: "processing", progress: pct(), message: `Generating ${total} location references…` });
     for (const loc of locations) {
       // Stage 11: stop before starting the next location. Finished references stay saved.
       if (await isCancelRequested(jobId)) {
-        await markCanceled(jobId, `Отменено — готово ${done} из ${total} локаций`);
+        await markCanceled(jobId, `Canceled — done ${done} of ${total} locations`);
         return;
       }
-      await updateJob(jobId, { progress: pct(), message: `Референс локации «${loc.name}» (${done + 1}/${total})…` });
+      await updateJob(jobId, { progress: pct(), message: `Location reference "${loc.name}» (${done + 1}/${total})…` });
       try {
         const visual = loc.visualPrompt ?? loc.description ?? loc.name;
         // 1) wide establishing angle — the anchor for the light and the place
@@ -57,7 +57,7 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
         await prisma.location.update({ where: { id: loc.id }, data: { imageUrl: wideUrl, imageReverse: null, imageDetail: null, imageExtra: null } }); // new master → the old angles no longer match; re-shot from this frame
         await checkC2pa(loc.id, "wide", wideUrl);
         // Stage 46A: ONLY the master frame is generated here. Additional angles are requested one at a time
-        // by the author («+ Ракурс» → location_extra_image job), never automatically.
+        // by the author ("+ Angle" → location_extra_image job), never automatically.
       } catch (e: any) {
         if (e instanceof GenerationCanceledError) { await markCanceled(jobId, CANCEL_MSG); return; }
         failed += 1;
@@ -66,7 +66,7 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
       done += 1;
       await sleep(1500);
     }
-    await completeJob(jobId, { total, failed, locationIds, c2paOk: c2paMissing === 0, c2paMissing, c2paChecks }, failed > 0 ? `Готово — ${failed} из ${total} не удалось` : "Референсы локаций готовы");
+    await completeJob(jobId, { total, failed, locationIds, c2paOk: c2paMissing === 0, c2paMissing, c2paChecks }, failed > 0 ? `Done — ${failed} of ${total} failed` : "Location references are ready");
   } catch (err: any) {
     console.error("[location-images] failed:", err);
     await failJob(jobId, err?.message ?? "Location image generation failed");

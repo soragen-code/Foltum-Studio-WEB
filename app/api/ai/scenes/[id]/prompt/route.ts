@@ -5,7 +5,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { buildScenePrompt } from "@/lib/scene-prompt";
-import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, sceneHasLocationRef, resolveContinuity } from "@/lib/prompt-seam";
+import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, applySeriesIntro, sceneHasLocationRef, resolveContinuity } from "@/lib/prompt-seam";
 import { normalizePromptOverride } from "@/lib/prompt-override";
 
 /**
@@ -24,7 +24,7 @@ import { normalizePromptOverride } from "@/lib/prompt-override";
  */
 export async function GET(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
-  if (!session?.user?.id) return NextResponse.json({ error: "Требуется вход" }, { status: 401 });
+  if (!session?.user?.id) return NextResponse.json({ error: "Login required" }, { status: 401 });
 
   const limited = rateLimitByUser(request, "ai:scene-prompt", session.user.email ?? session.user.id, RATE_LIMITS.ai);
   if (limited) return limited;
@@ -39,11 +39,11 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
       episode: { select: { id: true, chainMode: true, location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true } }, season: { select: { project: { select: { isTest: true } } } } } },
     },
   });
-  if (!scene) return NextResponse.json({ error: "Сцена не найдена" }, { status: 404 });
-  if (!scene.videoPrompt) return NextResponse.json({ error: "У сцены ещё нет видео-промпта" }, { status: 400 });
+  if (!scene) return NextResponse.json({ error: "Scene not found" }, { status: 404 });
+  if (!scene.videoPrompt) return NextResponse.json({ error: "The scene doesn't have a video prompt yet" }, { status: 400 });
 
   // Stage 38: the previous scene's frame is never sent as a reference. Stage 40: its END STATE
-  // (actual last-frame description in chain mode, otherwise the scripted «Финал кадра») opens the prompt.
+  // (actual last-frame description in chain mode, otherwise the scripted "Final frame") opens the prompt.
   const previous = scene.number > 1 ? await prisma.scene.findFirst({
     where: { episodeId: scene.episode.id, number: scene.number - 1 },
     select: { id: true, number: true, locationDesc: true, lastFrameUrl: true, endState: true, endStateActual: true },
@@ -75,16 +75,22 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     reference: built.reference as { locationId?: string | null } | null,
     location: scene.episode.location ?? null,
   });
-  const prompt = applyLocationBaseLayer(
-    applyContinuousAction(
-      applyNewShotCameraMove(
-        applyReframeDirective(applySeamDirectives(built.prompt, { hasOverride: built.hasOverride }), built.retryRefs, { hasOverride: built.hasOverride }),
-        scene.number,
+  // Stage 87: the FIRST scene of the episode is the series intro (wide/establishing shots + off-screen
+  // voiceover backstory, no dialogue close-ups). Applied as the OUTERMOST wrapper, exactly like the worker.
+  const prompt = applySeriesIntro(
+    applyLocationBaseLayer(
+      applyContinuousAction(
+        applyNewShotCameraMove(
+          applyReframeDirective(applySeamDirectives(built.prompt, { hasOverride: built.hasOverride }), built.retryRefs, { hasOverride: built.hasOverride }),
+          scene.number,
+          { hasOverride: built.hasOverride, continuity },
+        ),
         { hasOverride: built.hasOverride, continuity },
       ),
-      { hasOverride: built.hasOverride, continuity },
+      { hasOverride: built.hasOverride, hasLocationRef },
     ),
-    { hasOverride: built.hasOverride, hasLocationRef },
+    scene.number,
+    { hasOverride: built.hasOverride },
   );
 
   return NextResponse.json({
@@ -121,7 +127,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
  */
 export async function PUT(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
-  if (!session?.user?.id) return NextResponse.json({ error: "Требуется вход" }, { status: 401 });
+  if (!session?.user?.id) return NextResponse.json({ error: "Login required" }, { status: 401 });
 
   const limited = rateLimitByUser(request, "ai:scene-prompt", session.user.email ?? session.user.id, RATE_LIMITS.ai);
   if (limited) return limited;
@@ -132,18 +138,18 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: "Некорректный запрос" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   }
   const raw = (body as { prompt?: unknown } | null)?.prompt;
   if (raw !== undefined && typeof raw !== "string") {
-    return NextResponse.json({ error: "Некорректный промпт" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid prompt" }, { status: 400 });
   }
   const rawSkip = (body as { skipReferences?: unknown } | null)?.skipReferences;
   if (rawSkip !== undefined && typeof rawSkip !== "boolean") {
-    return NextResponse.json({ error: "Некорректное значение skipReferences" }, { status: 400 });
+    return NextResponse.json({ error: "Invalid skipReferences value" }, { status: 400 });
   }
   if (raw === undefined && rawSkip === undefined) {
-    return NextResponse.json({ error: "Нечего сохранять" }, { status: 400 });
+    return NextResponse.json({ error: "Nothing to save" }, { status: 400 });
   }
   const normalized = normalizePromptOverride((raw ?? "").toString());
   const promptOverride = normalized.length ? normalized : null;
@@ -153,7 +159,7 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
     where: { id, episode: { season: { project: { userId: session.user.id } } } },
     select: { id: true, promptOverride: true, skipReferences: true },
   });
-  if (!scene) return NextResponse.json({ error: "Сцена не найдена" }, { status: 404 });
+  if (!scene) return NextResponse.json({ error: "Scene not found" }, { status: 404 });
 
   const updated = await prisma.scene.update({
     where: { id: scene.id },

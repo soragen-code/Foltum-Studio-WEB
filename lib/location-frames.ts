@@ -1,5 +1,5 @@
 /**
- * Stage 46E — pure frame-set arithmetic for «Удалить кадр» on a location.
+ * Stage 46E — pure frame-set arithmetic for "Delete frame" on a location.
  *
  * A location keeps three named slots (master `imageUrl`, `imageReverse`, `imageDetail`) plus a JSON array of
  * extra frames (`imageExtra`). Removing a frame never leaves the location empty: at least one frame must stay.
@@ -16,7 +16,7 @@ export interface LocationFrameState {
   extras: string[];
 }
 
-export const MIN_FRAMES_ERROR = "Должен остаться хотя бы один кадр";
+export const MIN_FRAMES_ERROR = "At least one frame must remain";
 
 function has(u: string | null | undefined): u is string {
   return typeof u === "string" && u.trim().length > 0;
@@ -39,10 +39,10 @@ export function removeLocationFrame(state: LocationFrameState, slot: LocationFra
   // Existence checks first — a missing frame is a 404, not a «min 1» violation.
   if (slot === "extra") {
     if (index === undefined || !Number.isInteger(index) || index < 0 || index >= s.extras.length) {
-      return { ok: false, error: "Такого кадра нет", status: 404 };
+      return { ok: false, error: "No such shot", status: 404 };
     }
   } else if (!s[slot === "master" ? "imageUrl" : slot === "reverse" ? "imageReverse" : "imageDetail"]) {
-    return { ok: false, error: "Такого кадра нет", status: 404 };
+    return { ok: false, error: "No such shot", status: 404 };
   }
   if (countLocationFrames(s) <= 1) return { ok: false, error: MIN_FRAMES_ERROR, status: 400 };
 

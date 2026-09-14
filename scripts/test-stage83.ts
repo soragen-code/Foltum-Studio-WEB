@@ -28,8 +28,8 @@ ok("1: gate false for null/undefined scene count", needsSceneResetConfirm(null) 
 ok("1: gate true when scenes exist (1)", needsSceneResetConfirm(1) === true);
 ok("1: gate true when scenes exist (many)", needsSceneResetConfirm(12) === true);
 ok(
-  "1: confirm copy is the exact Russian text with Продолжить?",
-  SCENE_RESET_CONFIRM_MESSAGE === "Изменение сюжета/синопсиса/сценария сбросит все текущие сцены и их промпты. Продолжить?",
+  "1: confirm copy is the exact English text ending with Continue? (Stage 87 UI → English)",
+  SCENE_RESET_CONFIRM_MESSAGE === "Changing the plot / synopsis / script will reset all current scenes and their prompts. Continue?",
 );
 ok("1: helper documents that per-scene buttons stay instant", /Stage 79a/.test(helper) && /instant/.test(helper));
 
@@ -39,11 +39,11 @@ ok("2: a resetAsk state gates the confirm dialog", /const \[resetAsk, setResetAs
 ok("2: askReviseEpisode uses the gate before rewriting", /const askReviseEpisode = \(\) => \{[\s\S]*?needsSceneResetConfirm\(scenes\.length\)[\s\S]*?setResetAsk\(true\); return[\s\S]*?void reviseEpisode\(\)/.test(view));
 ok("2: no scenes → rewrite runs immediately (void reviseEpisode() with no force)", /void reviseEpisode\(\)\n\s*\}/.test(view));
 ok("2: confirm runs the destructive rewrite with force=true", /const confirmReviseReset = \(\) => \{ setResetAsk\(false\); void reviseEpisode\(true\) \}/.test(view));
-ok("2: sticky «Переписать» bar submits through the gate, not straight to reviseEpisode", /onSubmit=\{askReviseEpisode\}/.test(view) && !/onSubmit=\{\(\) => reviseEpisode\(\)\}/.test(view));
+ok("2: sticky Rewrite bar submits through the gate, not straight to reviseEpisode", /onSubmit=\{askReviseEpisode\}/.test(view) && !/onSubmit=\{\(\) => reviseEpisode\(\)\}/.test(view));
 ok("2: confirm dialog is rendered only in script phase when resetAsk is set", /phase === 'script' && resetAsk &&/.test(view));
 ok("2: dialog shows the exact confirm copy constant", /\{SCENE_RESET_CONFIRM_MESSAGE\}/.test(view));
-ok("2: dialog has a Да button wired to confirmReviseReset", /onClick=\{confirmReviseReset\}[^>]*data-testid="scene-reset-yes"[\s\S]*?Да<\/button>/.test(view) || /data-testid="scene-reset-yes"[\s\S]*?Да/.test(view));
-ok("2: dialog has an Отмена button that only closes the dialog (no change)", /onClick=\{\(\) => setResetAsk\(false\)\}[^>]*data-testid="scene-reset-cancel"[\s\S]*?Отмена/.test(view));
+ok("2: dialog has a Yes button wired to confirmReviseReset", /onClick=\{confirmReviseReset\}[^>]*data-testid="scene-reset-yes"[\s\S]*?Yes<\/button>/.test(view) || /data-testid="scene-reset-yes"[\s\S]*?Yes/.test(view));
+ok("2: dialog has a Cancel button that only closes the dialog (no change)", /onClick=\{\(\) => setResetAsk\(false\)\}[^>]*data-testid="scene-reset-cancel"[\s\S]*?Cancel/.test(view));
 ok("2: dialog carries a stable testid", /data-testid="scene-reset-confirm"/.test(view));
 
 // ---- (3) per-scene actions stay instant (Stage 79a preserved) ---------------
@@ -53,7 +53,7 @@ ok("3: reviseScene body present", reviseSceneBlock.length > 0);
 ok("3: reviseScene does not open the reset dialog", !/setResetAsk/.test(reviseSceneBlock));
 ok("3: reviseScene does not use a browser confirm()", !/\bconfirm\(/.test(reviseSceneBlock));
 ok("3: reviseScene still auto-regenerates the clip immediately (Stage 79a)", /await regenScene\(scene\.id\)/.test(reviseSceneBlock));
-ok("3: per-scene «Перегенерировать» button keeps its instant title (no confirmation)", /title="Перегенерировать ролик сразу, без подтверждения"/.test(view));
+ok("3: per-scene Regenerate button keeps its instant title (no confirmation)", /title="Regenerate the video immediately, without confirmation"/.test(view));
 ok("3: reset gate is scoped to episode rewrite, not per-scene (regenScene never opens the dialog)", !/regenScene[\s\S]{0,80}setResetAsk/.test(view));
 
 console.log(`\nStage 83: ${passed} checks passed`);

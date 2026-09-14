@@ -96,9 +96,9 @@ const has = (args: string[], ...seq: string[]) => {
 /* ── 5. Scene progress stage mapping ─────────────────────────────────────── */
 {
   const q = sceneProgressStage("starting", 12_000);
-  ok(q.stage === "queued" && q.progress === 5 && q.message === "В очереди", "starting → «В очереди» 5 %");
+  ok(q.stage === "queued" && q.progress === 5 && q.message === "Queued", "starting → «Queued» 5 %");
   const r = sceneProgressStage("processing", 83_000);
-  ok(r.stage === "rendering" && r.progress === 40 && r.message === "Рендер видео (Seedance)… 01:23", "processing → «Рендер видео (Seedance)… mm:ss» 40 %");
+  ok(r.stage === "rendering" && r.progress === 40 && r.message === "Rendering video (Seedance)… 01:23", "processing → «Rendering video (Seedance)… mm:ss» 40 %");
   const withPct = sceneProgressStage("processing", 5_000, "step 12/20\n 60%|██████    |");
   ok(withPct.progress === Math.round(5 + 0.6 * 79) && withPct.message.endsWith("· 60%"), "model percent from logs drives the bar");
   ok(parseLogPercent(null) === null && parseLogPercent("no numbers here") === null && parseLogPercent("progress: 0.25") === 25, "parseLogPercent");
@@ -108,12 +108,12 @@ const has = (args: string[], ...seq: string[]) => {
 
 /* ── 6. Assembly stage progress + ffmpeg progress parsing + pool ─────────── */
 {
-  ok(assembleStageProgress({ stage: "download", done: 2, total: 4 }).message === "Скачивание клипов 2/4", "download k/N message");
+  ok(assembleStageProgress({ stage: "download", done: 2, total: 4 }).message === "Downloading clips 2/4", "download k/N message");
   ok(assembleStageProgress({ stage: "download", done: 4, total: 4 }).progress === 30, "download done → 30 %");
-  ok(assembleStageProgress({ stage: "music" }).message === "Подбор музыки", "music stage");
-  ok(assembleStageProgress({ stage: "join", pct: 0 }).message === "Склейка", "join stage");
+  ok(assembleStageProgress({ stage: "music" }).message === "Selecting music", "music stage");
+  ok(assembleStageProgress({ stage: "join", pct: 0 }).message === "Assembly", "join stage");
   const r = assembleStageProgress({ stage: "render", pct: 50 });
-  ok(r.progress === 65 && r.message === "Склейка 50%", "render 50 % → 65 % «Склейка 50%»");
+  ok(r.progress === 65 && r.message === "Assembly 50%", "render 50 % → 65 % «Assembly 50%»");
   ok(parseProgressLine("out_time_us=1500000") === 1.5 && parseProgressLine("out_time=00:01:30.500") === 90.5 && parseProgressLine("frame=12") === null, "-progress line parsing");
 }
 async function main() {

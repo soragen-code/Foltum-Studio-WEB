@@ -44,7 +44,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     if (!card) return NextResponse.json({ error: "AI returned an invalid result: " + lastError }, { status: 502 });
 
     // A prompt edit no longer auto-locks the reference: the user may revise as many times as
-    // needed and the location stays editable until they explicitly press «Сохранить навсегда»
+    // needed and the location stays editable until they explicitly press "Save permanently"
     // (POST /api/ai/locations/[id]/lock), which is the only place refLocked is set to true.
     // Stage 60: one-step undo — snapshot the fields this edit (and any following image
     // regeneration) may overwrite, so undo can restore both the text and the previous photos.

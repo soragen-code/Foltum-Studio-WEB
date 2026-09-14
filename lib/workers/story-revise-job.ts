@@ -1,5 +1,5 @@
 /**
- * Background worker for Stage 12/69 — the «Сюжет» screen edit-by-prompt («Что изменить в сюжете»).
+ * Background worker for Stage 12/69 — the "Plot" screen edit-by-prompt ("What to change in the plot").
  *
  * The old flow ran the whole-season prose rewrite synchronously inside the route (client held an open
  * fetch, no progress bar) and only the affected-episode SCRIPT rewrite happened in the background. This
@@ -50,10 +50,10 @@ export async function runStoryReviseJob(jobId: string, projectId: string, params
   try {
     const instruction = (params.instruction ?? "").trim();
     const force = params.force === true;
-    if (instruction.length < 3) { await failJob(jobId, "Опишите, что изменить в сюжете"); return; }
+    if (instruction.length < 3) { await failJob(jobId, "Describe what to change in the plot"); return; }
 
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
-    await updateJob(jobId, { status: "processing", progress: 8, message: "Переписываю сюжет сезона…" });
+    await updateJob(jobId, { status: "processing", progress: 8, message: "Rewriting season plot…" });
 
     const project = await prisma.project.findFirst({
       where: { id: projectId },
@@ -65,7 +65,7 @@ export async function runStoryReviseJob(jobId: string, projectId: string, params
       where: { projectId, number: 1 },
       include: { episodes: { orderBy: { number: "asc" }, include: { characters: { include: { character: true } }, scenes: { select: { videoUrl: true } }, location: { select: { detailLevel: true } } } } },
     });
-    if (!season || season.episodes.length === 0) { await failJob(jobId, "Сначала сгенерируйте сезон"); return; }
+    if (!season || season.episodes.length === 0) { await failJob(jobId, "First generate the season"); return; }
 
     const language = normalizeLanguage(project.language, project.synopsis);
     const cards = project.characters.map(toCharacterCard);
@@ -80,16 +80,16 @@ export async function runStoryReviseJob(jobId: string, projectId: string, params
         { temperature: 0.5, maxTokens: 16000 }
       );
       const parsed = seasonStoryReviseSchema.parse(raw);
-      if (parsed.episodes.length < SEASON_MIN_EPISODES || parsed.episodes.length > SEASON_MAX_EPISODES) throw new Error(`LLM вернул ${parsed.episodes.length} эпизодов (допустимо ${SEASON_MIN_EPISODES}–${SEASON_MAX_EPISODES})`);
+      if (parsed.episodes.length < SEASON_MIN_EPISODES || parsed.episodes.length > SEASON_MAX_EPISODES) throw new Error(`LLM returned ${parsed.episodes.length} episodes (allowed ${SEASON_MIN_EPISODES}–${SEASON_MAX_EPISODES})`);
       after = { title: parsed.title, logline: parsed.logline, episodes: parsed.episodes.map((e, i) => ({ ...e, number: i + 1 })) };
       fullStory = parsed.fullStory.trim();
     } catch (err) {
-      await failJob(jobId, "Не удалось переписать сюжет: " + (err instanceof Error ? err.message : String(err)));
+      await failJob(jobId, "Failed to rewrite plot: " + (err instanceof Error ? err.message : String(err)));
       return;
     }
 
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
-    await updateJob(jobId, { progress: 45, message: "Синхронизирую структуру эпизодов…" });
+    await updateJob(jobId, { progress: 45, message: "Syncing episode structure…" });
 
     const oldCount = before.episodes.length;
     const newCount = after.episodes.length;
@@ -104,8 +104,8 @@ export async function runStoryReviseJob(jobId: string, projectId: string, params
         needsForce: true,
         episodes: [...rewritten].sort((a, b) => a - b),
         withVideo,
-        error: `В эпизодах ${withVideo.join(", ")} уже есть сгенерированное видео — правка перепишет сцены и видео этих эпизодов.`,
-      }, "Требуется подтверждение");
+        error: `In episodes ${withVideo.join(", ")} already have generated video — editing will overwrite the scenes and videos for these episodes.`,
+      }, "Confirmation required");
       return;
     }
 
@@ -148,7 +148,7 @@ export async function runStoryReviseJob(jobId: string, projectId: string, params
 
     // No episode needs a script rewrite → the whole operation is done.
     if (affected.length === 0) {
-      await completeJob(jobId, { affected: [], removed: removedNumbers, episodeCount: newCount, done: true }, "Сюжет обновлён");
+      await completeJob(jobId, { affected: [], removed: removedNumbers, episodeCount: newCount, done: true }, "Plot updated");
       return;
     }
 
@@ -157,10 +157,10 @@ export async function runStoryReviseJob(jobId: string, projectId: string, params
     // that job's id for the episode-rewrite progress bar. Await directly (we are already in a background
     // context) so the first tick runs before we complete this job.
     const seasonJob = await prisma.generationJob.create({
-      data: { type: SEASON_JOB_TYPE, status: "pending", progress: 0, message: `Переписываю эпизоды ${affected.join(", ")}...`, projectId, resultData: JSON.stringify({ revise: true, affected }) },
+      data: { type: SEASON_JOB_TYPE, status: "pending", progress: 0, message: `Rewriting episodes ${affected.join(", ")}...`, projectId, resultData: JSON.stringify({ revise: true, affected }) },
     });
     await runSeasonScriptJob(seasonJob.id, projectId, newCount);
-    await completeJob(jobId, { affected, removed: removedNumbers, episodeCount: newCount, seasonJobId: seasonJob.id, done: true }, `Переписываю эпизоды ${affected.join(", ")}...`);
+    await completeJob(jobId, { affected, removed: removedNumbers, episodeCount: newCount, seasonJobId: seasonJob.id, done: true }, `Rewriting episodes ${affected.join(", ")}...`);
   } catch (err: any) {
     console.error("[story-revise] job error:", err);
     await failJob(jobId, "Generation failed: " + (err?.message ?? "Unknown error"));

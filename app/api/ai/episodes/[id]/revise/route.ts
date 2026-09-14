@@ -24,7 +24,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   const { id } = await ctx.params;
   const body = await request.json().catch(() => ({}));
   const instruction = String(body?.instruction ?? "").trim();
-  if (instruction.length < 3) return NextResponse.json({ error: "Опишите, что изменить" }, { status: 400 });
+  if (instruction.length < 3) return NextResponse.json({ error: "Describe what to change" }, { status: 400 });
 
   const episode = await prisma.episode.findFirst({
     where: { id, season: { project: { userId: session.user.id } } },
@@ -35,20 +35,20 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   // such an episode cannot be revised until the job has finished it.
   if (!episode.script) {
     const running = await prisma.generationJob.findFirst({ where: { projectId: episode.season.projectId, type: SEASON_JOB_TYPE, status: { in: ["pending", "processing"] } }, select: { id: true } });
-    if (running) return NextResponse.json({ error: "Этот эпизод сейчас пишется — дождитесь, когда его сценарий будет готов.", writing: true }, { status: 409 });
+    if (running) return NextResponse.json({ error: "This episode is being written — wait until its script is ready.", writing: true }, { status: 409 });
   }
   const withVideo = episode.scenes.filter((s) => s.videoUrl).length;
   if (withVideo > 0 && !body?.force) {
-    return NextResponse.json({ error: `У ${withVideo} сцен уже есть готовое видео. Переписывание сценария пересоберёт сцены и удалит эти ролики из эпизода.`, needsForce: true, withVideo }, { status: 409 });
+    return NextResponse.json({ error: `For ${withVideo} scenes already have finished videos. Rewriting the script will reassemble the scenes and remove these videos from the episode.`, needsForce: true, withVideo }, { status: 409 });
   }
   const projectId = episode.season.projectId;
   // Stage 2 (background mode): the rewrite runs as a season_script job with a revise queue — the reasoning
   // model works in OpenAI background mode and the client's job polling advances it (same as generation).
   await failStaleJobs({ projectId, type: SEASON_JOB_TYPE });
   const active = await prisma.generationJob.findFirst({ where: { projectId, type: SEASON_JOB_TYPE, status: { in: ["pending", "processing"] } }, select: { id: true } });
-  if (active) return NextResponse.json({ error: "Сценарий сезона сейчас генерируется — дождитесь окончания.", writing: true }, { status: 409 });
+  if (active) return NextResponse.json({ error: "The season script is being generated — wait until it finishes.", writing: true }, { status: 409 });
   const state = initialSeasonState(episode.season.episodes.length, { episodeIds: [episode.id], instruction, force: !!body?.force });
-  const job = await prisma.generationJob.create({ data: { type: SEASON_JOB_TYPE, status: "pending", progress: 0, message: "Запуск…", projectId, resultData: JSON.stringify(state) } });
+  const job = await prisma.generationJob.create({ data: { type: SEASON_JOB_TYPE, status: "pending", progress: 0, message: "Starting…", projectId, resultData: JSON.stringify(state) } });
   runInBackground(() => runSeasonScriptJob(job.id, projectId, episode.season.episodes.length));
   return NextResponse.json({ jobId: job.id });
 }

@@ -14,7 +14,7 @@ import { runSynopsisJob, SYNOPSIS_JOB_TYPE } from "@/lib/workers/synopsis-job";
  *
  * Stage 1 of the new flow: idea → synopsis. This used to run the LLM synchronously and hold the
  * client's fetch open for the whole generation — if the producer left the page the request aborted
- * and the UI showed «Ошибка сети» even though the server had (or would have) finished.
+ * and the UI showed "Network error" even though the server had (or would have) finished.
  *
  * It now creates a background GenerationJob (type "synopsis") and returns { jobId } immediately;
  * the actual generation runs via runSynopsisJob() in the background of this invocation (after()),
@@ -49,7 +49,7 @@ export async function POST(request: Request) {
     if (active) return NextResponse.json({ jobId: active.id, resumed: true });
 
     const job = await prisma.generationJob.create({
-      data: { type: SYNOPSIS_JOB_TYPE, status: "pending", progress: 0, message: "Запуск…", projectId },
+      data: { type: SYNOPSIS_JOB_TYPE, status: "pending", progress: 0, message: "Starting…", projectId },
     });
     runInBackground(() => runSynopsisJob(job.id, projectId, { idea, auto, genres, extras, fromStory, story, episodeCount }));
     return NextResponse.json({ jobId: job.id, resumed: false });

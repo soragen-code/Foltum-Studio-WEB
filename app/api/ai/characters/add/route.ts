@@ -11,7 +11,7 @@ import { castExpansionSystemPrompt, castExpansionUserPrompt, normalizeCastExpans
 
 /**
  * POST /api/ai/characters/add  { projectId, hint? }
- * «Добавить ещё персонажей»: the LLM adds cast members (family, supporting, minor, crowd groups)
+ * "Add more characters": the LLM adds cast members (family, supporting, minor, crowd groups)
  * grounded in the synopsis; with a hint it follows the producer's request. Existing cast is kept.
  */
 export async function POST(request: Request) {

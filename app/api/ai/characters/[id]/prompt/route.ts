@@ -26,13 +26,13 @@ async function loadOwned(id: string, userId: string) {
 
 export async function GET(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
-  if (!session?.user?.id) return NextResponse.json({ error: "Требуется вход" }, { status: 401 });
+  if (!session?.user?.id) return NextResponse.json({ error: "Login required" }, { status: 401 });
   const limited = rateLimitByUser(request, "ai:character-prompt", session.user.email ?? session.user.id, RATE_LIMITS.ai);
   if (limited) return limited;
 
   const { id } = await ctx.params;
   const char = await loadOwned(id, session.user.id);
-  if (!char) return NextResponse.json({ error: "Персонаж не найден" }, { status: 404 });
+  if (!char) return NextResponse.json({ error: "Character not found" }, { status: 404 });
 
   const hasOverride = !!(char.promptOverride && char.promptOverride.trim());
   const prompt = hasOverride ? (char.promptOverride as string) : characterBasePrompt(char.appearance ?? "", char.name, char.tier, char.groupSize);
@@ -41,7 +41,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
 
 export async function PUT(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
-  if (!session?.user?.id) return NextResponse.json({ error: "Требуется вход" }, { status: 401 });
+  if (!session?.user?.id) return NextResponse.json({ error: "Login required" }, { status: 401 });
   const limited = rateLimitByUser(request, "ai:character-prompt", session.user.email ?? session.user.id, RATE_LIMITS.ai);
   if (limited) return limited;
 
@@ -50,7 +50,7 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
   if (!parsed.ok) return parsed.response;
 
   const char = await loadOwned(id, session.user.id);
-  if (!char) return NextResponse.json({ error: "Персонаж не найден" }, { status: 404 });
+  if (!char) return NextResponse.json({ error: "Character not found" }, { status: 404 });
 
   const normalized = normalizePromptOverride(parsed.data.prompt);
   const promptOverride = normalized.trim() ? normalized : null;

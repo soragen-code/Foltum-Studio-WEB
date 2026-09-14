@@ -1,10 +1,10 @@
 /**
  * Stage 46E — file names for downloaded reference frames.
- *   <CharacterName>_<лицо|профиль|рост|extra-N>.<ext>
+ *   <CharacterName>_<face|profile|full-body|extra-N>.<ext>
  *   <LocationName>_<master|reverse|detail|extra-N>.<ext>
  * Cyrillic is kept; only path-unsafe / control characters are stripped.
  */
-export const CHARACTER_SLOT_FILE_LABELS: Record<string, string> = { front: "лицо", profile: "профиль", full: "рост" };
+export const CHARACTER_SLOT_FILE_LABELS: Record<string, string> = { front: "face", profile: "profile", full: "height" };
 export const LOCATION_SLOT_FILE_LABELS: Record<string, string> = { master: "master", reverse: "reverse", detail: "detail" };
 
 /** Strip characters that are illegal or risky in file names (keeps letters of any script, digits, space, -, _, .). */

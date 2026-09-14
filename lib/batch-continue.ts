@@ -1,7 +1,7 @@
 /**
  * Stage 8 — batch video auto-continuation planner (pure, DB-free, unit-tested).
  *
- * The episode "Сгенерировать все" flow creates one video GenerationJob per scene and
+ * The episode "Generate all" flow creates one video GenerationJob per scene and
  * submits their Seedance predictions in the background of a single serverless invocation.
  * That invocation can end (Vercel maxDuration, or a slow per-scene reference-image step)
  * before every prediction is submitted, leaving later jobs "pending" with no predictionId
@@ -127,7 +127,7 @@ export function planContinuation(snaps: SceneJobSnapshot[], opts: ContinuationOp
       continue;
     }
     // No live job (never queued, canceled, or a stray completed-without-video).
-    // Auto mode must NOT charge/start it (that only happens via the explicit "Генерировать"/manual retry).
+    // Auto mode must NOT charge/start it (that only happens via the explicit "Generate"/manual retry).
     if (retryFailed && s.attempts < manualMax) {
       pending++;
       retryCandidates.push(s.sceneId);

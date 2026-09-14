@@ -45,7 +45,7 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
       keptRunning++;
     } else {
       // Never submitted → cancel outright so the planner won't resubmit and no charge happens.
-      await prisma.generationJob.update({ where: { id: job.id }, data: { cancelRequested: true, status: "canceled", message: "Генерация отменена" } }).catch(() => {});
+      await prisma.generationJob.update({ where: { id: job.id }, data: { cancelRequested: true, status: "canceled", message: "Generation canceled" } }).catch(() => {});
       if (job.sceneId) await prisma.scene.update({ where: { id: job.sceneId }, data: { status: "pending" } }).catch(() => {});
       canceled++;
     }

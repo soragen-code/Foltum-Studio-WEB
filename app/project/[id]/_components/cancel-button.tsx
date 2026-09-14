@@ -4,16 +4,16 @@ import { useState } from 'react'
 import { Loader2, X } from 'lucide-react'
 
 /**
- * Stage 11 — «Отменить генерацию» button shown next to a running progress indicator.
+ * Stage 11 — «Cancel generation button shown next to a running progress indicator.
  * On click it calls `onCancel` (which hits the relevant cancel endpoint). While the
  * request is in flight the button shows a spinner; afterwards the parent switches the
- * job/UI to its "Отменено" state. Idempotent: repeated clicks are safe (button disables
+ * job/UI to its "Canceled" state. Idempotent: repeated clicks are safe (button disables
  * itself while pending). Dark-theme, compact, mobile-safe.
  */
 export function CancelButton({
   onCancel,
-  label = 'Отменить',
-  pendingLabel = 'Останавливаю…',
+  label = 'Cancel',
+  pendingLabel = 'Stopping…',
   className = '',
   testId,
 }: {

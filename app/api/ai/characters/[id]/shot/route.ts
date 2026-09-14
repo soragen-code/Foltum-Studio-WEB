@@ -33,7 +33,7 @@ const FIELD: Record<"front" | "profile" | "full", "imageFront" | "imageProfile" 
 /**
  * POST /api/ai/characters/[id]/shot  { shot: "front"|"profile"|"full"|"extra", index?, imageModel? }
  *
- * Stage 46B-2: «Перегенерировать» on ONE reference photo. Charges one frame (CHARACTER_REFERENCE_COST),
+ * Stage 46B-2: "Regenerate" on ONE reference photo. Charges one frame (CHARACTER_REFERENCE_COST),
  * regenerates only that shot from the CURRENT appearance with the same chaining as the full worker
  * (front ← full anchor, profile ← front, full = guarded text-to-image, extra ← front/full by parity),
  * writes only that column and marks rendered scenes with this character as lookStale.
@@ -88,7 +88,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         type: CHARACTER_SHOT_JOB_TYPE,
         status: "processing",
         progress: 10,
-        message: `Перегенерация фото «${char.name}» (${slotKey})...`,
+        message: `Regenerating photo "${char.name}» (${slotKey})...`,
         projectId,
         characterId,
         resultData: JSON.stringify({ slot: slotKey }),
@@ -168,7 +168,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           data: { lookStale: true },
         }).catch(() => {});
 
-        await completeJob(job.id, { slot: slotKey, url, characterId }, "Фото готово");
+        await completeJob(job.id, { slot: slotKey, url, characterId }, "Photo is ready");
       } catch (e: any) {
         console.error(`[characters/shot] ${slotKey} failed for ${char.name}:`, e?.message ?? e);
         await failJob(job.id, e?.message ?? "Shot regeneration failed");

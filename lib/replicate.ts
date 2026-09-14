@@ -269,7 +269,7 @@ export interface FluxInput {
  */
 /** Thrown by generateImage when `shouldCancel` reports a user cancellation mid-prediction. */
 export class GenerationCanceledError extends Error {
-  constructor(message = "Генерация отменена пользователем") { super(message); this.name = "GenerationCanceledError"; }
+  constructor(message = "Generation canceled by the user") { super(message); this.name = "GenerationCanceledError"; }
 }
 
 export async function generateImage(input: FluxInput, context: { jobId?: string; characterId?: string; imageModel?: string; shouldCancel?: () => Promise<boolean>; provider?: GenerationProvider } = {}): Promise<string> {

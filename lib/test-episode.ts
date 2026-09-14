@@ -25,8 +25,8 @@ import {
 import { stripMarkup } from "@/lib/idea";
 import { resolveProjectName } from "@/lib/project-name";
 
-export const TEST_EPISODE_TITLE = "Тестовая серия";
-export const TEST_SEASON_TITLE = "Тест";
+export const TEST_EPISODE_TITLE = "Test episode";
+export const TEST_SEASON_TITLE = "Test";
 export const TEST_PROMPT_MIN_CHARS = 20;
 export const TEST_PROMPT_MAX_CHARS = 6000;
 export const TEST_DURATION_MIN = 5;
@@ -149,7 +149,7 @@ export function buildTestEpisodeRecords(input: TestEpisodeInput): TestEpisodeRec
   const plotForName = (input.action ?? "").trim() || firstTagLine(prompt, "[ACTION]") || (input.title ?? "").trim() || prompt;
   const name = resolveProjectName(input.projectTitle, plotForName);
   const language = (input.language ?? "").trim() || "en";
-  const logline = `Тестовая сцена: ${action.slice(0, 160)}`;
+  const logline = `Test scene: ${action.slice(0, 160)}`;
   const ep = { number: 1 as const, title, logline, locationName: locationDesc.slice(0, 80), locationDesc, status: "script_ready" as const, script: "" };
   ep.script = renderScriptFromScenes(ep, [], [{ number: 1, sceneKind, shotType, durationSec, locationDesc, action, dialogue, startState, endState }]);
   return {

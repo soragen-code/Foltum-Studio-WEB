@@ -48,7 +48,7 @@ const validUrl = (u?: string | null) => typeof u === "string" && u.startsWith("h
 /**
  * POST /api/ai/assemble-episode/polish  { episodeId }  →  { jobId }
  *
- * Stage 19 — the «Ассембл» final-polish pass now runs as a SERVER-DRIVEN background job
+ * Stage 19 — the "Assembly" final-polish pass now runs as a SERVER-DRIVEN background job
  * (type `episode_assemble`). The route validates, guards against duplicate jobs, creates the
  * job and returns its id immediately; the whole orchestration runs via runInBackground() so
  * it survives the browser navigating away. The client just polls GET /api/jobs/[jobId] and
@@ -76,10 +76,10 @@ export async function POST(request: Request) {
     include: { season: { include: { project: true } }, scenes: { orderBy: { number: "asc" } } },
   });
   if (!episode) return NextResponse.json({ error: "Episode not found" }, { status: 404 });
-  if (episode.scenes.length === 0) return NextResponse.json({ error: "В эпизоде нет сцен" }, { status: 400 });
+  if (episode.scenes.length === 0) return NextResponse.json({ error: "There are no scenes in the episode" }, { status: 400 });
   // The polish pass runs on a fully generated episode only (button is gated on this client-side too).
   if (episode.scenes.some((s) => !validUrl(s.videoUrl)))
-    return NextResponse.json({ error: "Сначала сгенерируйте все сцены эпизода" }, { status: 400 });
+    return NextResponse.json({ error: "First generate all episode scenes" }, { status: 400 });
 
   const project = episode.season.project;
 
@@ -103,7 +103,7 @@ export async function POST(request: Request) {
       type: ASSEMBLE_JOB_TYPE,
       status: "processing",
       progress: assembleProgress("analyzing"),
-      message: "Анализ логики эпизода…",
+      message: "Analyzing episode logic…",
       projectId: project.id,
       resultData: buildAssembleResult(initialResult),
     },
@@ -145,11 +145,11 @@ export async function POST(request: Request) {
         audit = episodeContinuityAuditSchema.parse(raw);
       } catch (err) {
         console.error("[assemble-polish] audit failed:", err);
-        await failJob(jobId, "Не удалось проанализировать логику эпизода. Попробуйте ещё раз.");
+        await failJob(jobId, "Failed to analyze the episode logic. Try again.");
         return;
       }
 
-      if (await canceled()) { await markCanceled(jobId, "Полировка отменена."); return; }
+      if (await canceled()) { await markCanceled(jobId, "Polishing canceled."); return; }
 
       // ── (b) Select the scenes that actually need re-generation ─────────────────────────────
       const sceneInputs: PolishSceneInput[] = [];
@@ -174,8 +174,8 @@ export async function POST(request: Request) {
           progress: assembleProgress(phase, done, total),
           message:
             phase === "regen"
-              ? `Перегенерация проблемных сцен… ${done}/${total}${failed > 0 ? ` · не удалось ${failed}` : ""}`
-              : "Склейка сцен прямым стыком…",
+              ? `Regenerating problem scenes… ${done}/${total}${failed > 0 ? ` · failed ${failed}` : ""}`
+              : "Assembling scenes with direct cuts…",
           resultData: buildAssembleResult({ episodeId, phase, issues, done, total, failed }),
         });
 
@@ -183,7 +183,7 @@ export async function POST(request: Request) {
       if (shouldStitchWithoutCharge(selection.length)) {
         await updateJob(jobId, {
           progress: assembleProgress("stitching"),
-          message: "Склейка сцен прямым стыком…",
+          message: "Assembling scenes with direct cuts…",
           resultData: buildAssembleResult({ episodeId, phase: "stitching", issues: [], done: 0, total: 0, failed: 0 }),
         });
         try {
@@ -191,13 +191,13 @@ export async function POST(request: Request) {
           await completeJob(jobId, { episodeId, phase: "done", issues: [], done: 0, total: 0, failed: 0, videoUrl, fixedCount: 0 } as AssembleResultData);
         } catch (err: any) {
           console.error("[assemble-polish] stitch failed (no issues):", err);
-          await failJob(jobId, err?.message ?? "Сборка эпизода не удалась");
+          await failJob(jobId, err?.message ?? "Episode assembly failed");
         }
         return;
       }
 
       await updateJob(jobId, {
-        message: "Перегенерация проблемных сцен…",
+        message: "Regenerating problem scenes…",
         progress: assembleProgress("regen", 0, total),
         resultData: buildAssembleResult({ episodeId, phase: "regen", issues, done: 0, total, failed: 0 }),
       });
@@ -210,7 +210,7 @@ export async function POST(request: Request) {
       }, 0);
       const user = await prisma.user.findUniqueOrThrow({ where: { id: session.user!.id } });
       if (need > 0 && (user.credits ?? 0) < need) {
-        await failJob(jobId, `Недостаточно кредитов на перегенерацию: нужно ${need}, на балансе ${user.credits ?? 0}`);
+        await failJob(jobId, `Insufficient credits for regeneration: need ${need}, balance ${user.credits ?? 0}`);
         return;
       }
 
@@ -235,9 +235,9 @@ export async function POST(request: Request) {
         });
         await prisma.user.update({ where: { id: user.id }, data: { credits: { decrement: cost } } });
         await prisma.creditTransaction.create({
-          data: { userId: user.id, amount: -cost, description: `Эпизод ${episode.number}, сцена ${scene.number} — финальная полировка (перегенерация, ${tier.id})` },
+          data: { userId: user.id, amount: -cost, description: `Episode ${episode.number}, scene ${scene.number} — final polish (regeneration, ${tier.id})` },
         });
-        const vjob = await prisma.generationJob.create({ data: { type: "video", status: "pending", progress: 1, message: "Полировка: в очереди…", projectId: project.id, sceneId: scene.id } });
+        const vjob = await prisma.generationJob.create({ data: { type: "video", status: "pending", progress: 1, message: "Polishing: queued…", projectId: project.id, sceneId: scene.id } });
         queued.push({ jobId: vjob.id, sceneId: scene.id, cost, duration });
       }
 
@@ -251,7 +251,7 @@ export async function POST(request: Request) {
       const refreshProgress = () => writeRegen(completed, 0);
       for (const item of queued) {
         if (await canceled()) break;
-        await updateJob(item.jobId, { status: "processing", progress: 2, message: "Полировка: старт видеомодели…" });
+        await updateJob(item.jobId, { status: "processing", progress: 2, message: "Polishing: starting video model…" });
         try {
           await runVideoJob({ jobId: item.jobId, sceneId: item.sceneId, projectId: project.id, userId: user.id, cost: item.cost, duration: item.duration, resolution: tier.resolution });
         } catch (err) {
@@ -262,13 +262,13 @@ export async function POST(request: Request) {
         await new Promise((r) => setTimeout(r, 1200));
       }
 
-      if (await canceled()) { await markCanceled(jobId, "Полировка отменена."); return; }
+      if (await canceled()) { await markCanceled(jobId, "Polishing canceled."); return; }
 
       // ── Wait for any reused (already-running) scene jobs to reach a terminal state ──────────
       if (reusedSceneIds.length) {
         const deadline = Date.now() + 10 * 60 * 1000;
         while (Date.now() < deadline) {
-          if (await canceled()) { await markCanceled(jobId, "Полировка отменена."); return; }
+          if (await canceled()) { await markCanceled(jobId, "Polishing canceled."); return; }
           const scenes = await prisma.scene.findMany({ where: { id: { in: reusedSceneIds } }, select: { id: true, videoUrl: true } });
           const pending = scenes.filter((s) => !validUrl(s.videoUrl));
           if (pending.length === 0) break;
@@ -283,14 +283,14 @@ export async function POST(request: Request) {
       const failed = finalScenes.filter((s) => !validUrl(s.videoUrl)).length;
       if (failed > 0) {
         await updateJob(jobId, { resultData: buildAssembleResult({ episodeId, phase: "regen", issues, done: total - failed, total, failed }) });
-        await failJob(jobId, "Часть проблемных сцен не удалось перегенерировать. Проверьте сцены и запустите «Ассембл» ещё раз.");
+        await failJob(jobId, "Some problematic scenes could not be regenerated. Check the scenes and run 'Assembly' again.");
         return;
       }
 
       // ── (c) Stitch ─────────────────────────────────────────────────────────────────────────
       await updateJob(jobId, {
         progress: assembleProgress("stitching"),
-        message: "Склейка сцен прямым стыком…",
+        message: "Assembling scenes with direct cuts…",
         resultData: buildAssembleResult({ episodeId, phase: "stitching", issues, done: total, total, failed: 0 }),
       });
       let videoUrl: string;
@@ -299,7 +299,7 @@ export async function POST(request: Request) {
         videoUrl = stitched.videoUrl;
       } catch (err: any) {
         console.error("[assemble-polish] stitch failed:", err);
-        await failJob(jobId, err?.message ?? "Сборка эпизода не удалась");
+        await failJob(jobId, err?.message ?? "Episode assembly failed");
         return;
       }
 
@@ -307,7 +307,7 @@ export async function POST(request: Request) {
       await completeJob(jobId, { episodeId, phase: "done", issues, done: total, total, failed: 0, videoUrl, fixedCount: total } as AssembleResultData);
     } catch (err: any) {
       console.error("[assemble-polish] background job crashed:", err);
-      await failJob(jobId, err?.message ?? "Финальная полировка не удалась");
+      await failJob(jobId, err?.message ?? "Final polish failed");
     } finally {
       clearInterval(hb);
     }

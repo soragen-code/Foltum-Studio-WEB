@@ -17,7 +17,7 @@ import { removeLocationFrame } from "@/lib/location-frames";
  */
 export async function DELETE(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
-  if (!session?.user?.id) return NextResponse.json({ error: "Требуется вход" }, { status: 401 });
+  if (!session?.user?.id) return NextResponse.json({ error: "Login required" }, { status: 401 });
   const limited = rateLimitByUser(request, "ai:location-frame", session.user.email ?? session.user.id, RATE_LIMITS.ai);
   if (limited) return limited;
 
@@ -25,13 +25,13 @@ export async function DELETE(request: Request, ctx: { params: Promise<{ id: stri
   const parsed = await parseBody(request, locationFrameDeleteSchema);
   if (!parsed.ok) return parsed.response;
   const { slot, index } = parsed.data;
-  if (slot === "extra" && index === undefined) return NextResponse.json({ error: "Для доп. кадра нужен index" }, { status: 400 });
+  if (slot === "extra" && index === undefined) return NextResponse.json({ error: "An additional frame requires index" }, { status: 400 });
 
   const loc = await prisma.location.findFirst({
     where: { id, project: { userId: session.user.id } },
     select: { id: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true },
   });
-  if (!loc) return NextResponse.json({ error: "Локация не найдена" }, { status: 404 });
+  if (!loc) return NextResponse.json({ error: "Location not found" }, { status: 404 });
 
   const result = removeLocationFrame(
     { imageUrl: loc.imageUrl, imageReverse: loc.imageReverse, imageDetail: loc.imageDetail, extras: parseLocationExtra(loc.imageExtra) },

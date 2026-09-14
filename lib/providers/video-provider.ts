@@ -14,9 +14,9 @@ import * as modelark from "@/lib/modelark";
 /* ------------------------------------------------------------------ */
 
 function requireKey(provider: GenerationProvider): void {
-  if (provider === "replicate" && !process.env.REPLICATE_API_TOKEN) throw new Error("Не задан ключ провайдера Replicate (REPLICATE_API_TOKEN)");
-  if (provider === "wavespeed" && !process.env.WAVESPEED_API_KEY) throw new Error("Не задан ключ провайдера WaveSpeed (WAVESPEED_API_KEY)");
-  if (provider === "modelark" && !process.env.MODELARK_API_KEY) throw new Error("Не задан ключ провайдера ModelArk (MODELARK_API_KEY)");
+  if (provider === "replicate" && !process.env.REPLICATE_API_TOKEN) throw new Error("Replicate provider key not set (REPLICATE_API_TOKEN)");
+  if (provider === "wavespeed" && !process.env.WAVESPEED_API_KEY) throw new Error("WaveSpeed provider key not set (WAVESPEED_API_KEY)");
+  if (provider === "modelark" && !process.env.MODELARK_API_KEY) throw new Error("ModelArk provider key not set (MODELARK_API_KEY)");
 }
 
 /** Submit a scene video on the given provider; returns the provider task id. */

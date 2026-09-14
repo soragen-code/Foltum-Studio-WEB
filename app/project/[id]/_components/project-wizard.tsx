@@ -28,7 +28,7 @@ function isNewFlow(project: any): boolean {
 export function ProjectWizard({ project: initialProject }: { project: any }) {
   const [project, setProject] = useState(initialProject)
   const currentStage = project?.stage ?? 'synopsis'
-  // Optional «Референсы» tab (stage 5), opened via ?tab=references from the season/episode screens.
+  // Optional «"References" tab (stage 5), opened via ?tab=references from the season/episode screens.
   const searchParams = useSearchParams()
   const referencesTab = searchParams?.get('tab') === 'references' && isNewFlow(project) && currentStage !== 'idea'
 
@@ -53,13 +53,13 @@ export function ProjectWizard({ project: initialProject }: { project: any }) {
             {/* Stage 46B: scenes are always 480p; the production quality is chosen when the episode is assembled. */}
             <span
               className="inline-flex items-center gap-1 rounded bg-muted px-2 py-0.5 uppercase"
-              title={`Сцены рендерятся в ${SCENE_RESOLUTION}; качество серии выбирается при сборке`}
+              title={`Scenes are rendered in ${SCENE_RESOLUTION}; episode quality is selected during assembly`}
               data-testid="power-badge"
             >
               <Gauge className="h-3 w-3" />
               {SCENE_RESOLUTION}
             </span>
-            <span className="hidden sm:inline">сцены {SCENE_RESOLUTION} · качество серии — при сборке</span>
+            <span className="hidden sm:inline">scenes {SCENE_RESOLUTION} · episode quality — during assembly</span>
           </div>
         </div>
 
@@ -72,7 +72,7 @@ export function ProjectWizard({ project: initialProject }: { project: any }) {
           {referencesTab && (
             <div className="space-y-4" data-testid="references-tab">
               <Link href={`/project/${project.id}`} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground" data-testid="back-to-season">
-                <ArrowLeft className="h-4 w-4" /> К сценарию сезона
+                <ArrowLeft className="h-4 w-4" /> To season script
               </Link>
               <ReferencesStage project={project} onRefresh={refreshProject} optional />
             </div>

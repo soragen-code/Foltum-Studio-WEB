@@ -12,7 +12,7 @@ import { runStoryReviseJob, STORY_REVISE_JOB_TYPE } from "@/lib/workers/story-re
 /**
  * POST /api/ai/season/full-story/revise { projectId, instruction, force? }
  *
- * Stage 12/69 — the «Сюжет» screen edit-by-prompt («Что изменить в сюжете»). This used to run the whole
+ * Stage 12/69 — the "Plot" screen edit-by-prompt ("What to change in the plot"). This used to run the whole
  * prose rewrite synchronously (client held an open fetch, no progress bar). It now creates a background
  * GenerationJob (type "story_revise") and returns { jobId } immediately; the prose rewrite + episode
  * structure sync + affected-episode script rewrite all run via runStoryReviseJob() in the background,
@@ -32,7 +32,7 @@ export async function POST(request: Request) {
   const instruction = String(body?.instruction ?? "").trim();
   const force = body?.force === true;
   if (!projectId) return NextResponse.json({ error: "projectId required" }, { status: 400 });
-  if (instruction.length < 3) return NextResponse.json({ error: "Опишите, что изменить в сюжете" }, { status: 400 });
+  if (instruction.length < 3) return NextResponse.json({ error: "Describe what to change in the plot" }, { status: 400 });
 
   const project = await prisma.project.findFirst({ where: { id: projectId, userId: session.user.id }, select: { id: true, synopsis: true } });
   if (!project?.synopsis) return NextResponse.json({ error: "Project not found" }, { status: 404 });
@@ -43,7 +43,7 @@ export async function POST(request: Request) {
 
   // Don't start a revise while the season story is still being written.
   const activeSeason = await prisma.generationJob.findFirst({ where: { projectId, type: SEASON_JOB_TYPE, status: { in: ["pending", "processing"] } } });
-  if (activeSeason) return NextResponse.json({ error: "Сюжет сезона ещё пишется — дождитесь окончания, затем внесите правки." }, { status: 409 });
+  if (activeSeason) return NextResponse.json({ error: "The season plot is still being written — wait until it finishes, then make edits." }, { status: 409 });
 
   // Idempotent: a refresh (without force) reuses the active revise job instead of starting a second.
   if (!force) {
@@ -55,7 +55,7 @@ export async function POST(request: Request) {
   }
 
   const job = await prisma.generationJob.create({
-    data: { type: STORY_REVISE_JOB_TYPE, status: "pending", progress: 0, message: "Запуск…", projectId },
+    data: { type: STORY_REVISE_JOB_TYPE, status: "pending", progress: 0, message: "Starting…", projectId },
   });
   runInBackground(() => runStoryReviseJob(job.id, projectId, { instruction, force }));
   return NextResponse.json({ jobId: job.id, resumed: false });

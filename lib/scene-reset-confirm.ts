@@ -10,9 +10,9 @@
 // on a single scene/clip and stay instant, with no confirmation. The gate here is only for the
 // episode-wide rewrite that resets ALL scenes.
 
-/** Exact Russian confirmation copy shown before the destructive episode-wide scene reset. */
+/** Confirmation copy shown before the destructive episode-wide scene reset. */
 export const SCENE_RESET_CONFIRM_MESSAGE =
-  "Изменение сюжета/синопсиса/сценария сбросит все текущие сцены и их промпты. Продолжить?";
+  "Changing the plot / synopsis / script will reset all current scenes and their prompts. Continue?";
 
 /**
  * True when rewriting the episode text would destroy existing scenes and therefore needs the

@@ -107,10 +107,10 @@ const ps = (index: number, mood: PerSceneMood["mood"], intensity: number): PerSc
     { mood: "tense", startSceneIndex: 0, endSceneIndex: 1, intensity: 0.6 },
     { mood: "mysterious", startSceneIndex: 2, endSceneIndex: 2, intensity: 0.5 },
   ];
-  ok(summarizePlan(segs, 1) === "напряжённая → загадочная (2 сегмента, 1 сцена без музыки)", "E: summary matches the spec example");
-  ok(summarizePlan(segs, 0) === "напряжённая → загадочная (2 сегмента)", "E: no silent scenes → no 'без музыки' tail");
-  ok(summarizePlan([{ mood: "action", startSceneIndex: 0, endSceneIndex: 0, intensity: 1 }], 0) === "экшн (1 сегмент)", "E: single segment pluralization");
-  ok(summarizePlan([], 2) === "без музыки", "E: no segments but silent scenes → 'без музыки'");
+  ok(summarizePlan(segs, 1) === "tense → mysterious (2 segments, 1 scene without music)", "E: summary matches the spec example (Stage 87 UI → English)");
+  ok(summarizePlan(segs, 0) === "tense → mysterious (2 segments)", "E: no silent scenes → no without-music tail");
+  ok(summarizePlan([{ mood: "action", startSceneIndex: 0, endSceneIndex: 0, intensity: 1 }], 0) === "action (1 segment)", "E: single segment pluralization");
+  ok(summarizePlan([], 2) === "no music", "E: no segments but silent scenes → no music");
 }
 
 // ── F. MusicGen runs BY VERSION ─────────────────────────────────────────────────────────────────

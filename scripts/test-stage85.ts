@@ -36,8 +36,8 @@ ok("1: location section is order-first (renders before character blocks)", /orde
 ok("1: location section is visually highlighted (accent border + tint)", /border-primary\/40/.test(locSection) && /bg-primary\/5/.test(locSection));
 
 // ---- (2) base-layer emphasis (ties to Stage 84) -----------------------------
-ok("2: location block shows the base-layer emphasis badge", /Базовый слой сцены/.test(locSection));
-ok("2: location heading + MapPin retained", /Референсы локаций/.test(locSection) && /MapPin/.test(locSection));
+ok("2: location block shows the base-layer emphasis badge", /Base scene layer/.test(locSection));
+ok("2: location heading + MapPin retained", /Location references/.test(locSection) && /MapPin/.test(locSection));
 
 // ---- (3) location cards larger than character cards -------------------------
 // Character groups grid uses lg:grid-cols-3; the location grid must use fewer columns → wider cards.

@@ -18,7 +18,7 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
   const [error, setError] = useState('')
   const resumedRef = useRef(false)
 
-  // Stage 69: «Переписать синопсис» now runs as a background GenerationJob so the client no longer
+  // Stage 69: «"Rewrite synopsis" now runs as a background GenerationJob so the client no longer
   // holds an open fetch (which broke on navigation and showed no progress). We poll the job and show a
   // smooth 0→100 % bar; on finish the new synopsis is written into the textarea.
   const poll = useJobPolling({
@@ -97,41 +97,41 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
     finally { setApproving(false) }
   }
 
-  // Stage 59 (step 2 «Синопсис»): in the new 4-step flow the synopsis already exists (written at the
+  // Stage 59 (step 2 «Synopsis"): in the new 4-step flow the synopsis already exists (written at the
   // idea step). This screen shows ONLY the synopsis — no "your idea" panel, no cast/locations — with an
-  // optional correction and an «Одобрить синопсис» button that advances to the season-story step.
+  // optional correction and an «"Approve synopsis" button that advances to the season-story step.
   const isNew = Boolean(project?.newFlow)
 
   if (isNew) {
     return (
       <div className="space-y-6">
         <div className="rounded-xl border border-border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
-          <h2 className="mb-2 font-display text-xl font-bold">Шаг 2 — Синопсис</h2>
+          <h2 className="mb-2 font-display text-xl font-bold">Step 2 — Synopsis</h2>
           <p className="mb-4 text-sm text-muted-foreground">
-            Проверьте синопсис сезона. Можно отредактировать его прямо в тексте или попросить ИИ переписать с замечанием. Когда всё устроит — нажмите «Одобрить синопсис», и мы перейдём к сюжету сезона (персонажи, локации и сценарий).
+            Review the season synopsis. You can edit it directly in the text or ask the AI to rewrite it with a note. When everything looks good — click "Approve synopsis", and we'll move on to the season plot (characters, locations, and script).
           </p>
 
           {error && <div className="mb-4 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
 
           {/* Stage 77: while the rewrite job runs the OLD synopsis is hidden behind a placeholder. */}
           {rewriteViewState(generating, poll.job?.status) === 'placeholder' ? (
-            <RewritePlaceholder job={poll.job} expectedTotalSec={SYNOPSIS_CORRECTION_EXPECTED_SEC} label="Переписываю синопсис…" testId="synopsis-revise-progress" className="mb-4" />
+            <RewritePlaceholder job={poll.job} expectedTotalSec={SYNOPSIS_CORRECTION_EXPECTED_SEC} label="Rewriting synopsis…" testId="synopsis-revise-progress" className="mb-4" />
           ) : (
             <textarea
               rows={12}
               value={synopsis}
               onChange={(e) => setSynopsis(e.target.value)}
-              placeholder="Синопсис сезона..."
+              placeholder="Season synopsis..."
               className="mb-4 w-full rounded-lg border border-input bg-background p-3 text-sm leading-relaxed outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
               data-testid="synopsis-text"
             />
           )}
 
           <div className="mb-4">
-            <label className="mb-1 block text-sm font-medium">Замечание для переписывания (необязательно)</label>
+            <label className="mb-1 block text-sm font-medium">Rewrite note (optional)</label>
             <textarea
               rows={2}
-              placeholder="Сделать драматичнее, убрать счастливый финал, добавить семейную линию..."
+              placeholder="Make it more dramatic, remove the happy ending, add a family storyline..."
               value={correctionPrompt}
               onChange={(e) => setCorrectionPrompt(e.target.value)}
               disabled={generating}
@@ -146,7 +146,7 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
                 data-testid="synopsis-regenerate"
               >
                 {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-                Переписать синопсис
+                Rewrite synopsis
               </button>
             )}
           </div>
@@ -158,7 +158,7 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
             data-testid="synopsis-approve"
           >
             {approving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-            Одобрить синопсис
+            Approve synopsis
           </button>
         </div>
       </div>

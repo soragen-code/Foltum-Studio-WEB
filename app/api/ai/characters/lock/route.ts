@@ -8,7 +8,7 @@ import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 /**
  * POST /api/ai/characters/lock  { characterId }
  *
- * Stage 22 — "Сохранить навсегда": finalize a character reference without regeneration.
+ * Stage 22 — "Save forever": finalize a character reference without regeneration.
  * Once locked, the references UI hides the prompt input, the revise button and the
  * save-forever button, and shows a lock badge. Locking persists across reloads.
  */

@@ -61,14 +61,14 @@ export async function runArtifactImagesJob({ jobId, projectId, episodeId }: Arti
       where: { id: episodeId },
       include: { artifacts: { include: { artifact: true } } },
     });
-    if (!episode) { await failJob(jobId, "Эпизод не найден"); return; }
+    if (!episode) { await failJob(jobId, "Episode not found"); return; }
 
     const canceled = () => isCancelRequested(jobId);
 
     // ---- Step 1: extract + link artifacts (only if none are linked yet) ----
     let linked = episode.artifacts.map((ea) => ea.artifact);
     if (linked.length === 0 && episode.script && episode.script.trim().length > 40) {
-      await updateJob(jobId, { status: "processing", progress: 8, message: "Определяю важные объекты эпизода…" });
+      await updateJob(jobId, { status: "processing", progress: 8, message: "Identifying important objects in the episode…" });
       let extracted: Extracted[] = [];
       try { extracted = await extractArtifacts(episode.script, episode.title, language); }
       catch (e: any) { console.error("[artifact-job] extraction failed:", e?.message ?? e); }
@@ -76,7 +76,7 @@ export async function runArtifactImagesJob({ jobId, projectId, episodeId }: Arti
       const existing = await prisma.artifact.findMany({ where: { projectId } });
       const byName = new Map(existing.map((a) => [a.name.trim().toLowerCase(), a]));
       for (const ex of extracted) {
-        if (await canceled()) { await markCanceled(jobId, "Отменено"); return; }
+        if (await canceled()) { await markCanceled(jobId, "Canceled"); return; }
         let art = byName.get(ex.name.toLowerCase());
         if (!art) {
           art = await prisma.artifact.create({ data: { projectId, name: ex.name, description: ex.description ?? null, visualPrompt: ex.visualPrompt } });
@@ -93,7 +93,7 @@ export async function runArtifactImagesJob({ jobId, projectId, episodeId }: Arti
     }
 
     if (linked.length === 0) {
-      await completeJob(jobId, { artifacts: 0, frames: 0 }, "У эпизода нет важных объектов");
+      await completeJob(jobId, { artifacts: 0, frames: 0 }, "The episode has no important objects");
       return;
     }
 
@@ -108,8 +108,8 @@ export async function runArtifactImagesJob({ jobId, projectId, episodeId }: Arti
     for (const a of linked) { const s = state.get(a.id)!; if (s.primary) done += 1; done += Math.min(ARTIFACT_FRAME_COUNT - 1, s.extra.length); }
 
     const pct = () => 8 + Math.round((done / Math.max(total, 1)) * 90);
-    const bump = async () => { await updateJob(jobId, { progress: pct(), message: `Кадры важных объектов (${done}/${total})…` }); };
-    await updateJob(jobId, { status: "processing", progress: pct(), message: `Кадры важных объектов (${done}/${total})…` });
+    const bump = async () => { await updateJob(jobId, { progress: pct(), message: `Frames of important objects (${done}/${total})…` }); };
+    await updateJob(jobId, { status: "processing", progress: pct(), message: `Frames of important objects (${done}/${total})…` });
 
     // Pass A: frame 0 (clean isolated reference) for artifacts missing a primary frame.
     const frame0 = linked.filter((a) => !state.get(a.id)!.primary);
@@ -158,12 +158,12 @@ export async function runArtifactImagesJob({ jobId, projectId, episodeId }: Arti
       });
     }
 
-    if (await canceled()) { await markCanceled(jobId, `Отменено — готово ${done} из ${total} кадров`); return; }
+    if (await canceled()) { await markCanceled(jobId, `Canceled — done ${done} of ${total} frames`); return; }
 
     await completeJob(
       jobId,
       { artifacts: linked.length, frames: total, failed, c2paOk: c2paMissing === 0, c2paMissing, c2paChecks },
-      failed > 0 ? `Готово — не удалось ${failed} из ${total} кадров` : "Кадры важных объектов готовы"
+      failed > 0 ? `Done — failed ${failed} of ${total} frames` : "Frames of important objects are ready"
     );
   } catch (err: any) {
     console.error("[artifact-job] failed:", err);

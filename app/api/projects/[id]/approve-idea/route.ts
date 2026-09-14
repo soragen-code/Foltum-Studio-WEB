@@ -10,7 +10,7 @@ import { runCharacterImagesJob } from "@/lib/workers/character-images-job";
 /**
  * POST /api/projects/[id]/approve-idea
  *
- * "Подтвердить синопсис и персонажей": marks synopsis + characters approved,
+ * "Confirm synopsis and characters": marks synopsis + characters approved,
  * moves the project to the "references" step and starts the existing
  * character-images job (Seedream) for every character that has no reference yet.
  * Idempotent: if a job is already running it is returned instead of a new one.

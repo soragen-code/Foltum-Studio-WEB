@@ -155,7 +155,7 @@ export function smoothedProgress({
 /**
  * Stage 60 — smooth, monotonic scene-video progress bar with an elapsed-time counter.
  * Same visual style as JobProgressBar, but the percentage is fed through `smoothedProgress`
- * (never goes backwards, capped <100% until the clip is really done) and shows «прошло Xм Yс».
+ * (never goes backwards, capped <100% until the clip is really done) and shows «elapsed Xm Ys".
  */
 export function SmoothProgress({
   job,
@@ -196,7 +196,7 @@ export function SmoothProgress({
   shownRef.current = pct
 
   const s = Math.floor(elapsedSec)
-  const elapsedLabel = s < 60 ? `${s}с` : `${Math.floor(s / 60)}м ${s % 60}с`
+  const elapsedLabel = s < 60 ? `${s}s` : `${Math.floor(s / 60)}min ${s % 60}s`
 
   return (
     <div className={`space-y-2 ${className}`}>
@@ -212,8 +212,8 @@ export function SmoothProgress({
             <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-primary" />
           )}
           <span className="truncate">
-            {failed ? job.error ?? 'Generation failed' : canceled ? job.message ?? 'Отменено' : job.message ?? 'Working...'}
-            {!done && !failed && !canceled && <span className="text-muted-foreground/70"> · прошло {elapsedLabel}</span>}
+            {failed ? job.error ?? 'Generation failed' : canceled ? job.message ?? 'Canceled' : job.message ?? 'Working...'}
+            {!done && !failed && !canceled && <span className="text-muted-foreground/70"> · elapsed {elapsedLabel}</span>}
           </span>
         </span>
         <span className="ml-3 flex-shrink-0 tabular-nums">{Math.round(pct)}%</span>
@@ -266,7 +266,7 @@ export function JobProgressBar({
             <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-primary" />
           )}
           <span className="truncate">
-            {failed ? job.error ?? 'Generation failed' : canceled ? job.message ?? 'Отменено' : job.message ?? 'Working...'}
+            {failed ? job.error ?? 'Generation failed' : canceled ? job.message ?? 'Canceled' : job.message ?? 'Working...'}
             {eta && <span className="text-muted-foreground/70"> · {eta}</span>}
           </span>
         </span>

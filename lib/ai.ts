@@ -165,7 +165,7 @@ export function safeJsonParse<T = any>(raw: string): T {
         /* fall through to the friendly error */
       }
     }
-    throw new Error(`Модель вернула неполный ответ (обрезанный JSON, ${cleaned.length} символов). Попробуйте ещё раз.`);
+    throw new Error(`The model returned an incomplete response (truncated JSON, ${cleaned.length} characters). Please try again.`);
   }
 }
 

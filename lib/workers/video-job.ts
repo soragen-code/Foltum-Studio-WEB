@@ -24,7 +24,7 @@ import { nextChainScene, chainStopMessage, CHAIN_INSUFFICIENT_CREDITS } from "@/
 import { resolvePowerTier, SCENE_RESOLUTION } from "@/lib/power-tier";
 import { sceneProgressStage, SCENE_STAGE_PROGRESS, SCENE_STAGE_MESSAGE } from "@/lib/scene-progress";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
-import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, sceneHasLocationRef, resolveContinuity, TEXT_ONLY_CONTINUITY_MESSAGE, type Continuity } from "@/lib/prompt-seam";
+import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, applySeriesIntro, sceneHasLocationRef, resolveContinuity, TEXT_ONLY_CONTINUITY_MESSAGE, type Continuity } from "@/lib/prompt-seam";
 
 export interface VideoJobParams {
   jobId: string;
@@ -163,7 +163,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     if (scene.endStateActual) await prisma.scene.update({ where: { id: sceneId }, data: { endStateActual: null } }).catch(() => {});
     const links = await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true } });
     // Stage 40: the previous scene's end-state (actual description of its last frame in chain mode,
-    // otherwise the scripted «Финал кадра») opens this scene's prompt. Its image is never sent.
+    // otherwise the scripted "Final frame") opens this scene's prompt. Its image is never sent.
     const previous = scene.number > 1 ? await prisma.scene.findFirst({
       where: { episodeId: scene.episodeId, number: scene.number - 1 },
       select: { id: true, number: true, locationDesc: true, lastFrameUrl: true, endState: true, endStateActual: true },
@@ -273,6 +273,10 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       location: episodeLoc?.location ?? null,
     });
     prompt = applyLocationBaseLayer(prompt, { hasOverride: built.hasOverride, hasLocationRef });
+    // Stage 87: the FIRST scene of the episode is the series intro — only wide/establishing shots of
+    // the location and the world plus an off-screen voiceover carrying the backstory, no dialogue
+    // close-ups. Keyed on scene.number === 1, so it applies retroactively for old projects too.
+    prompt = applySeriesIntro(prompt, scene.number, { hasOverride: built.hasOverride });
     console.log("[video-job] continuity", JSON.stringify({ sceneId, sceneNumber: scene.number, continuity, previousFrameSceneId: built.previousFrameSceneId ?? null, hasLocationRef }));
     const basePrompt = built.basePrompt;
     const fallbackRefs = built.fallbackRefs;
@@ -368,7 +372,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     // Stage 40: `reference_images` is omitted entirely for text-only submissions (never sent as []).
     predictionId = await startVideoGeneration(videoProvider, { ...input, ...(referenceImages.length ? { reference_images: referenceImages } : {}) });
     pipelineExtra.provider = videoProvider;
-    // Stage 46B: «В очереди» until the provider reports processing; Stage 78: in chain mode without the
+    // Stage 46B: "Queued" until the provider reports processing; Stage 78: in chain mode without the
     // previous last frame the card says once that the scene is generated from the description only.
     submitMessage = continuity === "text_only" ? TEXT_ONLY_CONTINUITY_MESSAGE : SCENE_STAGE_MESSAGE.queued;
     // Retry plan is still persisted for diagnostics, but moderation is now fail-fast:
@@ -446,7 +450,7 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, source: str
     const links = await prisma.sceneCharacter.findMany({ where: { sceneId: scene.id }, select: { character: { select: { name: true } } } }).catch(() => []);
     endStateActual = await describeLastFrame(lastFrameUrl, scene, links.map(l => ({ name: l.character.name })));
   }
-  // Stage 46B: «Проверка» 95 % — the clip is stored, the scene is about to be published.
+  // Stage 46B: "Checking" 95 % — the clip is stored, the scene is about to be published.
   await saveOwned(jobId, state, { progress: SCENE_STAGE_PROGRESS.verifying, message: SCENE_STAGE_MESSAGE.verifying });
   // Publish scene and completed job together. A stale lease holder cannot publish or refund.
   const published = await prisma.$transaction(async tx => {
@@ -497,9 +501,9 @@ async function continueChainRun(episodeId: string, finishedSceneNumber: number):
     await prisma.episode.update({ where: { id: episodeId }, data: { chainRunActive: false, chainRunNote: chainStopMessage(next.number, CHAIN_INSUFFICIENT_CREDITS) } });
     return;
   }
-  await prisma.creditTransaction.create({ data: { userId: project.userId, amount: -cost, description: `Эпизод ${episode.number}, сцена ${next.number} — генерация видео по цепочке (${tier.id})` } });
+  await prisma.creditTransaction.create({ data: { userId: project.userId, amount: -cost, description: `Episode ${episode.number}, scene ${next.number} — video generation via chain (${tier.id})` } });
   await prisma.scene.update({ where: { id: next.id }, data: { status: "generating", language: "en", videoModel: normalizeVideoModel(null) } });
-  const job = await prisma.generationJob.create({ data: { type: "video", status: "processing", progress: 2, message: "Цепочка: старт следующей сцены...", projectId: project.id, sceneId: next.id } });
+  const job = await prisma.generationJob.create({ data: { type: "video", status: "processing", progress: 2, message: "Chain: starting next scene...", projectId: project.id, sceneId: next.id } });
   runInBackground(() => runVideoJob({ jobId: job.id, sceneId: next.id, projectId: project.id, userId: project.userId, cost, duration, resolution: tier.resolution }));
 }
 
@@ -530,17 +534,17 @@ async function moderationMessage(sceneId: string, error: unknown, state?: VideoJ
   // Stage 38: the previous scene's frame is never sent, so the message lists only portraits / location angles / crowd.
   const imagesSent = counts ? counts.characters + counts.location + counts.crowd + counts.scene : null;
   const countsText = counts
-    ? ` Отправлено изображений: ${imagesSent} — портретов: ${counts.characters}, ракурсов локации: ${counts.location}, массовки: ${counts.crowd}${counts.scene ? `, кадр сцены: ${counts.scene}` : ""}.`
+    ? ` Images sent: ${imagesSent} — portraits: ${counts.characters}, location angles: ${counts.location}, extras: ${counts.crowd}${counts.scene ? `, scene frame: ${counts.scene}` : ""}.`
     : "";
   let message: string;
   if (state?.hasOverride && !hints.length && state.referenceKind !== "text_only") {
-    message = `[moderation] Сцена не прошла модерацию провайдера. Текст промпта — ручной (override), текстовые триггеры не найдены; вероятная причина — референс‑изображения (портреты персонажей, ракурсы локации, массовка).${countsText} Попробуйте вариант «Отправить без референс‑изображений (только текст)» в окне «Смотреть промпт» или отредактируйте промпт.`;
+    message = `[moderation] The scene failed provider moderation. The prompt text is manual (override); no text triggers were found. The likely cause is reference images (character portraits, location angles, extras).${countsText} Try "Send without reference images (text only)" in the "View prompt" window or edit the prompt.`;
   } else {
-    message = `[moderation] Сцена не прошла модерацию провайдера. Отредактируйте промпт вручную: откройте его кнопкой «Смотреть промпт», исправьте, сохраните свой вариант и запустите генерацию заново.` +
-      (hints.length ? ` Вероятные триггеры: ${hints.map(h => `«${h}»`).join(", ")}.` : "") +
-      (state?.referenceKind === "text_only" ? " Референс‑изображения не отправлялись (только текст)." : countsText + " Если блокируются референс‑изображения (портреты, ракурсы локации, массовка) — используйте вариант «Отправить без референс‑изображений (только текст)» в окне «Смотреть промпт».");
+    message = `[moderation] The scene failed provider moderation. Edit the prompt manually: open it with the "View prompt" button, fix it, save your version, and start generation again.` +
+      (hints.length ? ` Likely triggers: ${hints.map(h => `«${h}»`).join(", ")}.` : "") +
+      (state?.referenceKind === "text_only" ? " Reference images were not sent (text only)." : countsText + " If reference images are blocked (portraits, location angles, extras) — use the 'Send without reference images (text only)' option in the 'View prompt' window.");
   }
-  message += ` Код провайдера: ${safeProviderError(error)}`;
+  message += ` Provider code: ${safeProviderError(error)}`;
   return message;
 }
 
@@ -588,7 +592,7 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
   });
   if (!claim.count) return false;
   try {
-    // «Отменить генерацию» — check the flag BEFORE the provider status GET, so a cancel goes through even
+    // "Cancel generation" — check the flag BEFORE the provider status GET, so a cancel goes through even
     // while the provider is unreachable or its status read keeps failing (otherwise the card spun forever).
     // Stage 73: poll/cancel on the provider the job was submitted to (legacy "seedance" rows = WaveSpeed).
     const providerOf = (s: VideoJobState): GenerationProvider => (isGenerationProvider(s.provider) ? s.provider : "wavespeed");
@@ -596,7 +600,7 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
     const cancelState = (s: VideoJobState): Promise<void> => cancelVideoGeneration(providerOf(s), s.predictionId);
     if (fresh.cancelRequested === true || await isCancelRequested(job.id)) {
       await cancelState(state).catch(() => {});
-      await handleFailure(job.id, state, new Error("Генерация отменена автором"), state);
+      await handleFailure(job.id, state, new Error("Generation canceled by the author"), state);
       await markCanceled(job.id);
       return true;
     }
@@ -635,7 +639,7 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
     if (prediction.status === "succeeded" && !prediction.url) {
       const completedAt = prediction.completedAt ? Date.parse(prediction.completedAt) : NaN;
       if (!Number.isFinite(completedAt) || Date.now() - completedAt > EXPIRED_OUTPUT_GRACE_MS) {
-        await handleFailure(job.id, state, new Error("Готовое видео не было получено вовремя: провайдер уже удалил файл (он хранится около часа после завершения). Кредиты возвращены. Держите вкладку эпизода открытой до конца генерации или вернитесь к ней в течение часа."), state);
+        await handleFailure(job.id, state, new Error("The finished video was not retrieved in time: the provider has already deleted the file (it is stored for about an hour after completion). Credits have been refunded. Keep the episode tab open until generation finishes or return to it within an hour."), state);
         return true;
       }
     }
@@ -659,7 +663,7 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
       return true;
     }
     state.leaseUntil = 0;
-    // Stage 46B: stage-based progress — «В очереди» 5 % / «Рендер видео (Seedance)… mm:ss» 40 % (elapsed
+    // Stage 46B: stage-based progress — "Queued" 5 % / "Rendering video (Seedance)… mm:ss" 40 % (elapsed
     // since the model actually started; a model-reported percent is used when the logs carry one).
     const renderStart = prediction.startedAt ? Date.parse(prediction.startedAt) : NaN;
     const elapsedMs = Date.now() - (Number.isFinite(renderStart) ? renderStart : state.startedAt);

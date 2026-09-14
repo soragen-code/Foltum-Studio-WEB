@@ -25,26 +25,26 @@ export interface CharacterCardData {
 }
 
 const LANGUAGE_LABELS: Record<string, string> = {
-  ru: 'русский', en: 'English', uk: 'українська', de: 'Deutsch', fr: 'français',
+  ru: 'Russian', en: 'English', uk: 'Ukrainian', de: 'Deutsch', fr: 'français',
   es: 'español', it: 'italiano', pl: 'polski', pt: 'português', tr: 'Türkçe',
 }
 
 /** Genres for AUTO mode. ids must match GENRES in lib/idea.ts. */
 const GENRE_OPTIONS: { id: string; label: string }[] = [
-  { id: 'detective', label: 'Детектив' },
-  { id: 'horror', label: 'Ужасы' },
-  { id: 'fantasy', label: 'Магия / Фэнтези' },
-  { id: 'scifi', label: 'Сай-фай' },
-  { id: 'drama', label: 'Драма' },
-  { id: 'thriller', label: 'Триллер' },
-  { id: 'romance', label: 'Романтика' },
-  { id: 'comedy', label: 'Комедия' },
-  { id: 'adventure', label: 'Приключения' },
-  { id: 'postapoc', label: 'Постапокалипсис' },
-  { id: 'mystery', label: 'Мистика' },
-  { id: 'action', label: 'Боевик' },
-  { id: 'historical', label: 'Историческая драма' },
-  { id: 'melodrama', label: 'Мелодрама' },
+  { id: 'detective', label: 'Detective' },
+  { id: 'horror', label: 'Horror' },
+  { id: 'fantasy', label: 'Magic / Fantasy' },
+  { id: 'scifi', label: 'Sci-fi' },
+  { id: 'drama', label: 'Drama' },
+  { id: 'thriller', label: 'Thriller' },
+  { id: 'romance', label: 'Romance' },
+  { id: 'comedy', label: 'Comedy' },
+  { id: 'adventure', label: 'Adventure' },
+  { id: 'postapoc', label: 'Post-apocalypse' },
+  { id: 'mystery', label: 'Mystery' },
+  { id: 'action', label: 'Action' },
+  { id: 'historical', label: 'Historical drama' },
+  { id: 'melodrama', label: 'Melodrama' },
 ]
 
 /** Read-only character card with a pencil → prompt-based rewrite. */
@@ -107,8 +107,8 @@ export function CharacterCard({
               type="button"
               onClick={undo}
               disabled={busy || saving || undoing}
-              aria-label="Отменить последнее изменение"
-              title="Отменить последнее изменение"
+              aria-label="Undo last change"
+              title="Undo last change"
               data-testid="character-undo"
               className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition hover:text-foreground disabled:opacity-50"
             >
@@ -120,8 +120,8 @@ export function CharacterCard({
               type="button"
               onClick={() => setEditing((v) => !v)}
               disabled={busy || saving}
-              aria-label="Изменить персонажа по подсказке"
-              title="Изменить персонажа по подсказке"
+              aria-label="Edit character using a hint"
+              title="Edit character using a hint"
               data-testid="character-edit"
               className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground transition hover:text-foreground disabled:opacity-50"
             >
@@ -135,11 +135,11 @@ export function CharacterCard({
       {extra}
 
       <dl className="space-y-1.5 text-xs text-muted-foreground [overflow-wrap:anywhere]">
-        <div><dt className="inline font-medium text-foreground">Возраст: </dt><dd className="inline">{char.age || '—'}</dd></div>
-        <div><dt className="inline font-medium text-foreground">Роль: </dt><dd className="inline">{char.role || '—'}</dd></div>
-        <div><dt className="inline font-medium text-foreground">Внешность: </dt><dd className="inline">{char.appearance || '—'}</dd></div>
-        <div><dt className="inline font-medium text-foreground">Характер: </dt><dd className="inline">{char.personality || '—'}</dd></div>
-        <div><dt className="inline font-medium text-foreground">Первое появление: </dt><dd className="inline">{char.firstAppearance || '—'}</dd></div>
+        <div><dt className="inline font-medium text-foreground">Age: </dt><dd className="inline">{char.age || '—'}</dd></div>
+        <div><dt className="inline font-medium text-foreground">Role: </dt><dd className="inline">{char.role || '—'}</dd></div>
+        <div><dt className="inline font-medium text-foreground">Appearance: </dt><dd className="inline">{char.appearance || '—'}</dd></div>
+        <div><dt className="inline font-medium text-foreground">Personality: </dt><dd className="inline">{char.personality || '—'}</dd></div>
+        <div><dt className="inline font-medium text-foreground">First appearance: </dt><dd className="inline">{char.firstAppearance || '—'}</dd></div>
       </dl>
 
       {editing && onRevise && (
@@ -147,7 +147,7 @@ export function CharacterCard({
           <textarea
             value={instruction}
             onChange={(e) => setInstruction(e.target.value)}
-            placeholder="Что изменить в персонаже? Например: сделать старше и добавить шрам на щеке"
+            placeholder="What to change in the character? For example: make them older and add a scar on the cheek"
             rows={2}
             className="w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
             data-testid="character-edit-input"
@@ -160,7 +160,7 @@ export function CharacterCard({
             data-testid="character-edit-submit"
           >
             {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />}
-            Переписать карточку
+            Rewrite card
           </button>
         </div>
       )}
@@ -208,7 +208,7 @@ function Section({
 /**
  * Synopsis + locations + cast with prompt-based edits. Used by the Idea step (stacked) and, since
  * stage 5, at the top of the season-script screen (collapsible blocks). `onChanged` fires after every
- * successful edit so the season screen can offer «Применить изменения к сценарию сезона».
+ * successful edit so the season screen can offer «"Apply changes to the season script".
  */
 export function IdeaEditor({
   project,
@@ -253,12 +253,12 @@ export function IdeaEditor({
         body: JSON.stringify({ projectId: project.id, hint: castHint.trim() }),
       })
       const data = await res.json()
-      if (!res.ok) { setError(data?.error ?? 'Не удалось добавить персонажей'); return }
+      if (!res.ok) { setError(data?.error ?? 'Failed to add characters'); return }
       setCharacters(data.characters ?? characters)
-      setNotice(`Добавлено персонажей: ${data.added}`)
+      setNotice(`Characters added: ${data.added}`)
       setCastHint('')
       onChanged?.('characters')
-    } catch { setError('Ошибка сети') }
+    } catch { setError('Network error') }
     finally { setAddingCast(false) }
   }
 
@@ -270,7 +270,7 @@ export function IdeaEditor({
       body: JSON.stringify({ instruction: text, regenerate: false }),
     })
     const data = await res.json()
-    if (!res.ok) { setError(data?.error ?? 'Не удалось изменить локацию'); return }
+    if (!res.ok) { setError(data?.error ?? 'Failed to edit location'); return }
     setLocations((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...data.location, hasUndo: true } : l)))
     onChanged?.('locations')
   }
@@ -280,7 +280,7 @@ export function IdeaEditor({
     setError(''); setNotice('')
     const res = await fetch(`/api/ai/locations/${locationId}/undo`, { method: 'POST' })
     const data = await res.json().catch(() => ({}))
-    if (!res.ok) { setError(data?.error ?? 'Не удалось отменить изменение'); return }
+    if (!res.ok) { setError(data?.error ?? 'Failed to undo change'); return }
     setLocations((prev) => prev.map((l) => (l.id === locationId ? { ...l, ...data.location, hasUndo: false } : l)))
     onChanged?.('locations')
   }
@@ -295,15 +295,15 @@ export function IdeaEditor({
         body: JSON.stringify({ projectId: project.id, instruction: instruction.trim() }),
       })
       const data = await res.json()
-      if (!res.ok) { setError(data?.error ?? 'Не удалось изменить синопсис'); return }
+      if (!res.ok) { setError(data?.error ?? 'Failed to edit synopsis'); return }
       setSynopsis(data.synopsis ?? synopsis)
       if (data.charactersChanged) {
         setCharacters(data.characters ?? characters)
-        setNotice(`Персонажи обновлены вместе с синопсисом. ${data.changeSummary ?? ''}`.trim())
+        setNotice(`Characters updated along with the synopsis. ${data.changeSummary ?? ''}`.trim())
       }
       setInstruction('')
       onChanged?.('synopsis')
-    } catch { setError('Ошибка сети') }
+    } catch { setError('Network error') }
     finally { setRevising(false) }
   }
 
@@ -315,7 +315,7 @@ export function IdeaEditor({
       body: JSON.stringify({ characterId, instruction: text }),
     })
     const data = await res.json()
-    if (!res.ok) { setError(data?.error ?? 'Не удалось изменить персонажа'); return }
+    if (!res.ok) { setError(data?.error ?? 'Failed to edit character'); return }
     setCharacters((prev) => prev.map((c) => (c.id === characterId ? { ...c, ...data.character, hasUndo: true } : c)))
     onChanged?.('characters')
   }
@@ -325,7 +325,7 @@ export function IdeaEditor({
     setError(''); setNotice('')
     const res = await fetch(`/api/ai/characters/${characterId}/undo`, { method: 'POST' })
     const data = await res.json().catch(() => ({}))
-    if (!res.ok) { setError(data?.error ?? 'Не удалось отменить изменение'); return }
+    if (!res.ok) { setError(data?.error ?? 'Failed to undo change'); return }
     setCharacters((prev) => prev.map((c) => (c.id === characterId ? { ...c, ...data.character, hasUndo: false } : c)))
     onChanged?.('characters')
   }
@@ -333,13 +333,13 @@ export function IdeaEditor({
   return (
     <div className={collapsible ? 'space-y-3' : 'space-y-6'} data-testid="idea-editor">
       {error && <div className="rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
-      <Section id="synopsis" title="Синопсис сезона" collapsible={collapsible} open={!!openSections['synopsis']} onToggle={() => toggleSection('synopsis')}>
+      <Section id="synopsis" title="Season synopsis" collapsible={collapsible} open={!!openSections['synopsis']} onToggle={() => toggleSection('synopsis')}>
         <div className={collapsible ? '' : 'rounded-xl border border-border bg-card p-4 sm:p-6'} style={collapsible ? undefined : { boxShadow: 'var(--shadow-md)' }}>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            {!collapsible && <h3 className="font-display text-lg font-semibold">Синопсис сезона</h3>}
+            {!collapsible && <h3 className="font-display text-lg font-semibold">Season synopsis</h3>}
             {language && (
               <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground" data-testid="synopsis-language">
-                язык: {LANGUAGE_LABELS[language] ?? language}
+                language: {LANGUAGE_LABELS[language] ?? language}
               </span>
             )}
           </div>
@@ -348,12 +348,12 @@ export function IdeaEditor({
           </div>
           <div className="mt-5 rounded-lg border border-border bg-background p-3">
             <label className="mb-2 flex items-center gap-2 text-sm font-medium">
-              <MessageSquareText className="h-4 w-4 text-primary" /> Что изменить
+              <MessageSquareText className="h-4 w-4 text-primary" /> What to change
             </label>
             <textarea
               value={instruction}
               onChange={(e) => setInstruction(e.target.value)}
-              placeholder="Например: сделать финал сезона более мрачным, добавить линию соперницы"
+              placeholder="For example: make the season finale darker, add a rival’s storyline"
               rows={2}
               disabled={busy}
               className="w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
@@ -366,7 +366,7 @@ export function IdeaEditor({
               data-testid="synopsis-revise-submit"
             >
               {revising ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />}
-              Переписать синопсис
+              Rewrite synopsis
             </button>
             {notice && (
               <p className="mt-2 rounded-lg bg-primary/10 px-3 py-2 text-xs text-primary" data-testid="characters-sync-notice">{notice}</p>
@@ -375,10 +375,10 @@ export function IdeaEditor({
         </div>
       </Section>
 
-      <Section id="locations" title={`Локации (${locations.length})`} collapsible={collapsible} open={!!openSections['locations']} onToggle={() => toggleSection('locations')}>
+      <Section id="locations" title={`Locations (${locations.length})`} collapsible={collapsible} open={!!openSections['locations']} onToggle={() => toggleSection('locations')}>
         <div data-testid="idea-locations">
-          {!collapsible && <h3 className="mb-1 font-display text-lg font-semibold">Локации ({locations.length})</h3>}
-          <p className="mb-3 text-xs text-muted-foreground">Ключевые места сезона. Фотореалистичные референсы для них (и для персонажей) — на вкладке «Референсы»; видеомодель использует их вместе с персонажами.</p>
+          {!collapsible && <h3 className="mb-1 font-display text-lg font-semibold">Locations ({locations.length})</h3>}
+          <p className="mb-3 text-xs text-muted-foreground">Key locations in the season. Photorealistic references for them (and for characters) are in the References tab; the video model uses them together with the characters.</p>
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {locations.map((l) => (
               <LocationCard key={l.id} loc={l} busy={busy} onRevise={reviseLocation} onUndo={undoLocation} />
@@ -390,9 +390,9 @@ export function IdeaEditor({
         </div>
       </Section>
 
-      <Section id="cast" title={`Персонажи (${characters.length})`} collapsible={collapsible} open={!!openSections['cast']} onToggle={() => toggleSection('cast')}>
+      <Section id="cast" title={`Characters (${characters.length})`} collapsible={collapsible} open={!!openSections['cast']} onToggle={() => toggleSection('cast')}>
         <div data-testid="idea-cast">
-          {!collapsible && <h3 className="mb-3 font-display text-lg font-semibold">Персонажи ({characters.length})</h3>}
+          {!collapsible && <h3 className="mb-3 font-display text-lg font-semibold">Characters ({characters.length})</h3>}
           {groupByTier(characters).map((g) => (
             <div key={g.tier} className="mb-5" data-testid={`cast-group-${g.tier}`}>
               <h4 className="mb-2 text-sm font-semibold text-muted-foreground">{TIER_LABELS[g.tier]} · {g.items.length}</h4>
@@ -405,13 +405,13 @@ export function IdeaEditor({
           ))}
           <div className="rounded-lg border border-border bg-background p-3">
             <label className="mb-2 flex items-center gap-2 text-sm font-medium">
-              <UserPlus className="h-4 w-4 text-primary" /> Добавить ещё персонажей
+              <UserPlus className="h-4 w-4 text-primary" /> Add more characters
             </label>
             <div className="flex flex-col gap-2 sm:flex-row">
               <input
                 value={castHint}
                 onChange={(e) => setCastHint(e.target.value)}
-                placeholder="Необязательно: кого добавить (например, «братья героя и соседи по дому»)"
+                placeholder={`Optional: who to add (e.g., "the hero's brothers and housemates")`}
                 disabled={busy}
                 className="min-w-0 flex-1 rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:border-primary"
                 data-testid="cast-add-hint"
@@ -423,7 +423,7 @@ export function IdeaEditor({
                 data-testid="cast-add-submit"
               >
                 {addingCast ? <Loader2 className="h-3 w-3 animate-spin" /> : <UserPlus className="h-3 w-3" />}
-                Добавить ещё персонажей
+                Add more characters
               </button>
             </div>
           </div>
@@ -434,9 +434,9 @@ export function IdeaEditor({
 }
 
 /**
- * Step "Идея": idea → synopsis (in the idea's language) + cast + locations, and — stage 5 — the
+ * Step "Idea": idea → synopsis (in the idea's language) + cast + locations, and — stage 5 — the
  * season script starts automatically right after (no extra clicks): approve-idea {next:"structure"}
- * → POST /api/ai/season → the wizard switches to the single «Сценарий сезона» screen.
+ * → POST /api/ai/season → the wizard switches to the single «Season script screen.
  * The synopsis / cast / locations stay editable there (collapsible blocks).
  */
 export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () => void }) {
@@ -452,7 +452,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   const [ideaCanceled, setIdeaCanceled] = useState(false)
   const activeJobIdRef = useRef<string | null>(null)
   // Stage 67: synopsis generation is a background GenerationJob (type "synopsis"). We poll it instead
-  // of holding an open fetch, so leaving the page no longer aborts the request / shows «Ошибка сети».
+  // of holding an open fetch, so leaving the page no longer aborts the request / shows «Network error.
   const { job: synopsisJob, start: startPolling, clear: clearSynopsisJob } = useJobPolling({
     onFinish: (res) => {
       activeJobIdRef.current = null
@@ -463,7 +463,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
       } else if (res.job.status === 'canceled') {
         setIdeaCanceled(true)
       } else {
-        setError(res.job.error ?? 'Не удалось сгенерировать')
+        setError(res.job.error ?? "Couldn't generate")
       }
     },
   })
@@ -493,10 +493,10 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   }, [project.id])
   // Idea source: 'manual' = producer writes the idea; 'auto' = the AI invents it from a genre;
   // 'upload' = the producer uploads a finished story file (Stage 12).
-  // 'test' (Stage 40) = «Тестовая серия»: one hand-written scene prompt → one-scene episode, no story pipeline.
+  // 'test' (Stage 40) = «Test episode: one hand-written scene prompt → one-scene episode, no story pipeline.
   const [mode, setMode] = useState<'manual' | 'auto' | 'upload' | 'test'>('manual')
   const router = useRouter()
-  // Stage 46A: the test form is ONE «Идея» field — the scene prompt / dialogue are invented by the model
+  // Stage 46A: the test form is ONE «"Idea" field — the scene prompt / dialogue are invented by the model
   // and every test scene is a fixed 30 s clip (server-enforced).
   const [testIdea, setTestIdea] = useState('')
   const [creatingTest, setCreatingTest] = useState(false)
@@ -524,7 +524,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   const canGenerate = mode === 'auto' ? genres.length > 0 : mode === 'upload' ? storyText.trim().length >= 20 : idea.trim().length >= 10
   const canCreateTest = testIdea.trim().length >= 5
 
-  // Stage 40/46A — «Создать тестовую серию»: the model invents the whole scene from the one-line idea
+  // Stage 40/46A — «"Create a test episode": the model invents the whole scene from the one-line idea
   // (prompt, dialogue, meta), then the one-scene 30 s test episode is created and opened. Nothing to edit by hand.
   const createTestEpisode = async () => {
     setError(''); setNotice(''); setCreatingTest(true)
@@ -534,7 +534,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
         body: JSON.stringify({ idea: testIdea.trim(), durationSec: 30 }),
       })
       const d = await inv.json().catch(() => ({}))
-      if (!inv.ok) throw new Error(d?.error || 'Не удалось придумать сцену')
+      if (!inv.ok) throw new Error(d?.error || "Couldn't come up with a scene")
       const res = await fetch(`/api/projects/${project.id}/test-episode`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -546,10 +546,10 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
         }),
       })
       const cd = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(cd?.error || 'Не удалось создать тестовую серию')
+      if (!res.ok) throw new Error(cd?.error || "Couldn't create a test episode")
       router.push(`/project/${project.id}/episode/${cd.episodeId}`)
     } catch (e: any) {
-      setError(e?.message || 'Не удалось создать тестовую серию')
+      setError(e?.message || "Couldn't create a test episode")
       setCreatingTest(false)
     }
   }
@@ -565,10 +565,10 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
       fd.append('file', file)
       const res = await fetch('/api/ai/idea/parse-file', { method: 'POST', body: fd })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) { setError(data?.error ?? 'Не удалось разобрать файл'); return }
+      if (!res.ok) { setError(data?.error ?? "Couldn't parse the file"); return }
       setStoryText(data.text ?? '')
       setStoryMeta({ filename: data.filename, kind: data.kind, languageName: data.languageName ?? data.language, chars: data.chars ?? (data.text?.length ?? 0) })
-    } catch { setError('Ошибка сети при загрузке файла') }
+    } catch { setError('Network error while uploading file') }
     finally { setParsing(false) }
   }
 
@@ -578,25 +578,25 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
     try {
       const a = await fetch(`/api/projects/${project.id}/approve-idea`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ next: 'structure' }) })
       const ad = await a.json().catch(() => ({}))
-      if (!a.ok) throw new Error(ad?.error ?? 'Не удалось подтвердить синопсис')
+      if (!a.ok) throw new Error(ad?.error ?? 'Failed to confirm synopsis')
       const s = await fetch('/api/ai/season', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, ...(mode !== 'upload' ? { episodeCount } : {}) }) })
       const sd = await s.json().catch(() => ({}))
-      if (!s.ok) throw new Error(sd?.error ?? 'Не удалось запустить сценарий сезона')
+      if (!s.ok) throw new Error(sd?.error ?? 'Failed to start the season script')
       onRefresh()
       return true
     } catch (e: any) {
-      setError(`${e?.message ?? 'Ошибка'} — нажмите «Перейти к сценарию сезона», чтобы повторить.`)
+      setError(`${e?.message ?? 'Error'} — click "Go to season script" to try again.`)
       return false
     } finally { setChaining(false) }
   }
 
   const generate = async () => {
     if (mode === 'auto') {
-      if (genres.length === 0) { setError('Выберите хотя бы один жанр'); return }
+      if (genres.length === 0) { setError('Select at least one genre'); return }
     } else if (mode === 'upload') {
-      if (storyText.trim().length < 20) { setError('Загрузите файл с сюжетом (.txt, .md, .docx или .pdf)'); return }
+      if (storyText.trim().length < 20) { setError('Upload a plot file (.txt, .md, .docx, or .pdf)'); return }
     } else if (idea.trim().length < 10) {
-      setError('Опишите идею хотя бы одним-двумя предложениями'); return
+      setError('Describe the idea in at least one or two sentences'); return
     }
     setError(''); setNotice(''); setIdeaCanceled(false); clearSynopsisJob(); setStarting(true)
     try {
@@ -613,10 +613,10 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
         body: JSON.stringify(body),
       })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) { setError(data?.error ?? 'Не удалось сгенерировать'); return }
+      if (!res.ok) { setError(data?.error ?? "Couldn't generate"); return }
       if (data?.jobId) { activeJobIdRef.current = data.jobId; startPolling(data.jobId) }
     } catch {
-      setError('Ошибка сети')
+      setError('Network error')
     }
     finally { setStarting(false) }
   }
@@ -638,10 +638,10 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
         body: JSON.stringify({ projectId: project.id, ...(comment?.trim() ? { comment: comment.trim() } : {}), ...(mode !== 'upload' ? { episodeCount } : {}) }),
       })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok) { setError(d?.error ?? 'Не удалось составить краткий синопсис'); return false }
+      if (!res.ok) { setError(d?.error ?? "Couldn't create a brief synopsis"); return false }
       setShortSynopsis(d.shortSynopsis ?? null); setReworkOpen(false); setReworkComment('')
       return true
-    } catch { setError('Ошибка сети'); return false }
+    } catch { setError('Network error'); return false }
     finally { setSynopsisLoading(false) }
   }
 
@@ -654,13 +654,13 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
     <div className="space-y-6">
       <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
         <h2 className="flex items-center gap-2 font-display text-xl font-bold">
-          <Lightbulb className="h-5 w-5 text-primary" /> Шаг 1 — Идея
+          <Lightbulb className="h-5 w-5 text-primary" /> Step 1 — Idea
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Опишите свою идею — или выберите режим «Авто», и ИИ сам придумает оригинальную историю по выбранному жанру. На этом шаге мы составим только синопсис сезона: вы одобрите его на следующем шаге, а персонажей, локации и сценарий сгенерируем позже.
+          Describe your idea — or choose Auto mode, and AI will come up with an original story in the selected genre. In this step, we'll create only the season synopsis: you'll approve it in the next step, and we'll generate the characters, locations, and script later.
         </p>
 
-        {/* Mode toggle: своя идея / авто */}
+        {/* Mode toggle: own idea / auto */}
         <div className="mt-4 flex flex-wrap gap-1 rounded-lg border border-border bg-muted/40 p-1" role="tablist" data-testid="idea-mode-toggle">
           <button
             type="button"
@@ -669,7 +669,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
             className={`rounded-md px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${mode === 'manual' ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}
             data-testid="idea-mode-manual"
           >
-            Своя идея
+            Custom idea
           </button>
           <button
             type="button"
@@ -678,7 +678,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
             className={`rounded-md px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${mode === 'auto' ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}
             data-testid="idea-mode-auto"
           >
-            Авто по жанру
+            Auto by genre
           </button>
           <button
             type="button"
@@ -687,7 +687,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
             className={`rounded-md px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${mode === 'upload' ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}
             data-testid="idea-mode-upload"
           >
-            Загрузить свой сюжет файлом
+            Upload your own plot as a file
           </button>
           <button
             type="button"
@@ -696,7 +696,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
             className={`rounded-md px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${mode === 'test' ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}
             data-testid="idea-mode-test"
           >
-            Тестовая серия
+            Test episode
           </button>
         </div>
 
@@ -707,7 +707,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
           <textarea
             value={idea}
             onChange={(e) => setIdea(e.target.value)}
-            placeholder="Например: молодая смотрительница маяка на северном острове находит дневник исчезнувшего предшественника..."
+            placeholder="For example: a young lighthouse keeper on a northern island finds the diary of her missing predecessor..."
             rows={5}
             disabled={busy}
             className="mt-4 w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
@@ -716,12 +716,12 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
         ) : mode === 'test' ? (
           <div className="mt-4 space-y-3" data-testid="idea-test-panel">
             <p className="text-xs text-muted-foreground">
-              Одна сцена вместо целого сезона: опишите идею в одну фразу — ИИ сам придумает сцену, промпт и реплики. Каждая тестовая сцена — ролик 30 секунд. Референсы персонажей не нужны: модель работает только по тексту. Название проекта подберётся автоматически по сюжету сцены. После создания вы попадёте на страницу серии, где можно посмотреть промпт и сгенерировать ролик.
+              One scene instead of a full season: describe the idea in one phrase — AI will come up with the scene, prompt, and lines. Each test scene is a 30-second video. Character references aren't needed: the model works from text only. The project title will be chosen automatically based on the scene's plot. After creation, you'll go to the episode page, where you can view the prompt and generate the video.
             </p>
             <input
               value={testIdea}
               onChange={(e) => setTestIdea(e.target.value)}
-              placeholder="Идея сцены, например: двое рыбаков спорят на пирсе о пропавшей лодке"
+              placeholder="Scene idea, for example: two fishermen argue on a pier about a missing boat"
               disabled={busy}
               className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
               data-testid="test-scene-idea"
@@ -734,13 +734,13 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
               data-testid="test-episode-create"
             >
               {creatingTest ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
-              {creatingTest ? 'Придумываю сцену и создаю серию...' : 'Создать тестовую серию (30 с)'}
+              {creatingTest ? 'Coming up with a scene and creating a series...' : 'Create a test episode (30 s)'}
             </button>
           </div>
         ) : mode === 'upload' ? (
           <div className="mt-4 space-y-3" data-testid="idea-upload-panel">
             <p className="text-xs text-muted-foreground">
-              Загрузите готовый сюжет файлом — <span className="font-medium text-foreground">.txt, .md, .docx или .pdf</span>. ИИ возьмёт его за канон: структурирует в сезон с эпизодами, локациями и персонажами, минимально переписывая суть. Язык истории определится автоматически по содержимому файла. Озвучка всё равно будет английской.
+              Upload an existing plot as a file — <span className="font-medium text-foreground">.txt, .md, .docx or .pdf</span>. AI will treat it as canon: structure it into a season with episodes, locations, and characters, minimally rewriting the core story. The story language will be detected automatically from the file contents. The voiceover will still be in English.
             </p>
             <input
               ref={fileInput}
@@ -759,7 +759,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
               data-testid="idea-file-pick"
             >
               {parsing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Upload className="h-5 w-5" />}
-              {parsing ? 'Разбираю файл...' : storyMeta ? 'Выбрать другой файл' : 'Выбрать файл с сюжетом'}
+              {parsing ? 'Parsing file...' : storyMeta ? 'Choose another file' : 'Choose a plot file'}
             </button>
             {storyMeta && (
               <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs" data-testid="idea-file-info">
@@ -767,7 +767,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
                   <FileText className="h-4 w-4 flex-shrink-0 text-primary" />
                   <span className="break-all">{storyMeta.filename}</span>
                 </div>
-                <p className="mt-1 text-muted-foreground">Формат: {storyMeta.kind.toUpperCase()} · символов: {storyMeta.chars.toLocaleString('ru')} · язык: {storyMeta.languageName}</p>
+                <p className="mt-1 text-muted-foreground">Format: {storyMeta.kind.toUpperCase()} · characters: {storyMeta.chars.toLocaleString('ru')} · language: {storyMeta.languageName}</p>
                 <p className="mt-2 line-clamp-4 whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{storyText.slice(0, 400)}{storyText.length > 400 ? '…' : ''}</p>
               </div>
             )}
@@ -775,7 +775,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
         ) : (
           <div className="mt-4 space-y-3" data-testid="idea-auto-panel">
             <div>
-              <p className="mb-2 text-xs font-medium text-muted-foreground">Выберите направление / жанр (можно несколько):</p>
+              <p className="mb-2 text-xs font-medium text-muted-foreground">Select a direction / genre (you can choose several):</p>
               <div className="flex flex-wrap gap-2" data-testid="idea-genres">
                 {GENRE_OPTIONS.map((g) => {
                   const on = genres.includes(g.id)
@@ -798,7 +798,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
             <textarea
               value={extras}
               onChange={(e) => setExtras(e.target.value)}
-              placeholder="Доп. пожелания (необязательно): сеттинг, эпоха, тон, чего хотелось бы избежать… Язык истории определится по этому тексту (по умолчанию — русский)."
+              placeholder="Additional preferences (optional): setting, era, tone, things you’d like to avoid… The story language will be determined from this text (default — Russian)."
               rows={3}
               disabled={busy}
               className="w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
@@ -808,7 +808,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
         )}
         {mode !== 'upload' && mode !== 'test' && (
           <div className="mt-4 flex flex-wrap items-center gap-3" data-testid="episode-count-field">
-            <label htmlFor="episode-count" className="text-sm font-medium text-foreground">Количество эпизодов</label>
+            <label htmlFor="episode-count" className="text-sm font-medium text-foreground">Number of episodes</label>
             <div className="inline-flex items-center overflow-hidden rounded-lg border border-border">
               <button
                 type="button"
@@ -816,7 +816,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
                 disabled={busy || episodeCount <= 1}
                 className="px-3 py-2 text-sm font-bold text-muted-foreground transition hover:bg-muted disabled:opacity-40"
                 data-testid="episode-count-minus"
-                aria-label="Меньше эпизодов"
+                aria-label="Fewer episodes"
               >
                 −
               </button>
@@ -840,12 +840,12 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
                 disabled={busy || episodeCount >= 100}
                 className="px-3 py-2 text-sm font-bold text-muted-foreground transition hover:bg-muted disabled:opacity-40"
                 data-testid="episode-count-plus"
-                aria-label="Больше эпизодов"
+                aria-label="More episodes"
               >
                 +
               </button>
             </div>
-            <span className="text-xs text-muted-foreground">ИИ построит драматургию (вступление → завязка → кульминация → развязка) ровно на {episodeCount} эпизодов (1–100).</span>
+            <span className="text-xs text-muted-foreground">AI will build the dramatic structure (intro → inciting incident → climax → resolution) for exactly {episodeCount} episodes (1–100).</span>
           </div>
         )}
         {mode !== 'test' && <button
@@ -855,33 +855,33 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
           data-testid="idea-generate"
         >
           {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-          {hasResult ? 'Сгенерировать заново' : mode === 'auto' ? 'Придумать историю и составить синопсис' : mode === 'upload' ? 'Структурировать сюжет и составить синопсис' : 'Составить синопсис'}
+          {hasResult ? 'Regenerate' : mode === 'auto' ? 'Come up with a story and create a synopsis' : mode === 'upload' ? 'Structure the plot and create a synopsis' : 'Create synopsis'}
         </button>}
         {generating && !chaining && (
           <div className="mt-3 space-y-2" data-testid="idea-progress">
             {synopsisJob ? (
               <SmoothProgress job={synopsisJob} expectedTotalSec={SYNOPSIS_EXPECTED_SEC} />
             ) : (
-              <p className="inline-flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin text-primary" /> Запускаю генерацию…</p>
+              <p className="inline-flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin text-primary" /> Starting generation…</p>
             )}
             <div className="flex items-center justify-between gap-2">
-              <p className="min-w-0 text-xs text-muted-foreground">Шаг 1 из 4 · обычно 30–60 секунд: составляю синопсис сезона. Можно закрыть страницу — генерация продолжится в фоне, а прогресс восстановится при возврате.</p>
+              <p className="min-w-0 text-xs text-muted-foreground">Step 1 of 4 · usually 30–60 seconds: creating the season synopsis. You can close the page — generation will continue in the background, and progress will be restored when you return.</p>
               <CancelButton onCancel={cancelIdea} testId="idea-cancel" className="flex-shrink-0" />
             </div>
           </div>
         )}
         {ideaCanceled && !generating && !chaining && (
-          <p className="mt-2 text-xs text-amber-500" data-testid="idea-canceled">Генерация идеи отменена. Нажмите кнопку выше, чтобы запустить заново.</p>
+          <p className="mt-2 text-xs text-amber-500" data-testid="idea-canceled">Idea generation was canceled. Click the button above to start again.</p>
         )}
         {synopsisLoading && !generating && (
-          <p className="mt-2 inline-flex items-center gap-2 text-xs text-muted-foreground" data-testid="idea-synopsis-loading"><Loader2 className="h-3 w-3 animate-spin text-primary" /> Шаг 2 из 2 · составляю краткий синопсис сезона...</p>
+          <p className="mt-2 inline-flex items-center gap-2 text-xs text-muted-foreground" data-testid="idea-synopsis-loading"><Loader2 className="h-3 w-3 animate-spin text-primary" /> Step 2 of 2 · creating a short season synopsis...</p>
         )}
         {chaining && (
-          <p className="mt-2 inline-flex items-center gap-2 text-xs text-muted-foreground" data-testid="idea-chaining"><Loader2 className="h-3 w-3 animate-spin text-primary" /> Запускаю сценарий сезона...</p>
+          <p className="mt-2 inline-flex items-center gap-2 text-xs text-muted-foreground" data-testid="idea-chaining"><Loader2 className="h-3 w-3 animate-spin text-primary" /> Starting season script...</p>
         )}
       </div>
 
-      {/* Stage 59 (step 1 «Идея»): this screen is idea-only. As soon as the synopsis is ready the route
+      {/* Stage 59 (step 1 «"Idea"): this screen is idea-only. As soon as the synopsis is ready the route
           advances the project to stage="synopsis" and onRefresh() renders the synopsis screen (step 2),
           so there is no in-place result card here anymore. */}
     </div>

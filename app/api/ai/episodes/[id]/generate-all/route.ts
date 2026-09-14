@@ -56,7 +56,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
  * ALL AT THE SAME TIME (Stage 39 fan-out — scenes are independent). Idempotent: scenes with an active
  * job are reused (not charged again). Credits are charged per scene up front; when the balance cannot
  * cover every scene, as many scenes as can be paid are started and the rest are reported in
- * `insufficient` (« Недостаточно кредитов»). If NOTHING can be paid → 402.
+ * `insufficient` (" Insufficient credits"). If NOTHING can be paid → 402.
  */
 export async function POST(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
@@ -73,7 +73,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
 
   const episode = await loadEpisode(id, session.user.id);
   if (!episode) return NextResponse.json({ error: "Episode not found" }, { status: 404 });
-  if (episode.scenes.length === 0) return NextResponse.json({ error: "В эпизоде нет сцен" }, { status: 400 });
+  if (episode.scenes.length === 0) return NextResponse.json({ error: "There are no scenes in the episode" }, { status: 400 });
   const project = episode.season.project;
   const user = await prisma.user.findUniqueOrThrow({ where: { id: session.user.id } });
   const tier = resolvePowerTier(project);
@@ -91,21 +91,21 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     }
     const candidates = force ? episode.scenes.map((s) => ({ ...s, videoUrl: null })) : episode.scenes;
     const first = nextChainScene(candidates);
-    if (!first) return NextResponse.json({ error: "Все сцены эпизода уже сгенерированы" }, { status: 400 });
+    if (!first) return NextResponse.json({ error: "All episode scenes have already been generated" }, { status: 400 });
     const duration = sceneClipSeconds(tier.id, first.durationSec);
     const cost = sceneClipCost(tier.id, duration);
     const charged = await prisma.user.updateMany({ where: { id: user.id, credits: { gte: cost } }, data: { credits: { decrement: cost } } });
     if (charged.count !== 1) {
-      return NextResponse.json({ error: `Недостаточно кредитов: для сцены ${first.number} нужно ${cost}, на балансе ${user.credits ?? 0}` }, { status: 402 });
+      return NextResponse.json({ error: `Insufficient credits: for scene ${first.number} need ${cost}, balance ${user.credits ?? 0}` }, { status: 402 });
     }
-    await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Эпизод ${episode.number}, сцена ${first.number} — генерация видео по цепочке (${tier.id})` } });
+    await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Episode ${episode.number}, scene ${first.number} — video generation via chain (${tier.id})` } });
     if (force) {
       // Re-run of the whole episode: clear the videos of the later scenes so the chain walks through them again.
       await prisma.scene.updateMany({ where: { episodeId: episode.id, number: { gt: first.number }, status: { not: "generating" } }, data: { videoUrl: null, lastFrameUrl: null, endStateActual: null, status: "pending" } });
     }
     await prisma.scene.update({ where: { id: first.id }, data: { status: "generating", language: spokenLang, videoModel: provider, endStateActual: null } });
     await prisma.episode.update({ where: { id: episode.id }, data: { chainRunActive: true, chainRunNote: null } });
-    const job = await prisma.generationJob.create({ data: { type: "video", status: "processing", progress: 2, message: "Цепочка: старт первой сцены...", projectId: project.id, sceneId: first.id } });
+    const job = await prisma.generationJob.create({ data: { type: "video", status: "processing", progress: 2, message: "Chain: starting first scene...", projectId: project.id, sceneId: first.id } });
     runInBackground(() => runVideoJob({ jobId: job.id, sceneId: first.id, projectId: project.id, userId: user.id, cost, duration, resolution: tier.resolution, provider }));
     const fresh = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true } });
     const queue = chainOrder(candidates).map((s) => s.number);
@@ -128,9 +128,9 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   // Stage 39: partial start — pay for as many scenes (in order) as the balance covers; report the rest.
   const { payable, unpaid } = splitByCredits(toStart, (scene) => sceneClipCost(tier.id, sceneClipSeconds(tier.id, scene.durationSec)), user.credits ?? 0);
   if (toStart.length && payable.length === 0) {
-    return NextResponse.json({ error: `Недостаточно кредитов: нужно ${need} (${toStart.length} сцен, до ${plan.duration}с каждая), на балансе ${user.credits ?? 0}` }, { status: 402 });
+    return NextResponse.json({ error: `Insufficient credits: need ${need} (${toStart.length} scenes, up to ${plan.duration}each), balance ${user.credits ?? 0}` }, { status: 402 });
   }
-  const insufficient = unpaid.map((scene) => ({ sceneId: scene.id, sceneNumber: scene.number, error: "Недостаточно кредитов" }));
+  const insufficient = unpaid.map((scene) => ({ sceneId: scene.id, sceneNumber: scene.number, error: "Not enough credits" }));
 
   // Charge + create queued jobs up front (so the UI shows every scene as queued immediately).
   const queued: Array<{ jobId: string; sceneId: string; cost: number; duration: number }> = [];
@@ -138,10 +138,10 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     const cost = sceneClipCost(tier.id, sceneClipSeconds(tier.id, scene.durationSec));
     // Atomic, race-safe charge: decrement only if the balance still covers it (a parallel request may have spent it).
     const charged = await prisma.user.updateMany({ where: { id: user.id, credits: { gte: cost } }, data: { credits: { decrement: cost } } });
-    if (charged.count !== 1) { insufficient.push({ sceneId: scene.id, sceneNumber: scene.number, error: "Недостаточно кредитов" }); continue; }
-    await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Эпизод ${episode.number}, сцена ${scene.number} — генерация видео (${tier.id})` } });
+    if (charged.count !== 1) { insufficient.push({ sceneId: scene.id, sceneNumber: scene.number, error: "Not enough credits" }); continue; }
+    await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Episode ${episode.number}, scene ${scene.number} — video generation (${tier.id})` } });
     await prisma.scene.update({ where: { id: scene.id }, data: { status: "generating", language: spokenLang, videoModel: provider } });
-    const job = await prisma.generationJob.create({ data: { type: "video", status: "pending", progress: 1, message: "В очереди…", projectId: project.id, sceneId: scene.id } });
+    const job = await prisma.generationJob.create({ data: { type: "video", status: "pending", progress: 1, message: "In queue…", projectId: project.id, sceneId: scene.id } });
     queued.push({ jobId: job.id, sceneId: scene.id, cost, duration: sceneClipSeconds(tier.id, scene.durationSec) });
     jobs.push({ sceneId: scene.id, sceneNumber: scene.number, jobId: job.id });
   }
@@ -158,7 +158,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
           queued,
           async (item) => {
             try {
-              await updateJob(item.jobId, { status: "processing", progress: 2, message: "Старт видеомодели…" });
+              await updateJob(item.jobId, { status: "processing", progress: 2, message: "Starting video model…" });
               await runVideoJob({ jobId: item.jobId, sceneId: item.sceneId, projectId: project.id, userId: user.id, cost: item.cost, duration: item.duration, resolution: tier.resolution, provider });
             } finally {
               alive.delete(item.jobId);

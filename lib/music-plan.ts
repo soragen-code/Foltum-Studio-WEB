@@ -163,26 +163,20 @@ export function countScenesWithoutMusic(perScene: PerSceneMood[]): number {
 }
 
 /**
- * PURE — a short Russian summary of the plan, e.g.
- * "напряжённая → загадочная (2 сегмента, 1 сцена без музыки)".
+ * PURE — a short English summary of the plan, e.g.
+ * "tense → mysterious (2 segments, 1 scene without music)".
  */
 export function summarizePlan(segments: MoodSegment[], scenesWithoutMusic = 0): string {
-  if (segments.length === 0) return scenesWithoutMusic > 0 ? "без музыки" : "музыка недоступна";
+  if (segments.length === 0) return scenesWithoutMusic > 0 ? "no music" : "music unavailable";
   const chain = segments.map((s) => MOOD_LABELS[s.mood]).join(" → ");
-  const segWord = pluralRu(segments.length, "сегмент", "сегмента", "сегментов");
-  let tail = `${segments.length} ${segWord}`;
+  let tail = `${segments.length} ${plural(segments.length, "segment")}`;
   if (scenesWithoutMusic > 0) {
-    const scWord = pluralRu(scenesWithoutMusic, "сцена", "сцены", "сцен");
-    tail += `, ${scenesWithoutMusic} ${scWord} без музыки`;
+    tail += `, ${scenesWithoutMusic} ${plural(scenesWithoutMusic, "scene")} without music`;
   }
   return `${chain} (${tail})`;
 }
 
-/** Russian pluralization helper (1 сегмент / 2 сегмента / 5 сегментов). */
-function pluralRu(n: number, one: string, few: string, many: string): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return one;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
-  return many;
+/** English pluralization helper (1 segment / 2 segments). */
+function plural(n: number, word: string): string {
+  return n === 1 ? word : `${word}s`;
 }

@@ -2,7 +2,7 @@
  * Shared episode-stitch helper.
  *
  * Extracted from POST /api/ai/assemble-episode so the SAME stitch logic runs from:
- *   1. the background «Ассембл» job (episode_assemble) in /api/ai/assemble-episode/polish, and
+ *   1. the background "Assembly" job (episode_assemble) in /api/ai/assemble-episode/polish, and
  *   2. the standalone POST /api/ai/assemble-episode route (kept for backward compat).
  *
  * It downloads every scene clip, muxes voiceovers, joins them with local ffmpeg using the
@@ -59,11 +59,11 @@ export interface AssembleEpisodeResult {
   musicApplied: boolean;
   /** Stage 79: the per-moment plan actually used (segments + scenes left silent), or null. */
   musicPlan: { segments: MoodSegment[]; scenesWithoutMusic: number } | null;
-  /** Stage 79: Russian summary of the plan («напряжённая → загадочная (2 сегмента …)») or null. */
+  /** Stage 79: Russian summary of the plan ("tense → mysterious (2 segments …)") or null. */
   musicSummary: string | null;
   /** Stage 79: Russian error when music could not be produced, or null. */
   musicError: string | null;
-  /** Russian note for the UI («Музыка недоступна — собрано без музыки») or null. */
+  /** Russian note for the UI ("Music unavailable — assembled without music") or null. */
   note: string | null;
 }
 
@@ -72,14 +72,14 @@ export function assembleStageProgress(ev: AssembleProgressEvent): { progress: nu
   switch (ev.stage) {
     case "download": {
       const frac = ev.total > 0 ? ev.done / ev.total : 0;
-      return { progress: Math.round(frac * 30), message: `Скачивание клипов ${ev.done}/${ev.total}` };
+      return { progress: Math.round(frac * 30), message: `Downloading clips ${ev.done}/${ev.total}` };
     }
     case "music":
-      return { progress: 30, message: "Подбор музыки" };
+      return { progress: 30, message: "Selecting music" };
     case "join":
-      return { progress: 40, message: "Склейка" };
+      return { progress: 40, message: "Assembly" };
     case "render":
-      return { progress: 40 + Math.round((Math.max(0, Math.min(100, ev.pct)) / 100) * 50), message: `Склейка ${Math.round(ev.pct)}%` };
+      return { progress: 40 + Math.round((Math.max(0, Math.min(100, ev.pct)) / 100) * 50), message: `Assembly ${Math.round(ev.pct)}%` };
   }
 }
 export const ASSEMBLE_UPLOAD_PROGRESS = 90;
@@ -101,15 +101,15 @@ export async function assembleEpisodeVideo(episodeId: string, opts: AssembleEpis
       where: { id: episodeId },
       include: { season: { select: { projectId: true, project: { select: { synopsis: true } } } } },
     });
-    if (!episode) throw new Error("Эпизод не найден");
+    if (!episode) throw new Error("Episode not found");
 
     const scenes = await prisma.scene.findMany({
       where: { episodeId },
       orderBy: { number: "asc" },
     });
-    if (scenes.length === 0) throw new Error("В эпизоде нет сцен");
+    if (scenes.length === 0) throw new Error("There are no scenes in the episode");
     if (scenes.some((s) => !validUrl(s.videoUrl)))
-      throw new Error("Не все сцены имеют сгенерированное видео");
+      throw new Error("Not all scenes have generated video");
 
     const projectId = episode.season?.projectId ?? "unknown";
     let mood: Mood | null = null;
@@ -155,7 +155,7 @@ export async function assembleEpisodeVideo(episodeId: string, opts: AssembleEpis
                   mood = planSegments[0]?.mood ?? null;
                   if (planSegments.length === 0) return null; // every scene is "none" — no music
 
-                  void opts.onProgress?.(30, `Подбор музыки: ${musicSummary}`);
+                  void opts.onProgress?.(30, `Selecting music: ${musicSummary}`);
                   // 2. One cached track per UNIQUE mood (parallel; the S3 cache is reused).
                   const uniqueMoods = [...new Set(planSegments.map((s) => s.mood))];
                   const moodFiles = new Map<Mood, string>();
@@ -193,7 +193,7 @@ export async function assembleEpisodeVideo(episodeId: string, opts: AssembleEpis
     );
 
     // Persist to S3
-    void opts.onProgress?.(ASSEMBLE_UPLOAD_PROGRESS, "Загрузка");
+    void opts.onProgress?.(ASSEMBLE_UPLOAD_PROGRESS, "Loading");
     const s3Key = `media/public/episodes/${projectId}/${episodeId}/episode_${Date.now()}.mp4`;
     const buffer = await fs.readFile(result.outputPath);
     const videoUrl = await uploadBufferToS3(buffer, s3Key, "video/mp4");
@@ -212,8 +212,8 @@ export async function assembleEpisodeVideo(episodeId: string, opts: AssembleEpis
       musicApplied: result.musicApplied,
       musicPlan: planSegments.length > 0 ? { segments: planSegments, scenesWithoutMusic } : null,
       musicSummary,
-      musicError: musicFailed ? musicError ?? "неизвестная ошибка" : null,
-      note: opts.music !== false && musicFailed ? "Музыка недоступна — собрано без музыки" : null,
+      musicError: musicFailed ? musicError ?? "unknown error" : null,
+      note: opts.music !== false && musicFailed ? "Music unavailable — assembled without music" : null,
     };
   } finally {
     if (workDir) await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});

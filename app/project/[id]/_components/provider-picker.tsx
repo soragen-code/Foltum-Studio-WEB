@@ -5,18 +5,18 @@ import { Loader2 } from 'lucide-react'
 import { GENERATION_PROVIDERS, GENERATION_PROVIDER_LABELS, type GenerationProvider, isGenerationProvider } from '@/lib/validations'
 
 /**
- * Stage 73/74 — «Провайдер»: ONE native select for a single kind (reference images OR scene videos),
+ * Stage 73/74 — «Provider": ONE native select for a single kind (reference images OR scene videos),
  * persisted per project via PATCH /api/ai/projects/[id]/providers (only the changed field is sent).
  * Stage 74 moved the pickers: the image picker lives on the references stage, the video picker on the
- * scenes stage and next to the episode's «Порядок генерации» control. The model itself is fixed and
+ * scenes stage and next to the episode's «"Generation order" control. The model itself is fixed and
  * shown as plain text (images → Seedream 5.0 Pro, video → Seedance 2.5) — there is NO model selector.
  * Keys live in the environment; this only picks the transport.
  */
 export type ProviderPickerKind = 'image' | 'video'
 
 const KIND_META: Record<ProviderPickerKind, { title: string; model: string; field: 'imageProvider' | 'videoProvider'; fallback: GenerationProvider }> = {
-  image: { title: 'Провайдер референсов', model: 'Seedream 5.0 Pro', field: 'imageProvider', fallback: 'replicate' },
-  video: { title: 'Провайдер сцен', model: 'Seedance 2.5', field: 'videoProvider', fallback: 'wavespeed' },
+  image: { title: 'Reference provider', model: 'Seedream 5.0 Pro', field: 'imageProvider', fallback: 'replicate' },
+  video: { title: 'Scene provider', model: 'Seedance 2.5', field: 'videoProvider', fallback: 'wavespeed' },
 }
 
 export function ProviderPicker({ kind, projectId, value, compact = false, onChange }: {
@@ -43,14 +43,14 @@ export function ProviderPicker({ kind, projectId, value, compact = false, onChan
         body: JSON.stringify({ [meta.field]: next }),
       })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data?.error || 'Не удалось сохранить провайдера')
+      if (!res.ok) throw new Error(data?.error || "Couldn't save the provider")
       const saved: GenerationProvider = isGenerationProvider(data?.[meta.field]) ? data[meta.field] : next
       setCur(saved)
       onChange?.(saved)
-      setNote({ kind: 'ok', text: 'Сохранено' })
+      setNote({ kind: 'ok', text: 'Saved' })
     } catch (e: any) {
       setCur(prev)
-      setNote({ kind: 'error', text: e?.message || 'Ошибка сохранения' })
+      setNote({ kind: 'error', text: e?.message || 'Save error' })
     } finally {
       setSaving(false)
       setTimeout(() => setNote(null), 2500)
@@ -78,7 +78,7 @@ export function ProviderPicker({ kind, projectId, value, compact = false, onChan
         {GENERATION_PROVIDERS.map((p) => <option key={p} value={p}>{GENERATION_PROVIDER_LABELS[p]}</option>)}
       </select>
       {/* Fixed model — plain text, deliberately not selectable. */}
-      <span className="text-xs text-muted-foreground" data-testid={`provider-picker-${kind}-model`}>Модель: {meta.model}</span>
+      <span className="text-xs text-muted-foreground" data-testid={`provider-picker-${kind}-model`}>Model: {meta.model}</span>
       {saving && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
       {note && <span className={`text-xs ${note.kind === 'ok' ? 'text-emerald-600' : 'text-destructive'}`} role="status" data-testid="provider-picker-note">{note.text}</span>}
     </div>

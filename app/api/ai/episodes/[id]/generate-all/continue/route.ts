@@ -40,7 +40,7 @@ async function loadEpisode(episodeId: string, userId: string) {
  *  - failed-retryable scenes are re-charged and get a fresh job (capped attempts);
  *  - scenes with a video, or a job with a live prediction, are NEVER touched.
  * The client calls this every few seconds until { remaining } reaches 0.
- * Returns per-scene status so the UI shows a stable "N из M" indicator and the failed list.
+ * Returns per-scene status so the UI shows a stable "N of M" indicator and the failed list.
  */
 export async function POST(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
@@ -112,7 +112,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     // Atomic claim: only if still a stale, never-submitted pending/processing job.
     const claim = await prisma.generationJob.updateMany({
       where: { id: jobId, status: { in: ["pending", "processing"] }, updatedAt: { lt: new Date(now - KICK_STALE_MS) } },
-      data: { status: "processing", progress: 2, message: "Возобновляю генерацию…" },
+      data: { status: "processing", progress: 2, message: "Resuming generation…" },
     });
     if (claim.count !== 1) continue; // another continue call grabbed it
     const duration = sceneClipSeconds(tier.id, scene.durationSec);
@@ -132,9 +132,9 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     // Atomic, race-safe charge: decrement only if the balance covers it.
     const charged = await prisma.user.updateMany({ where: { id: session.user.id, credits: { gte: cost } }, data: { credits: { decrement: cost } } });
     if (charged.count !== 1) { creditsShort = true; continue; }
-    await prisma.creditTransaction.create({ data: { userId: session.user.id, amount: -cost, description: `Эпизод ${episode.number}, сцена ${scene.number} — повтор генерации (${tier.id})` } });
+    await prisma.creditTransaction.create({ data: { userId: session.user.id, amount: -cost, description: `Episode ${episode.number}, scene ${scene.number} — regeneration (${tier.id})` } });
     await prisma.scene.update({ where: { id: scene.id }, data: { status: "generating", language: "en" } }).catch(() => {});
-    const job = await prisma.generationJob.create({ data: { type: "video", status: "processing", progress: 2, message: "Старт видеомодели…", projectId: project.id, sceneId: scene.id } });
+    const job = await prisma.generationJob.create({ data: { type: "video", status: "processing", progress: 2, message: "Starting video model…", projectId: project.id, sceneId: scene.id } });
     runInBackground(() => runVideoJob({ jobId: job.id, sceneId: scene.id, projectId: project.id, userId: session.user.id, cost, duration, resolution: tier.resolution, provider: normalizeVideoModel(scene.videoModel) }));
     started.push({ sceneId: scene.id, jobId: job.id, sceneNumber: scene.number });
   }

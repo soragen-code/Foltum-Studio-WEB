@@ -1,5 +1,5 @@
 /**
- * Stage 13 — «Ассембл» final polish selection logic (pure, unit-tested).
+ * Stage 13 — "Assembly" final polish selection logic (pure, unit-tested).
  *
  * Given the whole-episode continuity audit (see `episodeContinuityAudit*` in lib/season.ts)
  * and the current scenes, decide which scenes must be RE-GENERATED. Only scenes the auditor
@@ -70,7 +70,7 @@ export function selectPolishScenes(
     out.push({
       sceneId: scene.id,
       number: scene.number,
-      issue: (a.issue ?? "").trim() || "Логическая нестыковка на стыке сцен",
+      issue: (a.issue ?? "").trim() || "Logical inconsistency between scenes",
       correctedVideoPrompt: corrected,
       correctedEndState: (a.correctedEndState ?? "").trim() || null,
       correctedStartState: (a.correctedStartState ?? "").trim() || null,

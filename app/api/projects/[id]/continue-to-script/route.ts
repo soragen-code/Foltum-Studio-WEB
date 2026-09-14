@@ -6,7 +6,7 @@ import { prisma } from "@/lib/db";
 /**
  * POST /api/projects/[id]/continue-to-script
  *
- * "Продолжить к сценарию": locks characters and moves the project to the
+ * "Continue to script": locks characters and moves the project to the
  * existing "structure" stage (stage 2 of the new flow will replace this).
  */
 export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {

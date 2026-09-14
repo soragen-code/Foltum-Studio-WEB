@@ -15,27 +15,27 @@ import { attachmentDisposition, referencesZipName } from "@/lib/download-name";
  */
 export async function GET(request: Request) {
   const session = await auth();
-  if (!session?.user?.id) return NextResponse.json({ error: "Требуется вход" }, { status: 401 });
+  if (!session?.user?.id) return NextResponse.json({ error: "Login required" }, { status: 401 });
   const limited = rateLimitByUser(request, "files:download-zip", session.user.email ?? session.user.id, RATE_LIMITS.ai);
   if (limited) return limited;
 
   const sp = new URL(request.url).searchParams;
   const characterId = sp.get("character");
   const locationId = sp.get("location");
-  if (!characterId && !locationId) return NextResponse.json({ error: "Укажите character или location" }, { status: 400 });
+  if (!characterId && !locationId) return NextResponse.json({ error: "Specify character or location" }, { status: 400 });
 
   let frames: OwnedFrame[] = [];
   let name = "";
   if (characterId) {
     const c = await prisma.character.findFirst({ where: { id: characterId, project: { userId: session.user.id } }, select: { name: true, imageFront: true, imageProfile: true, imageFull: true, imageExtra: true } });
-    if (!c) return NextResponse.json({ error: "Персонаж не найден" }, { status: 404 });
+    if (!c) return NextResponse.json({ error: "Character not found" }, { status: 404 });
     frames = characterFrames(c); name = c.name;
   } else {
     const l = await prisma.location.findFirst({ where: { id: locationId as string, project: { userId: session.user.id } }, select: { name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true } });
-    if (!l) return NextResponse.json({ error: "Локация не найдена" }, { status: 404 });
+    if (!l) return NextResponse.json({ error: "Location not found" }, { status: 404 });
     frames = locationFrames(l); name = l.name;
   }
-  if (frames.length === 0) return NextResponse.json({ error: "Нет кадров для скачивания" }, { status: 404 });
+  if (frames.length === 0) return NextResponse.json({ error: "No frames to download" }, { status: 404 });
 
   const zip = new JSZip();
   const results = await Promise.all(frames.map(async (f) => {
@@ -52,7 +52,7 @@ export async function GET(request: Request) {
     used.add(fn);
     zip.file(fn, r.data); added++;
   }
-  if (added === 0) return NextResponse.json({ error: "Не удалось загрузить кадры" }, { status: 502 });
+  if (added === 0) return NextResponse.json({ error: "Failed to load frames" }, { status: 502 });
 
   const buf = await zip.generateAsync({ type: "nodebuffer", compression: "STORE" });
   return new Response(new Uint8Array(buf), {

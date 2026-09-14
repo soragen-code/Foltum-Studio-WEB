@@ -34,10 +34,10 @@ export function NewProjectForm() {
         body: JSON.stringify({ powerTier: 'LOW' }),
       })
       const data = await res.json()
-      if (!res.ok) { setError(data?.error ?? 'Не удалось создать проект'); setLoading(false); return }
+      if (!res.ok) { setError(data?.error ?? "Couldn't create the project"); setLoading(false); return }
       router.push(`/project/${data?.project?.id}`)
     } catch {
-      setError('Что-то пошло не так')
+      setError('Something went wrong')
       setLoading(false)
     }
   }
@@ -48,10 +48,10 @@ export function NewProjectForm() {
       <main className="mx-auto max-w-[600px] px-4 py-12">
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
           <h1 className="font-display text-3xl font-bold tracking-tight">
-            Новый <span className="text-primary">проект</span>
+            New <span className="text-primary">project</span>
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Название проекта придумается само — коротко, по сюжету; длину сезона, число сцен и хронометраж определит сам сценарий.
+            The project title will be generated automatically — short and based on the plot; the season length, number of scenes, and runtime will be determined by the script.
           </p>
 
           <form onSubmit={handleCreate} className="mt-8 space-y-6">
@@ -60,12 +60,12 @@ export function NewProjectForm() {
             )}
 
             <div className="rounded-xl border border-border bg-card p-4" data-testid="scene-quality-info">
-              <div className="flex items-center gap-2 font-semibold"><MonitorPlay className="h-5 w-5 text-green-400" /> Сцены рендерятся в {SCENE_RESOLUTION}</div>
+              <div className="flex items-center gap-2 font-semibold"><MonitorPlay className="h-5 w-5 text-green-400" /> Scenes are rendered in {SCENE_RESOLUTION}</div>
               <p className="mt-1 text-xs text-muted-foreground">
-                {perSecond} кр./сек · до {perScene} кр. за сцену ({SEEDANCE_MAX_DURATION} с). Стоимость считается по фактической длине каждой сцены и показывается перед подтверждением.
+                {perSecond} cr./sec · up to {perScene} cr. per scene ({SEEDANCE_MAX_DURATION} s). Cost is calculated based on each scene's actual length and shown before confirmation.
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Качество готовой серии (480p / 720p / 1080p, 30 или 60 кадров/с) выбирается при сборке эпизода.
+                The finished episode quality (480p / 720p / 1080p, 30 or 60 fps) is selected during episode assembly.
               </p>
             </div>
 
@@ -76,7 +76,7 @@ export function NewProjectForm() {
               data-testid="project-create"
             >
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-              Создать
+              Create
             </button>
           </form>
         </motion.div>

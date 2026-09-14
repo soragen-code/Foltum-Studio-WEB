@@ -2,11 +2,11 @@
  * Stage 46B — stage-based progress for a scene video job (pure, unit-testable).
  *
  * The bar no longer creeps with a timer: every value maps to a REAL stage of the job.
- *   queued     «В очереди»                         5 %
- *   rendering  «Рендер видео (Seedance)… mm:ss»   40 % (or the model's own percent, if its logs report one)
- *   uploading  «Загрузка видео»                   85 %
- *   verifying  «Проверка»                          95 %
- *   done       «Видео готово»                     100 %
+ *   queued     "Queued"                         5 %
+ *   rendering  "Rendering video (Seedance)… mm:ss"   40 % (or the model's own percent, if its logs report one)
+ *   uploading  "Uploading video"                   85 %
+ *   verifying  "Checking"                          95 %
+ *   done       "Video ready"                     100 %
  */
 
 export type SceneStage = "queued" | "rendering" | "uploading" | "verifying" | "done";
@@ -20,11 +20,11 @@ export const SCENE_STAGE_PROGRESS: Record<SceneStage, number> = {
 };
 
 export const SCENE_STAGE_MESSAGE: Record<SceneStage, string> = {
-  queued: "В очереди",
-  rendering: "Рендер видео (Seedance)…",
-  uploading: "Загрузка видео",
-  verifying: "Проверка",
-  done: "Видео готово",
+  queued: "Queued",
+  rendering: "Rendering video (Seedance)…",
+  uploading: "Uploading video",
+  verifying: "Checking",
+  done: "Video is ready",
 };
 
 /** `mm:ss` for an elapsed duration (never negative). */

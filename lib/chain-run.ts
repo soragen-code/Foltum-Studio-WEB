@@ -1,8 +1,8 @@
 /**
- * Stage 40 — chain generation mode («По цепочке»), pure helpers (DB-free, unit-tested).
+ * Stage 40 — chain generation mode ("Chain mode"), pure helpers (DB-free, unit-tested).
  *
  * `Episode.chainMode`:
- *   - "parallel" (default, Stage 39): «Сгенерировать все» starts every scene at once; scenes are
+ *   - "parallel" (default, Stage 39): "Generate all" starts every scene at once; scenes are
  *     joined through the screenwriter's scripted `endState` (OPENING STATE of the next scene).
  *   - "chain": scenes are generated strictly one after another. After each finished scene its last
  *     frame is described by a vision model (`Scene.endStateActual`) and that description opens the
@@ -60,16 +60,16 @@ export function chainOrder<S extends ChainSceneLike>(scenes: readonly S[]): S[] 
 
 /** Russian note stored on the episode when the chain stops because a scene failed. */
 export function chainStopMessage(sceneNumber: number, error: string): string {
-  const reason = (error ?? "").trim() || "неизвестная ошибка";
-  return `Цепочка остановлена на сцене ${sceneNumber}: ${reason}`;
+  const reason = (error ?? "").trim() || "unknown error";
+  return `Chain stopped at scene ${sceneNumber}: ${reason}`;
 }
 
-export const CHAIN_INSUFFICIENT_CREDITS = "недостаточно кредитов";
+export const CHAIN_INSUFFICIENT_CREDITS = "insufficient credits";
 
 /**
  * Human hint for the mode toggle (UI). Kept here so the wording is a single source of truth.
  */
 export const CHAIN_MODE_HINTS: Record<ChainMode, string> = {
-  parallel: "Параллельно: все сцены стартуют сразу. Стыковка между сценами — по сценарному описанию финального кадра предыдущей сцены («Финал кадра»).",
-  chain: "По цепочке: сцены идут строго по очереди. После каждой готовой сцены её последний кадр описывается моделью, и это описание попадает в начало промпта следующей сцены. Кредиты списываются за каждую сцену при её старте; при ошибке цепочка останавливается.",
+  parallel: "Parallel: all scenes start at once. Transitions between scenes use the script description of the previous scene's final shot ('Final shot').",
+  chain: "Chain: scenes run strictly one after another. After each completed scene, the model describes its last frame, and that description is added to the beginning of the next scene's prompt. Credits are charged for each scene when it starts; if an error occurs, the chain stops.",
 };

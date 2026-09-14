@@ -102,16 +102,16 @@ const ok = (name: string, cond: boolean) => { assert.ok(cond, name); n++; };
   ok("stem keeps Cyrillic, strips unsafe", safeFileStem('Иван / "Грозный": <царь>?') === "Иван Грозный царь");
   ok("stem fallback", safeFileStem("   ") === "reference");
   ok("ext from url", extFromUrl("https://x/a/b.PNG?x=1") === "png" && extFromUrl("https://x/a.jpeg") === "jpeg" && extFromUrl("https://x/a") === "png");
-  ok("slot labels", slotFileLabel("character", "front") === "лицо" && slotFileLabel("character", "profile") === "профиль" && slotFileLabel("character", "full") === "рост" && slotFileLabel("character", "extra", 1) === "extra-2");
+  ok("slot labels", slotFileLabel("character", "front") === "face" && slotFileLabel("character", "profile") === "profile" && slotFileLabel("character", "full") === "height" && slotFileLabel("character", "extra", 1) === "extra-2");
   ok("location slot labels", slotFileLabel("location", "master") === "master" && slotFileLabel("location", "extra", 0) === "extra-1");
-  ok("character file name", referenceFileName("character", "Иван", "front", "https://s3/x.png") === "Иван_лицо.png");
+  ok("character file name", referenceFileName("character", "Иван", "front", "https://s3/x.png") === "Иван_face.png");
   ok("location file name", referenceFileName("location", "Старый причал", "extra", "https://s3/x.jpg", 2) === "Старый причал_extra-3.jpg");
   ok("zip name", referencesZipName("Иван") === "Иван_references.zip");
   const cd = attachmentDisposition("Иван_лицо.png");
   ok("content-disposition has ascii fallback + utf-8", cd.startsWith('attachment; filename="') && cd.includes("filename*=UTF-8''%D0%98%D0%B2%D0%B0%D0%BD_%D0%BB%D0%B8%D1%86%D0%BE.png"));
 
   const cf = characterFrames({ name: "Иван", imageFront: "https://s3/f.png", imageProfile: null, imageFull: "https://s3/u.png", imageExtra: JSON.stringify(["https://s3/e.png", "bad"]) });
-  ok("characterFrames: valid urls only, named", cf.length === 3 && cf.map((f) => f.fileName).join(",") === "Иван_лицо.png,Иван_рост.png,Иван_extra-1.png");
+  ok("characterFrames: valid urls only, named", cf.length === 3 && cf.map((f) => f.fileName).join(",") === "Иван_face.png,Иван_height.png,Иван_extra-1.png");
   const lf = locationFrames({ name: "Порт", imageUrl: "https://s3/m.png", imageReverse: null, imageDetail: "https://s3/d.png", imageExtra: null });
   ok("locationFrames: master + detail", lf.length === 2 && lf[1].fileName === "Порт_detail.png");
 }

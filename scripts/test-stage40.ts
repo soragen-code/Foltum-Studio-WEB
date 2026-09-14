@@ -84,8 +84,8 @@ const loc = { id: "loc", name: "Kitchen", imageUrl: styledUrl("k-wide"), imageRe
   ok(nextChainScene(scenes, 2)?.id === "e", "D: after scene 2 → skips generating (3) and promptless (4), picks 5");
   ok(nextChainScene(scenes, 5) === null, "D: nothing after the last scene");
   ok(chainOrder(scenes).map(s => s.id).join(",") === "b,e", "D: chainOrder lists only startable scenes in number order");
-  ok(chainStopMessage(3, "boom") === "Цепочка остановлена на сцене 3: boom", "D: stop message format");
-  ok(chainStopMessage(2, CHAIN_INSUFFICIENT_CREDITS).includes("недостаточно кредитов"), "D: insufficient-credits stop note");
+  ok(chainStopMessage(3, "boom") === "Chain stopped at scene 3: boom", "D: stop message format");
+  ok(chainStopMessage(2, CHAIN_INSUFFICIENT_CREDITS).includes("insufficient credits"), "D: insufficient-credits stop note");
   ok(isChainMode("chain") && isChainMode("parallel") && !isChainMode("x") && normalizeChainMode("nope") === "parallel" && normalizeChainMode("chain") === "chain", "D: mode guards");
   // parallel fan-out is unchanged: every startable scene is started at once (checked asynchronously below)
   const order = chainOrder(scenes);

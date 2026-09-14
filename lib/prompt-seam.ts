@@ -91,7 +91,7 @@ export function applyReframeDirective(
 /*                                                                                             */
 /*  RE-FRAME (Part D) only moves the camera to a different ANGLE for frame 1, but the clip then */
 /*  inherited the static, locked-off framing of the previous scene's final frame — the new     */
-/*  scene "froze" on the seam (user report: «камера сцены стоит так же, как в конце предыдущей»).*/
+/*  scene "froze" on the seam (user report: "the scene camera stays the same as at the end of the previous one").*/
 /*  This directive gives EVERY continuing scene its OWN camera motion that is already underway  */
 /*  on the first frame and runs through the whole clip, so the shot never opens on a held,      */
 /*  static composition. The starting frame is still shared for continuity — only the camera     */
@@ -255,6 +255,40 @@ export function sceneHasLocationRef(input: {
 }
 
 /* ------------------------------------------------------------------------------------------ */
+/*  Stage 87 — SERIES INTRO (the FIRST scene of every episode is the show's opening)            */
+/*                                                                                             */
+/*  Requirement 1: the first scene of an episode is built like the intro of a series — ONLY     */
+/*  wide / establishing shots of the location and of what is happening, plus an OFF-SCREEN       */
+/*  VOICEOVER that carries the backstory / exposition (it may recount the catastrophe or event  */
+/*  that led to the current situation). No dialogue close-ups, no lip-synced face-to-face talk. */
+/*  Implemented as a pure post-processing directive keyed on the scene NUMBER (=== 1), so it     */
+/*  fires for EVERY episode's first scene, retroactively for old projects too — the protected    */
+/*  lib/scene-prompt.ts is never touched. The narration is explicitly off-screen (not tied to    */
+/*  any on-camera character's articulation), covering the voiceover side at the prompt              */
+/*  level; the model renders the voiceover as an unseen narrator over the establishing imagery.  */
+/* ------------------------------------------------------------------------------------------ */
+
+export const SERIES_INTRO_LINE =
+  "SERIES INTRO (opening scene): this is the FIRST scene of the episode and it opens the story like the intro to a TV series. Use ONLY wide, establishing shots of the location and the world — sweeping, atmospheric views that take in the setting, its scale and mood, and whatever is happening in it, including any aftermath, disaster or event that led to the current situation. Do NOT use dialogue close-ups: no tight talking-head shots, no lip-synced face-to-face conversation, no character delivering lines to camera. Any people appear only as small figures inside the wide frames, never in conversational close-up. The narration is delivered as an OFF-SCREEN VOICEOVER — an unseen narrator speaking over the images to set up the backstory and context, never tied to the mouth, lips or articulation of anyone visible in the shot.";
+
+/**
+ * Append the SERIES-INTRO directive for the FIRST scene of an episode (sceneNumber === 1). Every
+ * other scene is returned unchanged, and a manual override owns its full text and is untouched.
+ * Idempotent (applying twice yields the same text). Keyed on the scene number only, so it works
+ * retroactively for scenes created by old projects.
+ */
+export function applySeriesIntro(
+  prompt: string,
+  sceneNumber: number,
+  opts: { hasOverride: boolean }
+): string {
+  if (opts.hasOverride) return prompt;
+  if (!(Number.isFinite(sceneNumber) && Math.floor(sceneNumber) === 1)) return prompt;
+  if (prompt.includes(SERIES_INTRO_LINE)) return prompt;
+  return `${prompt.trimEnd()}\n${SERIES_INTRO_LINE}`;
+}
+
+/* ------------------------------------------------------------------------------------------ */
 /*  Part C — continuity channel of a scene submission                                          */
 /* ------------------------------------------------------------------------------------------ */
 
@@ -262,7 +296,7 @@ export function sceneHasLocationRef(input: {
 export type Continuity = "last_frame" | "text_only" | "none";
 
 /** Russian job message shown when chain mode has no previous last frame yet. */
-export const TEXT_ONLY_CONTINUITY_MESSAGE = "Кадр предыдущей сцены не готов — генерация по описанию";
+export const TEXT_ONLY_CONTINUITY_MESSAGE = "The previous scene frame is not ready - generating from the description";
 
 export function resolveContinuity(input: {
   chainMode: "chain" | "parallel";

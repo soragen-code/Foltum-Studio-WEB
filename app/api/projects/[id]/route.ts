@@ -38,7 +38,7 @@ export async function GET(
     if (!project) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
     // Stage 60: never ship the whole prevSnapshot object to the client — expose only a boolean
-    // `hasUndo` so the UI can show the «Отменить последнее изменение» button when undo is available.
+    // `hasUndo` so the UI can show the "Undo last change" button when undo is available.
     const strip = <T extends { prevSnapshot?: unknown }>(o: T) => {
       const { prevSnapshot, ...rest } = o
       return { ...rest, hasUndo: prevSnapshot != null }
@@ -79,7 +79,7 @@ export async function DELETE(
     const { id } = await params
 
     const project = await prisma.project.findFirst({ where: { id, userId: user.id }, select: { id: true } })
-    if (!project) return NextResponse.json({ error: 'Проект не найден' }, { status: 404 })
+    if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 })
 
     const jobs = await prisma.$transaction(async (tx) => {
       const removed = await tx.generationJob.deleteMany({ where: { projectId: project.id } })
@@ -89,6 +89,6 @@ export async function DELETE(
     return NextResponse.json({ ok: true, deletedJobs: jobs })
   } catch (err: any) {
     console.error('[DELETE /api/projects/[id]]', err)
-    return NextResponse.json({ error: 'Не удалось удалить проект' }, { status: 500 })
+    return NextResponse.json({ error: "Couldn't delete the project" }, { status: 500 })
   }
 }

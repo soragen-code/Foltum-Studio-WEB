@@ -11,7 +11,7 @@ import { assembleEpisodeVideo } from "@/lib/assemble";
 import { completeJob, failJob, heartbeatJob, runInBackground, updateJob } from "@/lib/jobs";
 import { DEFAULT_ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY } from "@/lib/assemble-options";
 
-/** GenerationJob.type of the plain «Собрать» stitch (Stage 46B: background job with real progress). */
+/** GenerationJob.type of the plain "Assemble" stitch (Stage 46B: background job with real progress). */
 const STITCH_JOB_TYPE = "episode_stitch";
 const HEARTBEAT_MS = 45_000;
 
@@ -19,7 +19,7 @@ const HEARTBEAT_MS = 45_000;
  * Assemble a full episode from all accepted scene videos (in scene order).
  *
  * Stage 46B: the request returns a `jobId` immediately; the stitch runs in the background and
- * reports real stages («Скачивание клипов k/N» → «Подбор музыки» → «Склейка» → «Загрузка»)
+ * reports real stages ("Downloading clips k/N" → "Selecting music" → "Assembly" → "Uploading")
  * through GET /api/jobs/[id]. Body may carry the production `quality` (480p/720p/1080p) and
  * `fps` (30/60) of the final file — defaults 480p/30. Scenes themselves are always 480p.
  *
@@ -71,7 +71,7 @@ export async function POST(request: Request) {
         type: STITCH_JOB_TYPE,
         status: "processing",
         progress: 0,
-        message: "Подготовка",
+        message: "Preparing",
         projectId,
         resultData: JSON.stringify({ episodeId, quality, fps }),
       },
@@ -89,11 +89,11 @@ export async function POST(request: Request) {
         await completeJob(
           jobId,
           { episodeId, quality, fps, videoUrl: result.videoUrl, sceneCount: result.sceneCount, mood: result.mood, musicApplied: result.musicApplied, musicPlan: result.musicPlan, musicSummary: result.musicSummary, musicError: result.musicError, note: result.note },
-          result.note ?? "Эпизод собран"
+          result.note ?? "Episode assembled"
         );
       } catch (err: any) {
         console.error("Episode assembly error:", err);
-        await failJob(jobId, err?.message ?? "Сборка эпизода не удалась");
+        await failJob(jobId, err?.message ?? "Episode assembly failed");
       } finally {
         clearInterval(hb);
       }

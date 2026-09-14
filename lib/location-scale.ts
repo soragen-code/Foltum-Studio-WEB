@@ -80,9 +80,9 @@ export function desiredExtraFrames(loc: LocationLike): number {
   return Math.min(LOCATION_TOTAL_MAX - LOCATION_BASE_FRAMES, Math.max(0, desiredTotalFrames(loc) - LOCATION_BASE_FRAMES))
 }
 
-/** Human label for the detail level (RU UI). */
+/** Human label for the detail level (UI). */
 export function locationDetailLabel(level: LocationDetailLevel): string {
-  return level === 'high' ? 'высокая' : level === 'low' ? 'низкая' : 'средняя'
+  return level === 'high' ? 'high' : level === 'low' ? 'low' : 'medium'
 }
 
 /**

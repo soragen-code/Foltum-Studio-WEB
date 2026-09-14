@@ -9,7 +9,8 @@ import crypto from "crypto";
  */
 
 export const WFP_PURCHASE_URL = "https://secure.wayforpay.com/pay";
-export const WFP_CURRENCY = "UAH";
+// Stage 87 — all prices are charged and displayed in US dollars.
+export const WFP_CURRENCY = "USD";
 
 export function getMerchantAccount(): string {
   const v = process.env.WAYFORPAY_MERCHANT_ACCOUNT;
@@ -41,26 +42,28 @@ function hmacMd5(payload: string, key: string): string {
 
 /**
  * Product catalog — the single source of truth for prices & credits.
- * Prices are in UAH. Adjust freely; the client only sends a productId.
+ * Prices are in USD. Adjust freely; the client only sends a productId.
  */
 export type WfpProduct = {
   id: string;
   name: string;
-  amount: number; // UAH
+  amount: number; // USD
   credits: number;
   kind: "subscription" | "credits";
   tier?: string;
 };
 
+// Stage 87 — prices converted from UAH to USD at ~40 ₴ = $1 and rounded to
+// standard .99 price points. Credits mappings are unchanged.
 export const WFP_PRODUCTS: Record<string, WfpProduct> = {
   // Subscription plans (grant monthly credits + set tier)
-  basic: { id: "basic", name: "Foltum Studio — Basic (100 credits)", amount: 399, credits: 100, kind: "subscription", tier: "basic" },
-  pro: { id: "pro", name: "Foltum Studio — Pro (400 credits)", amount: 1199, credits: 400, kind: "subscription", tier: "pro" },
-  studio: { id: "studio", name: "Foltum Studio — Studio (1500 credits)", amount: 3199, credits: 1500, kind: "subscription", tier: "studio" },
+  basic: { id: "basic", name: "Foltum Studio — Basic (100 credits)", amount: 9.99, credits: 100, kind: "subscription", tier: "basic" },
+  pro: { id: "pro", name: "Foltum Studio — Pro (400 credits)", amount: 29.99, credits: 400, kind: "subscription", tier: "pro" },
+  studio: { id: "studio", name: "Foltum Studio — Studio (1500 credits)", amount: 79.99, credits: 1500, kind: "subscription", tier: "studio" },
   // One-off credit packs
-  pack50: { id: "pack50", name: "50 credits pack", amount: 199, credits: 50, kind: "credits" },
-  pack200: { id: "pack200", name: "200 credits pack", amount: 599, credits: 200, kind: "credits" },
-  pack500: { id: "pack500", name: "500 credits pack", amount: 1199, credits: 500, kind: "credits" },
+  pack50: { id: "pack50", name: "50 credits pack", amount: 4.99, credits: 50, kind: "credits" },
+  pack200: { id: "pack200", name: "200 credits pack", amount: 14.99, credits: 200, kind: "credits" },
+  pack500: { id: "pack500", name: "500 credits pack", amount: 29.99, credits: 500, kind: "credits" },
 };
 
 export function getProduct(id: string): WfpProduct | null {

@@ -332,7 +332,7 @@ export async function advanceSeasonJob(job: GenerationJob, deps: SeasonJobDeps =
 }
 
 /**
- * Stage 59 (step 3 «Сюжет сезона»): in the new 4-step flow the idea step writes ONLY the synopsis, so a
+ * Stage 59 (step 3 "Season plot"): in the new 4-step flow the idea step writes ONLY the synopsis, so a
  * fresh project has no characters/locations when the season job starts. Here we generate the COMPLETE cast
  * (all tiers) and the season's locations in ONE fast synchronous call from the approved synopsis, then
  * persist them. Idempotent: if characters already exist (retry / classic flow) it is a no-op. A single
@@ -377,7 +377,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
   if (await isCancelRequested(jobId)) {
     if (state.responseId) await deps.cancel(state.responseId);
     await saveState(jobId, { ...state, responseId: undefined });
-    await markCanceled(jobId, `Генерация отменена. Готово эпизодов: ${countDone()} из ${total}.`);
+    await markCanceled(jobId, `Generation canceled. Episodes done: ${countDone()} of ${total}.`);
     return;
   }
 
@@ -447,7 +447,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
     if (season) await prisma.season.update({ where: { id: season.id }, data: { status: "script_ready" } });
     await saveState(jobId, { ...state, step: "done", remaining: 0, total: curTotal, done: true });
     const note = state.warnings?.length ? ` · ${state.warnings.join("; ")}` : "";
-    await completeJob(jobId, { ...state, step: "done", remaining: 0, total: curTotal, done: true, lockedAt: undefined }, `Сценарий сезона готов${note}`);
+    await completeJob(jobId, { ...state, step: "done", remaining: 0, total: curTotal, done: true, lockedAt: undefined }, `Season script ready${note}`);
     return;
   }
 
@@ -456,14 +456,14 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
   let progress: number;
   if (planned.step === "structure") {
     responseId = await deps.start(seasonStructureSystemPrompt(language, state.episodeCount), seasonStructureUserPrompt(project.synopsis, cards, project.locations, shortSynopsisOutline(project.shortSynopsis)), { model: SCRIPT_MODEL, maxTokens: Math.min(64000, 4000 + 800 * state.episodeCount) });
-    message = "Строю структуру сезона…"; progress = 3;
+    message = "Building the season structure..."; progress = 3;
   } else if (planned.step === "fullStory") {
     responseId = await deps.start(
       seasonFullStorySystemPrompt(language, seasonStruct!.episodes.length),
       seasonFullStoryUserPrompt({ synopsis: project.synopsis, structure: seasonStruct!, characters: cards, locations: project.locations }),
       { model: SCRIPT_MODEL, maxTokens: 32000 }
     );
-    message = "Пишу сюжет сезона…"; progress = 4;
+    message = "Writing the season plot..."; progress = 4;
   } else {
     const ep = season!.episodes.find((e) => e.id === planned.episodeId)!;
     const next = season!.episodes.find((e) => e.number === ep.number + 1);
@@ -477,8 +477,8 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
       { model: SCRIPT_MODEL, maxTokens: 32000 }
     );
     message = planned.instruction
-      ? `Переписываю сценарий эпизода ${ep.number}… (модель рассуждает, обычно 5–10 минут)`
-      : `Пишу сценарий эпизода ${ep.number} из ${curTotal}… (модель рассуждает, обычно 5–10 минут)`;
+      ? `Rewriting the script for episode ${ep.number}... (the model is reasoning, usually 5-10 minutes)`
+      : `Writing the script for episode ${ep.number} of ${curTotal}... (the model is reasoning, usually 5-10 minutes)`;
     progress = episodeProgress(done, curTotal);
   }
   await saveState(
@@ -537,8 +537,8 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
     // Stage 45 — the 2-minute budget is enforced by normalize where speech allows; what is left over is
     // shown to the author instead of failing the job (no line of dialogue is ever cut to make it fit).
     const total = episodeTotalSeconds(script.scenes);
-    const overNote = `эпизод ${ep.number} длиннее 2 минут (${total} с) — сократите сцены`;
-    state.warnings = (state.warnings ?? []).filter((w) => !w.startsWith(`эпизод ${ep.number} `));
+    const overNote = `episode ${ep.number} is longer than 2 minutes (${total} s) - shorten the scenes`;
+    state.warnings = (state.warnings ?? []).filter((w) => !w.startsWith(`episode ${ep.number} `));
     if (total > EPISODE_MAX_TOTAL_SECONDS) state.warnings.push(overNote);
     await persistEpisodeScript(ep.id, outline, script, project.characters.map((c) => ({ id: c.id, name: c.name })), language);
     return loadSeason(projectId);

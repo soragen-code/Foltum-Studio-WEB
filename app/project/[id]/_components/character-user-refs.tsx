@@ -5,7 +5,7 @@ import { Loader2, Upload, X } from 'lucide-react'
 import { parseUserRefs, USER_REFS_MAX } from '@/lib/character-user-refs'
 
 /**
- * Stage 75 — «Фото-референсы»: up to 4 user-uploaded photos per character, shown as thumbnails with a
+ * Stage 75 — «Photo references: up to 4 user-uploaded photos per character, shown as thumbnails with a
  * remove button and an upload button. They are fed as image_input to every character reference
  * generation. Always visible on the card (not hover-only). Disabled when the reference is locked.
  */
@@ -50,7 +50,7 @@ export function CharacterUserRefs({
       const room = Math.max(0, USER_REFS_MAX - current.length)
       const picked = Array.from(files).slice(0, room)
       if (picked.length === 0) {
-        setError('Максимум 4 фото-референса')
+        setError('Up to 4 photo references')
         return
       }
       for (const file of picked) {
@@ -59,7 +59,7 @@ export function CharacterUserRefs({
         const res = await fetch(`/api/ai/characters/${characterId}/refs`, { method: 'POST', body: fd })
         const data = await res.json().catch(() => ({}))
         if (!res.ok) {
-          setError(data?.error || 'Не удалось загрузить фото')
+          setError(data?.error || 'Failed to upload photo')
           if (Array.isArray(data?.userRefs)) current = data.userRefs
           break
         }
@@ -67,7 +67,7 @@ export function CharacterUserRefs({
       }
       apply(current)
     } catch (e: any) {
-      setError(e?.message || 'Не удалось загрузить фото')
+      setError(e?.message || 'Failed to upload photo')
     } finally {
       setBusy(false)
       if (inputRef.current) inputRef.current.value = ''
@@ -86,12 +86,12 @@ export function CharacterUserRefs({
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setError(data?.error || 'Не удалось удалить фото')
+        setError(data?.error || "Couldn't delete the photo")
         return
       }
       apply(Array.isArray(data?.userRefs) ? data.userRefs : refs.filter((u) => u !== url))
     } catch (e: any) {
-      setError(e?.message || 'Не удалось удалить фото')
+      setError(e?.message || "Couldn't delete the photo")
     } finally {
       setRemoving(null)
     }
@@ -102,21 +102,21 @@ export function CharacterUserRefs({
   return (
     <div className="mb-3 rounded-lg border border-border bg-muted/30 p-2" data-testid="char-user-refs">
       <div className="mb-1.5 flex items-center justify-between gap-2">
-        <span className="text-xs font-medium">Фото-референсы</span>
+        <span className="text-xs font-medium">Photo references</span>
         <span className="text-[11px] text-muted-foreground">{refs.length}/{USER_REFS_MAX}</span>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
         {refs.map((url) => (
           <div key={url} className="relative h-14 w-14 overflow-hidden rounded-md bg-muted" data-testid="char-user-ref">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={url} alt="Фото-референс" className="h-full w-full object-cover" />
+            <img src={url} alt="Photo reference" className="h-full w-full object-cover" />
             <button
               type="button"
               onClick={() => remove(url)}
               disabled={disabled || !!removing || busy}
               className="absolute right-0 top-0 flex h-5 w-5 items-center justify-center rounded-bl-md bg-background/85 text-foreground hover:bg-destructive hover:text-destructive-foreground disabled:opacity-50"
-              title="Удалить фото"
-              aria-label="Удалить фото"
+              title="Delete photo"
+              aria-label="Delete photo"
               data-testid="char-user-ref-remove"
             >
               {removing === url ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />}
@@ -137,15 +137,15 @@ export function CharacterUserRefs({
           onClick={() => inputRef.current?.click()}
           disabled={disabled || busy || full}
           className="inline-flex h-14 items-center gap-1 rounded-md border border-dashed border-border px-2 text-xs transition hover:bg-muted disabled:opacity-50"
-          title={full ? 'Максимум 4 фото-референса' : 'Загрузить фото (JPEG, PNG, WebP до 8 МБ)'}
+          title={full ? 'Up to 4 photo references' : 'Upload photo (JPEG, PNG, WebP up to 8 MB)'}
           data-testid="char-user-ref-upload"
         >
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-          Загрузить фото
+          Upload photo
         </button>
       </div>
-      <p className="mt-1.5 text-[11px] text-muted-foreground">До 4 фото. Используются как референс внешности при генерации персонажа</p>
-      {disabled && <p className="mt-0.5 text-[11px] text-muted-foreground">Референс зафиксирован — фото нельзя изменить.</p>}
+      <p className="mt-1.5 text-[11px] text-muted-foreground">Up to 4 photos. Used as appearance references when generating the character</p>
+      {disabled && <p className="mt-0.5 text-[11px] text-muted-foreground">Reference is locked — the photo cannot be changed.</p>}
       {error && <p className="mt-1 text-[11px] text-destructive" data-testid="char-user-refs-error">{error}</p>}
     </div>
   )

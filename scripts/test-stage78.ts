@@ -78,7 +78,7 @@ const info = (d: number): MediaInfo => ({ duration: d, videoDuration: d, hasVide
   ok(resolveContinuity({ chainMode: "chain", sceneNumber: 2, previousFrameSceneId: null, refs: [{ kind: "character" }] }) === "text_only", "D: chain mode, scene 2, no frame → text_only");
   ok(resolveContinuity({ chainMode: "chain", sceneNumber: 1, previousFrameSceneId: null, refs: [] }) === "none", "D: chain mode scene 1 → none");
   ok(resolveContinuity({ chainMode: "parallel", sceneNumber: 4, previousFrameSceneId: null, refs: [] }) === "none", "D: parallel mode → none");
-  ok(TEXT_ONLY_CONTINUITY_MESSAGE === "Кадр предыдущей сцены не готов — генерация по описанию", "D: Russian text-only message");
+  ok(TEXT_ONLY_CONTINUITY_MESSAGE === "The previous scene frame is not ready - generating from the description", "D: English text-only message (Stage 87 UI → English)");
 }
 
 console.log(`\nStage 78: ${pass} checks passed`);

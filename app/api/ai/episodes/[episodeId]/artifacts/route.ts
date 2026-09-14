@@ -37,7 +37,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ episodeId:
     if (active) return NextResponse.json({ jobId: active.id, resumed: true });
 
     const job = await prisma.generationJob.create({
-      data: { type: "artifacts", status: "processing", progress: 5, message: "Определяю важные объекты эпизода…", projectId },
+      data: { type: "artifacts", status: "processing", progress: 5, message: "Identifying important objects in the episode…", projectId },
     });
     runInBackground(async () => { await runArtifactImagesJob({ jobId: job.id, projectId, episodeId }); });
     return NextResponse.json({ jobId: job.id });

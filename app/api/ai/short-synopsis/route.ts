@@ -37,7 +37,7 @@ export async function POST(request: Request) {
     if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
     const project = await prisma.project.findFirst({ where: { id: projectId, userId: user.id }, include: { characters: { orderBy: { createdAt: "asc" } } } });
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
-    if (!project.synopsis) return NextResponse.json({ error: "Сначала опишите идею" }, { status: 400 });
+    if (!project.synopsis) return NextResponse.json({ error: "First describe the idea" }, { status: 400 });
 
     const episodeCount = clampEpisodeCount(requested ?? project.episodeCount, SEASON_DEFAULT_EPISODES);
     const language = normalizeLanguage(project.language, project.idea || project.synopsis);
@@ -62,6 +62,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ shortSynopsis: result, episodeCount });
   } catch (err) {
     console.error("[short-synopsis] error:", err);
-    return NextResponse.json({ error: "Не удалось составить краткий синопсис" }, { status: 500 });
+    return NextResponse.json({ error: "Couldn't create a brief synopsis" }, { status: 500 });
   }
 }

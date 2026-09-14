@@ -32,20 +32,20 @@ export async function POST(request: Request) {
   const instruction = sync ? SEASON_SYNC_INSTRUCTION : String(body?.instruction ?? "").trim();
   const force = body?.force === true;
   if (!projectId) return NextResponse.json({ error: "projectId required" }, { status: 400 });
-  if (instruction.length < 3) return NextResponse.json({ error: "Опишите, что изменить в сезоне" }, { status: 400 });
+  if (instruction.length < 3) return NextResponse.json({ error: "Describe what to change in the season" }, { status: 400 });
 
   const project = await prisma.project.findFirst({ where: { id: projectId, userId: session.user.id }, include: { characters: true, locations: { orderBy: { createdAt: "asc" } } } });
   if (!project?.synopsis) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
   await failStaleJobs({ projectId, type: SEASON_JOB_TYPE });
   const active = await prisma.generationJob.findFirst({ where: { projectId, type: SEASON_JOB_TYPE, status: { in: ["pending", "processing"] } } });
-  if (active) return NextResponse.json({ error: "Сценарий сезона ещё пишется — дождитесь окончания, затем измените сезон." }, { status: 409 });
+  if (active) return NextResponse.json({ error: "The season script is still being written — wait until it finishes, then edit the season." }, { status: 409 });
 
   const season = await prisma.season.findFirst({
     where: { projectId, number: 1 },
     include: { episodes: { orderBy: { number: "asc" }, include: { characters: { include: { character: true } }, scenes: { select: { videoUrl: true } }, location: { select: { detailLevel: true } } } } },
   });
-  if (!season || season.episodes.length === 0) return NextResponse.json({ error: "Сначала сгенерируйте сценарий сезона" }, { status: 400 });
+  if (!season || season.episodes.length === 0) return NextResponse.json({ error: "First generate the season script" }, { status: 400 });
 
   const language = normalizeLanguage(project.language, project.synopsis);
   const cards = project.characters.map(toCharacterCard);
@@ -55,17 +55,17 @@ export async function POST(request: Request) {
   try {
     const raw = await chatJSON(seasonReviseSystemPrompt(language, before.episodes.length), seasonReviseUserPrompt({ synopsis: project.synopsis, structure: before, characters: cards, locations: project.locations, instruction }), { temperature: 0.4, maxTokens: 6000 });
     const parsed = seasonReviseSchema.parse(raw);
-    if (parsed.episodes.length !== before.episodes.length) throw new Error(`LLM вернул ${parsed.episodes.length} эпизодов вместо ${before.episodes.length}`);
+    if (parsed.episodes.length !== before.episodes.length) throw new Error(`LLM returned ${parsed.episodes.length} episodes instead of ${before.episodes.length}`);
     after = { ...parsed, episodes: parsed.episodes.map((e, i) => ({ ...e, number: i + 1 })) };
   } catch (err) {
-    return NextResponse.json({ error: "Не удалось перестроить сезон: " + (err instanceof Error ? err.message : String(err)) }, { status: 502 });
+    return NextResponse.json({ error: "Failed to rebuild season: " + (err instanceof Error ? err.message : String(err)) }, { status: 502 });
   }
 
   const affected = affectedEpisodes(before, after);
   const withVideo = season.episodes.filter((e) => affected.includes(e.number) && e.scenes.some((s) => s.videoUrl)).map((e) => e.number);
   if (withVideo.length && !force) {
     return NextResponse.json({
-      error: `В эпизодах ${withVideo.join(", ")} уже есть сгенерированное видео — при переписывании сцены и видео этих эпизодов будут удалены.`,
+      error: `In episodes ${withVideo.join(", ")} already have generated video — when rewriting, the scenes and videos for these episodes will be deleted.`,
       needsForce: true, episodes: affected, withVideo,
     }, { status: 409 });
   }
@@ -103,7 +103,7 @@ export async function POST(request: Request) {
 
   if (affected.length === 0) return NextResponse.json({ jobId: null, affected, title: after.title });
 
-  const job = await prisma.generationJob.create({ data: { type: SEASON_JOB_TYPE, status: "pending", progress: 0, message: `Переписываю эпизоды ${affected.join(", ")}...`, projectId, resultData: JSON.stringify({ revise: true, affected }) } });
+  const job = await prisma.generationJob.create({ data: { type: SEASON_JOB_TYPE, status: "pending", progress: 0, message: `Rewriting episodes ${affected.join(", ")}...`, projectId, resultData: JSON.stringify({ revise: true, affected }) } });
   runInBackground(() => runSeasonScriptJob(job.id, projectId, before.episodes.length));
   return NextResponse.json({ jobId: job.id, affected, title: after.title });
 }

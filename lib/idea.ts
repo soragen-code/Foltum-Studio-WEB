@@ -63,7 +63,7 @@ const str = (max: number) => z.string().trim().min(1).max(max);
 /** Cast tiers (stage 3). CROWD = a named group (family at the table, port workers, protesters…). */
 export const CHARACTER_TIERS = ["MAIN", "SUPPORTING", "MINOR", "CROWD"] as const;
 export type CharacterTier = (typeof CHARACTER_TIERS)[number];
-export const TIER_LABELS: Record<CharacterTier, string> = { MAIN: "Главные", SUPPORTING: "Второстепенные", MINOR: "Эпизодические", CROWD: "Массовка / группы" };
+export const TIER_LABELS: Record<CharacterTier, string> = { MAIN: "Main", SUPPORTING: "Supporting", MINOR: "Episodic", CROWD: "Crowd / groups" };
 export function normalizeTier(v: unknown): CharacterTier {
   const t = typeof v === "string" ? v.trim().toUpperCase() : "";
   return (CHARACTER_TIERS as readonly string[]).includes(t) ? (t as CharacterTier) : "MAIN";
@@ -349,20 +349,20 @@ export function ideaUserPrompt(idea: string): string {
 
 /** Genres/directions the producer can pick in AUTO mode (id + Russian label + English descriptor for the model). */
 export const GENRES = [
-  { id: "detective", label: "Детектив", en: "detective / crime mystery" },
-  { id: "horror", label: "Ужасы", en: "horror" },
-  { id: "fantasy", label: "Магия / Фэнтези", en: "magic / fantasy" },
-  { id: "scifi", label: "Сай-фай", en: "science fiction" },
-  { id: "drama", label: "Драма", en: "drama" },
-  { id: "thriller", label: "Триллер", en: "thriller / suspense" },
-  { id: "romance", label: "Романтика", en: "romance" },
-  { id: "comedy", label: "Комедия", en: "comedy" },
-  { id: "adventure", label: "Приключения", en: "adventure" },
-  { id: "postapoc", label: "Постапокалипсис", en: "post-apocalyptic" },
-  { id: "mystery", label: "Мистика", en: "supernatural mystery" },
-  { id: "action", label: "Боевик", en: "action" },
-  { id: "historical", label: "Историческая драма", en: "historical drama" },
-  { id: "melodrama", label: "Мелодрама", en: "melodrama / family saga" },
+  { id: "detective", label: "Detective", en: "detective / crime mystery" },
+  { id: "horror", label: "Horror", en: "horror" },
+  { id: "fantasy", label: "Magic / Fantasy", en: "magic / fantasy" },
+  { id: "scifi", label: "Sci-fi", en: "science fiction" },
+  { id: "drama", label: "Drama", en: "drama" },
+  { id: "thriller", label: "Thriller", en: "thriller / suspense" },
+  { id: "romance", label: "Romance", en: "romance" },
+  { id: "comedy", label: "Comedy", en: "comedy" },
+  { id: "adventure", label: "Adventure", en: "adventure" },
+  { id: "postapoc", label: "Post-apocalypse", en: "post-apocalyptic" },
+  { id: "mystery", label: "Supernatural mystery", en: "supernatural mystery" },
+  { id: "action", label: "Action", en: "action" },
+  { id: "historical", label: "Historical drama", en: "historical drama" },
+  { id: "melodrama", label: "Melodrama", en: "melodrama / family saga" },
 ] as const;
 export type GenreId = (typeof GENRES)[number]["id"];
 export const GENRE_BY_ID: Record<string, (typeof GENRES)[number]> = Object.fromEntries(GENRES.map((g) => [g.id, g]));

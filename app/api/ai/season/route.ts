@@ -28,13 +28,13 @@ export async function POST(request: Request) {
 
   const project = await prisma.project.findFirst({ where: { id: projectId, userId: session.user.id }, select: { id: true, synopsis: true, charactersApproved: true } });
   if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
-  if (!project.synopsis) return NextResponse.json({ error: "Сначала утвердите синопсис" }, { status: 400 });
+  if (!project.synopsis) return NextResponse.json({ error: "First approve the synopsis" }, { status: 400 });
 
   await failStaleJobs({ projectId, type: SEASON_JOB_TYPE });
   const active = await prisma.generationJob.findFirst({ where: { projectId, type: SEASON_JOB_TYPE, status: { in: ["pending", "processing"] } }, orderBy: { createdAt: "desc" } });
   if (active) return NextResponse.json({ jobId: active.id, resumed: true });
 
-  const job = await prisma.generationJob.create({ data: { type: SEASON_JOB_TYPE, status: "pending", progress: 0, message: "Запуск…", projectId } });
+  const job = await prisma.generationJob.create({ data: { type: SEASON_JOB_TYPE, status: "pending", progress: 0, message: "Starting…", projectId } });
   runInBackground(() => runSeasonScriptJob(job.id, projectId, episodeCount));
   return NextResponse.json({ jobId: job.id, resumed: false });
 }

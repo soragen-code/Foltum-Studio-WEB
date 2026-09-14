@@ -52,8 +52,8 @@ ok(cleanStoryText("x".repeat(STORY_MAX_CHARS + 500)).length === STORY_MAX_CHARS,
       ok(r.kind === kind && r.text.length > 20, `parseStoryFile: .${kind} returns text`);
     }
   }
-  await assert.rejects(() => parseStoryFile("s.rtf", Buffer.from("x")), /Неподдерживаемый формат/, "parseStoryFile rejects unsupported extension");
-  await assert.rejects(() => parseStoryFile("s.txt", Buffer.from("short")), /Не удалось извлечь/, "parseStoryFile rejects near-empty content");
+  await assert.rejects(() => parseStoryFile("s.rtf", Buffer.from("x")), /Unsupported format/, "parseStoryFile rejects unsupported extension");
+  await assert.rejects(() => parseStoryFile("s.txt", Buffer.from("short")), /Could not extract text/, "parseStoryFile rejects near-empty content");
 
   // --- (A) idea schema: story mode ------------------------------------------
   const goodStory = "b".repeat(200);
@@ -140,12 +140,12 @@ ok(cleanStoryText("x".repeat(STORY_MAX_CHARS + 500)).length === STORY_MAX_CHARS,
   ok(/MANDATORY/.test(ep1sys) && /EPISODE 1/.test(ep1sys) && /"sceneKind": "narration"/.test(ep1sys), "episodeScriptSystemPrompt(ep1): opening narration MANDATORY");
   ok(/off-screen NARRATOR/i.test(ep1sys) && /no lip-sync/i.test(ep1sys) && /voiceover/.test(ep1sys), "episodeScriptSystemPrompt(ep1): off-screen narrator, no lip-sync b-roll");
   ok(/voiceoverLocal/.test(ep1sys), "episodeScriptSystemPrompt(ep1,ru): asks for translated voiceoverLocal");
-  // Episode-2 = OPTIONAL catch-up only (not forced).
+  // Stage 87: scene 1 of EVERY episode is the SERIES/EPISODE INTRO — MANDATORY off-screen narrator
+  // voice-over over wide establishing b-roll (no lip-sync). This now applies to ep2 and ep3+ too.
   const ep2sys = episodeScriptSystemPrompt("ru", 2);
-  ok(/OPTIONAL/.test(ep2sys) && /NOT required/i.test(ep2sys), "episodeScriptSystemPrompt(ep2): catch-up narration OPTIONAL, not forced");
-  // Episode-3+ = no narration.
+  ok(/MANDATORY/.test(ep2sys) && /"sceneKind": "narration"/.test(ep2sys) && /off-screen NARRATOR/i.test(ep2sys), "episodeScriptSystemPrompt(ep2): opening narration MANDATORY (Stage 87)");
   const ep3sys = episodeScriptSystemPrompt("ru", 3);
-  ok(/NO opening narration/.test(ep3sys), "episodeScriptSystemPrompt(ep3): no opening narration");
+  ok(/MANDATORY/.test(ep3sys) && /"sceneKind": "narration"/.test(ep3sys) && /no lip-sync/i.test(ep3sys), "episodeScriptSystemPrompt(ep3): opening narration MANDATORY (Stage 87)");
   // English project: no voiceoverLocal requested.
   ok(!/voiceoverLocal/.test(episodeScriptSystemPrompt("en", 1)), "episodeScriptSystemPrompt(en): no voiceoverLocal for English projects");
 

@@ -43,11 +43,11 @@ export function DashboardClient() {
     try {
       const res = await fetch(`/api/projects/${id}`, { method: 'DELETE' })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(d?.error || 'Не удалось удалить проект')
+      if (!res.ok) throw new Error(d?.error || "Couldn't delete the project")
       setProjects((list) => list.filter((p) => p.id !== id))
       setConfirmId(null)
     } catch (e: any) {
-      setDeleteError(e?.message || 'Не удалось удалить проект')
+      setDeleteError(e?.message || "Couldn't delete the project")
     } finally {
       setDeletingId(null)
     }
@@ -148,7 +148,7 @@ export function DashboardClient() {
                         </h3>
                         {project?.isTest && (
                           <span data-testid="project-test-badge" className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-400">
-                            Тест
+                            Test
                           </span>
                         )}
                       </div>
@@ -171,7 +171,7 @@ export function DashboardClient() {
                   <div className="flex flex-wrap items-center justify-end gap-2 px-5 pb-4">
                     {confirmId === project?.id ? (
                       <>
-                        <span className="mr-auto text-xs text-destructive" data-testid="project-delete-confirm-text">Удалить проект без возможности восстановления?</span>
+                        <span className="mr-auto text-xs text-destructive" data-testid="project-delete-confirm-text">Delete the project permanently?</span>
                         <button
                           type="button"
                           onClick={() => deleteProject(project.id)}
@@ -179,9 +179,9 @@ export function DashboardClient() {
                           className="inline-flex items-center gap-1 rounded-lg bg-destructive px-3 py-1.5 text-xs font-semibold text-destructive-foreground disabled:opacity-50"
                           data-testid="project-delete-confirm"
                         >
-                          {deletingId === project.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />} Да, удалить
+                          {deletingId === project.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />} Yes, delete
                         </button>
-                        <button type="button" onClick={() => { setConfirmId(null); setDeleteError(null) }} disabled={deletingId === project.id} className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50" data-testid="project-delete-cancel">Отмена</button>
+                        <button type="button" onClick={() => { setConfirmId(null); setDeleteError(null) }} disabled={deletingId === project.id} className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50" data-testid="project-delete-cancel">Cancel</button>
                       </>
                     ) : (
                       <button
@@ -190,7 +190,7 @@ export function DashboardClient() {
                         className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:border-destructive/50 hover:text-destructive"
                         data-testid="project-delete"
                       >
-                        <Trash2 className="h-3 w-3" /> Удалить
+                        <Trash2 className="h-3 w-3" /> Delete
                       </button>
                     )}
                     {deleteError && confirmId === project?.id && <p className="w-full text-right text-xs text-destructive" data-testid="project-delete-error">{deleteError}</p>}

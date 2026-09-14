@@ -23,12 +23,12 @@ export async function POST(request: Request) {
 
     const form = await request.formData().catch(() => null);
     const file = form?.get("file");
-    if (!file || typeof file === "string") return NextResponse.json({ error: "Файл не передан" }, { status: 400 });
+    if (!file || typeof file === "string") return NextResponse.json({ error: "No file provided" }, { status: 400 });
 
     const name = (file as File).name ?? "story";
-    if (!storyKindFromName(name)) return NextResponse.json({ error: "Неподдерживаемый формат. Загрузите .txt, .md, .docx или .pdf" }, { status: 400 });
+    if (!storyKindFromName(name)) return NextResponse.json({ error: "Unsupported format. Upload .txt, .md, .docx, or .pdf" }, { status: 400 });
     const size = (file as File).size ?? 0;
-    if (size > STORY_MAX_BYTES) return NextResponse.json({ error: "Файл слишком большой (макс. 8 МБ)" }, { status: 400 });
+    if (size > STORY_MAX_BYTES) return NextResponse.json({ error: "File is too large (max. 8 MB)" }, { status: 400 });
 
     const buf = Buffer.from(await (file as File).arrayBuffer());
     const { kind, text } = await parseStoryFile(name, buf);
@@ -37,6 +37,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ text, kind, language, languageName: LANGUAGE_NAMES[language], chars: text.length, filename: name });
   } catch (err: any) {
     console.error("Story parse error:", err);
-    return NextResponse.json({ error: err?.message ?? "Не удалось разобрать файл" }, { status: 400 });
+    return NextResponse.json({ error: err?.message ?? "Couldn't parse the file" }, { status: 400 });
   }
 }

@@ -28,12 +28,12 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     const { id } = await ctx.params;
     const body = await request.json().catch(() => ({}));
     const instruction = typeof body?.instruction === "string" ? body.instruction.trim() : "";
-    if (!instruction) return NextResponse.json({ error: "Опишите, что изменить" }, { status: 400 });
+    if (!instruction) return NextResponse.json({ error: "Describe what to change" }, { status: 400 });
 
     const user = await prisma.user.findUnique({ where: { email: session.user.email } });
     if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
     const artifact = await prisma.artifact.findFirst({ where: { id, project: { userId: user.id } } });
-    if (!artifact) return NextResponse.json({ error: "Объект не найден" }, { status: 404 });
+    if (!artifact) return NextResponse.json({ error: "Object not found" }, { status: 404 });
 
     const newVisual = `${artifact.visualPrompt ?? artifact.name}\nRevision: ${instruction}`.slice(0, 2000);
     const updated = await prisma.artifact.update({ where: { id }, data: { visualPrompt: newVisual, imageUrl: null, imageExtra: null } });

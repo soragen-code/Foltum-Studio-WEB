@@ -15,7 +15,7 @@ import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
  */
 export async function POST(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const session = await auth();
-  if (!session?.user?.id) return NextResponse.json({ error: "Требуется вход" }, { status: 401 });
+  if (!session?.user?.id) return NextResponse.json({ error: "Login required" }, { status: 401 });
   const limited = rateLimitByUser(request, "ai:scene-undo", session.user.email ?? session.user.id, RATE_LIMITS.ai);
   if (limited) return limited;
 
@@ -23,10 +23,10 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   const scene = await prisma.scene.findFirst({
     where: { id, episode: { season: { project: { userId: session.user.id } } } },
   });
-  if (!scene) return NextResponse.json({ error: "Сцена не найдена" }, { status: 404 });
+  if (!scene) return NextResponse.json({ error: "Scene not found" }, { status: 404 });
 
   const snap = scene.prevSnapshot as Record<string, unknown> | null;
-  if (!snap) return NextResponse.json({ error: "Нечего отменять" }, { status: 404 });
+  if (!snap) return NextResponse.json({ error: "Nothing to undo" }, { status: 404 });
 
   const { kind, ...fields } = snap;
   void kind;
