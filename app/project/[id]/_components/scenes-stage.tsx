@@ -6,6 +6,8 @@ import { JobProgressBar, SmoothProgress, type JobInfo, type JobPollResponse, JOB
 import { ProviderPicker } from './provider-picker'
 
 const VIDEO_EXPECTED_SEC = 600 // ~10 min: Seedance renders a 15 s clip with native audio + upload
+// Stage 92: the scene breakdown is written by gpt-6-astra in a background job — a few minutes.
+const SCENES_EXPECTED_SEC = 240
 
 /**
  * POST that survives a dropped connection.
@@ -149,6 +151,10 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
       delete next[sceneId]
       return next
     })
+  /** episodeId -> the scene-breakdown job being polled (Stage 92: written by gpt-6-astra in the
+   *  background, so it needs a smooth progress bar just like the video jobs). */
+  const [scenesJobs, setScenesJobs] = useState<Record<string, JobInfo>>({})
+  const scenesPollTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   /** episodeId -> true while the "Generate all scenes" batch request is being dispatched. */
   const [startingBatch, setStartingBatch] = useState<Record<string, boolean>>({})
   // Stage 4: speech is always English (no subtitles; story-language text is shown in the UI only) — no language selector.
@@ -201,21 +207,75 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
     if (existing.length === 0 && !generatingEps[epId]) generateScenes(epId)
   }
 
+  const stopScenesPolling = (epId: string) => {
+    const t = scenesPollTimers.current[epId]
+    if (t) clearTimeout(t)
+    delete scenesPollTimers.current[epId]
+  }
+
+  /**
+   * Poll GET /api/jobs/[id] for one episode's scene-breakdown job (Stage 92 background job).
+   * Keeps `generatingEps[epId]` set until the job reaches a terminal state, feeds `scenesJobs`
+   * for the smooth progress bar, and on completion swaps in the freshly written scenes.
+   */
+  const pollScenesJob = (epId: string, jobId: string) => {
+    stopScenesPolling(epId)
+    const tick = async () => {
+      try {
+        const res = await fetch(`/api/jobs/${jobId}`, { cache: 'no-store' })
+        if (res.status === 404) { stopScenesPolling(epId); setGeneratingEps((p) => ({ ...p, [epId]: false })); return }
+        const data: JobPollResponse = await res.json()
+        if (data?.job) {
+          setScenesJobs((prev) => ({ ...prev, [epId]: data.job }))
+          if (data.job.status === 'completed' || data.job.status === 'failed' || data.job.status === 'canceled') {
+            stopScenesPolling(epId)
+            setGeneratingEps((p) => ({ ...p, [epId]: false }))
+            if (data.job.status === 'completed') {
+              const sc = data.job.result?.scenes
+              if (Array.isArray(sc) && sc.length) setEpScenes(epId, sc)
+              else onRefresh()
+            } else if (data.job.status === 'failed') {
+              setError(data.job.error ?? 'Generation failed')
+            }
+            // Keep the 100% / failed bar visible briefly, then hide it.
+            setTimeout(() => {
+              setScenesJobs((prev) => {
+                const next = { ...prev }
+                if (next[epId]?.id === jobId) delete next[epId]
+                return next
+              })
+            }, 2500)
+            return
+          }
+        }
+      } catch {
+        // transient network error — keep polling
+      }
+      scenesPollTimers.current[epId] = setTimeout(tick, JOB_POLL_INTERVAL_MS)
+    }
+    tick()
+  }
+
   const generateScenes = async (episodeId: string) => {
     if (!episodeId || generatingEps[episodeId]) return
     setGeneratingEps((prev) => ({ ...prev, [episodeId]: true }))
     setError('')
     try {
-      const res = await fetch('/api/ai/scenes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: project?.id, episodeId }),
-      })
-      const data = await res.json()
-      if (data?.scenes) setEpScenes(episodeId, data.scenes)
-      else setError(data?.error ?? 'Generation failed')
-    } catch { setError('Network error') }
-    finally { setGeneratingEps((prev) => ({ ...prev, [episodeId]: false })) }
+      // Stage 92: /api/ai/scenes now starts a background gpt-6-astra job and returns { jobId };
+      // the breakdown is written server-side and polled here. postJobStart retries a dropped POST
+      // (the endpoint is idempotent per episode, so a retry resumes the same job).
+      const res = await postJobStart('/api/ai/scenes', { projectId: project?.id, episodeId })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data?.jobId) {
+        setError(data?.error ?? 'Generation failed')
+        setGeneratingEps((prev) => ({ ...prev, [episodeId]: false }))
+        return
+      }
+      pollScenesJob(episodeId, data.jobId)
+    } catch {
+      setError('Network error')
+      setGeneratingEps((prev) => ({ ...prev, [episodeId]: false }))
+    }
   }
 
   const stopPolling = (sceneId: string) => {
@@ -263,7 +323,10 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
   }
 
   // Stop all pollers on unmount
-  useEffect(() => () => { Object.values(pollTimers.current).forEach(clearTimeout) }, [])
+  useEffect(() => () => {
+    Object.values(pollTimers.current).forEach(clearTimeout)
+    Object.values(scenesPollTimers.current).forEach(clearTimeout)
+  }, [])
 
   // Resume polling for EVERY active video job across the project (any episode),
   // so multiple episodes can render at once and survive a refresh without flicker.
@@ -505,13 +568,19 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
               )}
 
               {/* Non-destructive loading banner: the panel stays mounted so nothing
-                  flashes away and back while scenes are (re)generated. */}
-              {generating && (
+                  flashes away and back while scenes are (re)generated. Stage 92: the breakdown is
+                  written by gpt-6-astra in a background job — show a smooth 0→100 % bar with elapsed
+                  time once the job is being polled, and the plain spinner in the short gap before. */}
+              {generating && scenesJobs[selectedEpisodeId!] ? (
+                <div className="rounded-lg border border-border bg-card px-4 py-3">
+                  <SmoothProgress job={scenesJobs[selectedEpisodeId!]} expectedTotalSec={SCENES_EXPECTED_SEC} />
+                </div>
+              ) : generating ? (
                 <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin text-primary" />
                   {(scenes ?? []).length ? 'Regenerating scenes…' : 'Generating scenes…'}
                 </div>
-              )}
+              ) : null}
 
               {/* Skeleton placeholders keep the layout height stable on first generation */}
               {generating && (scenes ?? []).length === 0 && (

@@ -6,7 +6,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
-import { chatJSON } from "@/lib/ai";
+import { SCRIPT_MODEL, startBackgroundJSON, pollBackgroundJSON, cancelBackgroundResponse } from "@/lib/ai";
 import { normalizeLanguage } from "@/lib/idea";
 import {
   episodeContinuityAuditSchema,
@@ -135,13 +135,31 @@ export async function POST(request: Request) {
         startState: s.startState,
       }));
 
+      // Stage 92: the continuity audit rewrites scenes' videoPrompt (correctedVideoPrompt) — it is now
+      // written by gpt-6-astra (SCRIPT_MODEL). This whole-episode reasoning call takes minutes, so a
+      // synchronous chatJSON would die at the ~300 s undici headers limit even though we are already inside
+      // the background job; run it as an OpenAI background response and poll (5 s) until it completes.
       let audit;
       try {
-        const raw = await chatJSON(
+        const responseId = await startBackgroundJSON(
           episodeContinuityAuditSystemPrompt(language),
           episodeContinuityAuditUserPrompt(auditInput),
-          { temperature: 0.4, maxTokens: 16000 }
+          { model: SCRIPT_MODEL, maxTokens: 16000, reasoningEffort: "low" }
         );
+        let raw: unknown | undefined;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          await new Promise((r) => setTimeout(r, 5_000));
+          if (await canceled()) {
+            await cancelBackgroundResponse(responseId).catch(() => {});
+            await markCanceled(jobId, "Polishing canceled.");
+            return;
+          }
+          await heartbeatJob(jobId);
+          const poll = await pollBackgroundJSON(responseId);
+          if (poll.status === "completed") { raw = poll.json; break; }
+          if (poll.status === "failed") throw new Error(poll.error || "audit background response failed");
+        }
         audit = episodeContinuityAuditSchema.parse(raw);
       } catch (err) {
         console.error("[assemble-polish] audit failed:", err);
