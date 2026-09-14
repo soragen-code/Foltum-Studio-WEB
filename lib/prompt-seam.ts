@@ -108,13 +108,39 @@ export function extractScriptedCamera(startState: string | null | undefined): st
   return cam.length ? cam : null;
 }
 
-export type ReframeOpts = { hasOverride: boolean; sceneNumber?: number; startState?: string | null };
+/**
+ * Stage 102 — the vision description of the previous scene's REAL last frame opens with a mandatory
+ * "CAMERA OF THIS FRAME: …" line (lib/frame-state.ts). It is read here as an anti-example for frame 1
+ * and stripped wherever the description is inserted as world-state text.
+ */
+export const PREVIOUS_CAMERA_LINE_RE = /^\s*CAMERA OF THIS FRAME:\s*(.+?)\s*$/im;
+
+/** The camera of the previous scene's actual last frame, or null when the line is absent. */
+export function extractPreviousCamera(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const m = PREVIOUS_CAMERA_LINE_RE.exec(text);
+  const cam = m ? m[1].replace(/\s+/g, " ").trim() : "";
+  return cam.length ? cam : null;
+}
+
+/** Remove the "CAMERA OF THIS FRAME: …" line (and the blank line after it), keeping the state text. */
+export function stripPreviousCameraLine(text: string | null | undefined): string {
+  if (!text) return "";
+  return text.replace(/^\s*CAMERA OF THIS FRAME:[^\n]*\n?/im, "").replace(/^\s*\n/, "").trim();
+}
+
+export type ReframeOpts = { hasOverride: boolean; sceneNumber?: number; startState?: string | null; previousEndState?: string | null };
 
 /** The full Stage 101 CONTINUE-FROM directive (base line + camera prohibition + concrete frame-1 camera). */
-export function reframeDirective(imageIndex: number, opts: { sceneNumber?: number; startState?: string | null } = {}): string {
+export function reframeDirective(imageIndex: number, opts: { sceneNumber?: number; startState?: string | null; previousEndState?: string | null } = {}): string {
   const tag = `[Image${imageIndex}]`;
   const scripted = extractScriptedCamera(opts.startState);
   const fallback = openingAngleForScene(opts.sceneNumber ?? 1);
+  const previousCamera = extractPreviousCamera(opts.previousEndState);
+  // Stage 102: the previous shot's REAL final camera as an explicit anti-example.
+  const antiExample = previousCamera
+    ? `The previous shot ended on: ${previousCamera} — this exact camera (angle, scale, height) is FORBIDDEN for frame 1; open instead from ${scripted ? scripted.replace(/\.$/, "") : fallback}.`
+    : "";
   const prohibition =
     `The composition, camera angle, shot scale and camera height of ${tag} are FORBIDDEN as this shot's first frame. ` +
     `Frame 1 must NOT match ${tag} in angle, scale or height. ${tag} defines ONLY: who stands where, in what pose / phase of movement, wardrobe, props, set dressing, light and time of day.`;
@@ -124,7 +150,7 @@ export function reframeDirective(imageIndex: number, opts: { sceneNumber?: numbe
   const blocking =
     `The camera is NOT re-blocked to keep everyone in view — people stay where the action puts them and may pass out of shot; ` +
     `from frame 1 the characters keep moving and acting freely for this scene.`;
-  return `${reframePreviousFrameLine(imageIndex)}\n${prohibition}\n${camera} ${blocking}`;
+  return `${reframePreviousFrameLine(imageIndex)}\n${prohibition}${antiExample ? `\n${antiExample}` : ""}\n${camera} ${blocking}`;
 }
 
 /**
@@ -143,7 +169,7 @@ export function applyReframeDirective(
   if (i < 0) return prompt;
   const marker = `CONTINUE FROM [Image${i + 1}]:`;
   if (prompt.includes(marker)) return prompt;
-  const directive = reframeDirective(i + 1, { sceneNumber: opts.sceneNumber, startState: opts.startState });
+  const directive = reframeDirective(i + 1, { sceneNumber: opts.sceneNumber, startState: opts.startState, previousEndState: opts.previousEndState });
   return `${directive}\n\n${prompt.trimStart()}`;
 }
 

@@ -5,7 +5,8 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { buildScenePrompt } from "@/lib/scene-prompt";
-import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, applyLocationConsistency, applySeriesIntro, sceneHasLocationRef, resolveContinuity } from "@/lib/prompt-seam";
+import { isRefusal } from "@/lib/frame-state";
+import { stripPreviousCameraLine, applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, applyLocationConsistency, applySeriesIntro, sceneHasLocationRef, resolveContinuity } from "@/lib/prompt-seam";
 import { normalizePromptOverride } from "@/lib/prompt-override";
 
 /**
@@ -44,10 +45,13 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
 
   // Stage 38: the previous scene's frame is never sent as a reference. Stage 40: its END STATE
   // (actual last-frame description in chain mode, otherwise the scripted "Final frame") opens the prompt.
-  const previous = scene.number > 1 ? await prisma.scene.findFirst({
+  const previousRow = scene.number > 1 ? await prisma.scene.findFirst({
     where: { episodeId: scene.episode.id, number: scene.number - 1 },
     select: { id: true, number: true, locationDesc: true, lastFrameUrl: true, endState: true, endStateActual: true },
   }) : null;
+  // Stage 102: same sanitising as the worker — refusal-looking description = absent; camera line stripped from the state text.
+  const previousEndStateRaw = previousRow && !isRefusal(previousRow.endStateActual) ? previousRow.endStateActual : null;
+  const previous = previousRow ? { ...previousRow, endStateActual: previousEndStateRaw ? stripPreviousCameraLine(previousEndStateRaw) || null : null } : null;
   const built = buildScenePrompt({
     scene,
     characters: scene.characters.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront, imageProfile: l.character.imageProfile, imageFull: l.character.imageFull, imageExtra: l.character.imageExtra, appearance: l.character.appearance, age: l.character.age })),
@@ -84,7 +88,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
       applyLocationBaseLayer(
         applyContinuousAction(
           applyNewShotCameraMove(
-            applyReframeDirective(applySeamDirectives(built.prompt, { hasOverride: built.hasOverride }), built.retryRefs, { hasOverride: built.hasOverride, sceneNumber: scene.number, startState: scene.startState }),
+            applyReframeDirective(applySeamDirectives(built.prompt, { hasOverride: built.hasOverride }), built.retryRefs, { hasOverride: built.hasOverride, sceneNumber: scene.number, startState: scene.startState, previousEndState: previousEndStateRaw }),
             scene.number,
             { hasOverride: built.hasOverride, continuity },
           ),

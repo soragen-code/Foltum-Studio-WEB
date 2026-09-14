@@ -19,12 +19,12 @@ import { GenerationAttempt, safeProviderError, classifyProviderError, logAttempt
 import { updateJob, heartbeatJob, runInBackground, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { moderationHints } from "@/lib/sanitize-prompt";
 import { downscaleReferences, REFERENCE_WIDTH } from "@/lib/reference-downscale";
-import { describeLastFrame } from "@/lib/frame-state";
+import { describeLastFrame, isRefusal } from "@/lib/frame-state";
 import { nextChainScene, chainStopMessage, CHAIN_INSUFFICIENT_CREDITS } from "@/lib/chain-run";
 import { resolvePowerTier, SCENE_RESOLUTION } from "@/lib/power-tier";
 import { sceneProgressStage, SCENE_STAGE_PROGRESS, SCENE_STAGE_MESSAGE } from "@/lib/scene-progress";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
-import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, applyLocationConsistency, applySeriesIntro, sceneHasLocationRef, resolveContinuity, TEXT_ONLY_CONTINUITY_MESSAGE, type Continuity } from "@/lib/prompt-seam";
+import { stripPreviousCameraLine, applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, applyLocationConsistency, applySeriesIntro, sceneHasLocationRef, resolveContinuity, TEXT_ONLY_CONTINUITY_MESSAGE, type Continuity } from "@/lib/prompt-seam";
 
 export interface VideoJobParams {
   jobId: string;
@@ -164,10 +164,14 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     const links = await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true } });
     // Stage 40: the previous scene's end-state (actual description of its last frame in chain mode,
     // otherwise the scripted "Final frame") opens this scene's prompt. Its image is never sent.
-    const previous = scene.number > 1 ? await prisma.scene.findFirst({
+    const previousRow = scene.number > 1 ? await prisma.scene.findFirst({
       where: { episodeId: scene.episodeId, number: scene.number - 1 },
       select: { id: true, number: true, locationDesc: true, lastFrameUrl: true, endState: true, endStateActual: true },
     }) : null;
+    // Stage 102: a refusal-looking vision answer ("I'm sorry, I can't help…", legacy rows) is treated as absent;
+    // the raw description keeps its "CAMERA OF THIS FRAME" line for the anti-example, the OPENING STATE text does not.
+    const previousEndStateRaw = previousRow && !isRefusal(previousRow.endStateActual) ? previousRow.endStateActual : null;
+    const previous = previousRow ? { ...previousRow, endStateActual: previousEndStateRaw ? stripPreviousCameraLine(previousEndStateRaw) || null : null } : null;
     const episodeLoc = await prisma.episode.findUnique({ where: { id: scene.episodeId }, select: {
       id: true,
       script: true, // Stage 54: source text the prop registry is extracted from
@@ -262,6 +266,8 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       // Stage 101: the directive names this scene's concrete frame-1 camera (scripted CAMERA block wins).
       sceneNumber: scene.number,
       startState: look.texts.openingState ?? scene.startState,
+      // Stage 102: the previous shot's real final camera is named as a FORBIDDEN anti-example for frame 1.
+      previousEndState: previousEndStateRaw,
     });
     prompt = applyNewShotCameraMove(prompt, scene.number, { hasOverride: built.hasOverride, continuity });
     // Stage 82: the whole episode is one continuous event — a continuing scene carries the previous
@@ -459,7 +465,7 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, source: str
   // Stage 100: generation is always chain — always describe the ACTUAL last frame for the next scene.
   if (lastFrameUrl) {
     const links = await prisma.sceneCharacter.findMany({ where: { sceneId: scene.id }, select: { character: { select: { name: true } } } }).catch(() => []);
-    endStateActual = await describeLastFrame(lastFrameUrl, scene, links.map(l => ({ name: l.character.name })));
+    endStateActual = await describeLastFrame(lastFrameUrl, { ...scene, endState: scene.endState ?? null }, links.map(l => ({ name: l.character.name })));
   }
   // Stage 46B: "Checking" 95 % — the clip is stored, the scene is about to be published.
   await saveOwned(jobId, state, { progress: SCENE_STAGE_PROGRESS.verifying, message: SCENE_STAGE_MESSAGE.verifying });

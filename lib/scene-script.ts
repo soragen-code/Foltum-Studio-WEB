@@ -13,6 +13,8 @@
  *
  * Read-only: no ids, no secrets, no JSON — just the human-readable script text.
  */
+import { isRefusal } from "@/lib/frame-state";
+import { stripPreviousCameraLine } from "@/lib/prompt-seam";
 
 // Mirror of lib/scene-prompt.ts SEQUENCE_BREAK_LINKS, kept local to avoid importing the protected file
 // (and any circular import). Same values as season.ts' SEAM_BREAK_LINKS.
@@ -53,6 +55,17 @@ export interface PreviousSceneEnding {
 
 const clean = (s?: string | null): string => (s ?? "").toString().trim();
 
+/**
+ * Stage 102 — the vision description of the real last frame, ready for the script: a refusal-looking
+ * answer ("I'm sorry, I can't help…", legacy rows) counts as absent, and the mandatory
+ * "CAMERA OF THIS FRAME:" line is stripped (the script shows the world state only).
+ */
+function actualEnding(endStateActual?: string | null): string {
+  const raw = clean(endStateActual);
+  if (!raw || isRefusal(raw)) return "";
+  return stripPreviousCameraLine(raw);
+}
+
 function durationLabel(sec?: number | null): string {
   const n = typeof sec === "number" && sec > 0 ? Math.round(sec) : null;
   return n ? `${n}s` : "";
@@ -68,7 +81,7 @@ function sceneKindLabel(kind?: string | null): string {
 /** The previous scene's ENDING text, actual last-frame description preferred over the scripted one. */
 export function previousEndingText(previous?: PreviousSceneEnding | null): string {
   if (!previous) return "";
-  return clean(previous.endStateActual) || clean(previous.endState);
+  return actualEnding(previous.endStateActual) || clean(previous.endState);
 }
 
 /**
@@ -156,7 +169,7 @@ export function assembleSceneScript(scene: SceneScriptFields, previous?: Previou
   }
 
   // ── END STATE (how this scene ends — the next scene opens here) ─────────────
-  const end = clean(scene.endStateActual) || clean(scene.endState);
+  const end = actualEnding(scene.endStateActual) || clean(scene.endState);
   if (end) {
     lines.push("END STATE (how this scene ends — the next scene opens exactly here):");
     lines.push(end);

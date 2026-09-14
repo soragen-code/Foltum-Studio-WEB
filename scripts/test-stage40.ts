@@ -102,7 +102,9 @@ const loc = { id: "loc", name: "Kitchen", imageUrl: styledUrl("k-wide"), imageRe
   const user = req.messages[1].content as any[];
   ok(Array.isArray(user) && user.some(p => p.type === "image_url" && p.image_url.url === "https://media.invalid/last.jpg" && p.image_url.detail === "high"), "E: user message carries the last frame as image_url (detail high)");
   ok(user.some(p => p.type === "text" && p.text.includes("Yara") && p.text.includes("Theo") && p.text.includes("Kitchen")), "E: text part names the cast and location");
-  const good: VisionClient = { chat: { completions: { create: async () => ({ choices: [{ message: { content: "  Yara stands by the sink.  " } }] }) } } };
+  // Stage 102: descriptions shorter than 80 chars count as a refusal, so the mock returns a real-length one.
+  const GOOD_DESC = "CAMERA OF THIS FRAME: eye-level frontal medium shot.\n\nYara stands by the sink, frame-left, both hands on the counter edge. Theo sits at the table in the background, looking towards the window. Warm late-afternoon light falls from frame-right.";
+  const good: VisionClient = { chat: { completions: { create: async () => ({ choices: [{ message: { content: `  ${GOOD_DESC}  ` } }] }) } } };
   const bad: VisionClient = { chat: { completions: { create: async () => { throw new Error("vision down"); } } } };
   const empty: VisionClient = { chat: { completions: { create: async () => ({ choices: [{ message: { content: "" } }] }) } } };
   Promise.all([
@@ -110,7 +112,7 @@ const loc = { id: "loc", name: "Kitchen", imageUrl: styledUrl("k-wide"), imageRe
     describeLastFrame("https://media.invalid/last.jpg", { number: 2 }, [], bad),
     describeLastFrame("https://media.invalid/last.jpg", { number: 2 }, [], empty),
   ]).then(([g, b, e]) => {
-    ok(g === "Yara stands by the sink.", "E: describeLastFrame returns the trimmed description");
+    ok(g === GOOD_DESC, "E: describeLastFrame returns the trimmed description");
     ok(b === null, "E: describeLastFrame → null when the vision call throws (never breaks the video job)");
     ok(e === null, "E: describeLastFrame → null on empty content");
     finish();

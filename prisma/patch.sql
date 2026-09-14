@@ -261,3 +261,11 @@ ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "userRefs" TEXT;
 -- Stage 98: chain generation is now the DEFAULT (the previous scene's real last frame is passed as
 -- reference to the next scene). Only the column DEFAULT changes; existing rows keep their stored value.
 ALTER TABLE "Episode" ALTER COLUMN "chainMode" SET DEFAULT 'chain';
+
+-- Stage 102: the vision model sometimes REFUSED to describe the real last frame ("I'm sorry, I can't help
+-- with identifying people…") and the refusal was saved as Scene.endStateActual, poisoning the next scene's
+-- OPENING STATE. NULL every refusal-looking / too-short description so the chain falls back to the scripted
+-- endState. Idempotent: matching rows are NULLed once, later runs touch nothing.
+UPDATE "Scene" SET "endStateActual" = NULL
+WHERE "endStateActual" IS NOT NULL
+  AND ("endStateActual" ~* '(i''m sorry|can''t help|cannot help|unable to)' OR length(trim("endStateActual")) < 80);
