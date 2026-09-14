@@ -1021,20 +1021,17 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           </div>
           <p className="mt-1 text-sm text-muted-foreground">Characters (multiple angles) are generated with the "Generate characters" button. Locations are separate: one master frame using the button on the card, additional angles with "+". All images are tagged with C2PA. Click any frame to open it full screen.</p>
 
-          {/* Stage 91: Locations FIRST on the per-episode references screen.
+          {/* Stage 91/93: Locations FIRST on the per-episode references screen.
               IMPORTANT: this is the screen the user actually sees (episode-view.tsx, phase === 'references').
-              Earlier stages (84/85/86/90) edited the project-wizard component
-              (app/project/[id]/_components/references-stage.tsx) — the WRONG file — which is why the
-              location never moved. Ordering here is guaranteed by DOM/source order (Locations block is
-              rendered before Characters), NOT by a Tailwind order-* class (those get purged from the
-              compiled CSS and were inert in the previous attempts). The location is the base scene layer
-              created first, so it is highlighted and slightly larger than the character cards. */}
-          <div className="mt-4 rounded-xl border-2 border-primary/40 bg-primary/5 p-3 sm:p-4" data-testid="episode-location-block">
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="flex items-center gap-2 text-base font-bold"><MapPin className="h-5 w-5 text-primary" /> Locations ({refLocs.length})</h3>
-              <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">Base scene layer — created first</span>
-            </div>
-          <div className="mt-3 grid gap-4 sm:grid-cols-2">
+              Ordering here is guaranteed by DOM/source order (Locations block is rendered before
+              Characters), NOT by a Tailwind order-* class (those get purged from the compiled CSS).
+              Stage 93: the location card now MATCHES the character card exactly in size and layout —
+              same heading style, same grid (sm:grid-cols-2 lg:grid-cols-3), same 9:16 object-contain
+              photos and the same button rows — with NO oversized/highlighted wrapper and no "base
+              scene layer" badge, while keeping every location-specific control (generate/regenerate
+              master frame, "+ Angle", cancel-generation + confirm dialog). Locations stay FIRST. */}
+          <h3 className="mt-4 flex items-center gap-2 text-sm font-semibold" data-testid="episode-location-block"><MapPin className="h-4 w-4" /> Locations ({refLocs.length})</h3>
+          <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {refLocs.map((l) => {
               const detail = locationDetailLevel(l)
               const base = [{ url: l.imageUrl, label: 'Wide shot', slot: 'master' }, { url: l.imageReverse, label: 'Reverse angle', slot: 'reverse' }, { url: l.imageDetail, label: 'Medium shot', slot: 'detail' }].filter((a) => validUrl(a.url))
@@ -1049,22 +1046,26 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                     <div className="min-w-0 truncate text-sm font-medium">{l.name} <span className="font-normal text-muted-foreground">· {locationFrames(l)} {locationFrames(l) === 1 ? 'frame' : 'frames'}</span></div>
                     <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground" title="The recommended number of frames depends on the required location detail; add angles with '+' as needed" data-testid="location-detail-badge">detail: {locationDetailLabel(detail)} · recommended {desiredTotalFrames(l)}</span>
                   </div>
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {(() => { const all = [...base.map((a) => ({ url: a.url as string, label: a.label, slot: a.slot, idx: undefined as number | undefined })), ...extras.map((u, i) => ({ url: u, label: `${i + 1}. ${locationExtraLabel(i)}`, slot: 'extra', idx: i }))]; const urls = all.map((a) => a.url); return base.length > 0 ? all.map((a, i) => (
-                      <button key={a.url + i} type="button" onClick={() => openLightbox(urls, i, `${l.name} — ${a.label}`)} className="group relative h-40 w-24 overflow-hidden rounded bg-muted" title={a.label} data-testid="ref-image">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={a.url} alt={`${l.name} — ${a.label}`} className="h-full w-full object-cover" />
-                        <span className="absolute right-0.5 top-0.5 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
-                        <FrameToolbar
-                          regen={{ testId: `regen-shot-${a.slot}${a.idx !== undefined ? `-${a.idx}` : ''}`, busy, spinning: shotIsBusy(l.id, a.slot, a.idx), onClick: () => regenShot('location', l.id, a.slot, a.idx) }}
-                          download={{ url: a.url, name: referenceFileName('location', l.name, a.slot, a.url, a.idx) }}
-                          del={{ testId: `delete-shot-${a.slot}${a.idx !== undefined ? `-${a.idx}` : ''}`, onClick: () => deleteFrame(l.id, a.slot, a.idx), disabled: busy || all.length <= 1, disabledTitle: all.length <= 1 ? 'At least one frame' : 'Wait for generation to finish' }}
-                        />
-                      </button>
-                    )) : busy ? (
-                      <div className="flex h-40 w-24 items-center justify-center rounded bg-muted"><Loader2 className="h-4 w-4 animate-spin text-primary" /></div>
+                  <div className="mt-2">
+                    {(() => { const all = [...base.map((a) => ({ url: a.url as string, label: a.label, slot: a.slot, idx: undefined as number | undefined })), ...extras.map((u, i) => ({ url: u, label: `${i + 1}. ${locationExtraLabel(i)}`, slot: 'extra', idx: i }))]; const urls = all.map((a) => a.url); return all.length > 0 ? (
+                      <div className={all.length > 1 ? 'grid grid-cols-2 gap-2' : ''}>
+                        {all.map((a, i) => (
+                          <button key={a.url + i} type="button" onClick={() => openLightbox(urls, i, `${l.name} — ${a.label}`)} className={`group relative aspect-[9/16] overflow-hidden rounded bg-muted ${all.length === 1 ? 'mx-auto w-full max-w-[13rem]' : ''}`} title={a.label} data-testid="ref-image">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={a.url} alt={`${l.name} — ${a.label}`} className="h-full w-full object-contain" />
+                            <span className="absolute right-1 top-1 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
+                            <FrameToolbar
+                              regen={{ testId: `regen-shot-${a.slot}${a.idx !== undefined ? `-${a.idx}` : ''}`, busy, spinning: shotIsBusy(l.id, a.slot, a.idx), onClick: () => regenShot('location', l.id, a.slot, a.idx) }}
+                              download={{ url: a.url, name: referenceFileName('location', l.name, a.slot, a.url, a.idx) }}
+                              del={{ testId: `delete-shot-${a.slot}${a.idx !== undefined ? `-${a.idx}` : ''}`, onClick: () => deleteFrame(l.id, a.slot, a.idx), disabled: busy || all.length <= 1, disabledTitle: all.length <= 1 ? 'At least one frame' : 'Wait for generation to finish' }}
+                            />
+                          </button>
+                        ))}
+                      </div>
+                    ) : busy ? (
+                      <div className="mx-auto flex aspect-[9/16] w-full max-w-[13rem] items-center justify-center rounded bg-muted"><Loader2 className="h-4 w-4 animate-spin text-primary" /></div>
                     ) : (
-                      <div className="flex h-40 w-24 items-center justify-center rounded bg-muted"><ImageOff className="h-4 w-4 text-muted-foreground/40" /></div>
+                      <div className="mx-auto flex aspect-[9/16] w-full max-w-[13rem] items-center justify-center rounded bg-muted"><ImageOff className="h-4 w-4 text-muted-foreground/40" /></div>
                     ) })()}
                   </div>
                   {/* Stage 46E: prompt tools + download all */}
@@ -1149,9 +1150,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             })}
             {refLocs.length === 0 && <p className="text-sm text-muted-foreground">No locations are linked to this episode.</p>}
           </div>
-          </div>
 
-          {/* Characters — rendered BELOW the location block (location is the base scene layer, created first). */}
+          {/* Characters — rendered BELOW the location block (locations stay first; both cards are the same size). */}
           <h3 className="mt-6 flex items-center gap-2 text-sm font-semibold"><Users className="h-4 w-4" /> Characters ({refChars.length})</h3>
           <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {refChars.map((c) => {

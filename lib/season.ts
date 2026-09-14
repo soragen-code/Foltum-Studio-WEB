@@ -7,6 +7,7 @@ import { LANGUAGE_NAMES, type IdeaLanguage, type CharacterCard } from "@/lib/ide
 import { VISUAL_STYLE } from "@/lib/visual-style";
 import { POWER_TIER_CONFIG, SEEDANCE_MAX_DURATION, sceneTierConfig, type PowerTier } from "@/lib/power-tier";
 import { LOCATION_DETAIL_LEVELS } from "@/lib/location-scale";
+import { DIRECTING_RULES } from "@/lib/directing-rules";
 
 /** Stage 4: nobody is asked for a running time — the story decides. These are only sanity bounds for the LLM output. */
 export const SEASON_MIN_EPISODES = 1;
@@ -24,8 +25,12 @@ export function episodeBatches(total: number, size: number): { from: number; to:
   return out;
 }
 export const SEASON_DEFAULT_EPISODES = 8;
-export const EPISODE_MIN_SCENES = 6;
-export const EPISODE_MAX_SCENES = 15;
+/**
+ * Stage 93 — every scene is a full-length 30 s clip except the last (shorter), so a whole
+ * episode fits into 1:59 (≤ 119 s). With a 30 s scene that means ~4 scenes (30+30+30+29).
+ */
+export const EPISODE_MIN_SCENES = 4;
+export const EPISODE_MAX_SCENES = 4;
 /** Legacy "brisk" reference (kept for compatibility); clip planning now uses NATURAL_WORDS_PER_SEC. */
 export const SPEECH_WORDS_PER_SEC = 2.7;
 /**
@@ -37,8 +42,33 @@ export const MIN_WORDS_PER_SEC = 2;
 export const SCENE_MIN_SECONDS = 15;
 /** Seedance 2.5 real maximum (30 s) — every dialogue scene is planned at the maximum the model allows. */
 export const SCENE_MAX_SECONDS = SEEDANCE_MAX_DURATION;
-/** Stage 45 — HARD budget for one whole episode: the sum of all scene durations must not exceed 2 minutes. */
-export const EPISODE_MAX_TOTAL_SECONDS = 120;
+/** Stage 93 — HARD budget for one whole episode: the sum of all scene durations must not exceed 1:59 (119 s). */
+export const EPISODE_MAX_TOTAL_SECONDS = 119;
+/** Stage 93 — every non-last scene is a full-length 30 s clip (= Seedance 2.5 maximum). */
+export const SCENE_FIXED_SECONDS = SEEDANCE_MAX_DURATION;
+/** Stage 93 — fixed number of scenes per episode: ceil(119 / 30) = 4 (30+30+30+29). */
+export const EPISODE_SCENE_COUNT = Math.ceil(EPISODE_MAX_TOTAL_SECONDS / SCENE_FIXED_SECONDS);
+/**
+ * Stage 93 — duration for each of `n` scenes: every scene is SCENE_FIXED_SECONDS long,
+ * except the final scene which is trimmed so the episode total never exceeds
+ * EPISODE_MAX_TOTAL_SECONDS. For n = 4 this yields [30, 30, 30, 29].
+ */
+export function sceneDurationsForCount(n: number): number[] {
+  if (n <= 0) return [];
+  const out = Array.from({ length: n }, () => SCENE_FIXED_SECONDS);
+  if (SCENE_FIXED_SECONDS * n > EPISODE_MAX_TOTAL_SECONDS) {
+    out[n - 1] = EPISODE_MAX_TOTAL_SECONDS - SCENE_FIXED_SECONDS * (n - 1);
+  }
+  return out;
+}
+/** Stage 93 — force the fixed 30 s / shorter-last durations onto a scene list; returns the episode total. */
+export function applyFixedSceneDurations(scenes: Array<{ durationSec: number }>): number {
+  const d = sceneDurationsForCount(scenes.length);
+  scenes.forEach((s, i) => {
+    s.durationSec = d[i];
+  });
+  return d.reduce((a, b) => a + b, 0);
+}
 /** Stage 45 — frame-state (startState / endState) size: doubled vs Stage 42 (was 12–20 sentences / ≥150 words).
  *  Stage 72 — raised ~1.5× again (36–60 sentences / ≥450 words): in parallel order the scripted frame states are the
  *  ONLY continuity channel between scenes, so every visible object and every person must be listed explicitly. */
@@ -50,8 +80,9 @@ const STATE_SIZE_TEXT = `${STATE_MIN_SENTENCES}–${STATE_MAX_SENTENCES} sentenc
 /** Dialogue is the product: every talking scene carries a substantive exchange of this many sentences. */
 export const TALK_MIN_SENTENCES = 5;
 export const TALK_MAX_SENTENCES = 7;
-/** Purely visual scenes allowed per episode (soft limit). */
-export const MAX_SILENT_SCENES = 2;
+/** Purely visual scenes allowed per episode (soft limit). Stage 93 — with only EPISODE_SCENE_COUNT (4)
+ *  long scenes per episode, at most ONE may be silent so the episode stays dialogue-driven. */
+export const MAX_SILENT_SCENES = 1;
 export const ARC_ROLES = ["завязка", "развитие", "поворот", "финал"] as const;
 
 export const episodeOutlineSchema = z.object({
@@ -126,7 +157,9 @@ export const sceneScriptSchema = z.object({
 });
 export const episodeScriptSchema = z.object({
   visualIdentity: z.string().min(10),
-  scenes: z.array(sceneScriptSchema).min(EPISODE_MIN_SCENES).max(EPISODE_MAX_SCENES),
+  // Stage 93 — tolerant bounds so a model that emits a few extra/fewer scenes still parses;
+  // normalizeEpisodeScript() truncates to EPISODE_SCENE_COUNT and forces the fixed durations.
+  scenes: z.array(sceneScriptSchema).min(1).max(8),
 });
 export type EpisodeScript = z.infer<typeof episodeScriptSchema>;
 export type SceneScript = z.infer<typeof sceneScriptSchema>;
@@ -157,15 +190,14 @@ export function dialogueSentenceCount(dialogue: string): number {
 }
 
 /**
- * Clip length from the script itself: spoken words at a brisk pace + a little room for the action beat,
- * rounded into the 15–30 s window Seedance 2.5 supports. No one is asked for a running time.
+ * Stage 93 — every scene is a full-length 30 s clip (SCENE_FIXED_SECONDS). A single scene has no way of
+ * knowing whether it is the LAST one in the episode (only the final scene may be shorter), so the
+ * per-scene estimate is simply the fixed length; the batch path (normalizeEpisodeScript →
+ * applyFixedSceneDurations) trims the last scene so the whole episode stays ≤ EPISODE_MAX_TOTAL_SECONDS.
+ * The old word-count arguments are kept for call-site compatibility (they no longer affect the result).
  */
-export function estimateDurationSec(dialogue: string, action = ""): number {
-  const words = spokenWordCount(dialogue);
-  if (!words) return SCENE_MIN_SECONDS;
-  const actionBeat = Math.min(4, Math.ceil(action.trim().split(/\s+/).filter(Boolean).length / 12));
-  const sec = Math.ceil(words / NATURAL_WORDS_PER_SEC) + 1 + actionBeat;
-  return Math.min(SCENE_MAX_SECONDS, Math.max(SCENE_MIN_SECONDS, sec));
+export function estimateDurationSec(_dialogue: string, _action = ""): number {
+  return SCENE_FIXED_SECONDS;
 }
 
 /** Pace / camera / performance directions shared by the script prompts and the final Seedance prompt. */
@@ -546,7 +578,8 @@ export function normalizeEpisodeScript(script: EpisodeScript, characters?: Chara
   };
   // Stage 27a: auto-split any over-long scene FIRST, then renumber the flat result contiguously (1..N)
   // and derive each piece's durationSec from its own (now-fitting) speech.
-  const scenes = splitOverlongScenes(script.scenes).map((s, i) => {
+  // Stage 93 — an episode is a fixed EPISODE_SCENE_COUNT scenes; drop any extras the model emitted.
+  const scenes = splitOverlongScenes(script.scenes).slice(0, EPISODE_SCENE_COUNT).map((s, i) => {
       const narrationText = (s.voiceover ?? "").trim();
       const isNarr = s.sceneKind === "narration" && !!narrationText;
       return {
@@ -598,15 +631,9 @@ export function normalizeEpisodeScript(script: EpisodeScript, characters?: Chara
     if (!camera || normalizeCameraText(camera) === normalizeCameraText(pe.camera)) camera = pickDifferentCamera(pe.camera, i);
     cur.startState = joinState(pe.world, camera);
   }
-  // Stage 44 — a talking scene must hold its whole speech plus a beat of silence before the cut
-  // (≥ ceil(words / 2.1) + 2 s), clamped to the model maximum.
-  for (const sc of scenes) {
-    const spoken = sc.sceneKind === "narration" ? (sc.voiceover ?? "") : sc.dialogue;
-    const words = spokenWordCount(spoken);
-    if (words > 0) sc.durationSec = Math.min(SCENE_MAX_SECONDS, Math.max(sc.durationSec, Math.ceil(words / NATURAL_WORDS_PER_SEC) + 2));
-  }
-  // Stage 45 — the whole episode must fit the 2-minute budget.
-  fitEpisodeDuration(scenes);
+  // Stage 93 — every scene is a full-length 30 s clip except the last (shorter), so the whole episode
+  // fits 1:59 (≤ 119 s). This deterministically overrides any speech-derived duration.
+  applyFixedSceneDurations(scenes);
   return { ...script, scenes } as EpisodeScript;
 }
 
@@ -757,7 +784,7 @@ export const PACING_RULE =
   "PACING (slow burn, like an hour-long TV drama): the story moves only SLIGHTLY faster than a one-hour television drama — NEVER like a compressed short film. Characters do NOT get acquainted, fall in love, become allies or turn into enemies within ONE episode — relationships are built over SEVERAL episodes through repeated meetings, doubts and small steps. Each episode contains EXACTLY ONE major plot turn (plus a few small beats around it) and ends on its cliffhanger; it is FORBIDDEN to compress what would naturally be two episodes into one — if the material overflows, leave it for the next episode. Episode 1 is EXPOSITION ONLY: it introduces the world and the characters and lands ONE inciting conflict — no resolutions, no alliances, no romance yet. Spread the arc EVENLY across ALL episodes: the first third of the season must not rush ahead of the rest.";
 
 export function seasonStructureSystemPrompt(language: IdeaLanguage, episodeCount = SEASON_DEFAULT_EPISODES): string {
-  return `You are a showrunner planning ONE season of a short-form vertical drama series (9:16 video, each episode = ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES} fast-paced dialogue shots of 15–30 seconds, the whole episode UNDER 2 MINUTES).
+  return `You are a showrunner planning ONE season of a short-form vertical drama series (9:16 video, each episode = ${EPISODE_SCENE_COUNT} dialogue shots — every shot a full ${SCENE_FIXED_SECONDS} s except the last (a little shorter), the whole episode ≤ 1:59 / ${EPISODE_MAX_TOTAL_SECONDS} s).
 Return STRICT JSON: {"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string}]}.
 RULES:
 - NUMBER OF EPISODES: produce EXACTLY ${episodeCount} episodes — no more, no fewer — numbered 1..${episodeCount} contiguously. This count is set by the producer; do NOT change it, do NOT pad and do NOT compress the story into a different number.
@@ -797,13 +824,15 @@ export function episodeScriptSystemPrompt(language: IdeaLanguage, episodeNumber 
   const narrationRule = isFirst
     ? `\nR7. OPENING NARRATION (MANDATORY — scene 1 is the SERIES INTRO, this is EPISODE 1): scene 1 is an off-screen NARRATOR voice-over that sets up the backstory/world before the drama starts. For that scene set "sceneKind": "narration", put 2–4 sentences of English backstory narration in "voiceover"${local ? ` and its ${L} translation in "voiceoverLocal"` : ""}, and set "dialogue": "[NO DIALOGUE]" (there is NO on-camera talking). Its "videoPrompt" is ATMOSPHERIC ESTABLISHING B-ROLL that plays UNDER the narration — ONLY wide/establishing/observational shots of the location and world, NO talking heads, NO character mouths moving, NO lip-sync, NO dialogue close-ups; it still contains all 9 [..] lines (the [CHARACTER] line describes anyone glimpsed, and characters may appear in the distance doing ordinary things but NOT speaking). From scene 2 onward the episode is normal on-camera dialogue as usual. Every OTHER scene is "sceneKind": "dialogue" (or "action" when it is a fight — see R9).`
     : `\nR7. OPENING NARRATION (MANDATORY — scene 1 is the EPISODE INTRO and this is EPISODE ${episodeNumber}, a DIRECT CONTINUATION of the previous episode): scene 1 opens the episode like the "previously on…" intro of an ongoing series — an off-screen NARRATOR voice-over over wide establishing shots that CONTINUES FROM THE PREVIOUS EPISODE: it briefly recaps what just happened at the end of the previous episode (see "HOW THE PREVIOUS EPISODE ENDED" in the brief) and carries the story forward from that exact point, re-establishing the world and reminding the viewer of the ongoing situation and cliffhanger before the drama resumes. It NEVER restarts the story from scratch or re-introduces the premise as if new. Set "sceneKind": "narration", put 2–4 sentences of English narration (recap of the previous episode + bridge into this one) in "voiceover"${local ? ` and its ${L} translation in "voiceoverLocal"` : ""}, and set "dialogue": "[NO DIALOGUE]" (there is NO on-camera talking in scene 1). Its "videoPrompt" is ATMOSPHERIC ESTABLISHING B-ROLL under the narration — ONLY wide/establishing/observational shots of the location and world, NO talking heads, NO character mouths moving, NO lip-sync, NO dialogue close-ups; it still contains all 9 [..] lines (characters may appear in the distance doing ordinary things but NOT speaking). From scene 2 onward the episode is normal on-camera dialogue, picking up the characters exactly where the previous episode left them. Every OTHER scene is "sceneKind": "dialogue" (or "action" when it is a fight — see R9).`;
-  return `You are a film director + cinematographer writing the FULL shooting script of ONE episode (EPISODE ${episodeNumber}) of a short-form VERTICAL drama (9:16). The episode is ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES} consecutive shots ("scenes"), each 15–${SCENE_MAX_SECONDS} seconds and ALL of them together UNDER 2 MINUTES (sum of durationSec ≤ ${EPISODE_MAX_TOTAL_SECONDS} s), generated by an AI video model WITH native speech: characters really speak their lines out loud, so the DIALOGUE IS THE PRODUCT. A scene without dialogue is a wasted shot (the ONLY exception is a narration scene — see R7).
+  return `You are a film director + cinematographer writing the FULL shooting script of ONE episode (EPISODE ${episodeNumber}) of a short-form VERTICAL drama (9:16). The episode is EXACTLY ${EPISODE_SCENE_COUNT} consecutive shots ("scenes"): every scene is a full ${SCENE_FIXED_SECONDS}-second clip except the LAST, which is a little shorter so that ALL of them together stay UNDER 1:59 (sum of durationSec ≤ ${EPISODE_MAX_TOTAL_SECONDS} s — for ${EPISODE_SCENE_COUNT} scenes that is ${sceneDurationsForCount(EPISODE_SCENE_COUNT).join(" + ")} s). The clips are generated by an AI video model WITH native speech: characters really speak their lines out loud, so the DIALOGUE IS THE PRODUCT. A scene without dialogue is a wasted shot (the ONLY exception is a narration scene — see R7).
+
+${DIRECTING_RULES}
 
 Return STRICT JSON: {"visualIdentity": string, "scenes": [{"number": int, "shotType": string, "durationSec": int, "locationDesc": string, "characters": [names], "action": string, "sceneKind": "dialogue"|"narration"|"action", "dialogue": string${local ? ', "dialogueLocal": string' : ""}, "voiceover": string, ${local ? '"voiceoverLocal": string, ' : ""}"videoPrompt": string, "presence": string, "entrances": string, "continuesFrom": string, "startState": string, "endState": string}]}. ("voiceover"${local ? '/"voiceoverLocal"' : ""} is used ONLY for narration scenes; leave it "" for normal scenes.)
 SCENE KINDS ("sceneKind"): "dialogue" = a normal on-camera talking scene (the default); "narration" = an off-screen narrator voice-over over b-roll (see R7); "action" = a FIGHT / DUEL / CHASE / physical struggle — REQUIRED whenever the beat is a physical confrontation. An action scene is written as combat choreography (see R9) and may carry only 1–3 short lines spoken in the pauses between impacts.
 
 HARD RULES (the script is REJECTED automatically if any is broken):
-R1. HARD RUNNING-TIME BUDGET: the WHOLE EPISODE is UNDER 2 MINUTES — the sum of all "durationSec" must be ≤ ${EPISODE_MAX_TOTAL_SECONDS} s, and NO scene may exceed ${SCENE_MAX_SECONDS} s. Plan the scene count and the length of each dialogue so that the total fits: with ${SCENE_MIN_SECONDS} s minimum per scene that means in practice ${EPISODE_MIN_SCENES}–${Math.floor(EPISODE_MAX_TOTAL_SECONDS / SCENE_MIN_SECONDS)} scenes of ~15–20 s each (about 30–40 spoken words per talking scene); the schema allows up to ${EPISODE_MAX_SCENES} scenes but the 2-minute total always wins. The NUMBER OF SCENES follows the drama of this episode's logline (min ${EPISODE_MIN_SCENES}) — no padding, no filler. Each scene lasts exactly as long as its dialogue needs (${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS} s at a natural conversational pace ~2.1 words/s; "durationSec" = round(words / 2.1) + 2, clamped to ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS}). If the dialogue is too long to be spoken naturally within ${SCENE_MAX_SECONDS} s, break it into two consecutive scenes in the same location rather than cramming it into one clip — but keep the episode total under ${EPISODE_MAX_TOTAL_SECONDS} s by trimming other dialogue. All scenes happen in/around the episode's key location; scene 1 may open on a wide shot but someone is ALREADY talking in it (UNLESS R7 makes scene 1 an off-screen narration scene).
+R1. HARD RUNNING-TIME BUDGET (FIXED-LENGTH SHOTS): the episode is EXACTLY ${EPISODE_SCENE_COUNT} scenes. EVERY scene is a full ${SCENE_FIXED_SECONDS}-second clip, EXCEPT the LAST scene which is a little shorter so that the whole episode stays UNDER 1:59 — the sum of all "durationSec" must be ≤ ${EPISODE_MAX_TOTAL_SECONDS} s. Set "durationSec" = ${SCENE_FIXED_SECONDS} for scenes 1..${EPISODE_SCENE_COUNT - 1} and "durationSec" = ${sceneDurationsForCount(EPISODE_SCENE_COUNT)[EPISODE_SCENE_COUNT - 1]} for scene ${EPISODE_SCENE_COUNT} (the exact split is ${sceneDurationsForCount(EPISODE_SCENE_COUNT).join(" + ")} = ${EPISODE_MAX_TOTAL_SECONDS} s). NO scene may exceed ${SCENE_FIXED_SECONDS} s. Because each clip is a long ${SCENE_FIXED_SECONDS} s, WRITE ENOUGH DIALOGUE TO FILL IT: a talking scene needs a substantial, uninterrupted exchange of roughly 50–60 spoken words spread over several quick back-and-forth lines so speech runs across the whole ${SCENE_FIXED_SECONDS} s with no dead air. All scenes happen in/around the episode's key location; scene 1 may open on a wide shot but someone is ALREADY talking in it (UNLESS R7 makes scene 1 an off-screen narration scene).
 R2. AT MOST ${MAX_SILENT_SCENES} scenes in the whole episode may be silent ("[NO DIALOGUE]"). ALL OTHER SCENES contain a real spoken exchange. (A narration scene from R7 does NOT count as silent — it carries an English narration track, not on-camera dialogue.)
 R8. ${ONE_LOCATION_RULE}${narrationRule}
 R10. START / END STATE — MATCH CUT ON ACTION: ${END_STATE_RULE} ${START_STATE_RULE} In short: on every continuous seam the WORLD is the same and the CAMERA is new — scene N+1 opens on the SAME instant of the SAME action as scene N's final frame, seen from a DIFFERENT angle / shot scale / height, exactly like an editor cutting between two cameras on one continuous take. Repeating the previous framing is an error; changing the place, light, wardrobe, props or the phase of the movement across a continuous seam is an error. Dialogue never straddles a cut: a line may end right on the cut but is never split across two scenes, and the next scene begins with a fresh line; nobody falls silent or freezes before the cut.
@@ -847,7 +876,7 @@ S4. "visualIdentity": ONE SHORT English sentence (max 25 words) — photoreal li
 S5. Use ONLY the given character names (Western names, Latin letters, exactly as given). "characters" lists the names visible in the shot (a CROWD group name is listed when the group is in frame). SUPPORTING and MINOR characters present in the episode must actually speak in at least one scene each; crowds may have a short collective line or reactions.
 S6. Dramatize ONLY this episode's logline — a natural continuation of the previous episodes, ending on this episode's cliffhanger (the last scene IS the cliffhanger). Original content only: never reuse names, plots or lines of existing films/series.
 
-Before answering, check: scenes count ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES}; silent scenes ≤ ${MAX_SILENT_SCENES}; each talking scene has ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} English dialogue sentences and ≥ 2 words per second; every fight / physical confrontation promised by the logline is an "action" scene with face-to-face beat-by-beat choreography (R9); every videoPrompt has all 9 tags including [CHARACTER] and a cut list in [SHOT TYPE] that opens wide and mixes shot scales across the space; [BLOCKING] moves characters between different zones and gives each speaker ordinary business; [ACTION] adds secondary background life so the place feels alive; and EACH scene continues seamlessly from the previous one — "presence"/"entrances"/"continuesFrom" are filled and every entrance/exit/move is shown in [BLOCKING]/[ACTION]/[TRANSITION] so nobody teleports or vanishes; the SUM of all "durationSec" is ≤ ${EPISODE_MAX_TOTAL_SECONDS} s (the whole episode is under 2 minutes) and no scene exceeds ${SCENE_MAX_SECONDS} s; EVERY scene has a non-empty English "endState" (${STATE_SIZE_TEXT}, opening with the IN FRAME / NOT IN FRAME inventory and exact placement of every character and prop: pose, wardrobe, camera, composition, depth, background, lighting, time/weather, colour palette and props of the final frame) AND a non-empty English "startState" (the same exhaustive description for frame 1), both written as labelled WORLD: / CAMERA: blocks; on every continuous seam (continuesFrom other than location-change / new-sequence) the startState WORLD equals the previous scene's endState WORLD exactly (same instant of the same action, same place, same light) while the startState CAMERA differs from the previous endState CAMERA in at least two of shot scale / height / angle; every scene's locationDesc on a continuous seam is identical to the previous scene's; and a line may end right on the cut, but is never split across two scenes; characters never fall silent or freeze before the cut.`;
+Before answering, check: EXACTLY ${EPISODE_SCENE_COUNT} scenes; "durationSec" = ${SCENE_FIXED_SECONDS} for every scene EXCEPT the last, which is ${sceneDurationsForCount(EPISODE_SCENE_COUNT)[EPISODE_SCENE_COUNT - 1]} (split ${sceneDurationsForCount(EPISODE_SCENE_COUNT).join(" + ")}); silent scenes ≤ ${MAX_SILENT_SCENES}; each talking scene has ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} English dialogue sentences (~50–60 spoken words so speech fills the whole ${SCENE_FIXED_SECONDS} s clip); every fight / physical confrontation promised by the logline is an "action" scene with face-to-face beat-by-beat choreography (R9); every videoPrompt has all 9 tags including [CHARACTER] and a cut list in [SHOT TYPE] that opens wide and mixes shot scales across the space; [BLOCKING] moves characters between different zones and gives each speaker ordinary business; [ACTION] adds secondary background life so the place feels alive; and EACH scene continues seamlessly from the previous one — "presence"/"entrances"/"continuesFrom" are filled and every entrance/exit/move is shown in [BLOCKING]/[ACTION]/[TRANSITION] so nobody teleports or vanishes; the SUM of all "durationSec" is ≤ ${EPISODE_MAX_TOTAL_SECONDS} s (the whole episode is under 1:59) and no scene exceeds ${SCENE_FIXED_SECONDS} s; EVERY scene has a non-empty English "endState" (${STATE_SIZE_TEXT}, opening with the IN FRAME / NOT IN FRAME inventory and exact placement of every character and prop: pose, wardrobe, camera, composition, depth, background, lighting, time/weather, colour palette and props of the final frame) AND a non-empty English "startState" (the same exhaustive description for frame 1), both written as labelled WORLD: / CAMERA: blocks; on every continuous seam (continuesFrom other than location-change / new-sequence) the startState WORLD equals the previous scene's endState WORLD exactly (same instant of the same action, same place, same light) while the startState CAMERA differs from the previous endState CAMERA in at least two of shot scale / height / angle; every scene's locationDesc on a continuous seam is identical to the previous scene's; and a line may end right on the cut, but is never split across two scenes; characters never fall silent or freeze before the cut.`;
 }
 export function episodeScriptUserPrompt(input: {
   synopsis: string;
@@ -994,10 +1023,11 @@ export type SceneRevise = z.infer<typeof sceneReviseSchema>;
 export function sceneReviseSystemPrompt(language: IdeaLanguage): string {
   const L = langName(language);
   const local = language !== "en";
-  return `You are a film director rewriting ONE shot ("scene", ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS}s, vertical 9:16, AI video model with native speech) of an episode by the author's instruction.
+  return `You are a film director rewriting ONE shot ("scene", ${SCENE_FIXED_SECONDS}s, vertical 9:16, AI video model with native speech) of an episode by the author's instruction.
+${DIRECTING_RULES}
 Return STRICT JSON: {"sceneKind": "dialogue"|"action", "shotType": string, "durationSec": int, "locationDesc": "INT/EXT — place — time" (${L}), "action": string (${L}), "dialogue": string${local ? ', "dialogueLocal": string' : ""}, "videoPrompt": string, "presence": string, "entrances": string, "continuesFrom": string, "startState": string, "endState": string}.
 SCENE KIND: "dialogue" = a normal talking scene; "action" = a fight / duel / chase / physical struggle. If the instruction asks for a fight, an attack, a duel, a chase or any physical confrontation ("make this scene a fight", "they start fighting", "he attacks her") — set "sceneKind": "action" and rewrite the scene as combat choreography: ${ACTION_STAGING_RULE} An action scene keeps only 1–3 short lines (or "[NO DIALOGUE]") spoken in the pauses between impacts, and the talking-scene rules below (sentence count, wide/medium two-shot staging) do NOT apply to it. If the current scene is already an action scene and the instruction does not turn it into a conversation, keep "sceneKind": "action" and its choreography. Otherwise keep "sceneKind": "dialogue".
-RULES: "dialogue" is ALWAYS in ENGLISH (it is what the model voices), one line per row NAME (tone cue): "line"; a talking scene has a substantive exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences (3–6 quick lines, characters answer each other instantly; the story is told through the dialogue), or exactly "[NO DIALOGUE]" for a rare purely visual beat.${local ? ` "dialogueLocal" = the same lines translated into ${L}, same structure and cues.` : ""} durationSec = round(words / 2.1) + 2 clamped to ${SCENE_MIN_SECONDS}–${SCENE_MAX_SECONDS} (≥ 2 words per second — no timing is set by anyone else). Talking scenes stay on wide / medium two-shots / over-the-shoulder — the speaker's face does not have to be visible on every line (staging decides) and it NEVER fills the screen — NO full-screen face close-ups (tightest is a brief medium close-up with environment behind); the two characters are placed naturally in the location, never squared off face to face when they simply talk. ${CONFRONTATION_STAGING_SENTENCE} ${PACE_DIRECTION} ${MODERATION_SAFE_RULE} ${CREATIVE_RULE} ${LOCATION_PRESENCE_RULE} ${SCALE_DEPTH_RULE} ${EVERYDAY_BEHAVIOR_RULE} videoPrompt is ENGLISH, exactly 9 lines [SHOT TYPE] (cut list, 2–4 hard cuts with time ranges)/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL] (expressive acting)/[ACTION]/[CHARACTER]/[TRANSITION] (hard cut); keep [VISUAL STYLE] and [CHARACTER] descriptions identical to the given scene unless the instruction requires otherwise; no spoken text in videoPrompt; never "slowly", "slow motion", "lingering", "long pause". ${CONTINUITY_RULE} This shot must still begin from the PREVIOUS shot's ending and hand off cleanly into the NEXT shot (both are given below): keep the same people in place unless the instruction changes that, and if the revision adds or removes someone or moves the action, SHOW that entrance/exit/move. Fill "presence" (who is where at the start, following the previous shot), "entrances" (who enters/leaves during the shot and how, or "none") and "continuesFrom" (same-location-continuation | character-moves | location-change | new-sequence) to match the neighbouring shots. START / END STATE: ${END_STATE_RULE} ${START_STATE_RULE} Return "startState" = the revised scene's frame 1: its WORLD block must still equal the PREVIOUS shot's endState WORLD (same instant of the same action, same place, same light) while its CAMERA block is a DIFFERENT setup (≥ 2 of shot scale / height / angle changed) unless continuesFrom is location-change / new-sequence. The revised scene's OPENING must still continue the PREVIOUS shot's endState WORLD from a new camera (given below) unless continuesFrom is location-change / new-sequence, and its own "endState" must be updated to describe the NEW final frame — and it must remain consistent with the NEXT shot's opening (if the revision changes where people end up, say so in endState so the next shot can be adjusted). Original content only; Western names, Latin letters, exactly as given.`;
+RULES: "dialogue" is ALWAYS in ENGLISH (it is what the model voices), one line per row NAME (tone cue): "line"; a talking scene has a substantive exchange of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences (3–6 quick lines, characters answer each other instantly; the story is told through the dialogue), or exactly "[NO DIALOGUE]" for a rare purely visual beat.${local ? ` "dialogueLocal" = the same lines translated into ${L}, same structure and cues.` : ""} A normal scene is a full ${SCENE_FIXED_SECONDS} s clip (only the episode's final scene is shorter); set durationSec = ${SCENE_FIXED_SECONDS}. Talking scenes stay on wide / medium two-shots / over-the-shoulder — the speaker's face does not have to be visible on every line (staging decides) and it NEVER fills the screen — NO full-screen face close-ups (tightest is a brief medium close-up with environment behind); the two characters are placed naturally in the location, never squared off face to face when they simply talk. ${CONFRONTATION_STAGING_SENTENCE} ${PACE_DIRECTION} ${MODERATION_SAFE_RULE} ${CREATIVE_RULE} ${LOCATION_PRESENCE_RULE} ${SCALE_DEPTH_RULE} ${EVERYDAY_BEHAVIOR_RULE} videoPrompt is ENGLISH, exactly 9 lines [SHOT TYPE] (cut list, 2–4 hard cuts with time ranges)/[VISUAL STYLE]/[LIGHTING]/[BLOCKING]/[GAZE]/[NON-VERBAL] (expressive acting)/[ACTION]/[CHARACTER]/[TRANSITION] (hard cut); keep [VISUAL STYLE] and [CHARACTER] descriptions identical to the given scene unless the instruction requires otherwise; no spoken text in videoPrompt; never "slowly", "slow motion", "lingering", "long pause". ${CONTINUITY_RULE} This shot must still begin from the PREVIOUS shot's ending and hand off cleanly into the NEXT shot (both are given below): keep the same people in place unless the instruction changes that, and if the revision adds or removes someone or moves the action, SHOW that entrance/exit/move. Fill "presence" (who is where at the start, following the previous shot), "entrances" (who enters/leaves during the shot and how, or "none") and "continuesFrom" (same-location-continuation | character-moves | location-change | new-sequence) to match the neighbouring shots. START / END STATE: ${END_STATE_RULE} ${START_STATE_RULE} Return "startState" = the revised scene's frame 1: its WORLD block must still equal the PREVIOUS shot's endState WORLD (same instant of the same action, same place, same light) while its CAMERA block is a DIFFERENT setup (≥ 2 of shot scale / height / angle changed) unless continuesFrom is location-change / new-sequence. The revised scene's OPENING must still continue the PREVIOUS shot's endState WORLD from a new camera (given below) unless continuesFrom is location-change / new-sequence, and its own "endState" must be updated to describe the NEW final frame — and it must remain consistent with the NEXT shot's opening (if the revision changes where people end up, say so in endState so the next shot can be adjusted). Original content only; Western names, Latin letters, exactly as given.`;
 }
 
 /* ───────────── Stage 13 — episode-level continuity audit («Ассембл» final polish) ───────────── */
