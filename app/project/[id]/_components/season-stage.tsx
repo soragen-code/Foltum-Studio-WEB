@@ -73,7 +73,7 @@ export function ScriptView({ text, scenes }: { text?: string | null; scenes?: { 
             <div key={s.number} className="rounded-lg border border-border/60 bg-muted/20 p-3">
               <div className="font-semibold">Scene {s.number} · {s.shotType} · ~{s.durationSec ?? 15}s</div>
               <div className="text-xs text-muted-foreground">{s.locationDesc}</div>
-              {s.action && <p className="mt-2 italic">{s.action}</p>}
+              {s.action && <p className="mt-2 font-medium">{s.action}</p>}
               <pre className="mt-2 whitespace-pre-wrap break-words font-sans">{s.dialogue}</pre>
               {s.dialogueEn && s.dialogueEn.trim() !== (s.dialogue ?? '').trim() && (
                 <details className="mt-2 text-xs text-muted-foreground">
@@ -98,7 +98,7 @@ export function ScriptView({ text, scenes }: { text?: string | null; scenes?: { 
   return (
     <pre className="whitespace-pre-wrap break-words font-sans text-sm leading-relaxed">
       {(text ?? '').split('\n').map((l, i) => (
-        <span key={i} className={isStateLine(l) ? 'text-xs italic text-muted-foreground' : undefined} data-testid={isStateLine(l) ? 'script-state-line' : undefined}>{l}{'\n'}</span>
+        <span key={i} className={isStateLine(l) ? 'text-xs text-muted-foreground' : undefined} data-testid={isStateLine(l) ? 'script-state-line' : undefined}>{l}{'\n'}</span>
       ))}
     </pre>
   )
@@ -120,18 +120,61 @@ type BookScene = {
   voiceoverLocal?: string | null
 }
 
+/** Stage 108 — one dialogue row `NAME (tone cue): "line"` → speaker name + line (no slant, weight/colour only). */
+export function parseDialogueLine(line: string): { name: string; cue: string | null; text: string } | null {
+  const m = line.match(/^\s*([A-Za-z\u00C0-\u024F\u0400-\u04FF][^:("\u00ab\u201c]{0,48}?)\s*(\(([^)]*)\))?\s*:\s*(\S.*)$/u)
+  if (!m) return null
+  const text = m[4].trim().replace(/^["\u201c\u00ab]\s*/, '').replace(/\s*["\u201d\u00bb]$/, '')
+  return { name: m[1].trim(), cue: m[3]?.trim() || null, text }
+}
+
+function DialogueBlock({ speech }: { speech: string }) {
+  const rows = speech.split('\n').map((l) => l.trim()).filter(Boolean)
+  return (
+    <div className="space-y-3" data-testid="book-dialogue">
+      {rows.map((row, i) => {
+        const d = parseDialogueLine(row)
+        if (!d) return <p key={i} className="whitespace-pre-wrap">{row}</p>
+        return (
+          <div key={i}>
+            <div className="text-sm font-semibold uppercase tracking-wide text-foreground">
+              {d.name}
+              {d.cue && <span className="ml-2 font-medium normal-case tracking-normal text-muted-foreground">({d.cue})</span>}
+            </div>
+            <p className="whitespace-pre-wrap">{d.text}</p>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * Stage 108 — readable script body: ONE upright sans font, no slanted text anywhere. Scene headings are
+ * uppercase semibold, stage directions are plain high-contrast paragraphs, narration is labelled,
+ * dialogue shows the speaker name in bold with the line underneath.
+ */
 function SceneProse({ s }: { s: BookScene }) {
   const isNarration = s.sceneKind === 'narration'
   const narration = (s.voiceoverLocal || s.voiceover || '').trim()
   const speech = (s.dialogue || '').trim()
+  const hasSpeech = !isNarration && speech && speech !== '[NO DIALOGUE]'
+  const location = (s.locationDesc || '').trim()
   return (
-    <div className="space-y-2" data-testid="book-scene">
-      {/* Only the story itself is shown here: action/description, narration and dialogue.
-          Grey auxiliary meta (location caption, shot/plan, duration, labels) is intentionally omitted. */}
-      {s.action && <p className="whitespace-pre-wrap leading-relaxed">{s.action}</p>}
-      {isNarration && narration && <p className="whitespace-pre-wrap italic leading-relaxed">{narration}</p>}
-      {!isNarration && speech && <p className="whitespace-pre-wrap leading-relaxed">{speech}</p>}
-    </div>
+    <section className="space-y-4 pt-2 first:pt-0" data-testid="book-scene">
+      <h3 className="mt-6 text-sm font-semibold uppercase tracking-wide text-foreground first:mt-0">
+        Scene {s.number}
+        {location && <span className="ml-2 font-medium normal-case tracking-normal text-muted-foreground">· {location}</span>}
+      </h3>
+      {s.action && <p className="whitespace-pre-wrap">{s.action}</p>}
+      {isNarration && narration && (
+        <div>
+          <div className="text-sm font-semibold uppercase tracking-wide text-foreground">Narrator (V.O.)</div>
+          <p className="whitespace-pre-wrap">{narration}</p>
+        </div>
+      )}
+      {hasSpeech && <DialogueBlock speech={speech} />}
+    </section>
   )
 }
 
@@ -141,7 +184,7 @@ export function BookScript({ text, scenes, keyCount = 2 }: { text?: string | nul
     const key = scenes.slice(0, keyCount)
     const rest = scenes.slice(keyCount)
     return (
-      <div className="space-y-5 text-sm leading-relaxed" data-testid="book-script">
+      <div className="max-w-[70ch] space-y-4 font-sans text-base not-italic leading-relaxed text-foreground" data-testid="book-script">
         {key.map((s) => <SceneProse key={s.number} s={s} />)}
         {rest.length > 0 && full && rest.map((s) => <SceneProse key={s.number} s={s} />)}
         {rest.length > 0 && (
@@ -164,8 +207,8 @@ export function BookScript({ text, scenes, keyCount = 2 }: { text?: string | nul
   const long = t.length > LIMIT
   const shown = full || !long ? t : t.slice(0, LIMIT).trimEnd() + '…'
   return (
-    <div className="space-y-3 text-sm" data-testid="book-script">
-      <pre className="whitespace-pre-wrap break-words font-sans leading-relaxed">{shown}</pre>
+    <div className="max-w-[70ch] space-y-4 font-sans text-base not-italic leading-relaxed text-foreground" data-testid="book-script">
+      <pre className="whitespace-pre-wrap break-words font-sans text-base not-italic leading-relaxed">{shown}</pre>
       {long && (
         <button
           type="button"

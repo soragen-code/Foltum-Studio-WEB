@@ -1,7 +1,8 @@
 /**
  * Stage 2 — season script background job (resumable, poll-driven state machine).
  *
- * gpt-6-astra spends 5–10 minutes on one episode script — far beyond what a single serverless
+ * gpt-6-astra spends 5–10 minutes on the season structure (Stage 108: the episode script itself is
+ * written by gpt-4o — EPISODE_SCRIPT_MODEL — usually 1–3 minutes) — far beyond what a single serverless
  * request can wait for (Node's ~300 s headers timeout, Vercel's 800 s function kill). So every
  * model call runs in OpenAI *background mode*: we store the response id in GenerationJob.resultData
  * (`SeasonJobState`) and `advanceSeasonJob()` — called from the GET polling routes — polls it,
@@ -16,7 +17,7 @@
  */
 import { prisma } from "@/lib/db";
 import type { GenerationJob } from "@prisma/client";
-import { chatJSON, SCRIPT_MODEL, startBackgroundJSON, pollBackgroundJSON, cancelBackgroundResponse, type BackgroundPollResult } from "@/lib/ai";
+import { chatJSON, SCRIPT_MODEL, EPISODE_SCRIPT_MODEL, EPISODE_SCRIPT_MAX_TOKENS, EPISODE_SCRIPT_TEMPERATURE, startBackgroundJSON, pollBackgroundJSON, cancelBackgroundResponse, type BackgroundPollResult } from "@/lib/ai";
 import { maxDetailLevel, isLocationDetailLevel } from "@/lib/location-scale";
 import { completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { toCharacterCard, normalizeLanguage, seasonCastSystemPrompt, seasonCastUserPrompt, seasonCastResultSchema, characterCardToData, sanitizeCharacterCard, sanitizeLocationCard, dedupeCast, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
@@ -541,11 +542,13 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
         previousEnding,
         ...(planned.instruction ? { instruction: reviseInstruction(planned.instruction, next) } : {}),
       }),
-      { model: SCRIPT_MODEL, maxTokens: 32000 }
+      // Stage 108 — the episode script is written by gpt-4o (EPISODE_SCRIPT_MODEL): non-reasoning →
+      // temperature + max_output_tokens ≤ 16 384. Still a background response (same polling path).
+      { model: EPISODE_SCRIPT_MODEL, maxTokens: EPISODE_SCRIPT_MAX_TOKENS, temperature: EPISODE_SCRIPT_TEMPERATURE }
     );
     message = planned.instruction
-      ? `Rewriting the script for episode ${ep.number}... (the model is reasoning, usually 5-10 minutes)`
-      : `Writing the episode script... (the model is reasoning, usually 5-10 minutes)`;
+      ? `Rewriting the script for episode ${ep.number}... (usually 1-3 minutes)`
+      : `Writing the episode script... (usually 1-3 minutes)`;
     progress = episodeProgress(done, curTotal);
   }
   await saveState(

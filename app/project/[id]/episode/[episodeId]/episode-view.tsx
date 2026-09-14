@@ -1005,8 +1005,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
 
         {/* Step 1 — episode script in book format (D1/D2) */}
         {phase === 'script' && (
-          <div className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="phase-script">
-            <h2 className="mb-3 font-display text-xl font-bold">Episode script</h2>
+          <div className="mt-4 rounded-xl border border-border bg-card p-5 sm:p-8" data-testid="phase-script">
+            <h2 className="mb-5 font-display text-xl font-bold">Episode script</h2>
             {/* Stage 77: while the rewrite job runs the OLD script is hidden behind a placeholder. */}
             {rewriteViewState(revising, revisePoll.job?.status) === 'placeholder' ? (
               <RewritePlaceholder job={revisePoll.job} expectedTotalSec={EPISODE_REVISE_EXPECTED_SEC} label={hasScript ? 'Rewriting episode script…' : 'Writing the episode script…'} testId="episode-revise-progress" />

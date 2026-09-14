@@ -28,6 +28,16 @@ const MODEL = "gpt-4o";
  * Reasoning models reject `max_tokens` (use `max_completion_tokens`) and any non-default `temperature`.
  */
 export const SCRIPT_MODEL = "gpt-6-astra";
+/**
+ * Stage 108 — user decision: EPISODE SCRIPTS are written by gpt-4o (faster, follows the shooting-script
+ * shape well); idea/synopsis, season structure, the season plot and the scene breakdown stay on SCRIPT_MODEL.
+ * gpt-4o is not a reasoning model → `temperature` + `max_tokens` path; its completion cap is 16 384 tokens.
+ */
+export const EPISODE_SCRIPT_MODEL = "gpt-4o";
+/** Completion budget for one episode script on EPISODE_SCRIPT_MODEL (≤ the gpt-4o 16 384-token cap). */
+export const EPISODE_SCRIPT_MAX_TOKENS = 16000;
+/** Sampling temperature for episode scripts on EPISODE_SCRIPT_MODEL. */
+export const EPISODE_SCRIPT_TEMPERATURE = 0.7;
 
 /** Reasoning-family models (gpt-5*, gpt-6*, o*) use a different parameter set than gpt-4o. */
 export function isReasoningModel(model: string): boolean {
@@ -172,7 +182,8 @@ export function safeJsonParse<T = any>(raw: string): T {
 // ---------------------------------------------------------------------------
 // Background (asynchronous) JSON generation via the Responses API.
 //
-// gpt-6-astra spends 5–10 minutes on one episode script. A synchronous call dies at ~300 s
+// gpt-6-astra spends minutes on the season structure / scene breakdown (Stage 108: the episode script
+// itself is written by gpt-4o, usually 1–3 minutes, through the same background path). A synchronous call dies at ~300 s
 // (Node undici headers timeout, regardless of the SDK timeout) and the Vercel function is killed
 // at 800 s. In background mode OpenAI runs the generation server-side; we only store the response
 // id and poll it from short requests (see lib/workers/season-script-job.ts).
