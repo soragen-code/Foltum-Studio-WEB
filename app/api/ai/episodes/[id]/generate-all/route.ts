@@ -7,7 +7,7 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs, heartbeatJob, updateJob } from "@/lib/jobs";
 import { runVideoJob } from "@/lib/workers/video-job";
-import { resolvePowerTier } from "@/lib/power-tier";
+import { resolvePowerTier, isPowerTier } from "@/lib/power-tier";
 import { sceneClipPlan, sceneClipSeconds, sceneClipCost } from "@/lib/season";
 import { normalizeVideoModel } from "@/lib/ai-models";
 import { fanOutAll, splitByCredits } from "@/lib/generate-all-fanout";
@@ -76,6 +76,18 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   if (episode.scenes.length === 0) return NextResponse.json({ error: "There are no scenes in the episode" }, { status: 400 });
   const project = episode.season.project;
   const user = await prisma.user.findUniqueOrThrow({ where: { id: session.user.id } });
+  // Stage 89 — quality & speed picked on the episode-page top panel overrides the project's stored
+  // tier for this batch and is persisted back so the choice sticks. Invalid / omitted → keep current.
+  const requestedTier = isPowerTier(body?.powerTier) ? body.powerTier : null;
+  if (requestedTier && requestedTier !== project.powerTier) {
+    try {
+      await prisma.project.update({ where: { id: project.id }, data: { powerTier: requestedTier } });
+      project.powerTier = requestedTier;
+    } catch (e) {
+      console.warn("Could not persist project.powerTier (column missing?):", (e as any)?.message);
+      project.powerTier = requestedTier;
+    }
+  }
   const tier = resolvePowerTier(project);
   // Stage 40 — CHAIN MODE: strictly one scene at a time. Only the first pending scene is charged and
   // started here; the worker charges and starts each following scene when the previous one is

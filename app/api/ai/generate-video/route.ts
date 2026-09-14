@@ -9,7 +9,7 @@ import { parseBody, generateVideoSchema } from "@/lib/validations";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runVideoJob } from "@/lib/workers/video-job";
 import { sceneClipSeconds } from "@/lib/season";
-import { resolvePowerTier } from "@/lib/power-tier";
+import { resolvePowerTier, isPowerTier } from "@/lib/power-tier";
 import { normalizeVideoModel } from "@/lib/ai-models";
 
 /** Tier (power) determines credit cost AND video quality — single config in lib/power-tier.ts. */
@@ -52,6 +52,19 @@ export async function POST(request: Request) {
     const project = await prisma.project.findFirst({ where: { id: projectId } });
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
+    // Stage 89 — quality & speed picked on the episode-page top panel overrides the project's stored
+    // tier for this generation (and per-frame Edit/Regenerate, which hits this same route) and is
+    // persisted back so the choice sticks. Invalid / omitted → keep the project's current tier.
+    const requestedTier = isPowerTier(parsed.data.powerTier) ? parsed.data.powerTier : null;
+    if (requestedTier && requestedTier !== project.powerTier) {
+      try {
+        await prisma.project.update({ where: { id: project.id }, data: { powerTier: requestedTier } });
+        project.powerTier = requestedTier;
+      } catch (e) {
+        console.warn("Could not persist project.powerTier (column missing?):", (e as any)?.message);
+        project.powerTier = requestedTier; // still honor it for this request
+      }
+    }
     const tier = videoTierFor(project);
 
     const sceneData = await prisma.scene.findUnique({ where: { id: sceneId } });

@@ -18,7 +18,7 @@ import { rewriteViewState } from '@/lib/rewrite-view-state'
 import { CancelButton } from '../../_components/cancel-button'
 import { desiredTotalFrames, locationDetailLevel, locationDetailLabel, episodeLocations } from '@/lib/location-scale'
 import { CHARACTER_PHOTO_COUNT } from '@/lib/reference-counts'
-import { CHARACTER_REFERENCE_COST } from '@/lib/power-tier'
+import { CHARACTER_REFERENCE_COST, POWER_TIERS, POWER_TIER_CONFIG, DEFAULT_POWER_TIER, legacyTierToPower, isPowerTier, type PowerTier } from '@/lib/power-tier'
 import { IMAGE_MODELS, DEFAULT_IMAGE_MODEL, VIDEO_MODEL_LABEL, type ImageModelId } from '@/lib/ai-models'
 import { EpisodeNavGrid } from './episode-nav-grid'
 import { locationExtraLabel } from '@/lib/visual-style'
@@ -44,6 +44,20 @@ const REFERENCE_KIND_LABELS: Record<string, string> = {
   scene: 'Scene frame',
 }
 const referenceKindLabel = (kind: string) => REFERENCE_KIND_LABELS[kind] ?? 'Reference'
+// Stage 89 — a single "Quality & speed" selector on the episode top panel maps to the power tier
+// (lib/power-tier.ts). One control reflects BOTH facets: higher tiers render at a higher resolution
+// (quality) and take longer / cost more (speed). No model selector — Seedance 2.5 / Seedream 5.0 are fixed.
+const QUALITY_SPEED: Record<PowerTier, { label: string; hint: string }> = {
+  LOW: { label: 'Draft · 480p', hint: 'Draft quality — fastest, lowest cost. Best for quick tests and previews.' },
+  MEDIUM: { label: 'Standard · 720p', hint: 'Full Seedance 2.5 quality — for the finished series (recommended).' },
+  HIGH: { label: 'High · 720p+', hint: '720p with an extended per-scene budget — slower and pricier.' },
+}
+/** Resolve a project's current power tier id (LOW/MEDIUM/HIGH) for the selector's initial value. */
+function initialPowerTier(project: any): PowerTier {
+  if (isPowerTier(project?.powerTier)) return project.powerTier
+  if (project?.tier) return legacyTierToPower(project.tier)
+  return DEFAULT_POWER_TIER
+}
 const CHAR_EXTRA_MIN = Math.max(0, CHARACTER_PHOTO_COUNT - 3) // extra angles beyond the 3 base shots → 0 (3 photos)
 const validUrl = (u?: string | null) => typeof u === 'string' && u.startsWith('http') && u.length > 10
 function parseExtra(imageExtra?: string | null): string[] {
@@ -131,6 +145,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [assembleNote, setAssembleNote] = useState<string | null>(null)
   // Stage 79: music status of the LAST assembly, shown in the «"Assemble" dialog.
   const [assembleMusic, setAssembleMusic] = useState<{ musicApplied?: boolean; musicSummary?: string | null; musicError?: string | null } | null>(null)
+  // Stage 89 — "Quality & speed" (power tier) chosen right on the episode top panel, applied to scene
+  // generation, «Generate all» and per-frame Edit/Regenerate. Initialized from the project's current tier.
+  const [powerTier, setPowerTier] = useState<PowerTier>(() => initialPowerTier(project))
+  const powerTierRef = useRef<PowerTier>(powerTier)
+  useEffect(() => { powerTierRef.current = powerTier }, [powerTier])
   const stitchJob = useJobPolling({
     onFinish: (res) => {
       setStitching(false)
@@ -708,7 +727,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     setSceneError((prev) => { const n = { ...prev }; delete n[sceneId]; return n })
     setSceneErrorRefs((prev) => { const n = { ...prev }; delete n[sceneId]; return n })
     try {
-      const body: Record<string, unknown> = { projectId: project.id, sceneId }
+      // Stage 89: send the top-panel Quality & speed (power tier) so this generation — and per-frame
+      // Edit/Regenerate, which call this same route — use exactly what the user picked.
+      const body: Record<string, unknown> = { projectId: project.id, sceneId, powerTier: powerTierRef.current }
       const res = await postJobStart('/api/ai/generate-video', body)
       const data = await res.json(); if (!res.ok) throw new Error(data?.error ?? 'Failed to start generation')
       patchScene(sceneId, { status: 'generating' }); pollVideoJob(sceneId, data.jobId); void refreshCredits()
@@ -808,7 +829,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const generateAllScenes = async () => {
     setGenAllAsk(null); setGenAllStarting(true); setError(null)
     try {
-      const res = await postJobStart(`/api/ai/episodes/${episode.id}/generate-all`, {})
+      const res = await postJobStart(`/api/ai/episodes/${episode.id}/generate-all`, { powerTier: powerTierRef.current })
       const d = await res.json().catch(() => ({}))
       if (!res.ok || !Array.isArray(d?.jobs)) throw new Error(d?.error ?? 'Failed to start generation')
       if (d.chain) { setChainRunActive(true); setChainRunNote(null) }
@@ -1210,6 +1231,25 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Assemble
           </button>
           <span className="text-xs text-muted-foreground" data-testid="batch-status">{scenes.filter((s) => validUrl(s.videoUrl)).length} of {scenes.length} scenes ready{generatingCount > 0 ? ` · generating: ${generatingCount}` : ''}{isAssembled ? ' · episode assembled' : ''}</span>
+          {/* Stage 89 — «Quality & speed» (power tier) chosen right here, before generating. One selector
+              reflects BOTH quality (resolution) and speed/cost; the value is applied to scene generation,
+              «Generate all» and per-frame Edit/Regenerate. NO model selector (Seedance 2.5 / Seedream 5.0 fixed). */}
+          <div className="inline-flex items-center gap-2" data-testid="power-tier-picker">
+            <span className="text-xs text-muted-foreground">Quality &amp; speed:</span>
+            <div className="inline-flex overflow-hidden rounded-lg border border-border text-xs" role="group" aria-label="Quality and speed">
+              {POWER_TIERS.map((t) => {
+                const active = powerTier === t
+                return (
+                  <button key={t} type="button" onClick={() => setPowerTier(t)} aria-pressed={active}
+                    className={`px-3 py-1.5 font-medium transition ${active ? 'bg-primary text-primary-foreground' : 'bg-card hover:bg-muted'}`}
+                    data-testid={`power-tier-${t}`}
+                    title={QUALITY_SPEED[t].hint}>
+                    {QUALITY_SPEED[t].label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
           {/* Stage 72 — «"Generation order" segmented control (persisted via PATCH chain-mode). Locked while a
               chain run is active or any scene is generating: switching mid-run would change how the NEXT scene starts. */}
           <div className="inline-flex items-center gap-2" data-testid="chain-mode-picker">

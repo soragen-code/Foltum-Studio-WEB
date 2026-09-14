@@ -32,6 +32,7 @@ import {
   buildMusicPlan,
   mergeMoodSegments,
   limitMoods,
+  coalesceMoodSegments,
   toTimelineSegments,
   summarizePlan,
   countScenesWithoutMusic,
@@ -149,7 +150,10 @@ export async function assembleEpisodeVideo(episodeId: string, opts: AssembleEpis
                     logline: episode.logline,
                     synopsis: episode.season?.project?.synopsis,
                   });
-                  planSegments = limitMoods(mergeMoodSegments(perScene), 3);
+                  // Stage 89: coalesce adjacent same-mood segments (esp. after limitMoods recolors
+                  // neighbours to one mood) so one mood plays CONTINUOUSLY across all its scenes —
+                  // fades/track-restarts happen only at real mood changes, never at every scene seam.
+                  planSegments = coalesceMoodSegments(limitMoods(mergeMoodSegments(perScene), 3));
                   scenesWithoutMusic = countScenesWithoutMusic(perScene);
                   musicSummary = summarizePlan(planSegments, scenesWithoutMusic);
                   mood = planSegments[0]?.mood ?? null;

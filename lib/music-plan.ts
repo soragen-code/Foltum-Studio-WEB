@@ -117,8 +117,8 @@ export function mergeMoodSegments(perScene: PerSceneMood[]): MoodSegment[] {
 /**
  * PURE — cap the number of DISTINCT moods to `max`. If there are more unique moods than `max`, keep
  * the `max` most frequent (by scene coverage) and recolor every other segment to the nearest KEPT
- * mood by frequency. Never drops a segment. Adjacent segments that end up the same mood are NOT
- * re-merged (callers that care can re-run mergeMoodSegments; the timeline math handles both).
+ * mood by frequency. Never drops a segment. Recoloring can leave ADJACENT segments sharing one mood;
+ * always run `coalesceMoodSegments` afterwards (Stage 89) so those merge into one continuous stretch.
  */
 export function limitMoods(segments: MoodSegment[], max = 3): MoodSegment[] {
   if (segments.length === 0) return [];
@@ -136,6 +136,34 @@ export function limitMoods(segments: MoodSegment[], max = 3): MoodSegment[] {
   // Nearest kept mood = the most frequent kept mood (deterministic single target).
   const fallback = kept[0];
   return segments.map((seg) => (keptSet.has(seg.mood) ? { ...seg } : { ...seg, mood: fallback }));
+}
+
+/**
+ * PURE (Stage 89) — merge ADJACENT segments that share the same mood into ONE segment covering the
+ * whole run of scenes. This is the key to continuous cross-scene music: after `limitMoods` recolors
+ * segments down to ≤3 moods, neighbours can end up on the same mood; without coalescing each stays a
+ * separate timeline window (its own 1 s fade-in/out and its own `atrim=0` track restart in ffmpeg),
+ * so the soundtrack audibly dips / restarts at every scene boundary. Coalescing produces one segment
+ * per mood run, so the looped track plays UNINTERRUPTED across all scenes that share a mood, fading
+ * only at the true start/end of the run (i.e. only at real mood changes and the episode edges).
+ * Intensity of a merged segment is the scene-count-weighted average of its parts.
+ */
+export function coalesceMoodSegments(segments: MoodSegment[]): MoodSegment[] {
+  const out: MoodSegment[] = [];
+  for (const seg of segments) {
+    const prev = out[out.length - 1];
+    // Only merge segments that are truly contiguous in scene index (endSceneIndex+1 === next start).
+    if (prev && prev.mood === seg.mood && seg.startSceneIndex === prev.endSceneIndex + 1) {
+      const prevScenes = prev.endSceneIndex - prev.startSceneIndex + 1;
+      const segScenes = seg.endSceneIndex - seg.startSceneIndex + 1;
+      const total = prevScenes + segScenes;
+      prev.intensity = (prev.intensity * prevScenes + seg.intensity * segScenes) / total;
+      prev.endSceneIndex = seg.endSceneIndex;
+    } else {
+      out.push({ ...seg });
+    }
+  }
+  return out;
 }
 
 /**

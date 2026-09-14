@@ -50,6 +50,12 @@ export const generateVideoSchema = z.object({
    * backward compatibility (old clients may still send it) and ignored — any string passes.
    */
   provider: z.string().max(64).optional().nullable(),
+  /**
+   * Stage 89 — optional power-tier (quality & speed) override picked from the episode-page top panel.
+   * When a valid tier is sent it overrides the project's stored tier for this generation (and is
+   * persisted back to the project). Omitted / null → the project's current tier is used.
+   */
+  powerTier: z.enum(["LOW", "MEDIUM", "HIGH"]).optional().nullable(),
 });
 
 export const charactersSchema = z.object({
