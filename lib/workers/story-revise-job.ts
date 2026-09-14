@@ -17,6 +17,8 @@ import { toCharacterCard, normalizeLanguage } from "@/lib/idea";
 import { runSeasonScriptJob, SEASON_JOB_TYPE, outlineFromEpisode } from "@/lib/workers/season-script-job";
 import {
   seasonStoryReviseSchema,
+  validateEpisodeDescriptions,
+  EPISODE_FOOTAGE_RETRY_NOTE,
   seasonStoryReviseSystemPrompt,
   seasonStoryReviseUserPrompt,
   affectedEpisodes,
@@ -74,15 +76,29 @@ export async function runStoryReviseJob(jobId: string, projectId: string, params
     let after: SeasonStructure;
     let fullStory: string;
     try {
-      const raw = await chatJSON(
-        seasonStoryReviseSystemPrompt(language, before.episodes.length),
-        seasonStoryReviseUserPrompt({ synopsis: project.synopsis, structure: before, fullStory: season.fullStory ?? "", characters: cards, locations: project.locations, instruction }),
-        { temperature: 0.5, maxTokens: 16000 }
-      );
-      const parsed = seasonStoryReviseSchema.parse(raw);
-      if (parsed.episodes.length < SEASON_MIN_EPISODES || parsed.episodes.length > SEASON_MAX_EPISODES) throw new Error(`LLM returned ${parsed.episodes.length} episodes (allowed ${SEASON_MIN_EPISODES}–${SEASON_MAX_EPISODES})`);
-      after = { title: parsed.title, logline: parsed.logline, episodes: parsed.episodes.map((e, i) => ({ ...e, number: i + 1 })) };
-      fullStory = parsed.fullStory.trim();
+      // Stage 105 — the previous cliffhangers are passed as hard givens (cliffhangerChainGivens inside the user
+      // prompt); descriptions are validated (3-line footage, ≤ 120 words, OPENS ON chain) and the call is
+      // retried ONCE with an explicit format note — never truncated silently.
+      const userPrompt = seasonStoryReviseUserPrompt({ synopsis: project.synopsis, structure: before, fullStory: season.fullStory ?? "", characters: cards, locations: project.locations, instruction });
+      const attempt = async (note: string) => {
+        const raw = await chatJSON(seasonStoryReviseSystemPrompt(language, before.episodes.length), userPrompt + note, { temperature: 0.5, maxTokens: 16000 });
+        const parsed = seasonStoryReviseSchema.parse(raw);
+        if (parsed.episodes.length < SEASON_MIN_EPISODES || parsed.episodes.length > SEASON_MAX_EPISODES) throw new Error(`LLM returned ${parsed.episodes.length} episodes (allowed ${SEASON_MIN_EPISODES}–${SEASON_MAX_EPISODES})`);
+        const episodes = parsed.episodes.map((e, i) => ({ ...e, number: i + 1 }));
+        const problems = validateEpisodeDescriptions(episodes);
+        if (problems.length) throw new Error(`episode descriptions invalid: ${problems.slice(0, 4).join("; ")}`);
+        return { title: parsed.title, logline: parsed.logline, episodes, fullStory: parsed.fullStory.trim() };
+      };
+      let result: Awaited<ReturnType<typeof attempt>>;
+      try {
+        result = await attempt("");
+      } catch (first) {
+        const why = first instanceof Error ? first.message : String(first);
+        console.warn(`[story-revise] first attempt rejected (${why}) — retrying once with the format note`);
+        result = await attempt(`\n\n${EPISODE_FOOTAGE_RETRY_NOTE} Problems found: ${why}`);
+      }
+      after = { title: result.title, logline: result.logline, episodes: result.episodes };
+      fullStory = result.fullStory;
     } catch (err) {
       await failJob(jobId, "Failed to rewrite plot: " + (err instanceof Error ? err.message : String(err)));
       return;
@@ -128,7 +144,7 @@ export async function runStoryReviseJob(jobId: string, projectId: string, params
         const ids = Array.from(new Set(e.characters.map((n) => byName.get(n.toLowerCase())).filter((x): x is string => !!x)));
         if (!ep) {
           // New episode (count increased) — created as a draft; its script is written by the season job below.
-          const created = await tx.episode.create({ data: { seasonId: season.id, number: e.number, title: e.title, description: e.logline, logline: e.logline, cliffhanger: e.cliffhanger, locationName: loc.name, locationDesc: e.locationDesc, locationId: loc.id, arcRole: e.arcRole, status: "draft" } });
+          const created = await tx.episode.create({ data: { seasonId: season.id, number: e.number, title: e.title, description: e.description ?? e.logline, logline: e.logline, cliffhanger: e.cliffhanger, locationName: loc.name, locationDesc: e.locationDesc, locationId: loc.id, arcRole: e.arcRole, status: "draft" } });
           if (ids.length) await tx.episodeCharacter.createMany({ data: ids.map((characterId) => ({ episodeId: created.id, characterId })), skipDuplicates: true });
           continue;
         }
@@ -136,7 +152,7 @@ export async function runStoryReviseJob(jobId: string, projectId: string, params
         await tx.episode.update({
           where: { id: ep.id },
           data: {
-            title: e.title, description: e.logline, logline: e.logline, cliffhanger: e.cliffhanger, locationName: loc.name, locationDesc: e.locationDesc, locationId: loc.id, arcRole: e.arcRole,
+            title: e.title, description: e.description ?? e.logline, logline: e.logline, cliffhanger: e.cliffhanger, locationName: loc.name, locationDesc: e.locationDesc, locationId: loc.id, arcRole: e.arcRole,
             ...(rewrite ? { script: null, status: "draft", videoUrl: null } : {}),
           },
         });

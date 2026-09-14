@@ -10,6 +10,7 @@ import { referenceFileName } from '@/lib/download-name'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
+import { EpisodeFootage } from '../../_components/episode-footage'
 import { JobProgressBar, SmoothProgress, useJobPolling, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
 import { RewritePlaceholder } from '../../_components/rewrite-placeholder'
 import { isEpisodeRevisePending } from '@/lib/episode-revise-state'
@@ -958,6 +959,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             <div className="text-xs font-semibold uppercase text-muted-foreground">Episode {episode.number}{episode.arcRole ? ` · ${episode.arcRole}` : ''}</div>
             <h1 className="font-display text-2xl font-bold tracking-tight">{episode.title}</h1>
             {episode.logline && <p className="mt-1 text-sm text-muted-foreground">{episode.logline}</p>}
+            <EpisodeFootage description={(episode as any).description} className="mt-2" />
           </div>
           <div className="text-sm text-muted-foreground">Credits: <span className="font-semibold text-foreground" data-testid="credits">{credits}</span></div>
         </div>
@@ -1501,7 +1503,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           label="Edit the episode script by prompt (the whole episode or a specific scene)"
           placeholder="For example: remove the kitchen scene, heighten the conflict in scene 3…"
           submitLabel="Rewrite"
-          hint="Edits apply to the entire script and rebuild the scenes from scratch (current scenes and their prompts are reset). You can specify a scene by number. Ctrl/⌘+Enter — send."
+          hint="Rewriting clears the generated scenes, keyframes and videos of the affected episodes. You can specify a scene by number. Ctrl/⌘+Enter — send."
         />
       )}
 

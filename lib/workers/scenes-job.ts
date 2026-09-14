@@ -31,6 +31,8 @@ import {
   EPISODE_TOTAL_LABEL,
   SCENE_FIXED_SECONDS,
   sceneDurationsForCount,
+  episodeFootageGivens,
+  parseEpisodeFootage,
 } from "@/lib/season";
 
 /** GenerationJob.type value for the episode scene-breakdown job. */
@@ -135,7 +137,7 @@ Given the project synopsis, this episode's description, and the characters, retu
      WREN (quiet, stepping closer): "Neither should you, after what happened."
      ANSEL (a bitter breath): "Say his name, then. Say it."
 
-8. STORY. Dramatize ONLY the events of THIS episode's description — do NOT borrow, foreshadow in detail, or resolve events from the other episodes listed (they are told in their own episodes). Open by picking up naturally from the previous episode's cliffhanger (given below) and build steadily toward THIS episode's cliffhanger, landing on it in the final shot. Dialogue is natural, subtext-rich, screenplay format.
+8. STORY. Dramatize ONLY the events of THIS episode's description — when the brief gives HARD BEATS (SHOT 1 BEAT / SHOT 2 BEAT / FINAL FRAME), scene 1 IS the SHOT 1 beat, scene 2 IS the SHOT 2 beat and the last frame of scene 2 IS the FINAL FRAME image: do not invent events beyond those three lines, only add dialogue, blocking, camera and business — do NOT borrow, foreshadow in detail, or resolve events from the other episodes listed (they are told in their own episodes). Open by picking up naturally from the previous episode's cliffhanger (given below) and build steadily toward THIS episode's cliffhanger, landing on it in the final shot. Dialogue is natural, subtext-rich, screenplay format.
 
 ============ videoPrompt FORMAT (English, always, exactly these 9 lines, in this order) ============
 [SHOT TYPE]: <Wide establishing shot / Medium shot / Close-up / Over-the-shoulder / POV / Tracking shot / Reaction shot / Insert> + camera movement (static / slow dolly in / handheld / slow zoom / pan right ...), vertical 9:16 framing
@@ -169,6 +171,21 @@ export interface ScenesJobResult {
   scenes: any[];
   visualIdentity: string;
   characterSheet: Record<string, string>;
+}
+
+/**
+ * Stage 105 — the episode brief inside the user message. When the description is 60-second footage
+ * (SHOT 1 / SHOT 2 / CLIFFHANGER) the three lines are HARD BEATS: scene 1 = SHOT 1, scene 2 = SHOT 2,
+ * the final frame of scene 2 = the CLIFFHANGER image. Otherwise (legacy prose) the whole description is used as before.
+ */
+export function episodeBriefBlock(episode: { number: number; title: string; description: string | null; cliffhanger: string | null }): string {
+  const head = `Episode ${episode.number}: "${episode.title}"`;
+  const beats = episodeFootageGivens(episode.description);
+  if (beats) {
+    const f = parseEpisodeFootage(episode.description)!;
+    return `${head}${beats}\nThis episode's ending cliffhanger (the LAST FRAME of scene 2 IS this image): ${f.cliffhanger}${episode.cliffhanger && episode.cliffhanger.trim() !== f.cliffhanger ? ` (${episode.cliffhanger})` : ""}`;
+  }
+  return `${head}\nDescription: ${episode.description}\nThis episode's ending cliffhanger (build toward it): ${episode.cliffhanger ?? "N/A"}`;
 }
 
 /**
@@ -240,9 +257,7 @@ ${episodeListText || "  (single episode)"}
 ${prevContext}
 
 >>> GENERATE SCENES ONLY FOR THIS EPISODE <<<
-Episode ${episode.number}: "${episode.title}"
-Description: ${episode.description}
-This episode's ending cliffhanger (build toward it): ${episode.cliffhanger ?? "N/A"}
+${episodeBriefBlock(episode)}
 
 Direct this episode as ONE continuous piece of film: first write "visualIdentity" and the "characterSheet", then exactly ${SCENES_PER_EPISODE} consecutive camera shots (shot 1 = set-up continuing the previous cliffhanger, shot 2 = escalation ending on this episode's cliffhanger). ${LAST_SHOT_TEXT} — set "durationSec" per shot to ${SCENE_DURATIONS.join(", ")} (in order) so the whole episode is ${SCENE_DURATIONS.join(" + ")} = ${EPISODE_TOTAL_SECONDS} s, exactly ${TOTAL_LABEL}. Scene 1 = wide establishing shot with someone ALREADY talking; only ${MIN_SILENT_SCENES}–${MAX_SILENT_SCENES} shots marked [NO DIALOGUE], EVERY other shot carrying a SUBSTANTIAL back-and-forth exchange of roughly 50–60 spoken words over several quick lines that fill the whole ${SCENE_SECONDS} s clip (the characters ANSWER each other — never a single isolated line), each spoken line on its own "SPEAKER (tone): line" row; a longer conversation spans several consecutive shots, each still a full exchange; every videoPrompt in the full 9-line format — [SHOT TYPE], [VISUAL STYLE] (identical every scene), [LIGHTING], [BLOCKING], [GAZE], [NON-VERBAL], [ACTION], [CHARACTER] (verbatim descriptions), [TRANSITION] handing off to the next shot) that dramatize ONLY this episode's description — from a natural continuation of the previous episode to this episode's cliffhanger.`;
 
@@ -291,24 +306,30 @@ async function persistScenes(episodeId: string, data: { visualIdentity?: string;
       `establishing=${establishing}, identity="${visualIdentity.slice(0, 60)}", characters=${Object.keys(characterSheet).join("/")}`
   );
 
-  await prisma.scene.deleteMany({ where: { episodeId } });
-
-  const created = [];
-  for (const s of scenesOut) {
-    const scene = await prisma.scene.create({
-      data: {
-        episodeId,
-        number: s.number,
-        durationSec: s.durationSec,
-        dialogue: s.dialogue,
-        // Stage 20 (A2): lock scenes to the episode's single canonical location so the place never drifts.
-        locationDesc: anchorSceneLocation(s.locationDesc, episode.locationDesc, undefined),
-        videoPrompt: s.videoPrompt,
-        status: "pending",
-      },
-    });
-    created.push(scene);
-  }
+  // Stage 105 — a rewritten script replaces ALL scenes of the episode (their videos, keyframes and last
+  // frames go with the rows; S3 objects are left alone) and the stitched episode video becomes stale →
+  // Episode.videoUrl = null. One transaction so a failure never leaves a half-replaced episode.
+  const created = await prisma.$transaction(async (tx) => {
+    await tx.scene.deleteMany({ where: { episodeId } });
+    await tx.episode.update({ where: { id: episodeId }, data: { videoUrl: null } });
+    const rows = [];
+    for (const s of scenesOut) {
+      const scene = await tx.scene.create({
+        data: {
+          episodeId,
+          number: s.number,
+          durationSec: s.durationSec,
+          dialogue: s.dialogue,
+          // Stage 20 (A2): lock scenes to the episode's single canonical location so the place never drifts.
+          locationDesc: anchorSceneLocation(s.locationDesc, episode.locationDesc, undefined),
+          videoPrompt: s.videoPrompt,
+          status: "pending",
+        },
+      });
+      rows.push(scene);
+    }
+    return rows;
+  }, { timeout: 30_000 });
 
   return { scenes: created, visualIdentity, characterSheet };
 }

@@ -29,6 +29,8 @@ function shortSynopsisOutline(stored: string | null | undefined): string | null 
 }
 import {
   seasonStructureSchema,
+  validateEpisodeDescriptions,
+  EPISODE_FOOTAGE_RETRY_NOTE,
   seasonFullStorySchema,
   seasonFullStorySystemPrompt,
   seasonFullStoryUserPrompt,
@@ -86,6 +88,8 @@ export type SeasonJobState = {
   revise?: { episodeIds: string[]; instruction: string; force?: boolean };
   /** Stage 45 — advisory notes shown with the final job message (e.g. an episode over the 1:00 budget). */
   warnings?: string[];
+  /** Stage 105 — why the previous attempt of the current step failed (appended to the retry prompt; cleared on success). */
+  lastFailure?: string;
 };
 
 /** Two pollers must not advance the same job at once; a stuck lock expires after this long. */
@@ -182,7 +186,11 @@ export function validateStructure(raw: unknown, episodeCount: number): SeasonStr
   const parsed = seasonStructureSchema.parse(raw);
   // Stage 14 (B2): the producer sets the episode count — enforce it exactly (retry if the model drifts).
   if (parsed.episodes.length !== episodeCount) throw new Error(`structure returned ${parsed.episodes.length} episodes, expected exactly ${episodeCount}`);
-  return { ...parsed, episodes: parsed.episodes.map((e, i) => ({ ...e, number: i + 1 })) };
+  const structure = { ...parsed, episodes: parsed.episodes.map((e, i) => ({ ...e, number: i + 1 })) };
+  // Stage 105 — every description is 60-second footage (SHOT 1 / SHOT 2 / CLIFFHANGER, ≤ 120 words, OPENS ON chain). Invalid → retry (never truncate).
+  const problems = validateEpisodeDescriptions(structure.episodes);
+  if (problems.length) throw new Error(`episode descriptions invalid: ${problems.slice(0, 4).join("; ")}`);
+  return structure;
 }
 
 export function validateFullStory(raw: unknown): string {
@@ -266,7 +274,8 @@ export async function persistEpisodeScript(
     if (epIds.length) await tx.episodeCharacter.createMany({ data: epIds.map((characterId) => ({ episodeId, characterId })), skipDuplicates: true });
     await tx.episode.update({
       where: { id: episodeId },
-      data: { script: text, description: outline.logline, logline: outline.logline, cliffhanger: outline.cliffhanger, locationName: outline.locationName, locationDesc: outline.locationDesc, arcRole: outline.arcRole, status: "script_ready", title: outline.title },
+      // Stage 105 — a new script replaces the old scenes (deleted above, keyframes/videos go with the rows) → the stitched episode video is stale too.
+      data: { script: text, description: outline.description ?? outline.logline, logline: outline.logline, cliffhanger: outline.cliffhanger, locationName: outline.locationName, locationDesc: outline.locationDesc, arcRole: outline.arcRole, status: "script_ready", title: outline.title, videoUrl: null },
     });
   }, { timeout: 60_000, maxWait: 15_000 }); // 15 scenes × (create + characters) over Neon exceed Prisma's default 5 s interactive-transaction timeout (seen on prod: "Transaction not found")
 }
@@ -284,6 +293,8 @@ export function outlineFromEpisode(e: { number: number; title: string; logline: 
     characters: e.characters.map((c) => c.character.name),
     arcRole: role,
     cliffhanger: e.cliffhanger ?? "",
+    // Stage 105 — the stored 60-second footage (legacy rows hold the old logline copy; parseEpisodeFootage then returns null).
+    ...(e.description ? { description: e.description } : {}),
   };
 }
 
@@ -459,10 +470,10 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
         retryStep = state.step === "episode" && state.episodeId
           ? { step: "episode", episodeId: state.episodeId, instruction: state.revise?.episodeIds.includes(state.episodeId) ? state.revise.instruction : undefined }
           : { step: state.step as "structure" | "fullStory" };
-        state = { ...state, attempt: state.attempt + 1 };
+        state = { ...state, attempt: state.attempt + 1, lastFailure: failure };
       }
     } else {
-      state = { ...state, attempt: 0 };
+      state = { ...state, attempt: 0, lastFailure: undefined };
       if (state.step === "episode" && state.episodeId && state.revise?.episodeIds.includes(state.episodeId)) {
         state = { ...state, revise: { ...state.revise, episodeIds: state.revise.episodeIds.filter((id) => id !== state.episodeId) } };
       }
@@ -489,7 +500,9 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
   let message: string;
   let progress: number;
   if (planned.step === "structure") {
-    responseId = await deps.start(seasonStructureSystemPrompt(language, state.episodeCount), seasonStructureUserPrompt(project.synopsis, cards, project.locations, shortSynopsisOutline(project.shortSynopsis)), { model: SCRIPT_MODEL, maxTokens: Math.min(64000, 4000 + 800 * state.episodeCount) });
+    // Stage 105 — the single retry after a rejected structure gets an explicit format instruction (plus the exact problems).
+    const retryNote = state.attempt > 0 ? `\n\n${EPISODE_FOOTAGE_RETRY_NOTE}${state.lastFailure ? ` Problems found: ${state.lastFailure}` : ""}` : "";
+    responseId = await deps.start(seasonStructureSystemPrompt(language, state.episodeCount), seasonStructureUserPrompt(project.synopsis, cards, project.locations, shortSynopsisOutline(project.shortSynopsis)) + retryNote, { model: SCRIPT_MODEL, maxTokens: Math.min(64000, 4000 + 800 * state.episodeCount) });
     message = "Building the season structure..."; progress = 3;
   } else if (planned.step === "fullStory") {
     responseId = await deps.start(
@@ -554,7 +567,7 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
           const level = maxDetailLevel(loc.detailLevel, e.locationDetail);
           if (level && level !== loc.detailLevel) { await tx.location.update({ where: { id: loc.id }, data: { detailLevel: level } }); loc.detailLevel = level; }
         }
-        const ep = await tx.episode.create({ data: { seasonId: s.id, number: e.number, title: e.title, description: e.logline, logline: e.logline, cliffhanger: e.cliffhanger, locationName: loc.name, locationDesc: e.locationDesc, locationId: loc.id, arcRole: e.arcRole, status: "draft" } });
+        const ep = await tx.episode.create({ data: { seasonId: s.id, number: e.number, title: e.title, description: e.description ?? e.logline, logline: e.logline, cliffhanger: e.cliffhanger, locationName: loc.name, locationDesc: e.locationDesc, locationId: loc.id, arcRole: e.arcRole, status: "draft" } });
         const ids = Array.from(new Set(e.characters.map((n) => byName.get(n.toLowerCase())).filter((x): x is string => !!x)));
         if (ids.length) await tx.episodeCharacter.createMany({ data: ids.map((characterId) => ({ episodeId: ep.id, characterId })) });
       }

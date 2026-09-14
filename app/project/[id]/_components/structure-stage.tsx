@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { Loader2, Wand2, Check, ChevronDown, ChevronRight, Edit2 } from 'lucide-react'
+import { EpisodeFootage, RewriteNote } from './episode-footage'
 
 export function StructureStage({ project, onRefresh }: { project: any; onRefresh: () => void }) {
   const [seasons, setSeasons] = useState<any[]>(project?.seasons ?? [])
@@ -147,9 +148,7 @@ export function StructureStage({ project, onRefresh }: { project: any; onRefresh
                             </button>
                           )}
                         </div>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {ep?.description ?? ''}
-                        </p>
+                        <EpisodeFootage description={ep?.description} className="mt-1" />
                         {ep?.cliffhanger && (
                           <p className="mt-1 text-xs italic text-primary">
                             🚨 {ep.cliffhanger}
@@ -164,7 +163,8 @@ export function StructureStage({ project, onRefresh }: { project: any; onRefresh
           </div>
 
           {!isApproved && (
-            <div className="flex gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <RewriteNote className="basis-full" testId="structure-rewrite-note" />
               <button
                 onClick={generateStructure}
                 disabled={generating}

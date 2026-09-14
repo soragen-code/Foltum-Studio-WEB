@@ -112,6 +112,8 @@ export const episodeOutlineSchema = z.object({
   characters: z.array(z.string().min(1)).min(1),
   arcRole: z.enum(ARC_ROLES),
   cliffhanger: z.string().min(5),
+  /** Stage 105 — the 60-second footage (SHOT 1 / SHOT 2 / CLIFFHANGER, 3 labelled lines). Optional so legacy rows still parse; validated by validateEpisodeDescriptions. */
+  description: z.string().min(20).optional(),
 });
 export const seasonStructureSchema = z.object({
   title: z.string().min(1),
@@ -120,6 +122,100 @@ export const seasonStructureSchema = z.object({
 });
 export type SeasonStructure = z.infer<typeof seasonStructureSchema>;
 export type EpisodeOutline = z.infer<typeof episodeOutlineSchema>;
+
+/* ───────────── Stage 105 — episode story = 60-SECOND FOOTAGE ───────────── */
+// An episode "description" is no longer a narrated retelling: it is what the CAMERA SEES in 60 seconds,
+// written as exactly three labelled lines (SHOT 1 / SHOT 2 / CLIFFHANGER). Episode N ≥ 2 opens on the
+// previous episode's cliffhanger ("OPENS ON: …" at the start of SHOT 1). The scenes are built from these
+// three beats as hard givens (scene 1 = SHOT 1, scene 2 = SHOT 2, final frame = CLIFFHANGER).
+export const EPISODE_FOOTAGE_MAX_WORDS = 120;
+export const SHOT1_LABEL = "SHOT 1 (30 s):";
+export const SHOT2_LABEL = "SHOT 2 (30 s):";
+export const CLIFFHANGER_LABEL = "CLIFFHANGER (last frame):";
+export const OPENS_ON_LABEL = "OPENS ON:";
+export type EpisodeFootage = { shot1: string; shot2: string; cliffhanger: string; opensOn?: string };
+
+const FOOTAGE_RE = /shot\s*1\s*(?:\([^)]*\))?\s*:\s*([\s\S]*?)\s*shot\s*2\s*(?:\([^)]*\))?\s*:\s*([\s\S]*?)\s*cliffhanger\s*(?:\([^)]*\))?\s*:\s*([\s\S]*)$/i;
+const OPENS_ON_RE = /^\s*opens\s+on\s*:\s*([\s\S]*?)(?<=[.!?…])(?:\s+|$)/i;
+
+/** Word count by whitespace split (the length budget of a description). */
+export function countWords(text: string | null | undefined): number {
+  return (text ?? "").trim().split(/\s+/).filter(Boolean).length;
+}
+
+/** Parse a 3-line footage description; null when any label is missing (→ callers fall back to the plain text). */
+export function parseEpisodeFootage(description: string | null | undefined): EpisodeFootage | null {
+  if (!description) return null;
+  const m = FOOTAGE_RE.exec(description.replace(/\*\*/g, "").trim());
+  if (!m) return null;
+  const shot1 = m[1].trim(), shot2 = m[2].trim(), cliffhanger = m[3].trim();
+  if (!shot1 || !shot2 || !cliffhanger) return null;
+  const o = OPENS_ON_RE.exec(shot1);
+  const opensOn = o ? o[1].trim() : /^\s*opens\s+on\s*:/i.test(shot1) ? shot1.replace(/^\s*opens\s+on\s*:\s*/i, "").trim() : undefined;
+  return { shot1, shot2, cliffhanger, ...(opensOn ? { opensOn } : {}) };
+}
+
+/**
+ * Validate the descriptions of a whole season (in episode order): 3-line format, ≤ EPISODE_FOOTAGE_MAX_WORDS
+ * words, and every episode after the first opens on the previous cliffhanger ("OPENS ON:" in SHOT 1).
+ * Returns human-readable problems (empty = valid). Shared by the structure job, the story revise and the tests.
+ */
+export function validateEpisodeDescriptions(episodes: { number: number; description?: string | null; cliffhanger?: string | null }[]): string[] {
+  const problems: string[] = [];
+  episodes.forEach((e, i) => {
+    const desc = (e.description ?? "").trim();
+    if (!desc) { problems.push(`episode ${e.number}: description is missing`); return; }
+    const f = parseEpisodeFootage(desc);
+    if (!f) { problems.push(`episode ${e.number}: description is not in the "${SHOT1_LABEL} / ${SHOT2_LABEL} / ${CLIFFHANGER_LABEL}" 3-line format`); return; }
+    const words = countWords(desc);
+    if (words > EPISODE_FOOTAGE_MAX_WORDS) problems.push(`episode ${e.number}: description has ${words} words (max ${EPISODE_FOOTAGE_MAX_WORDS})`);
+    if (i > 0 && !/opens\s+on\s*:/i.test(f.shot1)) problems.push(`episode ${e.number}: SHOT 1 must begin with "${OPENS_ON_LABEL} <the CLIFFHANGER of episode ${e.number - 1}>"`);
+  });
+  return problems;
+}
+
+/** Appended to the prompt on the single retry after validateEpisodeDescriptions failed (never truncate silently). */
+export const EPISODE_FOOTAGE_RETRY_NOTE =
+  `Your previous answer was too long / not in the SHOT 1 / SHOT 2 / CLIFFHANGER format — rewrite EVERY episode "description" in the 3-line format ("${SHOT1_LABEL} …" / "${SHOT2_LABEL} …" / "${CLIFFHANGER_LABEL} …"), max ${EPISODE_FOOTAGE_MAX_WORDS} words per description, and start SHOT 1 of every episode after the first with "${OPENS_ON_LABEL} <the previous episode's CLIFFHANGER text>".`;
+
+/** The user's reference example (dugout), in the 3-line format — embedded in the structure / revise prompts. */
+export const EPISODE_FOOTAGE_EXAMPLE = `EXAMPLE (reference for the FORMAT and the level of concreteness — do not reuse its content):
+Episode 1 "description":
+${SHOT1_LABEL} Alex and his team climb down into the dugout; Alex's wife patches the wound on his arm while two men crouch over the radio trying to tune it; the kids stand shivering by the earth wall.
+${SHOT2_LABEL} The radio finally locks onto a voice announcing a new shelter; everyone turns to listen, the wife stops bandaging, one man repeats the coordinates aloud.
+${CLIFFHANGER_LABEL} Over the rim of the dugout, five pairs of glowing eyes open in the dark.
+Episode 2 "description":
+${SHOT1_LABEL} ${OPENS_ON_LABEL} Over the rim of the dugout, five pairs of glowing eyes open in the dark. A child notices them and screams; the creatures hear it and pour furiously over the rim into the dugout, catching the team off guard.
+${SHOT2_LABEL} The team fights back with whatever is at hand — a rifle butt, a shovel, the radio — in the cramped dugout while the wife drags the kids into the far corner.
+${CLIFFHANGER_LABEL} A creature's clawed hand closes around the child's ankle as the last lamp goes out.`;
+
+/** The description format rule shared by the structure prompt and both revise prompts. */
+export const EPISODE_FOOTAGE_RULE = `EPISODE "description" = 60-SECOND FOOTAGE (MANDATORY FORMAT). Write what the CAMERA SEES in the episode's 60 seconds, as EXACTLY three labelled lines (labels in English verbatim, the text after each label in the story language):
+  ${SHOT1_LABEL} ONE action in ONE location — who is in frame, what they physically do, what they talk about.
+  ${SHOT2_LABEL} the escalation of the SAME action in the SAME location — the turn that makes the situation worse or irreversible.
+  ${CLIFFHANGER_LABEL} a concrete VISUAL image of the final frame — a picture the viewer sees (what is in frame, where), never a hint, a question or "will they…".
+  Length: the whole description ≈ 60–90 words, HARD MAX ${EPISODE_FOOTAGE_MAX_WORDS} words. "cliffhanger" = the CLIFFHANGER line's text copied verbatim. "logline" = ONE sentence (what this episode is about).
+  ${OPENS_ON_LABEL} for EVERY episode after the first, SHOT 1 MUST begin with "${OPENS_ON_LABEL} <the CLIFFHANGER text of the previous episode>" — the SAME instant, the SAME location, the same people in the same places; never "an hour later", never a reset. Then the action continues from that image.
+  BANNED in a description: voice-over retelling of backstory or of a whole period ("a week when…", "over the following days…"); parallel actions that cannot fit into one camera shot (five characters doing five different things in five places); a location change inside the episode; more than ONE event per shot; more than 3–4 characters actively doing things in one shot (others may stand in the background); time skips inside the episode; summaries ("tension rises", "they argue about the past").
+${EPISODE_FOOTAGE_EXAMPLE}`;
+
+/** Stage 105 — the three footage beats as HARD GIVENS for the shooting-script prompts ("" when the description is not in the 3-line format → callers keep the old whole-description behaviour). */
+export const SHOT1_BEAT_LABEL = "SHOT 1 BEAT (scene 1, 30 s):";
+export const SHOT2_BEAT_LABEL = "SHOT 2 BEAT (scene 2, 30 s):";
+export const FINAL_FRAME_LABEL = "FINAL FRAME (cliffhanger — the last frame of scene 2):";
+export function episodeFootageGivens(description: string | null | undefined): string {
+  const f = parseEpisodeFootage(description);
+  if (!f) return "";
+  return `\nHARD BEATS (the episode IS these three lines — scene 1 = SHOT 1, scene 2 = SHOT 2, the final frame of scene 2 = the CLIFFHANGER image; do NOT invent events beyond them, only add dialogue, blocking, camera and business):\n${SHOT1_BEAT_LABEL} ${f.shot1}\n${SHOT2_BEAT_LABEL} ${f.shot2}\n${FINAL_FRAME_LABEL} ${f.cliffhanger}`;
+}
+
+/** Hard givens for revise prompts: which text every episode's SHOT 1 must OPEN ON (the previous cliffhanger). */
+export function cliffhangerChainGivens(structure: { episodes: { number: number; cliffhanger: string }[] }): string {
+  const eps = [...structure.episodes].sort((a, b) => a.number - b.number);
+  if (eps.length < 2) return "";
+  const lines = eps.slice(1).map((e, i) => `- Episode ${e.number} SHOT 1 opens on the CLIFFHANGER of episode ${eps[i].number}: "${eps[i].cliffhanger}"`);
+  return `\n\nCLIFFHANGER CHAIN — HARD GIVENS (each episode's SHOT 1 starts with "${OPENS_ON_LABEL}" + this exact text; if your revision changes an episode's CLIFFHANGER, update the NEXT episode's ${OPENS_ON_LABEL} line to the new text verbatim):\n${lines.join("\n")}`;
+}
 
 /** Stage 38: every scene kind the script writer may emit (also the values persisted in Scene.sceneKind). */
 export const SCENE_KINDS = ["dialogue", "narration", "action"] as const;
@@ -802,12 +898,13 @@ export const PACING_RULE =
 
 export function seasonStructureSystemPrompt(language: IdeaLanguage, episodeCount = SEASON_DEFAULT_EPISODES): string {
   return `You are a showrunner planning ONE season of a short-form vertical drama series (9:16 video, each episode = a ${EPISODE_TOTAL_LABEL} piece of EXACTLY ${EPISODE_SCENE_COUNT} dialogue shots — every shot a full ${SCENE_FIXED_SECONDS} s${LAST_SHOT_NOTE}, the whole episode = ${EPISODE_MAX_TOTAL_SECONDS} s).
-- EPISODE SHAPE (${EPISODE_SCENE_COUNT} shots, ${EPISODE_TOTAL_LABEL}): shot 1 = the set-up — it carries the episode's continuation straight out of the previous episode's cliffhanger (episode 1: the season opening) and states this episode's want/conflict; shot 2 = the escalation — the conflict sharpens and the shot ENDS on this episode's cliffhanger. Every logline must be playable in exactly these two beats: ONE concrete dramatic turn, no subplots, no montage.
-Return STRICT JSON: {"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string}]}.
+- EPISODE SHAPE (${EPISODE_SCENE_COUNT} shots, ${EPISODE_TOTAL_LABEL}): shot 1 = the set-up — it carries the episode's continuation straight out of the previous episode's cliffhanger (episode 1: the season opening) and states this episode's want/conflict; shot 2 = the escalation — the conflict sharpens and the shot ENDS on this episode's cliffhanger. Every episode must be playable in exactly these two beats: ONE concrete dramatic turn, no subplots, no montage.
+- ${EPISODE_FOOTAGE_RULE}
+Return STRICT JSON: {"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string, "description": string (60-SECOND FOOTAGE — 3 labelled lines, see the rule)}]}.
 RULES:
 - NUMBER OF EPISODES: produce EXACTLY ${episodeCount} episodes — no more, no fewer — numbered 1..${episodeCount} contiguously. This count is set by the producer; do NOT change it, do NOT pad and do NOT compress the story into a different number.
 - DRAMATURGY across the whole season (spread these four acts over the ${episodeCount} episodes, in order): ВСТУПЛЕНИЕ → ЗАВЯЗКА → КУЛЬМИНАЦИЯ → РАЗВЯЗКА.
-  • ВСТУПЛЕНИЕ (episode 1, arcRole "завязка"): expose the world and the main characters; it opens with an off-screen NARRATOR voice-over backstory before the drama starts. Introduce the central want and the first disturbance.
+  • ВСТУПЛЕНИЕ (episode 1, arcRole "завязка"): expose the world and the main characters through ONE concrete on-camera situation (the shooting script may add a short narrator intro — the "description" itself stays pure on-camera action, no backstory retelling). Introduce the central want and the first disturbance.
   • ЗАВЯЗКА → развитие (early-middle episodes, arcRole "развитие"): rising action — the conflict escalates step by step, stakes grow, complications and reversals ("поворот") appear, at least one strong поворот in the second half.
   • КУЛЬМИНАЦИЯ (the episode just before the finale, or the finale's first half — mark it arcRole "поворот"): the highest-tension confrontation the whole season built toward — the decisive clash where everything is on the line.
   • РАЗВЯЗКА (the LAST episode, arcRole "финал"): the aftermath and resolution — consequences land, the main dramatic question is answered, threads close (a final hook is allowed but the arc resolves).
@@ -816,8 +913,8 @@ RULES:
 - Each episode has ONE key location. "locationName" MUST be one of the given LOCATIONS, copied verbatim (they already have reference images). Only if the story truly needs a place that is not in the list may you invent a new one (then give it a new name) — at most 2 new locations per season. "locationDesc" is a DETAILED English visual description (2–4 sentences: architecture, materials, textures, props, weather, light, color palette, time of day) usable verbatim by an image/video model — for a listed location, expand its given description. "locationName" is in ${langName(language)}.
 - ${LOCATION_DETAIL_RULE}
 - Use ONLY the given character names (verbatim; a CROWD group name counts as a character). Every episode lists 2–6 characters actually present: the MAIN characters carrying it plus the SUPPORTING characters (family, colleagues, rivals) involved. Across the season EVERY SUPPORTING character appears in at least one episode, MINOR characters and CROWD groups are used where the story plausibly gathers people (family dinners, workplaces, hospitals, streets, court, celebrations).
-- Each logline is 2–3 sentences of concrete dramatic events (who wants what, what goes wrong). Cliffhanger = the final beat that forces the viewer into the next episode. No summaries like "tension rises".
-- CLIFFHANGER CHAIN (each episode opens on the previous episode's cliffhanger): episode 1 opens the season; every later episode's logline MUST OPEN by picking up DIRECTLY from where the immediately preceding episode ended — the same moment, same place, the same unresolved situation of that episode's cliffhanger — and only then advance. Episode N+1's first beat = the direct consequence/continuation of episode N's cliffhanger: no time-skips, no resets, no re-introducing the premise that would drop the thread. The chain of cliffhanger → next episode's opening stays UNBROKEN across all ${episodeCount} episodes; consequences carry over episode to episode and nothing repeats.
+- "logline" is ONE sentence (who wants what, what goes wrong); the events themselves live in the 3-line "description". "cliffhanger" = the CLIFFHANGER line — a concrete final IMAGE that forces the viewer into the next episode. No summaries like "tension rises".
+- CLIFFHANGER CHAIN (each episode opens on the previous episode's cliffhanger — "${OPENS_ON_LABEL}" at the start of SHOT 1): episode 1 opens the season; every later episode's description MUST OPEN by picking up DIRECTLY from where the immediately preceding episode ended — the same moment, same place, the same unresolved situation of that episode's cliffhanger — and only then advance. Episode N+1's first beat = the direct consequence/continuation of episode N's cliffhanger: no time-skips, no resets, no re-introducing the premise that would drop the thread. The chain of cliffhanger → next episode's opening stays UNBROKEN across all ${episodeCount} episodes; consequences carry over episode to episode and nothing repeats.
 - ${CREATIVE_RULE}
 - ${MODERATION_SAFE_RULE}
 - Locations are LARGE, LIVING spaces to be used physically: describe in "locationDesc" a place with several distinct zones the characters move between and the concrete objects, furniture, surfaces and corners they interact with, plus the natural background life of the place (who else is around, what moves, the weather) so it never reads as a flat backdrop. Pick VARIED key locations across the season — interiors and exteriors, private and public, different scales and times of day.
@@ -927,7 +1024,8 @@ export function episodeScriptUserPrompt(input: {
   const prevEndingBlock = pe
     ? `\n\nHOW THE PREVIOUS EPISODE (Ep.${pe.number} «${pe.title}») ENDED — THIS EPISODE CONTINUES DIRECTLY FROM HERE:\nCliffhanger: ${pe.cliffhanger}${(pe.endState ?? "").trim() ? `\nFinal frame / world-state left behind: ${(pe.endState ?? "").trim()}` : ""}${(pe.tail ?? "").trim() ? `\nClosing beats:\n${(pe.tail ?? "").trim()}` : ""}\nWrite THIS episode as the direct next chapter: pick up the story, the world-state, the locations and the characters exactly where the previous episode left them (nobody teleports, resets or forgets what just happened), resolve or escalate that cliffhanger, and open scene 1 with an off-screen NARRATOR briefly recapping / continuing from the previous episode before the drama resumes (never restart the story from scratch).`
     : "";
-  return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}\n\nPREVIOUS EPISODES:\n${prev}${prevEndingBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
+  const beats = episodeFootageGivens(input.episode.description);
+  return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}\n\nPREVIOUS EPISODES:\n${prev}${prevEndingBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
 }
 
 /**
@@ -1138,20 +1236,21 @@ export const SEASON_SYNC_INSTRUCTION =
 
 export function seasonReviseSystemPrompt(language: IdeaLanguage, episodeCount: number): string {
   return `You are the showrunner of a short-form vertical drama series. You receive the CURRENT season structure (${episodeCount} episodes) and an INSTRUCTION from the author. Apply the instruction to the structure and return the FULL updated structure as STRICT JSON with exactly the same shape:
-{"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string}]}.
+{"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string, "description": string (60-SECOND FOOTAGE — 3 labelled lines, see the rule)}]}.
 RULES:
 - Keep EXACTLY ${episodeCount} episodes with the same numbers 1..${episodeCount}. Never add or remove episodes.
 - MINIMAL CHANGE: copy every field of every episode VERBATIM unless the instruction (or story consistency it forces) requires changing it. Episodes that the instruction does not touch must be returned character-for-character identical — the system regenerates only episodes whose logline / arc / location / characters changed, and rewriting untouched episodes wastes the author's work.
 - Use ONLY the given character names verbatim (a new character requested by the author is allowed only if it is present in the CHARACTERS list; otherwise weave the request into the existing cast). "locationName" should be one of the given LOCATIONS (verbatim); a new place only when the story truly needs it.
 - ${LOCATION_DETAIL_RULE}
-- Loglines are 2–3 sentences of concrete dramatic events; cliffhanger = the final beat. Keep continuity: consequences carry over episode to episode.
-- ${PACING_RULE} Changed loglines must keep this pacing.
+- ${EPISODE_FOOTAGE_RULE}
+- "logline" is ONE sentence; "cliffhanger" = the CLIFFHANGER line verbatim. Keep continuity: consequences carry over episode to episode. If an episode's current "description" is not yet in the 3-line format, rewrite it into the format WITHOUT changing its events (that alone does not count as a story change).
+- ${PACING_RULE} Changed episodes must keep this pacing.
 - ${CREATIVE_RULE}
 - ${MODERATION_SAFE_RULE}
 - All text except "locationDesc" is in ${langName(language)}; "locationDesc" is a detailed English visual description. Character names stay exactly as given (Western names in Latin letters).`;
 }
 export function seasonReviseUserPrompt(input: { synopsis: string; structure: SeasonStructure; characters: CharacterCard[]; locations: LocationRef[]; instruction: string }): string {
-  return `SYNOPSIS:\n${input.synopsis}\n\nCHARACTERS (with tiers):\n${charactersBlock(input.characters)}\n\nLOCATIONS:\n${input.locations.length ? locationsBlock(input.locations) : "(none)"}\n\nCURRENT SEASON STRUCTURE (JSON):\n${JSON.stringify(input.structure, null, 1)}\n\nINSTRUCTION FROM THE AUTHOR:\n${input.instruction}`;
+  return `SYNOPSIS:\n${input.synopsis}\n\nCHARACTERS (with tiers):\n${charactersBlock(input.characters)}\n\nLOCATIONS:\n${input.locations.length ? locationsBlock(input.locations) : "(none)"}\n\nCURRENT SEASON STRUCTURE (JSON):\n${JSON.stringify(input.structure, null, 1)}${cliffhangerChainGivens(input.structure)}\n\nINSTRUCTION FROM THE AUTHOR:\n${input.instruction}`;
 }
 
 // ─── Stage 12: whole-season prose story ("Сюжет" screen) ─────────────────────────────
@@ -1201,11 +1300,13 @@ export function seasonFullStoryUserPrompt(input: { synopsis: string; structure: 
 /** Story-screen revise: rewrite the prose per the author's instruction AND keep the structure in sync (count may change). */
 export function seasonStoryReviseSystemPrompt(language: IdeaLanguage, episodeCount: number): string {
   return `You are the showrunner of a short-form vertical drama. You receive the CURRENT season structure (${episodeCount} episodes), the CURRENT full-story prose, and an INSTRUCTION from the author. Apply the instruction and return the FULL updated season as STRICT JSON:
-{"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string}], "fullStory": string}.
+{"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string, "description": string (60-SECOND FOOTAGE — 3 labelled lines, see the rule)}], "fullStory": string}.
 RULES:
 - MINIMAL CHANGE: keep the structure and prose the author did NOT ask to change VERBATIM. Only touch what the instruction (or the story consistency it forces) requires — the system regenerates scripts only for episodes whose logline / arc / location / cast changed, so needless edits waste the author's work.
 - EPISODE COUNT: keep ${episodeCount} episodes UNLESS the author explicitly asks to add or remove episodes; then return the new count (allowed range ${SEASON_MIN_EPISODES}–${SEASON_MAX_EPISODES}), renumber episodes 1..N contiguously, and make "episodes" and "fullStory" agree exactly (same number of episode blocks, same titles/order). Episode 1 = завязка, last = финал.
-- Use ONLY the given character names verbatim; "locationName" should be one of the given LOCATIONS (verbatim) unless the story truly needs a new place. Loglines are 2–3 sentences of concrete events; cliffhanger = the final beat.
+- Use ONLY the given character names verbatim; "locationName" should be one of the given LOCATIONS (verbatim) unless the story truly needs a new place. "logline" is ONE sentence; "cliffhanger" = the CLIFFHANGER line verbatim.
+- ${EPISODE_FOOTAGE_RULE}
+  If an episode's current "description" is not yet in the 3-line format, rewrite it into the format WITHOUT changing its events (that alone does not count as a story change).
 - ${PACING_RULE}
 - ${LOCATION_DETAIL_RULE}
 - ${CREATIVE_RULE}
@@ -1214,7 +1315,7 @@ RULES:
 ${fullStoryFormatRules(language, episodeCount)}`;
 }
 export function seasonStoryReviseUserPrompt(input: { synopsis: string; structure: SeasonStructure; fullStory: string; characters: CharacterCard[]; locations: LocationRef[]; instruction: string }): string {
-  return `SYNOPSIS:\n${input.synopsis}\n\nCHARACTERS (with tiers):\n${charactersBlock(input.characters)}\n\nLOCATIONS:\n${input.locations.length ? locationsBlock(input.locations) : "(none)"}\n\nCURRENT SEASON STRUCTURE (JSON):\n${JSON.stringify(input.structure, null, 1)}\n\nCURRENT FULL STORY:\n${input.fullStory || "(not written yet)"}\n\nINSTRUCTION FROM THE AUTHOR:\n${input.instruction}`;
+  return `SYNOPSIS:\n${input.synopsis}\n\nCHARACTERS (with tiers):\n${charactersBlock(input.characters)}\n\nLOCATIONS:\n${input.locations.length ? locationsBlock(input.locations) : "(none)"}\n\nCURRENT SEASON STRUCTURE (JSON):\n${JSON.stringify(input.structure, null, 1)}\n\n${cliffhangerChainGivens(input.structure)}\n\nCURRENT FULL STORY:\n${input.fullStory || "(not written yet)"}\n\nINSTRUCTION FROM THE AUTHOR:\n${input.instruction}`;
 }
 
 const norm = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -1222,6 +1323,10 @@ const norm = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").tr
 export function episodeNeedsRewrite(before: EpisodeOutline, after: EpisodeOutline): boolean {
   if (norm(before.logline) !== norm(after.logline)) return true;
   if (norm(before.cliffhanger) !== norm(after.cliffhanger)) return true;
+  // Stage 105 — the three footage beats changed (compared only when both sides are in the 3-line format,
+  // so merely re-formatting a legacy description does not trigger a script rewrite).
+  const fb = parseEpisodeFootage(before.description), fa = parseEpisodeFootage(after.description);
+  if (fb && fa && (norm(fb.shot1) !== norm(fa.shot1) || norm(fb.shot2) !== norm(fa.shot2) || norm(fb.cliffhanger) !== norm(fa.cliffhanger))) return true;
   if (before.arcRole !== after.arcRole) return true;
   if (norm(before.locationName) !== norm(after.locationName)) return true;
   const a = new Set(before.characters.map(norm));
