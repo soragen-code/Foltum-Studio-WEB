@@ -1021,70 +1021,20 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           </div>
           <p className="mt-1 text-sm text-muted-foreground">Characters (multiple angles) are generated with the "Generate characters" button. Locations are separate: one master frame using the button on the card, additional angles with "+". All images are tagged with C2PA. Click any frame to open it full screen.</p>
 
-          {/* Characters */}
-          <h3 className="mt-4 flex items-center gap-2 text-sm font-semibold"><Users className="h-4 w-4" /> Characters ({refChars.length})</h3>
-          <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {refChars.map((c) => {
-              const busy = !!charBusy[c.id] || (refSession && refScope === 'characters' && !hasAllImages(c))
-              // Stage 56: render ONLY the character's actual reference photos (usually one full-body imageFull),
-              // with no padded empty placeholder slots. Each slot keeps its true url->shot mapping so
-              // per-shot regen/download target the right image; the 9:16 photo is shown object-contain (no crop).
-              const slots = characterPhotoSlots(c)
-              const photos = slots.map((s) => s.url)
-              return (
-                <div key={c.id} className="rounded-lg border border-border/60 p-3" data-testid="ref-character">
-                  {slots.length > 0 ? (
-                    <div className={slots.length > 1 ? 'grid grid-cols-2 gap-2' : ''}>
-                      {slots.map((s, i) => (
-                        <button key={`${s.shot}-${s.idx ?? 0}`} type="button" onClick={() => openLightbox(photos, i, `${c.name} — ${s.label}`)} className={`group relative aspect-[9/16] overflow-hidden rounded bg-muted ${slots.length === 1 ? 'mx-auto w-full max-w-[13rem]' : ''}`} title={s.label} data-testid="ref-image">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={s.url} alt={`${c.name} — ${s.label}`} className="h-full w-full object-contain" />
-                          <span className="absolute right-1 top-1 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
-                          <FrameToolbar
-                            regen={{ testId: `regen-shot-${s.shot}${s.idx !== undefined ? `-${s.idx}` : ''}`, busy, spinning: shotIsBusy(c.id, s.shot, s.idx), onClick: () => regenShot('character', c.id, s.shot, s.idx) }}
-                            download={{ url: s.url, name: referenceFileName('character', c.name, s.shot, s.url, s.idx) }}
-                          />
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="mx-auto flex aspect-[9/16] w-full max-w-[13rem] items-center justify-center rounded bg-muted" data-testid="ref-image">
-                      {busy ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : <ImageOff className="h-4 w-4 text-muted-foreground/40" />}
-                    </div>
-                  )}
-                  <div className="mt-2 truncate text-sm font-medium">{c.name} <span className="font-normal text-muted-foreground">· {photos.length} photo</span></div>
-                  {c.role && <div className="truncate text-xs text-muted-foreground">{c.role}</div>}
-                      {/* Stage 46E: prompt view/edit + download all */}
-                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
-                        <button type="button" onClick={() => setPromptFor({ kind: 'character', id: c.id, name: c.name })} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs" data-testid="character-prompt" title="View, copy, or edit the character prompt">
-                          <FileText className="h-3.5 w-3.5" /> Prompt
-                        </button>
-                        <DownloadAllButton kind="character" id={c.id} count={photos.length} />
-                        <button type="button" disabled={busy || !!charResetting[c.id]} onClick={() => resetCharacterPrompt(c.id)} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="char-prompt-reset" title="Remove manual prompt and restore automatic">
-                            {charResetting[c.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Reset prompt to auto
-                          </button>
-                        {!!(c.promptOverride && String(c.promptOverride).trim()) && <span className="rounded bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="character-prompt-override">Prompt changed manually</span>}
-                      </div>
-                      <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
-                        <input value={charEdit[c.id] ?? ''} onChange={(e) => setCharEdit((t) => ({ ...t, [c.id]: e.target.value }))} placeholder="Edit by prompt…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-character-input" disabled={busy} />
-                        <button onClick={() => reviseCharacter(c.id)} disabled={busy || !(charEdit[c.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-character-submit" title="Edit by prompt">
-                          {charBusy[c.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
-                        </button>
-                        {c.hasUndo && (
-                          <button onClick={() => undoCharacter(c.id)} disabled={busy} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="character-undo" title="Undo last change">
-                            <Undo2 className="h-3.5 w-3.5" />
-                          </button>
-                        )}
-                      </div>
-                </div>
-              )
-            })}
-            {refChars.length === 0 && <p className="text-sm text-muted-foreground">No characters are linked to this episode.</p>}
-          </div>
-
-          {/* Locations */}
-          <h3 className="mt-6 flex items-center gap-2 text-sm font-semibold"><MapPin className="h-4 w-4" /> Locations ({refLocs.length})</h3>
-          <div className="mt-2 grid gap-4 sm:grid-cols-2">
+          {/* Stage 91: Locations FIRST on the per-episode references screen.
+              IMPORTANT: this is the screen the user actually sees (episode-view.tsx, phase === 'references').
+              Earlier stages (84/85/86/90) edited the project-wizard component
+              (app/project/[id]/_components/references-stage.tsx) — the WRONG file — which is why the
+              location never moved. Ordering here is guaranteed by DOM/source order (Locations block is
+              rendered before Characters), NOT by a Tailwind order-* class (those get purged from the
+              compiled CSS and were inert in the previous attempts). The location is the base scene layer
+              created first, so it is highlighted and slightly larger than the character cards. */}
+          <div className="mt-4 rounded-xl border-2 border-primary/40 bg-primary/5 p-3 sm:p-4" data-testid="episode-location-block">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="flex items-center gap-2 text-base font-bold"><MapPin className="h-5 w-5 text-primary" /> Locations ({refLocs.length})</h3>
+              <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">Base scene layer — created first</span>
+            </div>
+          <div className="mt-3 grid gap-4 sm:grid-cols-2">
             {refLocs.map((l) => {
               const detail = locationDetailLevel(l)
               const base = [{ url: l.imageUrl, label: 'Wide shot', slot: 'master' }, { url: l.imageReverse, label: 'Reverse angle', slot: 'reverse' }, { url: l.imageDetail, label: 'Medium shot', slot: 'detail' }].filter((a) => validUrl(a.url))
@@ -1198,6 +1148,68 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               )
             })}
             {refLocs.length === 0 && <p className="text-sm text-muted-foreground">No locations are linked to this episode.</p>}
+          </div>
+          </div>
+
+          {/* Characters — rendered BELOW the location block (location is the base scene layer, created first). */}
+          <h3 className="mt-6 flex items-center gap-2 text-sm font-semibold"><Users className="h-4 w-4" /> Characters ({refChars.length})</h3>
+          <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {refChars.map((c) => {
+              const busy = !!charBusy[c.id] || (refSession && refScope === 'characters' && !hasAllImages(c))
+              // Stage 56: render ONLY the character's actual reference photos (usually one full-body imageFull),
+              // with no padded empty placeholder slots. Each slot keeps its true url->shot mapping so
+              // per-shot regen/download target the right image; the 9:16 photo is shown object-contain (no crop).
+              const slots = characterPhotoSlots(c)
+              const photos = slots.map((s) => s.url)
+              return (
+                <div key={c.id} className="rounded-lg border border-border/60 p-3" data-testid="ref-character">
+                  {slots.length > 0 ? (
+                    <div className={slots.length > 1 ? 'grid grid-cols-2 gap-2' : ''}>
+                      {slots.map((s, i) => (
+                        <button key={`${s.shot}-${s.idx ?? 0}`} type="button" onClick={() => openLightbox(photos, i, `${c.name} — ${s.label}`)} className={`group relative aspect-[9/16] overflow-hidden rounded bg-muted ${slots.length === 1 ? 'mx-auto w-full max-w-[13rem]' : ''}`} title={s.label} data-testid="ref-image">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={s.url} alt={`${c.name} — ${s.label}`} className="h-full w-full object-contain" />
+                          <span className="absolute right-1 top-1 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
+                          <FrameToolbar
+                            regen={{ testId: `regen-shot-${s.shot}${s.idx !== undefined ? `-${s.idx}` : ''}`, busy, spinning: shotIsBusy(c.id, s.shot, s.idx), onClick: () => regenShot('character', c.id, s.shot, s.idx) }}
+                            download={{ url: s.url, name: referenceFileName('character', c.name, s.shot, s.url, s.idx) }}
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mx-auto flex aspect-[9/16] w-full max-w-[13rem] items-center justify-center rounded bg-muted" data-testid="ref-image">
+                      {busy ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : <ImageOff className="h-4 w-4 text-muted-foreground/40" />}
+                    </div>
+                  )}
+                  <div className="mt-2 truncate text-sm font-medium">{c.name} <span className="font-normal text-muted-foreground">· {photos.length} photo</span></div>
+                  {c.role && <div className="truncate text-xs text-muted-foreground">{c.role}</div>}
+                      {/* Stage 46E: prompt view/edit + download all */}
+                      <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                        <button type="button" onClick={() => setPromptFor({ kind: 'character', id: c.id, name: c.name })} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs" data-testid="character-prompt" title="View, copy, or edit the character prompt">
+                          <FileText className="h-3.5 w-3.5" /> Prompt
+                        </button>
+                        <DownloadAllButton kind="character" id={c.id} count={photos.length} />
+                        <button type="button" disabled={busy || !!charResetting[c.id]} onClick={() => resetCharacterPrompt(c.id)} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="char-prompt-reset" title="Remove manual prompt and restore automatic">
+                            {charResetting[c.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Reset prompt to auto
+                          </button>
+                        {!!(c.promptOverride && String(c.promptOverride).trim()) && <span className="rounded bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="character-prompt-override">Prompt changed manually</span>}
+                      </div>
+                      <div className="mt-2 flex flex-col gap-1.5 sm:flex-row">
+                        <input value={charEdit[c.id] ?? ''} onChange={(e) => setCharEdit((t) => ({ ...t, [c.id]: e.target.value }))} placeholder="Edit by prompt…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 text-xs" data-testid="ref-character-input" disabled={busy} />
+                        <button onClick={() => reviseCharacter(c.id)} disabled={busy || !(charEdit[c.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="ref-character-submit" title="Edit by prompt">
+                          {charBusy[c.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+                        </button>
+                        {c.hasUndo && (
+                          <button onClick={() => undoCharacter(c.id)} disabled={busy} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="character-undo" title="Undo last change">
+                            <Undo2 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
+                      </div>
+                </div>
+              )
+            })}
+            {refChars.length === 0 && <p className="text-sm text-muted-foreground">No characters are linked to this episode.</p>}
           </div>
 
           {/* Stage 59 navigation — References is step 2: back to script · forward to scenes.
