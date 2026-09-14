@@ -87,8 +87,8 @@ model Project {
   // Stage 59: durable "new 4-step flow" marker. New projects set it true; legacy rows stay false (classic flow).
   // The wizard needs this because at stage=synopsis/early-structure charactersApproved is still false.
   newFlow     Boolean  @default(false)
-  // Stage 73: generation provider for reference images / scene videos: replicate | wavespeed | modelark
-  imageProvider String @default("replicate")
+  // Stage 104: the only media provider is WaveSpeed (columns kept for compatibility, always "wavespeed")
+  imageProvider String @default("wavespeed")
   videoProvider String @default("wavespeed")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -290,7 +290,7 @@ model Scene {
   voiceover     String?  @db.Text // stage 12: ENGLISH off-screen narration voiced by the model (backstory/catch-up), used only for narration scenes
   voiceoverLocal String? @db.Text // stage 12: the same narration translated into the story language for the UI
   status        String   @default("pending") // pending, generating, generated, accepted
-  videoModel    String?  // chosen video model / provider for this scene: always "seedance" (Seedance 2.5; Stage 63 removed the Kling option) — persisted per generated scene
+  videoModel    String?  // chosen video model / provider for this scene: always "seedance" (Seedance 2.5; Stage 63 removed the alternative model option) — persisted per generated scene
   promptOverride String? @db.Text // stage 31: manual per-scene final-prompt override — when non-empty it replaces the auto-assembled prompt TEXT verbatim (image/reference chaining is unaffected); null = use auto prompt
   skipReferences Boolean @default(false) // stage 33/36: submit this scene WITHOUT any reference images (text-only), previous-scene frame included
   skipPreviousFrame Boolean @default(false) // stage 37: keep character/location references but do NOT send the previous scene's last frame (moderation trigger)
@@ -300,6 +300,11 @@ model Scene {
   lookCache     String?  @db.Text // stage 46B-1: JSON {hash, videoPrompt, startState, endState, openingState} — scene text rewritten to the CURRENT character look
   lookStale     Boolean  @default(false) // stage 46B-1: a linked character's appearance changed after this scene's video was rendered
   prevSnapshot  Json?    // stage 60: one previous version for one-step undo
+  // Stage 104: keyframe-driven scenes — a Seedream still (opening frame of the shot) that seeds Seedance image-to-video
+  keyframeUrl    String?          // S3 URL of the generated keyframe (9:16 jpeg)
+  keyframePrompt String? @db.Text // exact Seedream edit prompt used for the keyframe (shown in the Scene Script modal)
+  keyframeStatus String?          // pending | running | done | error
+  keyframeError  String? @db.Text // last keyframe error (also set when the video fell back to text-to-video)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

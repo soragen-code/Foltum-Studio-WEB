@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { generateImage } from "@/lib/replicate";
+import { generateImage } from "@/lib/providers/image-provider";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 
@@ -9,7 +9,6 @@ import { characterShotPrompt, clampPromptToLimit } from "@/lib/full-body-prompt"
 import { detectC2paFromUrl } from "@/lib/c2pa";
 import { checkFullBodyImage, fullBodyPasses, fullBodyScore, fullBodyCorrectionSuffix, evaluateProportions, type FullBodyCheck, type ProportionDefect } from "@/lib/full-body-check";
 import { REF_BATCH_CONCURRENCY, runWithConcurrency } from "@/lib/reference-counts";
-import { loadProjectImageProvider } from "@/lib/providers/project-provider";
 // Stage 75: user-uploaded photo references — transport only (prepended to image_input).
 import { parseUserRefs, mergeImageInput } from "@/lib/character-user-refs";
 
@@ -83,12 +82,11 @@ type C2paCheck = { characterId: string; shot: string; ok: boolean; signatures: s
  * is produced text-to-image (no face-chain) and passes the framing + proportion guard. The old front
  * portrait, the profile and the extra angles are NOT auto-generated any more — they are only produced
  * on demand from the character card (POST /api/ai/characters/[id]/shot). Up to REF_BATCH_CONCURRENCY
- * (20) Replicate requests run in flight; every stored photo's C2PA metadata is verified. Idempotent:
+ * (20) provider requests run in flight; every stored photo's C2PA metadata is verified. Idempotent:
  * a character that already has imageFull is skipped, so a resumed/retried job only fills the gaps.
  */
 export async function runCharacterImagesJob({ jobId, projectId, characterIds, imageModel }: CharacterImagesJobParams): Promise<void> {
   try {
-    const imageProvider = await loadProjectImageProvider(projectId); // Stage 73: transport provider only
     const characters = await prisma.character.findMany({
       where: { id: { in: characterIds }, projectId },
       orderBy: { createdAt: "asc" },
@@ -133,22 +131,22 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
         // previously nulled the full-body photo). A prompt already within the limit is passed through unchanged.
         const gen = (prompt: string) => generateImage(
           { prompt: clampPromptToLimit(prompt), aspect_ratio: ASPECT_RATIOS[shot], ...(chained ? { image_input: imageInput } : {}) },
-          { jobId, characterId: char.id, imageModel, provider: imageProvider }
+          { jobId, characterId: char.id, imageModel}
         );
-        let replicateUrl: string;
+        let providerUrl: string;
         // Proportion guard for the full-body shot (people only): the chained face close-up pulls the model
         // into a big-headed, short-legged "dwarf" figure (or a hip-cropped medium shot). Vision-check each
         // attempt and regenerate with a corrective prompt up to FULL_BODY_MAX_ATTEMPTS times; keep the
         // best attempt if all fail. A failing CHECK never fails the job.
         if (shot === "full" && char.tier !== "CROWD") {
           const r = await generateFullBodyWithGuard(basePrompt, gen, { child: isChildAppearance(char.appearance ?? ""), label: char.name, canceled });
-          replicateUrl = r.url;
+          providerUrl = r.url;
           if (r.proportionsWarning?.length) proportionsWarnings.push({ characterId: char.id, name: char.name, defects: r.proportionsWarning });
         } else {
-          replicateUrl = await gen(basePrompt);
+          providerUrl = await gen(basePrompt);
         }
         const s3Key = `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/${shot}-${Date.now()}.png`;
-        const url = await uploadRemoteToS3(replicateUrl, s3Key, "image/png");
+        const url = await uploadRemoteToS3(providerUrl, s3Key, "image/png");
         await prisma.character.update({ where: { id: char.id }, data: { [SHOT_FIELDS[shot]]: url } });
         (char as any)[SHOT_FIELDS[shot]] = url;
         const c2pa = await detectC2paFromUrl(url);

@@ -269,3 +269,16 @@ ALTER TABLE "Episode" ALTER COLUMN "chainMode" SET DEFAULT 'chain';
 UPDATE "Scene" SET "endStateActual" = NULL
 WHERE "endStateActual" IS NOT NULL
   AND ("endStateActual" ~* '(i''m sorry|can''t help|cannot help|unable to)' OR length(trim("endStateActual")) < 80);
+
+
+-- Stage 104: WaveSpeed is the ONLY media provider. Normalise legacy provider values and the column default
+-- (columns are kept — never dropped).
+UPDATE "Project" SET "imageProvider" = 'wavespeed' WHERE "imageProvider" <> 'wavespeed';
+UPDATE "Project" SET "videoProvider" = 'wavespeed' WHERE "videoProvider" <> 'wavespeed';
+ALTER TABLE "Project" ALTER COLUMN "imageProvider" SET DEFAULT 'wavespeed';
+
+-- Stage 104: keyframe-driven scenes (Seedream keyframe → Seedance image-to-video first/last frame).
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "keyframeUrl" TEXT;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "keyframePrompt" TEXT;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "keyframeStatus" TEXT;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "keyframeError" TEXT;

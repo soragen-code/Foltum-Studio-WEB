@@ -8,12 +8,11 @@ import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, locationShotSchema } from "@/lib/validations";
 import { normalizeImageModel } from "@/lib/ai-models";
 import { runInBackground, completeJob, failJob } from "@/lib/jobs";
-import { generateImage } from "@/lib/replicate";
+import { generateImage } from "@/lib/providers/image-provider";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { locationAnglePrompt, locationExtraAnglePrompt, parseLocationExtra, VISUAL_STYLE_ID } from "@/lib/visual-style";
 import { extraJobImageInputs } from "@/lib/workers/location-extra-image-job";
 import { CHARACTER_REFERENCE_COST } from "@/lib/power-tier";
-import { loadProjectImageProvider } from "@/lib/providers/project-provider";
 
 /** Job type of a single-frame regeneration — distinct from the location set jobs so their polling ignores it. */
 export const LOCATION_SHOT_JOB_TYPE = "location_shot";
@@ -90,7 +89,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     runInBackground(async () => {
       try {
         const visual = loc.visualPrompt ?? loc.description ?? loc.name;
-        const ctx = { jobId: job.id, imageModel, provider: await loadProjectImageProvider(loc.projectId) }; // Stage 73
+        const ctx = { jobId: job.id, imageModel };
         let remote: string;
         if (slot === "master") {
           remote = await generateImage({ prompt: locationAnglePrompt(visual, loc.name, "wide"), aspect_ratio: "9:16" }, ctx);

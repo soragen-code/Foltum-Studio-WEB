@@ -19,7 +19,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
   const { id } = await params;
   let job = await prisma.generationJob.findUnique({ where: { id } });
-  // Video job whose worker went quiet → pick the Replicate prediction up from here (resume / heartbeat)
+  // Video job whose worker went quiet → pick the WaveSpeed task up from here (resume / heartbeat)
   if (job && (await resumeVideoJob(job))) {
     job = await prisma.generationJob.findUnique({ where: { id } });
   }
@@ -38,7 +38,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   let scene: any | undefined;
   if (job.type === "characters") {
     characters = await prisma.character.findMany({ where: { projectId: job.projectId }, orderBy: { createdAt: "asc" } });
-  } else if (job.type === "video" && job.sceneId) {
+  } else if ((job.type === "video" || job.type === "scene-keyframe") && job.sceneId) {
+    // Stage 104: keyframe jobs return the scene row too (keyframeUrl / keyframeStatus / keyframeError for the card).
     scene = await prisma.scene.findUnique({ where: { id: job.sceneId } });
   }
 

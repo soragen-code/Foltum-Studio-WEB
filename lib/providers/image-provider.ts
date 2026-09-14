@@ -1,20 +1,31 @@
-import type { GenerationProvider } from "@/lib/validations";
-import { startImagePrediction, getPredictionState, cancelPrediction, type FluxInput } from "@/lib/replicate";
-import { generateImageSync, modelArkImageSize } from "@/lib/modelark";
+import { GenerationAttempt, safeDiagnosticInput, safeProviderError, classifyProviderError, logAttempt } from "@/lib/generation-diagnostics";
+import { VISUAL_STYLE_ID } from "@/lib/visual-style";
+import { WAVESPEED_BASE, getWaveSpeedKey, wavespeedErrorText } from "@/lib/wavespeed";
 
 /* ------------------------------------------------------------------ */
-/*  Stage 73: reference-image generation provider layer (transport).    */
-/*  replicate  — the existing lib/replicate.ts path, byte-for-byte.     */
-/*  wavespeed  — Seedream 5.0 Pro on WaveSpeed  (t2i, or /edit when     */
-/*               reference images are present; max 10 refs).           */
-/*  modelark   — Seedream 5.0 on ModelArk, synchronous; the result is  */
-/*               parked in-memory under a synthetic id so the shared   */
-/*               start → poll → done flow stays identical.             */
+/*  Reference-image generation — Seedream 5.0 Pro on WaveSpeed ONLY.    */
+/*  (Stage 104: the per-project provider switch was removed; every      */
+/*  image goes through WaveSpeed t2i, or /edit when reference images    */
+/*  are present; max 10 refs.)                                          */
 /* ------------------------------------------------------------------ */
+
+/** Reference-image request (character portraits, location plates, scene stills, keyframes). */
+export interface FluxInput {
+  prompt: string;
+  /** "1:1" | "3:4" | "4:3" | "16:9" | "9:16" etc. Default "9:16" for vertical. */
+  aspect_ratio?: string;
+  /** Unused by Seedream — kept for call-site compatibility. */
+  prompt_strength?: number;
+  /** Unused by Seedream — kept for call-site compatibility. */
+  num_inference_steps?: number;
+  seed?: number;
+  /** Seedream multi-reference input (1-10 URLs): the output keeps the place/light of these images. */
+  image_input?: string[];
+}
 
 export interface ImageGenerationInput extends FluxInput {
   /** What the image is for (diagnostics only; does not change the request). */
-  kind?: "character" | "location" | "scene_still";
+  kind?: "character" | "location" | "scene_still" | "keyframe";
 }
 
 export interface ImageGenerationState {
@@ -23,22 +34,32 @@ export interface ImageGenerationState {
   error?: string;
 }
 
-const WAVESPEED_BASE = "https://api.wavespeed.ai/api/v3";
-/** WaveSpeed Seedream 5.0 Pro endpoints (text-to-image / multi-reference edit). Stage 74: Lite → Pro. */
+/** WaveSpeed Seedream 5.0 Pro endpoints (text-to-image / multi-reference edit). */
 export const WAVESPEED_SEEDREAM_T2I = "bytedance/seedream-v5.0-pro";
 export const WAVESPEED_SEEDREAM_EDIT = "bytedance/seedream-v5.0-pro/edit";
-const WAVESPEED_IMAGE_MAX_REFS = 10;
+export const WAVESPEED_IMAGE_MAX_REFS = 10;
+/** Model name recorded in generation diagnostics. */
+export const SEEDREAM_MODEL = WAVESPEED_SEEDREAM_T2I;
 
-function wavespeedKey(): string {
-  const key = process.env.WAVESPEED_API_KEY;
-  if (!key) throw new Error("WaveSpeed provider key not set (WAVESPEED_API_KEY)");
-  return key;
+/** Explicit pixel size closest to the requested aspect ratio (2K class) as "W*H". */
+export function seedreamImageSize(aspect?: string): string {
+  switch ((aspect ?? "9:16").trim()) {
+    case "1:1": return "2048*2048";
+    case "16:9": return "2560*1440";
+    case "4:3": return "2304*1728";
+    case "3:4": return "1728*2304";
+    case "3:2": return "2496*1664";
+    case "2:3": return "1664*2496";
+    case "21:9": return "3024*1296";
+    case "9:16":
+    default: return "1440*2560";
+  }
 }
 
 /** Pure body/slug builder for the WaveSpeed Seedream request (exported for tests). */
 export function buildWaveSpeedImageRequest(input: ImageGenerationInput): { slug: string; body: Record<string, unknown> } {
   const refs = (input.image_input ?? []).filter((u) => typeof u === "string" && u.length > 0).slice(0, WAVESPEED_IMAGE_MAX_REFS);
-  const size = modelArkImageSize(input.aspect_ratio).replace("x", "*");
+  const size = seedreamImageSize(input.aspect_ratio);
   const body: Record<string, unknown> = { prompt: input.prompt, size, output_format: "png", enable_sync_mode: false };
   if (refs.length) {
     body.images = refs;
@@ -50,15 +71,6 @@ export function buildWaveSpeedImageRequest(input: ImageGenerationInput): { slug:
 function wsUnwrap(body: any): any {
   return body && typeof body === "object" && body.data && typeof body.data === "object" ? body.data : body;
 }
-function wsError(body: any, httpStatus?: number): string {
-  const parts: string[] = [];
-  if (httpStatus !== undefined) parts.push(`HTTP ${httpStatus}`);
-  const code = body?.code ?? body?.data?.code;
-  if (code !== undefined && code !== null) parts.push(`code ${code}`);
-  const msg = body?.message ?? body?.data?.error ?? body?.error;
-  if (msg) parts.push(String(msg));
-  return parts.length ? parts.join(" — ") : "unknown WaveSpeed error";
-}
 
 async function wavespeedStart(input: ImageGenerationInput): Promise<string> {
   const { slug, body } = buildWaveSpeedImageRequest(input);
@@ -66,7 +78,7 @@ async function wavespeedStart(input: ImageGenerationInput): Promise<string> {
   try {
     res = await fetch(`${WAVESPEED_BASE}/${slug}`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${wavespeedKey()}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${getWaveSpeedKey()}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(30_000),
     });
@@ -75,22 +87,22 @@ async function wavespeedStart(input: ImageGenerationInput): Promise<string> {
   }
   let json: any = null;
   try { json = await res.json(); } catch { /* handled below */ }
-  if (!res.ok) throw new Error(`WaveSpeed image submit failed: ${wsError(json, res.status)}`);
+  if (!res.ok) throw new Error(`WaveSpeed image submit failed: ${wavespeedErrorText(json, res.status)}`);
   const id = wsUnwrap(json)?.id;
-  if (!id) throw new Error(`WaveSpeed image submit returned no task id: ${wsError(json, res.status)}`);
+  if (!id) throw new Error(`WaveSpeed image submit returned no task id: ${wavespeedErrorText(json, res.status)}`);
   return String(id);
 }
 
 async function wavespeedState(id: string): Promise<ImageGenerationState> {
   const res = await fetch(`${WAVESPEED_BASE}/predictions/${id}/result`, {
-    headers: { Authorization: `Bearer ${wavespeedKey()}` },
+    headers: { Authorization: `Bearer ${getWaveSpeedKey()}` },
     signal: AbortSignal.timeout(20_000),
   });
   let json: any = null;
   try { json = await res.json(); } catch { /* handled below */ }
   if (!res.ok) {
     if (res.status >= 500 || res.status === 429) return { status: "running" };
-    throw new Error(`WaveSpeed image result failed: ${wsError(json, res.status)}`);
+    throw new Error(`WaveSpeed image result failed: ${wavespeedErrorText(json, res.status)}`);
   }
   const data = wsUnwrap(json);
   const status = String(data?.status ?? "").toLowerCase();
@@ -105,50 +117,80 @@ async function wavespeedState(id: string): Promise<ImageGenerationState> {
   return { status: "running" };
 }
 
-/* ModelArk: synchronous call parked under a synthetic id. */
-const modelArkResults = new Map<string, { promise: Promise<string>; done?: ImageGenerationState }>();
-let modelArkSeq = 0;
-
-function modelArkStart(input: ImageGenerationInput): string {
-  const id = `modelark-img-${Date.now()}-${++modelArkSeq}`;
-  const entry: { promise: Promise<string>; done?: ImageGenerationState } = { promise: generateImageSync(input) };
-  entry.promise.then(
-    (url) => { entry.done = { status: "succeeded", outputUrl: url }; },
-    (err) => { entry.done = { status: "failed", error: err?.message || String(err) }; },
-  );
-  modelArkResults.set(id, entry);
-  return id;
+/** Submit an image generation; returns the WaveSpeed task id. */
+export async function startImageGeneration(input: ImageGenerationInput): Promise<{ id: string }> {
+  return { id: await wavespeedStart(input) };
 }
 
-function modelArkState(id: string): ImageGenerationState {
-  const entry = modelArkResults.get(id);
-  if (!entry) return { status: "failed", error: "ModelArk image task not found in this process" };
-  if (entry.done) { modelArkResults.delete(id); return entry.done; }
-  return { status: "running" };
+/** Current state of an image generation. */
+export async function getImageGenerationState(id: string): Promise<ImageGenerationState> {
+  return wavespeedState(id);
 }
 
-/** Submit an image generation on the given provider; returns the provider task id. */
-export async function startImageGeneration(provider: GenerationProvider, input: ImageGenerationInput, imageModel?: string): Promise<{ id: string; provider: GenerationProvider }> {
-  if (provider === "wavespeed") return { id: await wavespeedStart(input), provider };
-  if (provider === "modelark") return { id: modelArkStart(input), provider };
-  return { id: await startImagePrediction(input, imageModel), provider: "replicate" };
-}
-
-/** Current state of an image generation, normalised across providers. */
-export async function getImageGenerationState(provider: GenerationProvider, id: string): Promise<ImageGenerationState> {
-  if (provider === "wavespeed") return wavespeedState(id);
-  if (provider === "modelark") return modelArkState(id);
-  const p = await getPredictionState(id);
-  if (p.status === "succeeded") return p.url ? { status: "succeeded", outputUrl: p.url } : { status: "failed", error: "Replicate returned no output image" };
-  if (p.status === "failed" || p.status === "canceled") return { status: "failed", error: p.error };
-  return { status: "running" };
-}
-
-/** Best-effort cancel (Replicate only has a real cancel API; others are no-ops). */
-export async function cancelImageGeneration(provider: GenerationProvider, id: string): Promise<void> {
-  if (provider === "replicate") { await cancelPrediction(id).catch(() => {}); return; }
-  if (provider === "modelark") { modelArkResults.delete(id); return; }
+/** Best-effort cancel of an image generation. */
+export async function cancelImageGeneration(id: string): Promise<void> {
   try {
-    await fetch(`${WAVESPEED_BASE}/predictions/${id}/cancel`, { method: "POST", headers: { Authorization: `Bearer ${wavespeedKey()}` }, signal: AbortSignal.timeout(15_000) });
+    await fetch(`${WAVESPEED_BASE}/predictions/${id}/cancel`, { method: "POST", headers: { Authorization: `Bearer ${getWaveSpeedKey()}` }, signal: AbortSignal.timeout(15_000) });
   } catch { /* best-effort */ }
+}
+
+/* ------------------------------------------------------------------ */
+/*  High-level: generate one image (start → poll → url) with           */
+/*  diagnostics + user-cancel support. Used by every image worker.      */
+/* ------------------------------------------------------------------ */
+
+function sleep(ms: number) { return new Promise((r) => setTimeout(r, ms)); }
+
+/** Thrown by generateImage when `shouldCancel` reports a user cancellation mid-generation. */
+export class GenerationCanceledError extends Error {
+  constructor(message = "Generation canceled by the user") { super(message); this.name = "GenerationCanceledError"; }
+}
+
+export interface GenerateImageContext {
+  jobId?: string;
+  characterId?: string;
+  /** Ignored (the model is fixed); kept so existing call sites compile. */
+  imageModel?: string;
+  shouldCancel?: () => Promise<boolean>;
+}
+
+/**
+ * Generate a photorealistic reference image (Seedream 5.0 Pro on WaveSpeed).
+ * Returns the URL of the generated image. Logs each attempt; no paid automatic retries.
+ */
+export async function generateImage(input: FluxInput, context: GenerateImageContext = {}): Promise<string> {
+  const { imageModel: _ignored, shouldCancel, ...logContext } = context;
+  void _ignored;
+  // Cancel is checked BEFORE the task is created so a canceled job never pays for a new one.
+  if (shouldCancel && (await shouldCancel())) throw new GenerationCanceledError();
+  const attempt: GenerationAttempt = {
+    ...logContext, attempt: 1, phase: "reference", model: SEEDREAM_MODEL,
+    status: "submitting", style: VISUAL_STYLE_ID,
+    input: safeDiagnosticInput({ prompt: input.prompt, aspect_ratio: input.aspect_ratio ?? "9:16", size: "2K", provider: "wavespeed" }),
+  };
+  logAttempt(attempt);
+  try {
+    attempt.predictionId = (await startImageGeneration(input)).id;
+    attempt.status = "processing"; logAttempt(attempt);
+    const started = Date.now();
+    while (true) {
+      // User cancel (cancelRequested on the job): stop the task and bail out — the caller
+      // discards the result, refunds and marks the job canceled.
+      if (shouldCancel && (await shouldCancel())) {
+        await cancelImageGeneration(attempt.predictionId).catch(() => {});
+        attempt.status = "canceled"; logAttempt(attempt);
+        throw new GenerationCanceledError();
+      }
+      const st = await getImageGenerationState(attempt.predictionId);
+      if (st.status === "succeeded" && st.outputUrl) { attempt.status = "succeeded"; logAttempt(attempt); return st.outputUrl; }
+      if (st.status === "failed") throw new Error(st.error || "Image model failed");
+      if (Date.now() - started > 180_000) throw new Error("Image model timed out; no automatic resubmission");
+      await sleep(2_000);
+    }
+  } catch (error) {
+    if (error instanceof GenerationCanceledError) throw error;
+    attempt.error = safeProviderError(error); attempt.errorKind = classifyProviderError(error);
+    attempt.status = attempt.errorKind === "timeout" ? "timeout" : "failed";
+    logAttempt(attempt); throw new Error(attempt.error);
+  }
 }

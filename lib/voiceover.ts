@@ -150,7 +150,7 @@ export function buildNativeAudioPrompt(
   const base = (basePrompt ?? "").trim();
   const lines = parseDialogue(dialogue);
 
-  // Replicate Seedance 2.5 input schema: dialogue uses ordinary double quotes.
+  // Seedance 2.5 input schema: dialogue uses ordinary double quotes.
   const AUDIO_DIRECTION =
     "AUDIO TRACK: dialogue and ambient sound only. " +
     "NO background music. NO score. NO instrumental track. NO soundtrack. NO musical theme. " +

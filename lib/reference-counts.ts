@@ -7,7 +7,7 @@ export const CHARACTER_PHOTO_COUNT = 3
 /** Stage 18: every artifact / important object reference has 1 frame (primary only). */
 export const ARTIFACT_FRAME_COUNT = 1
 /**
- * How many Replicate image requests may be in flight at once for one episode's
+ * How many WaveSpeed image requests may be in flight at once for one episode's
  * reference batch. The rest are queued and started as slots free up.
  */
 export const REF_BATCH_CONCURRENCY = 20

@@ -241,6 +241,8 @@ export async function persistEpisodeScript(
           // Stage 41 — scripted start state of the first frame (this scene's OPENING STATE).
           startState: (s.startState ?? "").trim() || null,
           endStateActual: null,
+          // Stage 104 — a freshly scripted scene has no keyframe yet.
+          keyframeUrl: null, keyframePrompt: null, keyframeStatus: null, keyframeError: null,
           // Stage 12 (Commit D) — off-screen narration: `voiceover` = English narration voiced by the model,
           // `voiceoverLocal` = the same narration translated for the UI. `sceneKind` distinguishes narration from dialogue.
           sceneKind: s.sceneKind ?? "dialogue",

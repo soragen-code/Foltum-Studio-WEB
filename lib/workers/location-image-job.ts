@@ -1,10 +1,9 @@
 import { prisma } from "@/lib/db";
-import { generateImage, GenerationCanceledError } from "@/lib/replicate";
+import { generateImage, GenerationCanceledError } from "@/lib/providers/image-provider";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { locationAnglePrompt, VISUAL_STYLE_ID } from "@/lib/visual-style";
 import { detectC2paFromUrl } from "@/lib/c2pa";
-import { loadProjectImageProvider } from "@/lib/providers/project-provider";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -18,8 +17,7 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
   // prediction) and again before any result is written. Location data is left untouched; the caller's
   // refund pass returns the credits for every location whose master frame did not change.
   const canceled = () => isCancelRequested(jobId);
-  const imageProvider = await loadProjectImageProvider(projectId); // Stage 73: transport provider only
-  const gen = (input: Parameters<typeof generateImage>[0]) => generateImage(input, { jobId, imageModel, shouldCancel: canceled, provider: imageProvider });
+  const gen = (input: Parameters<typeof generateImage>[0]) => generateImage(input, { jobId, imageModel, shouldCancel: canceled});
   const CANCEL_MSG = "Generation canceled by the user";
   try {
     if (await canceled()) { await markCanceled(jobId, CANCEL_MSG); return; }

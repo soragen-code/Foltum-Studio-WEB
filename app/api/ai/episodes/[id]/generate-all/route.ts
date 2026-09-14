@@ -112,7 +112,9 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Episode ${episode.number}, scene ${first.number} — video generation via chain (${tier.id})` } });
     if (force) {
       // Re-run of the whole episode: clear the videos of the later scenes so the chain walks through them again.
-      await prisma.scene.updateMany({ where: { episodeId: episode.id, number: { gt: first.number }, status: { not: "generating" } }, data: { videoUrl: null, lastFrameUrl: null, endStateActual: null, status: "pending" } });
+      await prisma.scene.updateMany({ where: { episodeId: episode.id, number: { gt: first.number }, status: { not: "generating" } }, data: { videoUrl: null, lastFrameUrl: null, endStateActual: null, status: "pending", keyframeUrl: null, keyframePrompt: null, keyframeStatus: null, keyframeError: null } });
+      // Stage 104 — a forced re-run renders fresh keyframes for the first scene too.
+      await prisma.scene.update({ where: { id: first.id }, data: { keyframeUrl: null, keyframePrompt: null, keyframeStatus: null, keyframeError: null } });
     }
     await prisma.scene.update({ where: { id: first.id }, data: { status: "generating", language: spokenLang, videoModel: provider, endStateActual: null } });
     await prisma.episode.update({ where: { id: episode.id }, data: { chainRunActive: true, chainRunNote: null } });

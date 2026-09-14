@@ -269,7 +269,7 @@ export interface BuildScenePromptResult {
   visualPrompt: string;
   /** Normalized video model id. */
   model: VideoModelId;
-  /** Replicate slug for the model. */
+  /** Provider model slug. */
   modelSlug: string;
   /** Which reference strategy the scene resolves to. */
   referenceKind: ScenePromptReferenceKind;
@@ -659,4 +659,21 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     dialogue,
     isNarration,
   };
+}
+
+/**
+ * Stage 104 — remove the `[ImageN] ...` reference legend (and the LOCATION_INSIDE_NOTE line that follows
+ * it) from an assembled scene prompt. Used for the image-to-video submission: Seedance i2v receives the
+ * keyframe as `image` (and optionally `last_image`) and NO reference_images list, so the legend would
+ * point at pictures that are not attached. Pure; every other line is kept verbatim.
+ */
+export function stripReferenceList(prompt: string): string {
+  const lines = (prompt ?? "").split("\n");
+  const kept = lines.filter(line => {
+    const t = line.trim();
+    if (/^\[Image\d+\]/i.test(t)) return false;
+    if (t === LOCATION_INSIDE_NOTE.trim()) return false;
+    return true;
+  });
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }

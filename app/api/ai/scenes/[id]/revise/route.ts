@@ -70,6 +70,8 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       // Stage 41 — the revised scene's scripted first frame.
       startState: raw.startState.trim(),
       endStateActual: null,
+      // Stage 104 — the revised scene opens differently: its keyframe is stale and is rendered anew.
+      keyframeUrl: null, keyframePrompt: null, keyframeStatus: null, keyframeError: null,
     };
     // Stage 60: one-step undo — snapshot the fields this edit overwrites (text + video),
     // so undo can restore the previous scene text and the previously rendered clip.

@@ -8,7 +8,7 @@
 
 /** Max user photo references per character. */
 export const USER_REFS_MAX = 4;
-/** Default image_input cap — safe for every provider (Replicate/WaveSpeed 10, ModelArk 14). */
+/** Default image_input cap — WaveSpeed Seedream accepts at most 10 reference images. */
 export const IMAGE_INPUT_CAP = 10;
 /** Accepted upload MIME types → file extension. */
 export const USER_REF_MIME_EXT: Record<string, string> = {

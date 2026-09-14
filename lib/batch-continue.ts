@@ -25,7 +25,7 @@ export interface SceneJobSnapshot {
   /** The most recent video GenerationJob for the scene (or null if none created yet). */
   latestJob: {
     status: string; // pending | processing | completed | failed | ...
-    /** resultData holds a Replicate predictionId (submitted → owned by poll recovery). */
+    /** resultData holds a WaveSpeed task id (submitted → owned by poll recovery). */
     hasPrediction: boolean;
     /** job.error indicates a Seedance moderation refusal ("[moderation] …"). */
     isModeration: boolean;
@@ -80,7 +80,7 @@ export function planContinuation(snaps: SceneJobSnapshot[], opts: ContinuationOp
   const retryCandidates: string[] = [];
   let done = 0;
   let generating = 0;
-  let inFlight = 0; // scenes with a live Replicate prediction (occupy a real generation slot)
+  let inFlight = 0; // scenes with a live WaveSpeed task (occupy a real generation slot)
   let failed = 0; // terminal failures (surfaced, not acted on by this mode)
   let pending = 0; // scenes this mode WILL act on (kept in `remaining`)
   // Stage 39: no sequential gate — a not-done scene is kickable regardless of the state of its

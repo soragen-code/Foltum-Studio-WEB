@@ -2,7 +2,7 @@
  * Power tier — the single source of truth for what the project's "мощность"
  * really controls in the video pipeline.
  *
- * Honest scope (verified against the real Seedance 2.5 schema on Replicate):
+ * Honest scope (verified against the real Seedance 2.5 schema on WaveSpeed):
  *   - resolution: only "480p" | "720p" exist for Seedance 2.5 (no 1080p)
  *   - baseDuration: the minimal clip length the tier pays for (seconds);
  *     actual clip length is clamped by the scene rules in the video routes
@@ -18,7 +18,7 @@ export const POWER_TIERS: readonly PowerTier[] = ["LOW", "MEDIUM", "HIGH"];
 
 export type SeedanceResolution = "480p" | "720p";
 
-/** Real Seedance 2.5 schema on Replicate: duration integer 1–30 s (verified 2026-09). Same for every tier. */
+/** Real Seedance 2.5 schema on WaveSpeed: duration integer 1–30 s (verified 2026-09). Same for every tier. */
 export const SEEDANCE_MAX_DURATION = 30;
 
 export interface PowerTierConfig {

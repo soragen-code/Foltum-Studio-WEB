@@ -10,16 +10,15 @@
  * Stage 43 — DEFAULT join mode is the «seamless hard cut» (`seamlessCutClips`): a plain
  * editorial cut with an invisible micro-blend on the seam itself (video xfade of
  * SEAMLESS_BLEND_SEC ≈ 2–3 frames, audio acrossfade of the same length so there is no click
- * and no gap). The older FILM-bridge (`stitchWithAiBridges`) and visible-dissolve
- * (`crossfadeClips`) paths are kept but are only used when explicitly requested via
- * `AssembleOptions.mode`.
+ * and no gap). The visible-dissolve (`crossfadeClips`) path is kept but only used when
+ * explicitly requested via `AssembleOptions.mode`. (Stage 104: the old FILM-bridge path and its
+ * remote frame-interpolation dependency were removed — a seam is always a hard cut.)
  */
 import { execFile, spawn } from "child_process";
 import { promises as fs } from "fs";
 import os from "os";
 import path from "path";
 import { promisify } from "util";
-import { runFrameInterpolation } from "./replicate";
 import {
   ASSEMBLE_DIMENSIONS, ASSEMBLE_FPS, ASSEMBLE_QUALITIES, DEFAULT_ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY,
   type AssembleFps, type AssembleQuality,
@@ -166,8 +165,7 @@ export async function extractLastFrameBuffer(videoUrl: string): Promise<Buffer> 
 /**
  * Extract the FIRST frame of a video as a JPEG buffer.
  *
- * Counterpart of extractLastFrameBuffer: the last frame of scene N and the first frame
- * of scene N+1 are fed to FILM to synthesize the invisible bridge between them.
+ * Counterpart of extractLastFrameBuffer (diagnostics / tests).
  */
 export async function extractFirstFrameBuffer(videoUrl: string): Promise<Buffer> {
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "firstframe-"));
@@ -180,25 +178,6 @@ export async function extractFirstFrameBuffer(videoUrl: string): Promise<Buffer>
   } finally {
     await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
-}
-
-/** Extract the LAST frame of a LOCAL video file as a JPEG buffer (no download). */
-async function extractLastFrameLocal(videoPath: string, outPath: string): Promise<Buffer> {
-  try {
-    await runFfmpeg(
-      ["-sseof", "-1", "-i", videoPath, "-update", "1", "-q:v", "2", "-frames:v", "1", outPath],
-      "local last frame (sseof)"
-    );
-  } catch {
-    await runFfmpeg(["-i", videoPath, "-vf", "reverse", "-q:v", "2", "-frames:v", "1", outPath], "local last frame (reverse)");
-  }
-  return fs.readFile(outPath);
-}
-
-/** Extract the FIRST frame of a LOCAL video file as a JPEG buffer (no download). */
-async function extractFirstFrameLocal(videoPath: string, outPath: string): Promise<Buffer> {
-  await runFfmpeg(["-i", videoPath, "-frames:v", "1", "-q:v", "2", outPath], "local first frame");
-  return fs.readFile(outPath);
 }
 
 export interface MediaInfo {
@@ -496,7 +475,7 @@ async function concatClips(clips: string[], workDir: string, outPath: string): P
 /* ------------------------------------------------------------------ */
 
 /** How consecutive scene clips are joined into an episode. */
-export type StitchMode = "seamless-cut" | "film" | "crossfade" | "concat";
+export type StitchMode = "seamless-cut" | "crossfade" | "concat";
 /** Default: a straight editorial cut with an invisible micro-blend on the seam. */
 export const DEFAULT_STITCH_MODE: StitchMode = "seamless-cut";
 
@@ -690,30 +669,15 @@ export async function stitchLocalClipsSeamless(
 }
 
 /* ------------------------------------------------------------------ */
-/*  AI-seamless stitching (FILM frame interpolation at every seam)     */
+/*  Assembly options                                                   */
 /* ------------------------------------------------------------------ */
-
-/** How a single seam is smoothed: an FILM-synthesized bridge, or a plain cut. */
-interface SeamBridge {
-  bridgePath: string;
-  /** Final bridge duration (s); `duration/2` is trimmed from each adjacent clip. */
-  duration: number;
-}
-
-/** Injectable interpolation fn (default wraps FILM); mockable in tests. */
-export type InterpolateFn = (frame1: Buffer, frame2: Buffer) => Promise<string>;
 
 export interface AssembleOptions {
   /**
    * Join mode. Default "seamless-cut" (Stage 43): straight cut + invisible micro-blend, no AI
-   * bridges, no visible dissolves. "film" = legacy FILM bridges (falls back to crossfade/concat),
-   * "crossfade" = visible 0.2s dissolves, "concat" = raw hard cut.
+   * bridges, no visible dissolves. "crossfade" = visible 0.2s dissolves, "concat" = raw hard cut.
    */
   mode?: StitchMode;
-  /** Override the frame-interpolation backend (tests inject a mock / throwing fn). Only used in mode "film". */
-  interpolate?: InterpolateFn;
-  /** FILM depth: 2^t + 1 frames @ 30fps. Default 3 (≈0.3s bridge). */
-  timesToInterpolate?: number;
   /** Stage 46B: production quality of the FINAL episode file (scenes themselves are always 480p). Default "480p". */
   quality?: AssembleQuality;
   /** Stage 46B: frame rate of the final file. Default 30. */
@@ -926,194 +890,10 @@ export function buildFinalRenderArgs(o: FinalRenderOptions): { args: string[]; r
 }
 
 /**
- * Decide the bridge length for one seam so the TOTAL episode duration is preserved
- * (the bridge replaces `duration` seconds trimmed evenly from the two adjacent clips).
- * Returns null when the seam must NOT be bridged (a neighbouring clip too short, or an
- * unusable bridge) — the caller then leaves that seam as a plain cut.
- *   - `bridge`: final bridge duration inserted at the seam.
- *   - `half`:   trimmed from the tail of clip A and the head of clip B (bridge/2 each).
- */
-export function planSeamBridge(
-  rawBridgeDuration: number,
-  durationA: number,
-  durationB: number
-): { bridge: number; half: number } | null {
-  if (!(durationA > 0.4) || !(durationB > 0.4)) return null;
-  if (!(rawBridgeDuration > 0.05)) return null;
-  // Never let a bridge eat more than 30% of the shorter neighbour (keeps bodies positive
-  // even when a clip is flanked by a bridge on each side).
-  const maxBridge = Math.min(durationA, durationB) * 0.3;
-  const bridge = Math.min(rawBridgeDuration, maxBridge);
-  if (!(bridge > 0.05)) return null;
-  return { bridge, half: bridge / 2 };
-}
-
-/** Re-encode one clip body [start, start+dur] to uniform params, with tiny edge afades. */
-async function encodeBody(
-  clip: string,
-  start: number,
-  dur: number,
-  outPath: string,
-  w: number,
-  h: number,
-  fps: number
-): Promise<void> {
-  const trimArgs: string[] = [];
-  if (start > 0.001) trimArgs.push("-ss", start.toFixed(3));
-  if (dur > 0.001) trimArgs.push("-t", dur.toFixed(3));
-  const fd = 0.02;
-  const afade =
-    dur > 0.05
-      ? `afade=t=in:st=0:d=${fd},afade=t=out:st=${Math.max(0, dur - fd).toFixed(3)}:d=${fd}`
-      : "anull";
-  await runFfmpeg(
-    [
-      "-i", clip,
-      ...trimArgs,
-      "-vf", `scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},format=yuv420p`,
-      "-af", afade,
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-r", String(fps),
-      "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
-      "-movflags", "+faststart",
-      outPath,
-    ],
-    "body segment"
-  );
-}
-
-/**
- * Build the bridge segment for one seam: FILM's interpolated video scaled to the episode
- * geometry, with an audio track stitched from the SAME slices trimmed off the neighbours
- * (tail of clip A + head of clip B) so sound stays continuous and in sync under the bridge.
- * Inputs: 0 = bridge mp4, 1 = clip A, 2 = clip B.
- */
-async function encodeBridge(
-  bridgePath: string,
-  clipA: string,
-  clipB: string,
-  durationA: number,
-  half: number,
-  bridge: number,
-  outPath: string,
-  w: number,
-  h: number,
-  fps: number
-): Promise<void> {
-  const xf = Math.min(0.02, half / 2);
-  const filter =
-    `[0:v]scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},format=yuv420p[vb];` +
-    `[1:a]atrim=start=${Math.max(0, durationA - half).toFixed(3)}:end=${durationA.toFixed(3)},asetpts=PTS-STARTPTS[a1];` +
-    `[2:a]atrim=start=0:end=${half.toFixed(3)},asetpts=PTS-STARTPTS[a2];` +
-    `[a1][a2]acrossfade=d=${xf.toFixed(3)}:c1=tri:c2=tri[axf];` +
-    `[axf]apad,atrim=end=${bridge.toFixed(3)},asetpts=PTS-STARTPTS[ab]`;
-  await runFfmpeg(
-    [
-      "-i", bridgePath, "-i", clipA, "-i", clipB,
-      "-filter_complex", filter,
-      "-map", "[vb]", "-map", "[ab]",
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-r", String(fps),
-      "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
-      "-t", bridge.toFixed(3),
-      "-movflags", "+faststart",
-      outPath,
-    ],
-    "bridge segment"
-  );
-}
-
-/**
- * AI-seamless join: on EACH seam, synthesize a FILM bridge between the last frame of clip i
- * and the first frame of clip i+1, then rebuild the episode as [body, bridge, body, bridge, …].
- * Total duration is preserved (each bridge replaces an equal slice trimmed off its neighbours).
- *
- * Robustness contract:
- *   - Every seam's bridge is generated EXACTLY ONCE (single linear pass; ffmpeg download/probe
- *     retries never re-call the paid model).
- *   - A seam whose interpolation fails (or is too short to bridge) degrades to a plain cut —
- *     it never fails the whole assembly.
- *   - If NOT A SINGLE seam produced a bridge, returns false so the caller runs the existing
- *     whole-episode crossfade/concat fallback (identical to pre-Stage-28 behaviour).
- * Returns true when the AI-bridged episode was written to `outPath`.
- */
-async function stitchWithAiBridges(
-  normalized: string[],
-  infos: MediaInfo[],
-  workDir: string,
-  outPath: string,
-  opts: AssembleOptions
-): Promise<boolean> {
-  const n = normalized.length;
-  const ref = infos[0];
-  const w = ref.width || 720;
-  const h = ref.height || 1280;
-  const fps = ref.fps > 0 ? Math.round(ref.fps) : 24;
-  const times = opts.timesToInterpolate ?? 3;
-  const interpolate: InterpolateFn =
-    opts.interpolate ?? ((f1, f2) => runFrameInterpolation({ frame1: f1, frame2: f2, timesToInterpolate: times }));
-
-  // ── Generate the per-seam bridges (ONCE each) ─────────────────────────────────────────────
-  const seams: (SeamBridge | null)[] = [];
-  for (let i = 0; i < n - 1; i++) {
-    const di = infos[i].duration;
-    const dj = infos[i + 1].duration;
-    // Skip interpolation entirely for unbridgeable (too-short) seams — saves paid credits.
-    if (!(di > 0.4) || !(dj > 0.4)) {
-      seams.push(null);
-      continue;
-    }
-    try {
-      const f1 = await extractLastFrameLocal(normalized[i], path.join(workDir, `lf_${i}.jpg`));
-      const f2 = await extractFirstFrameLocal(normalized[i + 1], path.join(workDir, `ff_${i}.jpg`));
-      const bridgeUrl = await interpolate(f1, f2);
-      const bridgePath = path.join(workDir, `bridge_${String(i).padStart(3, "0")}.mp4`);
-      await downloadToFile(bridgeUrl, bridgePath);
-      const bInfo = await probeMedia(bridgePath);
-      const plan = planSeamBridge(bInfo.duration, di, dj);
-      if (!plan) {
-        seams.push(null);
-        continue;
-      }
-      seams.push({ bridgePath, duration: plan.bridge });
-    } catch (err) {
-      console.warn(`[ffmpeg] seam ${i} interpolation failed — plain cut:`, (err as Error).message);
-      seams.push(null);
-    }
-  }
-
-  // Nothing bridged → let the caller use the whole-episode crossfade/concat fallback.
-  if (seams.every((s) => s === null)) return false;
-
-  // ── Rebuild ordered segments: [body0, bridge0?, body1, bridge1?, …] ───────────────────────
-  const segments: string[] = [];
-  for (let i = 0; i < n; i++) {
-    const di = infos[i].duration;
-    const leftBridge = i > 0 ? seams[i - 1] : null;
-    const rightBridge = i < n - 1 ? seams[i] : null;
-    const leftTrim = leftBridge ? leftBridge.duration / 2 : 0;
-    const rightTrim = rightBridge ? rightBridge.duration / 2 : 0;
-    const bodyDur = di > 0 ? Math.max(0, di - leftTrim - rightTrim) : 0;
-    const bodyOut = path.join(workDir, `seg_body_${String(i).padStart(3, "0")}.mp4`);
-    await encodeBody(normalized[i], leftTrim, bodyDur, bodyOut, w, h, fps);
-    segments.push(bodyOut);
-    if (rightBridge) {
-      const bridgeSeg = path.join(workDir, `seg_bridge_${String(i).padStart(3, "0")}.mp4`);
-      await encodeBridge(
-        rightBridge.bridgePath, normalized[i], normalized[i + 1],
-        di, rightBridge.duration / 2, rightBridge.duration, bridgeSeg, w, h, fps
-      );
-      segments.push(bridgeSeg);
-    }
-  }
-
-  await concatClips(segments, workDir, outPath);
-  return true;
-}
-
-/**
  * Download all scene clips (+ voiceovers), give every clip a uniform audio track and join
  * them into one episode. Default mode (Stage 43) is the seamless hard cut — a straight cut
  * with an invisible ~0.08s video/audio micro-blend on the seam, no AI bridges. Legacy modes
- * ("film", "crossfade", "concat") are selectable via `opts.mode`.
+ * ("crossfade", "concat") are selectable via `opts.mode`.
  * Caller must `fs.rm(result.workDir, { recursive: true })`.
  */
 export async function assembleEpisodeLocally(scenes: SceneClipInput[], opts: AssembleOptions = {}): Promise<AssembleResult> {
@@ -1193,28 +973,14 @@ export async function assembleEpisodeLocally(scenes: SceneClipInput[], opts: Ass
   } else if (mode === "concat") {
     await concatClips(normalized, workDir, joinedPath);
   } else {
-    // Legacy modes — "film": AI-seamless join (FILM bridge at every seam), best-effort; any
-    // failure (whole pass or "no seam bridged") drops through to the crossfade/hard-cut path.
-    // "crossfade": visible 0.2s dissolves. Assembly ALWAYS completes.
-    let bridged = false;
-    if (mode === "film") {
-      try {
-        bridged = await stitchWithAiBridges(normalized, infos, workDir, joinedPath, opts);
-      } catch (err) {
-        console.warn("[ffmpeg] AI-seamless stitch failed — falling back:", (err as Error).message);
-        bridged = false;
-      }
-    }
-    if (!bridged) {
+    // Legacy mode "crossfade": visible 0.2s dissolves, best-effort. Assembly ALWAYS completes.
+    try {
+      await crossfadeClips(normalized, infos, joinedPath, TRANSITION_SEC);
+    } catch (err) {
+      // Crossfade is best-effort: never fail the whole assembly because of a transition.
+      console.warn("[ffmpeg] xfade failed — falling back to hard cuts:", (err as Error).message);
       await fs.rm(joinedPath, { force: true });
-      try {
-        await crossfadeClips(normalized, infos, joinedPath, TRANSITION_SEC);
-      } catch (err) {
-        // Crossfade is best-effort: never fail the whole assembly because of a transition.
-        console.warn("[ffmpeg] xfade failed — falling back to hard cuts:", (err as Error).message);
-        await fs.rm(joinedPath, { force: true });
-        await concatClips(normalized, workDir, joinedPath);
-      }
+      await concatClips(normalized, workDir, joinedPath);
     }
   }
 
@@ -1231,7 +997,7 @@ export async function assembleEpisodeLocally(scenes: SceneClipInput[], opts: Ass
   // single-track `musicPath`; any failure falls through to the single track (then to no music).
   let musicSegments: MusicSegmentInput[] | null = null;
   if (opts.resolveMusicSegments) {
-    // For join modes that don't fill seamOffsets (concat / crossfade / film), approximate the scene
+    // For join modes that don't fill seamOffsets (concat / crossfade), approximate the scene
     // boundaries from the normalized clip durations so the plan still maps onto the timeline.
     let offsets = seamOffsets;
     if (offsets.length === 0 && infos.length > 1) {

@@ -8,7 +8,7 @@ import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, characterShotSchema } from "@/lib/validations";
 import { normalizeImageModel } from "@/lib/ai-models";
 import { runInBackground, completeJob, failJob } from "@/lib/jobs";
-import { generateImage } from "@/lib/replicate";
+import { generateImage } from "@/lib/providers/image-provider";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { generateFullBodyWithGuard } from "@/lib/workers/character-images-job";
 import { VISUAL_STYLE_ID, isChildAppearance, type CharacterRefKind } from "@/lib/visual-style";
@@ -16,7 +16,6 @@ import { VISUAL_STYLE_ID, isChildAppearance, type CharacterRefKind } from "@/lib
 import { characterShotPrompt, characterExtraShotPrompt } from "@/lib/full-body-prompt";
 import { parseImageArray } from "@/lib/reference-counts";
 import { CHARACTER_REFERENCE_COST } from "@/lib/power-tier";
-import { loadProjectImageProvider } from "@/lib/providers/project-provider";
 // Stage 75: user-uploaded photo references — transport only (prepended to image_input).
 import { parseUserRefs, mergeImageInput } from "@/lib/character-user-refs";
 
@@ -111,7 +110,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         const appearance = char.appearance ?? "";
         const front = char.imageFront;
         const full = char.imageFull;
-        const ctx = { jobId: job.id, characterId, imageModel, provider: await loadProjectImageProvider(char.projectId) }; // Stage 73
+        const ctx = { jobId: job.id, characterId, imageModel };
         const userRefs = parseUserRefs(char.userRefs); // Stage 75: user photos go first in image_input
         let remote: string;
         let s3Key: string;

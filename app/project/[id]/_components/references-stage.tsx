@@ -12,7 +12,6 @@ import { CancelButton } from './cancel-button'
 import { CHARACTER_REFERENCE_COST } from '@/lib/power-tier'
 import { TIER_LABELS, groupByTier, tierOf, type Tier, type LocationCardData, LocationCard, AddLocationForm } from './cast-and-locations'
 import { locationExtraLabel } from '@/lib/visual-style'
-import { ProviderPicker } from './provider-picker'
 import { CharacterUserRefs } from './character-user-refs'
 
 interface RefCharacter extends CharacterCardData {
@@ -532,8 +531,6 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
           <h2 className="flex items-center gap-2 font-display text-xl font-bold">
             <Users className="h-5 w-5 text-primary" /> {optional ? 'References' : 'Step 2 — Characters (references)'}
           </h2>
-          {/* Stage 74: reference-image provider (transport only; model fixed to Seedream 5.0 Pro). Always visible. */}
-          <ProviderPicker kind="image" projectId={project.id} value={project?.imageProvider} compact onChange={onRefresh} />
         </div>
         {optional && (
           <p className="mt-1 text-sm text-muted-foreground">

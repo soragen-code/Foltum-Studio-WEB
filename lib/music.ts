@@ -3,15 +3,15 @@
  *
  *   1. `pickMood()` — gpt-4o (chatJSON) reads the episode logline / project synopsis and picks ONE
  *      mood from the fixed `MOODS` list (validated with zod; falls back to "mysterious").
- *   2. `getOrCreateMusicTrack()` — an instrumental loop is generated once per project+mood with
- *      Meta MusicGen on Replicate (30 s, the longest the model allows) and cached in S3 under
- *      `music/<projectId>/<mood>.mp3`; every later assembly with the same mood reuses the file.
- *      The track is LOOPED by ffmpeg to the episode length (see buildMusicMixFilter).
+ *   2. `getOrCreateMusicTrack()` — an instrumental track is generated once per project+mood with
+ *      ACE-Step 1.5 on WaveSpeed (Stage 104) and cached in S3 under `music/<projectId>/<mood>.mp3`;
+ *      every later assembly with the same mood reuses the file. The track is LOOPED by ffmpeg to
+ *      the episode length (see buildMusicMixFilter).
  *   Any failure → the caller assembles WITHOUT music (never fails the episode).
  */
 import { z } from "zod";
 import { chatJSON } from "@/lib/ai";
-import { getReplicate, getPredictionState } from "@/lib/replicate";
+import { wavespeedSubmit, wavespeedWait } from "@/lib/wavespeed";
 import { getBucketConfig } from "@/lib/aws-config";
 import { uploadBufferToS3 } from "@/lib/s3-upload";
 
@@ -32,7 +32,7 @@ export const MOOD_LABELS: Record<Mood, string> = {
   action: "action",
 };
 
-/** Instrumental prompt per mood for MusicGen (short, no vocals, loop-friendly). */
+/** Instrumental style description per mood (short, no vocals, loop-friendly) — becomes the ACE-Step tags. */
 export const MOOD_PROMPTS: Record<Mood, string> = {
   tense: "tense suspenseful cinematic underscore, pulsing low strings, ticking percussion, no vocals, seamless loop",
   romantic: "warm romantic cinematic piano and soft strings, gentle and intimate, no vocals, seamless loop",
@@ -43,44 +43,27 @@ export const MOOD_PROMPTS: Record<Mood, string> = {
   action: "driving action cinematic score, fast percussion, powerful brass and strings, no vocals, seamless loop",
 };
 
-export const MUSIC_MODEL = "meta/musicgen";
-/**
- * Stage 79 — MusicGen CANNOT be run by name (`predictions.create({ model: "meta/musicgen" })` hits
- * POST /v1/models/meta/musicgen/predictions and returns 404, because meta/musicgen is not an official
- * model). It must be run BY VERSION (POST /v1/predictions with { version, input }). This is the full
- * hex id of the latest version (starts with 671ac645ce5e); resolveMusicgenVersion() caches it and
- * re-fetches the current version once if a create fails because this pin went stale.
- */
-export const MUSICGEN_VERSION_ID = "671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb";
-/** MusicGen renders at most 30 s; the file is looped to the episode length. */
-export const MUSIC_TRACK_SECONDS = 30;
+/** WaveSpeed ACE-Step 1.5 model slug (instrumental background score). */
+export const MUSIC_MODEL = "wavespeed-ai/ace-step-1.5";
+/** Track length requested from ACE-Step (s); the file is looped to the episode length. */
+export const MUSIC_TRACK_SECONDS = 60;
+export const ACE_STEP_MIN_DURATION = 5;
+export const ACE_STEP_MAX_DURATION = 240;
+/** Appended to every mood's tags so the track is always an instrumental underscore. */
+export const MUSIC_INSTRUMENTAL_TAGS = "instrumental, cinematic, background score, no vocals";
 const MUSIC_TIMEOUT_MS = 4 * 60 * 1000;
 const POLL_MS = 4000;
 
-/** Cached MusicGen version id (seeded with MUSICGEN_VERSION_ID; refreshed on a stale-version error). */
-let _musicgenVersion: string = MUSICGEN_VERSION_ID;
-
-/** Return the cached MusicGen version id. */
-export function resolveMusicgenVersion(): string {
-  return _musicgenVersion;
+/** Pure: ACE-Step style tags for a mood (MOOD_PROMPTS + the instrumental suffix). */
+export function moodToTags(mood: Mood): string {
+  return `${MOOD_PROMPTS[mood] ?? MOOD_PROMPTS[DEFAULT_MOOD]}, ${MUSIC_INSTRUMENTAL_TAGS}`;
 }
 
-/** Fetch the CURRENT MusicGen version from Replicate and cache it (used when the pinned version is stale). */
-async function refreshMusicgenVersion(): Promise<string> {
-  const model = await getReplicate().models.get("meta", "musicgen");
-  const id = (model as { latest_version?: { id?: string } })?.latest_version?.id;
-  if (!id) throw new Error("Could not resolve meta/musicgen latest version");
-  _musicgenVersion = id;
-  return id;
-}
-
-/** True when a create error looks like a stale / missing model version (worth re-resolving the version once). */
-function isStaleVersionError(err: unknown): boolean {
-  const msg = String((err as Error)?.message ?? err ?? "").toLowerCase();
-  return (
-    msg.includes("version") &&
-    (msg.includes("404") || msg.includes("not found") || msg.includes("invalid version") || msg.includes("does not exist"))
-  );
+/** Pure request body builder for POST /wavespeed-ai/ace-step-1.5 (exported for tests). */
+export function buildAceStepBody(mood: Mood, durationSec: number = MUSIC_TRACK_SECONDS): { tags: string; lyrics: string; duration: number } {
+  const raw = Number.isFinite(durationSec) ? Math.round(durationSec) : MUSIC_TRACK_SECONDS;
+  const duration = Math.max(ACE_STEP_MIN_DURATION, Math.min(ACE_STEP_MAX_DURATION, raw));
+  return { tags: moodToTags(mood), lyrics: "[instrumental]", duration };
 }
 
 /** Validate a raw model answer; unknown / malformed → DEFAULT_MOOD. */
@@ -118,35 +101,10 @@ function publicUrlForKey(key: string): string {
   return `https://${bucketName}.s3.${region}.amazonaws.com/${key}`;
 }
 
-/** Generate a 30 s instrumental with MusicGen; returns the temporary Replicate output URL. */
+/** Generate an instrumental track with ACE-Step 1.5 on WaveSpeed; returns the temporary output URL. */
 export async function generateMusicTrack(mood: Mood): Promise<string> {
-  const input = {
-    prompt: MOOD_PROMPTS[mood],
-    duration: MUSIC_TRACK_SECONDS,
-    model_version: "stereo-large",
-    output_format: "mp3",
-    normalization_strategy: "peak",
-  };
-  // Stage 79: run BY VERSION (meta/musicgen can't be run by name — returns 404). If the pinned
-  // version is stale, re-resolve the current version ONCE and retry the create.
-  let prediction;
-  try {
-    prediction = await getReplicate().predictions.create({ version: resolveMusicgenVersion(), input });
-  } catch (err) {
-    if (!isStaleVersionError(err)) throw err;
-    console.warn("[music] MusicGen version stale — re-resolving:", (err as Error).message);
-    const fresh = await refreshMusicgenVersion();
-    prediction = await getReplicate().predictions.create({ version: fresh, input });
-  }
-  const started = Date.now();
-  for (;;) {
-    const state = await getPredictionState(prediction.id);
-    if (state.status === "succeeded" && state.url) return state.url;
-    if (state.status === "succeeded") throw new Error("MusicGen returned no output");
-    if (state.status === "failed" || state.status === "canceled") throw new Error(state.error || "MusicGen failed");
-    if (Date.now() - started > MUSIC_TIMEOUT_MS) throw new Error("MusicGen timed out");
-    await new Promise((r) => setTimeout(r, POLL_MS));
-  }
+  const id = await wavespeedSubmit(MUSIC_MODEL, buildAceStepBody(mood), "WaveSpeed music");
+  return wavespeedWait(id, { timeoutMs: MUSIC_TIMEOUT_MS, pollMs: POLL_MS, label: "WaveSpeed music" });
 }
 
 /**

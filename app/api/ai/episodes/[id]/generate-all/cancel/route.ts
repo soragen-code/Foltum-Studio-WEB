@@ -10,10 +10,10 @@ const hasPredictionId = (resultData: string | null) => !!resultData && resultDat
  * POST /api/ai/episodes/[id]/generate-all/cancel — Stage 11.
  *
  * Stops the batch video auto-continuation for an episode:
- *  - every video job that has NOT yet submitted a Replicate prediction (pending/processing,
+ *  - every video job that has NOT yet submitted a WaveSpeed task (pending/processing,
  *    no predictionId) is flagged cancelRequested and moved to "canceled" so the continue
  *    planner never resubmits it and no new charge happens;
- *  - jobs whose prediction is already live are left alone (Replicate is the provider; the
+ *  - jobs whose prediction is already live are left alone (WaveSpeed is the provider; the
  *    already-charged clip is allowed to finish — no NEW predictions start after this).
  * The client stops its auto-continue polling on success. Idempotent.
  */
@@ -40,7 +40,7 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
   let keptRunning = 0;
   for (const job of activeJobs) {
     if (hasPredictionId(job.resultData)) {
-      // A live Replicate prediction — flag it so its worker won't re-queue, but let the clip finish.
+      // A live WaveSpeed task — flag it so its worker won't re-queue, but let the clip finish.
       await prisma.generationJob.update({ where: { id: job.id }, data: { cancelRequested: true } }).catch(() => {});
       keptRunning++;
     } else {

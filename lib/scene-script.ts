@@ -44,6 +44,8 @@ export interface SceneScriptFields {
   endState?: string | null;
   endStateActual?: string | null;
   characters?: string[] | null;
+  /** Stage 104: the exact Seedream prompt used for this scene's keyframe (opening still), when generated. */
+  keyframePrompt?: string | null;
 }
 
 /** The minimal ending info of the immediately-preceding scene needed for the opening hand-off. */
@@ -173,6 +175,14 @@ export function assembleSceneScript(scene: SceneScriptFields, previous?: Previou
   if (end) {
     lines.push("END STATE (how this scene ends — the next scene opens exactly here):");
     lines.push(end);
+    lines.push("");
+  }
+
+  // ── KEYFRAME PROMPT (Stage 104 — the opening still that seeds the image-to-video clip) ──────
+  const kf = (scene.keyframePrompt ?? "").trim();
+  if (kf) {
+    lines.push("KEYFRAME PROMPT (the opening still of this shot, rendered before the video):");
+    lines.push(kf);
     lines.push("");
   }
 
