@@ -1373,7 +1373,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
 
                 {/* Stage 34: the 9:16 preview is centered horizontally inside the card (height-driven width). */}
                 <div className="mt-3 flex justify-center">
-                <div className="aspect-[9/16] h-[420px] max-h-[420px] max-w-full overflow-hidden rounded-lg bg-black/80" data-testid="scene-preview">
+                <div className="relative aspect-[9/16] h-[420px] max-h-[420px] max-w-full overflow-hidden rounded-lg bg-black/80" data-testid="scene-preview">
                   {gen ? (
                     <div className="flex h-full flex-col items-center justify-center gap-3 p-4 text-center" data-testid="scene-spinner">
                       <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -1381,7 +1381,22 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       {job && <SmoothProgress job={job} expectedTotalSec={VIDEO_EXPECTED_SEC} className="w-full" />}
                     </div>
                   ) : validUrl(scene.videoUrl) ? (
-                    <SceneVideoPlayer videoUrl={scene.videoUrl as string} poster={scene.lastFrameUrl} className="h-full w-full object-contain" />
+                    <>
+                      <SceneVideoPlayer videoUrl={scene.videoUrl as string} poster={scene.lastFrameUrl} className="h-full w-full object-contain" />
+                      {/* Stage 109 — the real last frame opens in the same lightbox. */}
+                      {validUrl(scene.lastFrameUrl) && (
+                        <button
+                          type="button"
+                          onClick={() => openLightbox([scene.lastFrameUrl], 0, `Scene ${scene.number} — last frame`)}
+                          className="absolute bottom-2 right-2 z-10 inline-flex cursor-zoom-in items-center gap-1 rounded bg-black/60 px-1.5 py-1 text-[10px] font-medium text-white hover:bg-black/80"
+                          aria-label="Open last frame"
+                          title="Open the last frame at full size"
+                          data-testid="scene-lastframe-open"
+                        >
+                          <Maximize2 className="h-3 w-3" /> Last frame
+                        </button>
+                      )}
+                    </>
                   ) : (
                     <div className="flex h-full items-center justify-center text-xs text-muted-foreground">The video has not been generated yet</div>
                   )}
@@ -1406,9 +1421,21 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                 {/* Stage 104 — KEYFRAME: the Seedream opening still that seeds the image-to-video clip (frame 1;
                     the next scene's keyframe is this clip's final frame). Regenerating it never deletes the video. */}
                 <div className="mt-3 flex items-center gap-3 rounded-lg border border-border/60 bg-muted/30 p-2" data-testid="scene-keyframe">
-                  <div className="aspect-[9/16] h-24 shrink-0 overflow-hidden rounded bg-black/70">
+                  <div className="relative aspect-[9/16] h-24 shrink-0 overflow-hidden rounded bg-black/70">
                     {validUrl(scene.keyframeUrl) ? (
-                      <img src={scene.keyframeUrl as string} alt={`Keyframe of scene ${scene.number}`} className="h-full w-full object-cover" data-testid="scene-keyframe-thumb" />
+                      // Stage 109 — the keyframe opens full-size in the shared lightbox (click the still or the
+                      // always-visible expand control; Esc / backdrop / X close it, "Open original" links the raw file).
+                      <button
+                        type="button"
+                        onClick={() => openLightbox([scene.keyframeUrl], 0, `Scene ${scene.number} — keyframe`)}
+                        className="block h-full w-full cursor-zoom-in"
+                        aria-label="Open keyframe"
+                        title="Open keyframe at full size"
+                        data-testid="scene-keyframe-open"
+                      >
+                        <img src={scene.keyframeUrl as string} alt={`Keyframe of scene ${scene.number}`} className="h-full w-full object-cover" data-testid="scene-keyframe-thumb" />
+                        <span className="pointer-events-none absolute bottom-1 right-1 rounded bg-black/60 p-1 text-white" aria-hidden="true"><Maximize2 className="h-3 w-3" /></span>
+                      </button>
                     ) : (
                       <div className="flex h-full items-center justify-center text-[10px] text-muted-foreground">{kfBusy[scene.id] || scene.keyframeStatus === 'running' || scene.keyframeStatus === 'pending' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'No keyframe'}</div>
                     )}
@@ -1562,12 +1589,14 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             <button className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-white/10 p-2 text-white hover:bg-white/20 sm:left-4" data-testid="lightbox-prev" onClick={(e) => { e.stopPropagation(); lightboxStep(-1) }}><ChevronLeft className="h-6 w-6" /></button>
           )}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={lightbox.images[lightbox.index]} alt={lightbox.title ?? ''} className="max-h-full max-w-full object-contain" onClick={(e) => e.stopPropagation()} />
+          <img src={lightbox.images[lightbox.index]} alt={lightbox.title ?? ''} className="max-h-[92vh] max-w-full object-contain" onClick={(e) => e.stopPropagation()} />
           {lightbox.images.length > 1 && (
             <button className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-white/10 p-2 text-white hover:bg-white/20 sm:right-4" data-testid="lightbox-next" onClick={(e) => { e.stopPropagation(); lightboxStep(1) }}><ChevronRight className="h-6 w-6" /></button>
           )}
           <div className="absolute bottom-3 left-0 right-0 text-center text-xs text-white/80">
             {lightbox.title ? `${lightbox.title} · ` : ''}{lightbox.index + 1}/{lightbox.images.length}
+            {/* Stage 109 — raw file in a new tab. */}
+            <a href={lightbox.images[lightbox.index]} target="_blank" rel="noopener noreferrer" className="ml-3 underline hover:text-white" onClick={(e) => e.stopPropagation()} data-testid="lightbox-open-original">Open original</a>
           </div>
         </div>
       )}
