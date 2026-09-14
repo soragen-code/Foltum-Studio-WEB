@@ -84,7 +84,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
       applyLocationBaseLayer(
         applyContinuousAction(
           applyNewShotCameraMove(
-            applyReframeDirective(applySeamDirectives(built.prompt, { hasOverride: built.hasOverride }), built.retryRefs, { hasOverride: built.hasOverride }),
+            applyReframeDirective(applySeamDirectives(built.prompt, { hasOverride: built.hasOverride }), built.retryRefs, { hasOverride: built.hasOverride, sceneNumber: scene.number, startState: scene.startState }),
             scene.number,
             { hasOverride: built.hasOverride, continuity },
           ),

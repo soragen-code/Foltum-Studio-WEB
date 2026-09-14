@@ -257,7 +257,12 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     // scene's last frame. Stage 81: a NEW-SHOT CAMERA MOVE so a continuing scene starts its own camera
     // motion from frame 1 instead of inheriting the static end framing of the previous scene.
     // Same transforms as the GET prompt preview; a manual override is untouched.
-    prompt = applyReframeDirective(applySeamDirectives(prompt, { hasOverride: built.hasOverride }), built.retryRefs, { hasOverride: built.hasOverride });
+    prompt = applyReframeDirective(applySeamDirectives(prompt, { hasOverride: built.hasOverride }), built.retryRefs, {
+      hasOverride: built.hasOverride,
+      // Stage 101: the directive names this scene's concrete frame-1 camera (scripted CAMERA block wins).
+      sceneNumber: scene.number,
+      startState: look.texts.openingState ?? scene.startState,
+    });
     prompt = applyNewShotCameraMove(prompt, scene.number, { hasOverride: built.hasOverride, continuity });
     // Stage 82: the whole episode is one continuous event — a continuing scene carries the previous
     // shot's world/action on in real time (persistent world, not a frozen composition).

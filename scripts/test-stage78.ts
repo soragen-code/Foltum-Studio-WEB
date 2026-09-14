@@ -65,7 +65,7 @@ const info = (d: number): MediaInfo => ({ duration: d, videoDuration: d, hasVide
   const refs = [{ kind: "character" }, { kind: "previous_frame" }, { kind: "location" }];
   const p = "Base prompt.";
   const withRef = applyReframeDirective(p, refs, { hasOverride: false });
-  ok(withRef.includes(reframePreviousFrameLine(2)) && withRef.startsWith(p), "C: previous_frame at index 1 → [Image2] directive appended");
+  ok(withRef.includes(reframePreviousFrameLine(2)) && withRef.indexOf("CONTINUE FROM [Image2]:") === 0 && withRef.endsWith(p), "C: previous_frame at index 1 → [Image2] directive prepended to the top (Stage 101)");
   ok(applyReframeDirective(withRef, refs, { hasOverride: false }) === withRef, "C: idempotent");
   ok(applyReframeDirective(p, [{ kind: "character" }], { hasOverride: false }) === p, "C: no previous_frame ref → unchanged");
   ok(applyReframeDirective(p, refs, { hasOverride: true }) === p, "C: override → unchanged");

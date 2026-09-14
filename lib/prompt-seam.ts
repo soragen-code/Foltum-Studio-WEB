@@ -60,30 +60,91 @@ export function applySeamDirectives(prompt: string, opts: { hasOverride: boolean
  * light and time of day — after which the characters move and act freely per this scene, and the
  * camera (at its new angle) does NOT reposition anyone to keep them in frame: people stay where the
  * story puts them and may pass out of shot. Continuity = same world + continuing action, not a held pose.
+ *
+ * Stage 101 rework: the model kept copying the CAMERA of [ImageN] (angle, scale, height) into the next
+ * scene. The directive now (a) sits at the TOP of the prompt, (b) explicitly FORBIDS the reference's
+ * composition / angle / scale / height as this shot's frame 1, (c) names a CONCRETE opening camera —
+ * the script's own CAMERA block from startState when present, otherwise a deterministic angle rotated
+ * by scene number (NEW_SHOT_OPENING_ANGLES) so consecutive scenes never open the same way.
  */
 export function reframePreviousFrameLine(imageIndex: number): string {
   const tag = `[Image${imageIndex}]`;
-  return `CONTINUE FROM ${tag}: use ${tag} only as the STARTING frame of this shot — the world carries straight on from it (the same characters with the same faces, wardrobe, hair and build; the same location, props, set dressing, light and time of day; nothing and nobody new is added, nothing removed). It is NOT a still to hold and that exact composition is not frozen: from the first frame the characters keep moving and acting for THIS scene, free to walk, turn, shift and leave the frame. The camera opens from a clearly different angle (about 30–60° around the subjects) with a different shot scale and height, and it is NOT re-blocked to keep everyone in view — people stay wherever the action puts them and may pass out of shot; the shot keeps living and moving from that new angle.`;
+  return `CONTINUE FROM ${tag}: use ${tag} only as the STARTING frame of this shot — the world carries straight on from it (the same characters with the same faces, wardrobe, hair and build; the same location, props, set dressing, light and time of day; nothing and nobody new is added, nothing removed). It is NOT a still to hold and that exact composition is not frozen: from the first frame the characters keep moving and acting for THIS scene, free to walk, turn, shift and leave the frame. The camera opens from a clearly different angle with a different shot scale and height, and it is NOT re-blocked to keep everyone in view — people stay wherever the action puts them and may pass out of shot; the shot keeps living and moving from that new angle.`;
 }
 
 /** Alias kept for the spec's naming (RE_FRAME_PREVIOUS_FRAME_LINE). */
 export const RE_FRAME_PREVIOUS_FRAME_LINE = reframePreviousFrameLine;
 
 /**
- * Append the RE-FRAME directive for the `previous_frame` reference (1-based [ImageN] index = position
- * in the ordered reference list + 1). No previous_frame ref / manual override → unchanged. Idempotent.
+ * Stage 101 — concrete OPENING CAMERA for a continuing scene (angle + shot scale + camera height),
+ * rotated by scene number so consecutive scenes open differently. Each entry is a full, unambiguous
+ * camera setup — never a vague "about 30–60°".
+ */
+export const NEW_SHOT_OPENING_ANGLES = [
+  "a REVERSE angle (~180°) from the opposite side of the space, medium shot at eye level",
+  "a 90° SIDE angle from frame-left of the reference, full shot at chest height",
+  "a HIGH WIDE shot from the opposite side, the camera well above head height looking down",
+  "a 90° SIDE angle from frame-right of the reference, medium close-up at eye level",
+  "a LOW MEDIUM shot from the far side of the space, the camera near knee height looking up",
+  "a THREE-QUARTER over-the-shoulder angle from behind the subject who was nearest the camera in the reference, medium shot slightly above eye level",
+] as const;
+
+/** Pick the opening camera for a scene (1-based); deterministic, cycles through NEW_SHOT_OPENING_ANGLES. */
+export function openingAngleForScene(sceneNumber: number): string {
+  const n = Number.isFinite(sceneNumber) && sceneNumber > 0 ? Math.floor(sceneNumber) : 1;
+  return NEW_SHOT_OPENING_ANGLES[(n - 1) % NEW_SHOT_OPENING_ANGLES.length];
+}
+
+/**
+ * Extract the scripted "CAMERA:" block from a scene startState ("WORLD: …\nCAMERA: …").
+ * Runs from "CAMERA:" to the end of the text or to the next labelled block (e.g. "\nWORLD:").
+ * Returns null when there is no CAMERA block.
+ */
+export function extractScriptedCamera(startState: string | null | undefined): string | null {
+  if (!startState) return null;
+  const m = /CAMERA:\s*([\s\S]*?)(?=\n\s*[A-Z][A-Z \/&-]{2,}:|$)/.exec(startState);
+  if (!m) return null;
+  const cam = m[1].replace(/\s+/g, " ").trim();
+  return cam.length ? cam : null;
+}
+
+export type ReframeOpts = { hasOverride: boolean; sceneNumber?: number; startState?: string | null };
+
+/** The full Stage 101 CONTINUE-FROM directive (base line + camera prohibition + concrete frame-1 camera). */
+export function reframeDirective(imageIndex: number, opts: { sceneNumber?: number; startState?: string | null } = {}): string {
+  const tag = `[Image${imageIndex}]`;
+  const scripted = extractScriptedCamera(opts.startState);
+  const fallback = openingAngleForScene(opts.sceneNumber ?? 1);
+  const prohibition =
+    `The composition, camera angle, shot scale and camera height of ${tag} are FORBIDDEN as this shot's first frame. ` +
+    `Frame 1 must NOT match ${tag} in angle, scale or height. ${tag} defines ONLY: who stands where, in what pose / phase of movement, wardrobe, props, set dressing, light and time of day.`;
+  const camera = scripted
+    ? `FRAME-1 CAMERA (from the script — mandatory): ${scripted} If any of it is ambiguous, open on ${fallback}.`
+    : `FRAME-1 CAMERA (mandatory): open on ${fallback}.`;
+  const blocking =
+    `The camera is NOT re-blocked to keep everyone in view — people stay where the action puts them and may pass out of shot; ` +
+    `from frame 1 the characters keep moving and acting freely for this scene.`;
+  return `${reframePreviousFrameLine(imageIndex)}\n${prohibition}\n${camera} ${blocking}`;
+}
+
+/**
+ * PREPEND the RE-FRAME directive for the `previous_frame` reference (1-based [ImageN] index = position
+ * in the ordered reference list + 1) to the TOP of the prompt, so the model reads the camera rule before
+ * anything else. No previous_frame ref / manual override → unchanged. Idempotent (one directive per prompt).
+ * `sceneNumber` / `startState` are optional (backward compatible with the Stage 78 call shape).
  */
 export function applyReframeDirective(
   prompt: string,
   refs: Array<{ kind: string }>,
-  opts: { hasOverride: boolean }
+  opts: ReframeOpts
 ): string {
   if (opts.hasOverride) return prompt;
   const i = refs.findIndex((r) => r.kind === "previous_frame");
   if (i < 0) return prompt;
-  const line = reframePreviousFrameLine(i + 1);
-  if (prompt.includes(line)) return prompt;
-  return `${prompt.trimEnd()}\n${line}`;
+  const marker = `CONTINUE FROM [Image${i + 1}]:`;
+  if (prompt.includes(marker)) return prompt;
+  const directive = reframeDirective(i + 1, { sceneNumber: opts.sceneNumber, startState: opts.startState });
+  return `${directive}\n\n${prompt.trimStart()}`;
 }
 
 /* ------------------------------------------------------------------------------------------ */
