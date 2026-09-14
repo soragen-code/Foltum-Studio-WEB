@@ -4,6 +4,7 @@ import { ThemeProvider } from '@/components/theme-provider'
 import { Toaster } from '@/components/ui/sonner'
 import { ChunkLoadErrorHandler } from '@/components/chunk-load-error-handler'
 import { Providers } from '@/components/providers'
+import { SiteFooter } from '@/components/site-footer'
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +51,10 @@ export default function RootLayout({
         >
           <Providers>
             {children}
+            {/* Site-wide legal footer (Stage 97): rendered once here so it appears at the
+                end of the page flow on EVERY route — public, authenticated app and legal
+                pages alike. Duplicate per-page SiteFooter usages were removed accordingly. */}
+            <SiteFooter />
           </Providers>
           <Toaster />
           <ChunkLoadErrorHandler />

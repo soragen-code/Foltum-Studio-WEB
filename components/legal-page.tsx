@@ -1,6 +1,5 @@
 import Link from 'next/link'
 import { Film } from 'lucide-react'
-import { SiteFooter } from '@/components/site-footer'
 
 /**
  * Shared shell for the public legal / informational pages (Terms, Refund Policy,
@@ -43,8 +42,6 @@ export function LegalPage({
           </div>
         </div>
       </main>
-
-      <SiteFooter />
     </div>
   )
 }

@@ -92,10 +92,15 @@ const all = terms + refund + contacts + legal;
   ok(/Moshkivskyi Vitalii/.test(footer), "footer shows merchant name");
 }
 
-// ── Footer rendered on the public login page ──
+// ── Footer reaches the public login page ──
+// Stage 97: the SiteFooter moved from per-page inserts (login/signup/legal) into the ROOT
+// layout so it renders site-wide, exactly once per page. The login page therefore no longer
+// imports SiteFooter itself — it inherits it from app/layout.tsx. Assert the footer is wired
+// in the root layout (which covers the login page and every other route).
 {
-  ok(/SiteFooter/.test(login), "login page imports & renders SiteFooter");
-  ok(/from ['"]@\/components\/site-footer['"]/.test(login), "login imports SiteFooter from components/site-footer");
+  const layout = readFileSync(`${process.cwd()}/app/layout.tsx`, "utf8");
+  ok(/SiteFooter/.test(layout), "root layout imports & renders SiteFooter (covers the login page)");
+  ok(/from ['"]@\/components\/site-footer['"]/.test(layout), "root layout imports SiteFooter from components/site-footer");
 }
 
 // ── Legal pages are publicly reachable (not behind auth) ──

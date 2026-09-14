@@ -6,7 +6,6 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Film, Mail, Lock, Loader2 } from 'lucide-react'
 import { motion } from 'framer-motion'
-import { SiteFooter } from '@/components/site-footer'
 
 export function LoginForm() {
   const [email, setEmail] = useState('')
@@ -104,7 +103,6 @@ export function LoginForm() {
         </p>
       </motion.div>
       </div>
-      <SiteFooter />
     </div>
   )
 }

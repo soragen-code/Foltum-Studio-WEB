@@ -6,7 +6,6 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Film, Mail, Lock, User as UserIcon, Loader2 } from 'lucide-react'
 import { motion } from 'framer-motion'
-import { SiteFooter } from '@/components/site-footer'
 
 export function SignupForm() {
   const [name, setName] = useState('')
@@ -128,7 +127,6 @@ export function SignupForm() {
         </p>
       </motion.div>
       </div>
-      <SiteFooter />
     </div>
   )
 }
