@@ -2,9 +2,9 @@
  * Stage 40 — chain generation mode ("Chain mode"), pure helpers (DB-free, unit-tested).
  *
  * `Episode.chainMode`:
- *   - "parallel" (default, Stage 39): "Generate all" starts every scene at once; scenes are
+ *   - "parallel" (Stage 39): "Generate all" starts every scene at once; scenes are
  *     joined through the screenwriter's scripted `endState` (OPENING STATE of the next scene).
- *   - "chain": scenes are generated strictly one after another. After each finished scene its last
+ *   - "chain" (DEFAULT since Stage 98): scenes are generated strictly one after another. After each finished scene its last
  *     frame is described by a vision model (`Scene.endStateActual`) and that description opens the
  *     prompt of the next scene. Credits are charged per scene when the scene actually starts. On the
  *     first failure the chain stops and the episode keeps a note (`Episode.chainRunNote`).
@@ -18,7 +18,9 @@ export function isChainMode(value: unknown): value is ChainMode {
 }
 
 export function normalizeChainMode(value: unknown): ChainMode {
-  return value === "chain" ? "chain" : "parallel";
+  // Stage 98: "chain" is the default — only an explicit "parallel" opts out. Any absent/invalid
+  // value resolves to "chain" so the previous scene's real last frame is passed to the next scene.
+  return value === "parallel" ? "parallel" : "chain";
 }
 
 export interface ChainSceneLike {

@@ -257,3 +257,7 @@ ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "videoProvider" TEXT NOT NULL DEF
 
 -- Stage 75: user-uploaded photo references per character (JSON array of public S3 URLs, max 4).
 ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "userRefs" TEXT;
+
+-- Stage 98: chain generation is now the DEFAULT (the previous scene's real last frame is passed as
+-- reference to the next scene). Only the column DEFAULT changes; existing rows keep their stored value.
+ALTER TABLE "Episode" ALTER COLUMN "chainMode" SET DEFAULT 'chain';
