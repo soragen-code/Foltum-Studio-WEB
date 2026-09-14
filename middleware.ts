@@ -20,7 +20,17 @@ const SESSION_COOKIES = [
 
 const PROTECTED_PREFIXES = ["/dashboard", "/project"];
 
-const PUBLIC_PATHS = new Set(["/", "/login", "/signup", "/pricing"]);
+const PUBLIC_PATHS = new Set([
+  "/",
+  "/login",
+  "/signup",
+  "/pricing",
+  // Legal / informational pages required by the payment provider (WayForPay).
+  // These MUST be reachable while logged out so reviewers and buyers can read them.
+  "/terms",
+  "/refund-policy",
+  "/contacts",
+]);
 const PUBLIC_PREFIXES = ["/api/auth", "/api/signup", "/api/payment/wayforpay/callback"];
 
 const CSP = [

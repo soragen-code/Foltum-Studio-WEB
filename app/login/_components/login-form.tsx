@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Film, Mail, Lock, Loader2 } from 'lucide-react'
 import { motion } from 'framer-motion'
+import { SiteFooter } from '@/components/site-footer'
 
 export function LoginForm() {
   const [email, setEmail] = useState('')
@@ -37,7 +38,8 @@ export function LoginForm() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background hero-gradient px-4">
+    <div className="flex min-h-screen flex-col bg-background hero-gradient">
+      <div className="flex flex-1 items-center justify-center px-4 py-12">
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -101,6 +103,8 @@ export function LoginForm() {
           </Link>
         </p>
       </motion.div>
+      </div>
+      <SiteFooter />
     </div>
   )
 }
