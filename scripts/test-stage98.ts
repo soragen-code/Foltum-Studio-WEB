@@ -31,7 +31,7 @@ ok(normalizeChainMode(undefined) === "chain", "1a: normalizeChainMode(undefined)
 ok(normalizeChainMode(null) === "chain", "1a: normalizeChainMode(null) → chain");
 ok(normalizeChainMode("nope") === "chain", "1a: normalizeChainMode(invalid) → chain");
 ok(normalizeChainMode("chain") === "chain", "1a: normalizeChainMode('chain') → chain");
-ok(normalizeChainMode("parallel") === "parallel", "1a: parallel is still selectable (preserved)");
+ok(normalizeChainMode("parallel") === "chain", "1a: Stage 100 — parallel mode removed, legacy 'parallel' now collapses to chain");
 
 // (b) schema.prisma: chainMode column default is now "chain".
 const schema = read("prisma/schema.prisma");

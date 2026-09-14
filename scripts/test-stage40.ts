@@ -86,11 +86,12 @@ const loc = { id: "loc", name: "Kitchen", imageUrl: styledUrl("k-wide"), imageRe
   ok(chainOrder(scenes).map(s => s.id).join(",") === "b,e", "D: chainOrder lists only startable scenes in number order");
   ok(chainStopMessage(3, "boom") === "Chain stopped at scene 3: boom", "D: stop message format");
   ok(chainStopMessage(2, CHAIN_INSUFFICIENT_CREDITS).includes("insufficient credits"), "D: insufficient-credits stop note");
-  ok(isChainMode("chain") && isChainMode("parallel") && !isChainMode("x") && normalizeChainMode("nope") === "chain" && normalizeChainMode("parallel") === "parallel" && normalizeChainMode("chain") === "chain", "D: mode guards (Stage 98: default is chain)");
-  // parallel fan-out is unchanged: every startable scene is started at once (checked asynchronously below)
+  ok(isChainMode("chain") && isChainMode("parallel") && !isChainMode("x") && normalizeChainMode("nope") === "chain" && normalizeChainMode("parallel") === "chain" && normalizeChainMode("chain") === "chain", "D: mode guards (Stage 100: normalizeChainMode always → chain, parallel removed)");
+  // Stage 100: parallel mode removed — normalizeChainMode collapses every input to "chain". fanOutAll
+  // remains a generic helper (still used by the batch-continue poller), so its behaviour is unchanged.
   const order = chainOrder(scenes);
   fanOutAll(order, async (s) => s.id).then((res) => {
-    ok(res.started === order.length && res.results.every(r => r.status === "fulfilled"), "D: fanOutAll (parallel) still starts every startable scene at once");
+    ok(res.started === order.length && res.results.every(r => r.status === "fulfilled"), "D: fanOutAll still starts every given item (generic helper)");
   }).catch(err => { console.error(err); process.exit(1); });
 }
 

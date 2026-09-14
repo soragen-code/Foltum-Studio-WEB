@@ -52,7 +52,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     else await tx.season.update({ where: { id: season.id }, data: { title: records.season.title, logline: records.season.logline } });
     let episode = await tx.episode.findFirst({ where: { seasonId: season.id, title: TEST_EPISODE_TITLE }, select: { id: true } })
       ?? await tx.episode.findFirst({ where: { seasonId: season.id, number: 1 }, select: { id: true } });
-    const epData = { ...records.episode, chainMode: "parallel", chainRunActive: false, chainRunNote: null, videoUrl: null };
+    const epData = { ...records.episode, chainMode: "chain", chainRunActive: false, chainRunNote: null, videoUrl: null };
     if (!episode) {
       episode = await tx.episode.create({ data: { seasonId: season.id, ...epData }, select: { id: true } });
     } else {

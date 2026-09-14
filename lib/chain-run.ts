@@ -1,13 +1,15 @@
 /**
  * Stage 40 — chain generation mode ("Chain mode"), pure helpers (DB-free, unit-tested).
  *
- * `Episode.chainMode`:
- *   - "parallel" (Stage 39): "Generate all" starts every scene at once; scenes are
- *     joined through the screenwriter's scripted `endState` (OPENING STATE of the next scene).
- *   - "chain" (DEFAULT since Stage 98): scenes are generated strictly one after another. After each finished scene its last
- *     frame is described by a vision model (`Scene.endStateActual`) and that description opens the
- *     prompt of the next scene. Credits are charged per scene when the scene actually starts. On the
- *     first failure the chain stops and the episode keeps a note (`Episode.chainRunNote`).
+ * `Episode.chainMode` is always "chain" (Stage 100 removed parallel mode entirely):
+ *   scenes are generated strictly one after another. After each finished scene its last
+ *   frame is described by a vision model (`Scene.endStateActual`) and that description opens the
+ *   prompt of the next scene. Credits are charged per scene when the scene actually starts. On the
+ *   first failure the chain stops and the episode keeps a note (`Episode.chainRunNote`).
+ *
+ * The `ChainMode` type / `isChainMode` guard still accept the legacy "parallel" literal so old
+ * stored rows and API payloads deserialize without error, but `normalizeChainMode` collapses every
+ * input to "chain" and nothing writes "parallel" anymore.
  */
 
 export type ChainMode = "parallel" | "chain";
@@ -17,10 +19,11 @@ export function isChainMode(value: unknown): value is ChainMode {
   return value === "parallel" || value === "chain";
 }
 
-export function normalizeChainMode(value: unknown): ChainMode {
-  // Stage 98: "chain" is the default — only an explicit "parallel" opts out. Any absent/invalid
-  // value resolves to "chain" so the previous scene's real last frame is passed to the next scene.
-  return value === "parallel" ? "parallel" : "chain";
+export function normalizeChainMode(_value?: unknown): ChainMode {
+  // Stage 100: parallel mode was removed entirely. Generation is ALWAYS sequential (chain):
+  // scenes run strictly one after another and each scene opens on the real last frame of the
+  // previous scene. The stored value (including legacy "parallel" rows) is ignored.
+  return "chain";
 }
 
 export interface ChainSceneLike {
@@ -67,11 +70,3 @@ export function chainStopMessage(sceneNumber: number, error: string): string {
 }
 
 export const CHAIN_INSUFFICIENT_CREDITS = "insufficient credits";
-
-/**
- * Human hint for the mode toggle (UI). Kept here so the wording is a single source of truth.
- */
-export const CHAIN_MODE_HINTS: Record<ChainMode, string> = {
-  parallel: "Parallel: all scenes start at once. Transitions between scenes use the script description of the previous scene's final shot ('Final shot').",
-  chain: "Chain: scenes run strictly one after another. After each completed scene, the model describes its last frame, and that description is added to the beginning of the next scene's prompt. Credits are charged for each scene when it starts; if an error occurs, the chain stops.",
-};

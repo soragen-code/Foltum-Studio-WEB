@@ -134,7 +134,8 @@ const count = (hay: string, needle: string) => hay.split(needle).length - 1;
   // NO model selector added (Seedance 2.5 / Seedream 5.0 are fixed). The tier picker itself is a segmented
   // control built from <button> elements — not a dropdown. (The only <select> elements in this file are the
   // pre-existing assemble-dialog quality/fps pickers, which Stage 89 did not touch.)
-  const pickerBlock = view.slice(view.indexOf('data-testid="power-tier-picker"'), view.indexOf('data-testid="chain-mode-picker"'));
+  // Stage 100 removed the chain-mode picker; the power-tier picker block now ends at the chain-run status span.
+  const pickerBlock = view.slice(view.indexOf('data-testid="power-tier-picker"'), view.indexOf('data-testid="chain-run-active"'));
   ok(pickerBlock.includes("<button") && !/\<select\b/.test(pickerBlock), "G: the Quality & speed picker is segmented buttons, not a <select> dropdown");
   ok((view.match(/<select\b/g) || []).length === 3, "G: no NEW model/quality dropdown was added (the 3 <select> are the pre-existing assemble-dialog quality/fps pickers)");
 }

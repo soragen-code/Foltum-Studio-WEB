@@ -170,7 +170,6 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     }) : null;
     const episodeLoc = await prisma.episode.findUnique({ where: { id: scene.episodeId }, select: {
       id: true,
-      chainMode: true, // Stage 72: "parallel" | "chain" — the previous last frame is a reference only in chain mode
       script: true, // Stage 54: source text the prop registry is extracted from
       propRegistry: true, // Stage 54: cached registry JSON ({hash, props}) reused across the episode's scenes
       location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true } },
@@ -241,14 +240,15 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       props: episodeProps, // Stage 54: canonical episode props, substituted VERBATIM per scene
       // Stage 40: a test episode has no linked characters/location → plain text-to-video, no Flux still.
       textOnlyWhenNoReferences: Boolean(episodeLoc?.season?.project?.isTest),
-      // Stage 72: the previous scene's last frame is a continuity reference ONLY in chain mode.
-      chainMode: episodeLoc?.chainMode === "chain" ? "chain" : "parallel",
+      // Stage 100: parallel mode removed — generation is always chain, so the previous scene's last
+      // frame is always a continuity reference for same-location continuations.
+      chainMode: "chain",
     });
     let prompt = built.prompt;
-    // Stage 78 (Part C): continuity channel — the previous last frame as an image, text only (chain
-    // mode, frame not ready yet), or none (scene 1 / parallel mode).
+    // Stage 78 (Part C): continuity channel — the previous last frame as an image, or text only
+    // (chain, frame not ready yet). Scene 1 has no prior shot, so it resolves to "none".
     const continuity: Continuity = resolveContinuity({
-      chainMode: episodeLoc?.chainMode === "chain" ? "chain" : "parallel",
+      chainMode: "chain",
       sceneNumber: scene.number,
       previousFrameSceneId: built.previousFrameSceneId,
       refs: built.retryRefs,
@@ -449,9 +449,10 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, source: str
     lastFrameUrl = await uploadBufferToS3(frame, `${key}-lastframe.jpg`, "image/jpeg");
   } catch (error) { console.warn("[video-job] frame:", safeProviderError(error)); }
   // Stage 40 — chain mode: describe the ACTUAL last frame (vision) for the next scene's OPENING STATE.
-  const episode = await prisma.episode.findUnique({ where: { id: scene.episodeId }, select: { id: true, chainMode: true, chainRunActive: true } }).catch(() => null);
+  const episode = await prisma.episode.findUnique({ where: { id: scene.episodeId }, select: { id: true, chainRunActive: true } }).catch(() => null);
   let endStateActual: string | null = null;
-  if (episode?.chainMode === "chain" && lastFrameUrl) {
+  // Stage 100: generation is always chain — always describe the ACTUAL last frame for the next scene.
+  if (lastFrameUrl) {
     const links = await prisma.sceneCharacter.findMany({ where: { sceneId: scene.id }, select: { character: { select: { name: true } } } }).catch(() => []);
     endStateActual = await describeLastFrame(lastFrameUrl, scene, links.map(l => ({ name: l.character.name })));
   }
@@ -474,7 +475,7 @@ async function finalizeVideoJob(jobId: string, state: VideoJobState, source: str
     return true;
   });
   // Stage 40 — chain run: this scene is done, start the next pending scene (charged now).
-  if (published && episode?.chainMode === "chain" && episode.chainRunActive) {
+  if (published && episode?.chainRunActive) {
     await continueChainRun(episode.id, scene.number).catch(err => console.error("[chain-run] continue failed:", safeProviderError(err)));
   }
 }
@@ -489,7 +490,7 @@ async function continueChainRun(episodeId: string, finishedSceneNumber: number):
     where: { id: episodeId },
     include: { season: { include: { project: true } }, scenes: { orderBy: { number: "asc" } } },
   });
-  if (!episode || episode.chainMode !== "chain" || !episode.chainRunActive) return;
+  if (!episode || !episode.chainRunActive) return;
   const project = episode.season.project;
   const next = nextChainScene(episode.scenes, finishedSceneNumber);
   if (!next) {

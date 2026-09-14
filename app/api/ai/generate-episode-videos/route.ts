@@ -21,11 +21,10 @@ const SCENE_MAX_SECONDS = Number(process.env.SCENE_MAX_SECONDS ?? 15);
 /**
  * POST /api/ai/generate-episode-videos  { projectId, episodeId, language? }
  *
- * Generate video for EVERY scene of the episode at once — the scenes run in PARALLEL
- * (each gets its own background job). Scenes that already have a running/pending job are
- * skipped (their existing job id is returned). Credits are deducted per scene actually
- * started; if the balance can't cover all pending scenes we start as many as we can and
- * report how many were skipped for lack of credits.
+ * Stage 100 — parallel mode removed: scenes are generated STRICTLY SEQUENTIALLY (chain). This
+ * endpoint charges and starts ONLY the first pending scene and arms the chain run; the worker
+ * charges and starts each following scene once the previous one is published. If a scene is already
+ * in flight the chain is (re)armed and resumed from it.
  *
  * Returns { jobs: [{ sceneId, sceneNumber, jobId }], skipped, creditsRemaining }.
  * The frontend polls GET /api/jobs/[jobId] for each returned job.
@@ -70,77 +69,77 @@ export async function POST(request: Request) {
     );
     const perSceneCost = Math.max(tier.cost, Math.ceil((tier.cost * duration) / tier.duration));
 
+    // Stage 100 — parallel mode removed: scenes are generated STRICTLY SEQUENTIALLY (chain). This
+    // endpoint charges and starts ONLY the first pending scene, then arms the chain run so the worker
+    // (lib/workers/video-job.ts → continueChainRun) charges and starts each following scene once the
+    // previous one is published. It never fans out.
     const jobs: Array<{ sceneId: string; sceneNumber: number; jobId: string; resumed?: boolean }> = [];
-    let skipped = 0;
-    let creditsLeft = user.credits ?? 0;
+    const skipped = 0;
+    const creditsLeft = user.credits ?? 0;
 
-    for (const scene of scenes) {
-      if (!scene.videoPrompt) {
-        skipped++;
-        continue;
-      }
-
-      // Clear any dead job, then reuse a still-active one instead of double-charging.
-      await failStaleJobs({ sceneId: scene.id, type: "video" });
-      const active = await prisma.generationJob.findFirst({
-        where: { sceneId: scene.id, type: "video", status: { in: ["pending", "processing"] } },
-        orderBy: { createdAt: "desc" },
-      });
-      if (active) {
-        jobs.push({ sceneId: scene.id, sceneNumber: scene.number, jobId: active.id, resumed: true });
-        continue;
-      }
-
-      if (creditsLeft < perSceneCost) {
-        skipped++;
-        continue;
-      }
-      creditsLeft -= perSceneCost;
-
-      await prisma.user.update({ where: { id: user.id }, data: { credits: { decrement: perSceneCost } } });
-      await prisma.creditTransaction.create({
-        data: {
-          userId: user.id,
-          amount: -perSceneCost,
-          description: `Batch video generation — scene ${scene.number} (${tier.power} power)`,
-        },
-      });
-
-      try {
-        await prisma.scene.update({ where: { id: scene.id }, data: { language: spokenLang } });
-      } catch (e) {
-        console.warn("Could not persist scene.language:", (e as any)?.message);
-      }
-      await prisma.scene.update({ where: { id: scene.id }, data: { status: "generating" } });
-
-      const job = await prisma.generationJob.create({
-        data: {
-          type: "video",
-          status: "processing",
-          progress: 2,
-          message: "Queued — starting video model...",
-          projectId,
-          sceneId: scene.id,
-        },
-      });
-
-      // Fire the job in the background — all scenes generate in parallel.
-      runInBackground(() =>
-        runVideoJob({
-          jobId: job.id,
-          sceneId: scene.id,
-          projectId,
-          userId: user.id,
-          cost: perSceneCost,
-          duration,
-          resolution: tier.resolution,
-        })
-      );
-
-      jobs.push({ sceneId: scene.id, sceneNumber: scene.number, jobId: job.id });
+    // Clear dead jobs first; if a scene is already in flight, (re)arm the chain and resume from it.
+    for (const scene of scenes) await failStaleJobs({ sceneId: scene.id, type: "video" });
+    const running = await prisma.generationJob.findFirst({
+      where: { sceneId: { in: scenes.map((s) => s.id) }, type: "video", status: { in: ["pending", "processing"] } },
+      orderBy: { createdAt: "desc" },
+    });
+    if (running) {
+      await prisma.episode.update({ where: { id: episodeId }, data: { chainRunActive: true, chainRunNote: null } }).catch(() => {});
+      const scene = scenes.find((s) => s.id === running.sceneId);
+      jobs.push({ sceneId: running.sceneId, sceneNumber: scene?.number ?? 0, jobId: running.id, resumed: true });
+      return NextResponse.json({ jobs, skipped: 0, creditsRemaining: creditsLeft });
     }
 
-    return NextResponse.json({ jobs, skipped, creditsRemaining: creditsLeft });
+    // The first pending scene: has a prompt, has no video yet, is not generating.
+    const first = scenes.find((s) => (s.videoPrompt ?? "").trim() && !s.videoUrl && s.status !== "generating");
+    if (!first) return NextResponse.json({ error: "All episode scenes have already been generated" }, { status: 400 });
+
+    if (creditsLeft < perSceneCost)
+      return NextResponse.json({ error: `Insufficient credits: for scene ${first.number} need ${perSceneCost}, balance ${creditsLeft}` }, { status: 402 });
+
+    await prisma.user.update({ where: { id: user.id }, data: { credits: { decrement: perSceneCost } } });
+    await prisma.creditTransaction.create({
+      data: {
+        userId: user.id,
+        amount: -perSceneCost,
+        description: `Chain video generation — scene ${first.number} (${tier.power} power)`,
+      },
+    });
+
+    try {
+      await prisma.scene.update({ where: { id: first.id }, data: { language: spokenLang } });
+    } catch (e) {
+      console.warn("Could not persist scene.language:", (e as any)?.message);
+    }
+    await prisma.scene.update({ where: { id: first.id }, data: { status: "generating", endStateActual: null } });
+    await prisma.episode.update({ where: { id: episodeId }, data: { chainRunActive: true, chainRunNote: null } }).catch(() => {});
+
+    const job = await prisma.generationJob.create({
+      data: {
+        type: "video",
+        status: "processing",
+        progress: 2,
+        message: "Chain: starting first scene...",
+        projectId,
+        sceneId: first.id,
+      },
+    });
+
+    runInBackground(() =>
+      runVideoJob({
+        jobId: job.id,
+        sceneId: first.id,
+        projectId,
+        userId: user.id,
+        cost: perSceneCost,
+        duration,
+        resolution: tier.resolution,
+      })
+    );
+
+    jobs.push({ sceneId: first.id, sceneNumber: first.number, jobId: job.id });
+    const fresh = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true } });
+    return NextResponse.json({ jobs, skipped, creditsRemaining: fresh?.credits ?? creditsLeft });
   } catch (err: any) {
     console.error("Batch video generation error:", err);
     return NextResponse.json(

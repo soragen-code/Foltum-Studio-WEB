@@ -36,7 +36,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     where: { id, episode: { season: { project: { userId: session.user.id } } } },
     include: {
       characters: { include: { character: true } },
-      episode: { select: { id: true, chainMode: true, location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true } }, season: { select: { project: { select: { isTest: true } } } } } },
+      episode: { select: { id: true, location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true } }, season: { select: { project: { select: { isTest: true } } } } } },
     },
   });
   if (!scene) return NextResponse.json({ error: "Scene not found" }, { status: 404 });
@@ -56,11 +56,11 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     // Stage 33: always Seedance 2.5 (legacy stored ids are normalized the same way in the worker).
     provider: scene.videoModel,
     textOnlyWhenNoReferences: Boolean(scene.episode.season?.project?.isTest),
-    // Stage 72: the previous scene's last frame is a continuity reference ONLY in chain mode.
-    chainMode: scene.episode.chainMode === "chain" ? "chain" : "parallel",
+    // Stage 100: parallel mode removed — generation is always chain.
+    chainMode: "chain",
   });
   const continuity = resolveContinuity({
-    chainMode: scene.episode.chainMode === "chain" ? "chain" : "parallel",
+    chainMode: "chain",
     sceneNumber: scene.number,
     previousFrameSceneId: built.previousFrameSceneId,
     refs: built.retryRefs,

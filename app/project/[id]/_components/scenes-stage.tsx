@@ -389,10 +389,10 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
   }
 
   /**
-   * Generate video for EVERY scene of the episode at once — they render in PARALLEL.
-   * Each returned job is polled independently. Scenes with an already-running job are
-   * resumed (never double-charged). If you dislike a scene, tweak its prompt and hit
-   * the per-scene Regenerate button — only that scene reruns.
+   * Stage 100 — parallel mode removed: generation is STRICTLY SEQUENTIAL (chain). This starts only
+   * the first pending scene and arms the chain; the server starts each following scene once the
+   * previous one is published. Each returned job is polled independently; an already-running scene
+   * is resumed (never double-charged). Dislike a scene? Tweak its prompt and hit its Regenerate button.
    */
   const generateEpisodeVideos = async (episodeId?: string) => {
     const epId = episodeId ?? selectedEpisodeId
@@ -551,7 +551,7 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
                 )}
               </div>
 
-              {/* Generate ALL scenes of the episode at once — they render in parallel.
+              {/* Generate ALL scenes of the episode — Stage 100: sequentially, one after another (chain).
                   Dislike one? Tweak its prompt and hit that scene's Regenerate button. */}
               {(scenes ?? []).length > 0 && (
                 <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-3" style={{ boxShadow: 'var(--shadow-sm)' }}>
