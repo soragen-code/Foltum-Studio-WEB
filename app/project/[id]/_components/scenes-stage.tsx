@@ -1,9 +1,10 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Loader2, Play, Check, RefreshCw, Edit2, Film, ChevronDown, ChevronRight, Zap } from 'lucide-react'
+import { Loader2, Play, Check, RefreshCw, Edit2, Film, ChevronDown, ChevronRight, Zap, ScrollText } from 'lucide-react'
 import { JobProgressBar, SmoothProgress, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from './use-job-polling'
 import { ProviderPicker } from './provider-picker'
+import { SceneScriptModal } from './scene-script-modal'
 
 const VIDEO_EXPECTED_SEC = 600 // ~10 min: Seedance renders a 15 s clip with native audio + upload
 // Stage 92: the scene breakdown is written by gpt-6-astra in a background job — a few minutes.
@@ -161,6 +162,8 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
   const pollTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({})
   const [error, setError] = useState('')
   const [expandedSeason, setExpandedSeason] = useState<string | null>(null)
+  // Stage 99: which scene's read-only "Scene Script" modal is open (null = none).
+  const [scriptScene, setScriptScene] = useState<{ id: string; number?: number } | null>(null)
 
   const allSeasons = project?.seasons ?? []
   const allEpisodes: any[] = allSeasons.flatMap((s: any) => s?.episodes ?? [])
@@ -676,6 +679,15 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
                   )}
 
                   <div className="flex flex-wrap items-center gap-2">
+                    {/* Stage 99: read-only per-scene screenplay page — opens where the previous scene ended. */}
+                    <button
+                      onClick={() => setScriptScene({ id: scene?.id ?? '', number: scene?.number })}
+                      disabled={!scene?.id}
+                      className="flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition hover:bg-muted disabled:opacity-50"
+                      data-testid="scene-script-button"
+                    >
+                      <ScrollText className="h-3 w-3" /> Scene Script
+                    </button>
                     {scene?.status !== 'accepted' && (
                       <>
                         <button
@@ -718,6 +730,15 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
           )}
         </div>
       </div>
+
+      {/* Stage 99: read-only per-scene Scene Script modal. */}
+      {scriptScene && (
+        <SceneScriptModal
+          sceneId={scriptScene.id}
+          sceneNumber={scriptScene.number}
+          onClose={() => setScriptScene(null)}
+        />
+      )}
     </div>
   )
 }
