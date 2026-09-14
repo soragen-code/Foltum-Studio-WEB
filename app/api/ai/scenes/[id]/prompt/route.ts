@@ -43,7 +43,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     where: { id, episode: { season: { project: { userId: session.user.id } } } },
     include: {
       characters: { include: { character: true }, orderBy: { characterId: "asc" } },
-      episode: { select: { id: true, propRegistry: true, location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true } }, season: { select: { project: { select: { isTest: true } } } } } },
+      episode: { select: { id: true, propRegistry: true, location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true, setInventory: true } }, season: { select: { project: { select: { isTest: true } } } } } },
     },
   });
   if (!scene) return NextResponse.json({ error: "Scene not found" }, { status: 404 });

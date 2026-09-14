@@ -46,6 +46,8 @@ export interface ScenePromptScene {
   language?: string | null;
   locationDesc?: string | null;
   continuesFrom?: string | null;
+  /** Stage 113 — the scripted action text; used (with videoPrompt/dialogue) to match the location's set objects. */
+  action?: string | null;
   /** Stage 41 — scripted START state of this scene's first frame (its own OPENING STATE unless the previous scene has an actual last-frame description). */
   startState?: string | null;
   /** Stage 40/41 — scripted END state of this scene's final frame; appended to the prompt as END STATE. */
@@ -121,6 +123,8 @@ export interface ScenePromptLocation {
   imageDetail?: string | null;
   /** Stage 44 — JSON array of extra location angles (Location.imageExtra); sent as references too. */
   imageExtra?: string | null;
+  /** Stage 113 — Location.setInventory (one "object — placement" per line); null for legacy rows. */
+  setInventory?: string | null;
 }
 
 /**
@@ -292,8 +296,39 @@ export const SCENE_SECTION = {
   referenceMap: "REFERENCE MAP",
   people: "PEOPLE IN FRAME",
   props: "CLOTHING & PROPS",
+  set: "SET OBJECTS",
   negatives: "NEGATIVES",
 } as const;
+
+/** Stage 113 — at most this many set-inventory objects enter one video prompt (keeps the prompt compact). */
+export const SET_OBJECTS_CAP = 8;
+
+/**
+ * Stage 113 — pick the location's set-inventory entries ("object — placement") that the scene text mentions
+ * (case-insensitive: the whole object name or any of its words longer than 3 letters), in inventory order,
+ * capped at SET_OBJECTS_CAP. Pure and deterministic. [] without an inventory or without matches.
+ */
+export function matchSetInventoryInText(setInventory: string | string[] | null | undefined, text: string | null | undefined, cap = SET_OBJECTS_CAP): string[] {
+  const entries = (Array.isArray(setInventory) ? setInventory : (setInventory ?? "").split(/\r?\n/)).map(e => (e ?? "").replace(/\s+/g, " ").trim()).filter(Boolean);
+  const t = (text ?? "").toLowerCase();
+  if (!entries.length || !t.trim()) return [];
+  const out: string[] = [];
+  for (const e of entries) {
+    const objectName = e.split(/\s+[—–-]\s+/)[0].toLowerCase().trim();
+    if (!objectName) continue;
+    const words = objectName.split(/[^a-z0-9']+/).filter(w => w.length > 3);
+    const hit = t.includes(objectName) || words.some(w => new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}s?\\b`).test(t));
+    if (hit) out.push(e);
+    if (out.length >= cap) break;
+  }
+  return out;
+}
+
+/** Stage 113 — one compact line with the matched set objects and their fixed placement; "" when nothing matched. */
+export function buildSetObjectsSection(matched: readonly string[]): string {
+  if (!matched.length) return "";
+  return `${SCENE_SECTION.set} (already in this location at these fixed positions — use them, do not invent other furniture or props): ${matched.join("; ")}.`;
+}
 
 /**
  * Stage 54 — PEOPLE COUNTER, the main "how many are on screen" signal. Built from the ACTUAL scene
@@ -446,7 +481,9 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const referenceMap = ""; // Generated from the ACTUAL ordered refs below, including overrides.
   const peopleCounter = buildPeopleCounter(characters.filter(c => c.tier !== "CROWD"), characters.some(c => c.tier === "CROWD"));
   const propsSection = buildPropsSection(matchedProps);
-  const structureBlock = [referenceMap, peopleCounter, propsSection].filter(Boolean).join("\n");
+  // Stage 113 — the location's set objects this scene uses (matched against the scene text), with placement.
+  const setSection = buildSetObjectsSection(matchSetInventoryInText(location?.setInventory, `${mentionText}\n${scene.action ?? ""}`.toLowerCase()));
+  const structureBlock = [referenceMap, peopleCounter, propsSection, setSection].filter(Boolean).join("\n");
   const negativesBlock = buildNegatives(isNarration);
 
   // Stage 38: an "action" scene (fight / duel / chase / physical struggle) gets the combat pace &

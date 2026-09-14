@@ -299,6 +299,11 @@ export const sceneScriptSchema = z.object({
    * (then it describes the fresh opening). Opens this scene's prompt as OPENING STATE.
    */
   startState: z.string().min(1),
+  /**
+   * Stage 113 — optional "SET" line (English): the location's set-inventory objects that are in frame / used in
+   * this scene, with their placement. Only objects from the location's set inventory may appear here.
+   */
+  set: z.string().optional(),
 });
 export const episodeScriptSchema = z.object({
   visualIdentity: z.string().min(10),
@@ -960,9 +965,47 @@ function charactersBlock(characters: CharacterCard[]) {
     .map((c) => `- ${c.name} [${c.tier ?? "MAIN"}${c.tier === "CROWD" && c.groupSize ? `, group of ${c.groupSize}` : ""}] (${c.role}, ${c.age}); first appears: ${c.firstAppearance}\n  Personality: ${c.personality}\n  Appearance: ${c.appearance}`)
     .join("\n");
 }
-export type LocationRef = { name: string; description?: string | null; visualPrompt?: string | null };
+export type LocationRef = { name: string; description?: string | null; visualPrompt?: string | null; setInventory?: string | null };
+/** Stage 113 — DB text (one "object — placement" per line) → clean entries; [] for legacy rows. */
+export function locationInventoryEntries(setInventory: string[] | string | null | undefined): string[] {
+  const raw = Array.isArray(setInventory) ? setInventory : typeof setInventory === "string" ? setInventory.split(/\r?\n/) : [];
+  return raw.map((e) => (e ?? "").replace(/\s+/g, " ").trim()).filter(Boolean);
+}
 function locationsBlock(locations: LocationRef[]) {
-  return locations.map((l) => `- ${l.name}: ${l.description ?? ""}${l.visualPrompt ? ` / ${l.visualPrompt}` : ""}`).join("\n");
+  return locations
+    .map((l) => {
+      const inv = locationInventoryEntries(l.setInventory);
+      return `- ${l.name}: ${l.description ?? ""}${l.visualPrompt ? ` / ${l.visualPrompt}` : ""}${inv.length ? `\n  SET INVENTORY: ${inv.join("; ")}` : ""}`;
+    })
+    .join("\n");
+}
+/**
+ * Stage 113 — the episode-script prompt block for the episode location's set inventory. Empty for legacy
+ * locations without an inventory (then the script is written exactly as before Stage 113).
+ */
+export function locationInventoryBlock(setInventory: string[] | string | null | undefined): string {
+  const inv = locationInventoryEntries(setInventory);
+  if (!inv.length) return "";
+  return `\nLOCATION SET INVENTORY (the ONLY physical objects that exist in this place — these are already drawn on the location references at exactly these positions; the scenes' action, blocking and props use ONLY these objects with this placement, and each scene lists the ones in frame / used in its "set" field):\n${inv.map((e) => `- ${e}`).join("\n")}`;
+}
+/**
+ * Stage 113 — soft check: inventory object names (the part before " — ") that the scenes' "set" lines mention
+ * versus objects mentioned in "set" that are NOT in the inventory. Returns human-readable warnings; never throws.
+ */
+export function checkSceneSetInventory(scenes: { number: number; set?: string | null }[], setInventory: string[] | string | null | undefined): string[] {
+  const inv = locationInventoryEntries(setInventory);
+  if (!inv.length) return [];
+  const objects = inv.map((e) => e.split(/\s+[—–-]\s+/)[0].toLowerCase().trim()).filter(Boolean);
+  const warnings: string[] = [];
+  for (const sc of scenes) {
+    const set = (sc.set ?? "").trim();
+    if (!set) continue;
+    const body = set.replace(/^SET:\s*/i, "").replace(/^[^—–-]*[—–-]\s*/, "");
+    const mentioned = body.split(/;|,|\band\b/).map((m) => m.split(/\s+[—–-]\s+/)[0].toLowerCase().trim()).filter((m) => m.length > 2);
+    const unknown = mentioned.filter((m) => !objects.some((o) => o.includes(m) || m.includes(o) || o.split(" ").some((w) => w.length > 3 && m.includes(w))));
+    if (unknown.length) warnings.push(`scene ${sc.number}: "set" mentions objects not in the location inventory: ${unknown.join(", ")}`);
+  }
+  return warnings;
 }
 /** Resolve an LLM location name to a project Location (same fuzzy rule as matchCharacter). */
 export function matchLocation<T extends { name: string }>(locations: T[], raw: string): T | undefined {
@@ -1068,6 +1111,7 @@ S3. "locationDesc": "INT/EXT — place — time of day" in ${L}. "action" (4–6
 S4. "visualIdentity": ONE SHORT English sentence (max 25 words) — photoreal live-action look, color palette, lens/grain feel of this episode. Keep it short: it is repeated in every scene.
 S5. Use ONLY the given character names (Western names, Latin letters, exactly as given). "characters" lists the names visible in the shot (a CROWD group name is listed when the group is in frame). SUPPORTING and MINOR characters present in the episode must actually speak in at least one scene each; crowds may have a short collective line or reactions.
 S6. Dramatize ONLY this episode's logline — a natural continuation of the previous episodes, ending on this episode's cliffhanger (the last scene IS the cliffhanger). Original content only: never reuse names, plots or lines of existing films/series.
+S14. SET INVENTORY (when the user prompt gives a LOCATION SET INVENTORY): those entries are the ONLY physical objects that exist in this location — they are already drawn on the location reference images at exactly the listed positions. The "action", [BLOCKING], [ACTION] and props of every scene use ONLY objects from that list, at the listed placement; never invent furniture, doors, vehicles, machines or plot props that are not listed. For EVERY scene fill the ENGLISH field "set": ONE compact line "SET: <Location name> — <objects from the inventory that are in frame or used in this scene, each with its placement>" (1–2 lines, 3–8 objects, verbatim names from the list). When no inventory is given, omit "set".
 
 Before answering, check: EXACTLY ${EPISODE_SCENE_COUNT} scenes; "durationSec" per scene = ${sceneDurationsForCount(EPISODE_SCENE_COUNT).join(", ")} (split ${sceneDurationsForCount(EPISODE_SCENE_COUNT).join(" + ")} = ${EPISODE_MAX_TOTAL_SECONDS} s); NO silent scenes (every scene has on-camera English dialogue with cast names as speakers, "[NO DIALOGUE]" appears nowhere); each talking scene has ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} English dialogue sentences (~50–60 spoken words so speech fills the whole ${SCENE_FIXED_SECONDS} s clip); every fight / physical confrontation promised by the logline is an "action" scene with face-to-face beat-by-beat choreography (R9); every videoPrompt has all 9 tags including [CHARACTER], a timed 0–10s / 10–20s / 20–30s choreography in [ACTION] and a cut list in [SHOT TYPE] that opens wide and mixes shot scales across the space; [BLOCKING] moves characters between different zones and gives each speaker ordinary business; [ACTION] adds secondary background life so the place feels alive; and EACH scene continues seamlessly from the previous one — "presence"/"entrances"/"continuesFrom" are filled and every entrance/exit/move is shown in [BLOCKING]/[ACTION]/[TRANSITION] so nobody teleports or vanishes; the SUM of all "durationSec" is ${EPISODE_MAX_TOTAL_SECONDS} s (the whole episode is exactly ${EPISODE_TOTAL_LABEL}) and no scene exceeds ${SCENE_FIXED_SECONDS} s; EVERY scene has a non-empty English "endState" (${STATE_SIZE_TEXT}, opening with the IN FRAME / NOT IN FRAME inventory and exact placement of every character and prop: pose, wardrobe, camera, composition, depth, background, lighting, time/weather, colour palette and props of the final frame) AND a non-empty English "startState" (the same exhaustive description for frame 1), both written as labelled WORLD: / CAMERA: blocks; on every continuous seam (continuesFrom other than location-change / new-sequence) the startState WORLD equals the previous scene's endState WORLD exactly (same instant of the same action, same place, same light) while the startState CAMERA differs from the previous endState CAMERA in at least two of shot scale / height / angle; every scene's locationDesc on a continuous seam is identical to the previous scene's; and a line may end right on the cut, but is never split across two scenes; characters never fall silent or freeze before the cut.`;
 }
@@ -1091,6 +1135,8 @@ export function episodeScriptUserPrompt(input: {
     tail?: string | null;
   } | null;
   instruction?: string;
+  /** Stage 113 — the episode location's set inventory (DB text or entries); absent/empty → no inventory block. */
+  locationInventory?: string[] | string | null;
 }): string {
   const prev = input.previous.length
     ? input.previous.map((p) => `Ep.${p.number} «${p.title}»: ${p.logline} Cliffhanger: ${p.cliffhanger}`).join("\n")
@@ -1103,7 +1149,7 @@ export function episodeScriptUserPrompt(input: {
     ? `\n\nHOW THE PREVIOUS EPISODE (Ep.${pe.number} «${pe.title}») ENDED — THIS EPISODE CONTINUES DIRECTLY FROM HERE:\nCliffhanger: ${pe.cliffhanger}${(pe.endState ?? "").trim() ? `\nFinal frame / world-state left behind: ${(pe.endState ?? "").trim()}` : ""}${(pe.tail ?? "").trim() ? `\nClosing beats:\n${(pe.tail ?? "").trim()}` : ""}\nWrite THIS episode as the direct next chapter: pick up the story, the world-state, the locations and the characters exactly where the previous episode left them (nobody teleports, resets or forgets what just happened), resolve or escalate that cliffhanger, and open scene 1 with the characters ALREADY talking on camera in the middle of that situation — no narrator, no recap, no "previously on" (never restart the story from scratch).`
     : "";
   const beats = episodeFootageGivens(input.episode.description);
-  return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}\n\nPREVIOUS EPISODES:\n${prev}${prevEndingBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
+  return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}\n\nPREVIOUS EPISODES:\n${prev}${prevEndingBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}${locationInventoryBlock(input.locationInventory)}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
 }
 
 /**
@@ -1131,7 +1177,7 @@ export function renderEpisodeScriptText(ep: EpisodeOutline, script: EpisodeScrip
   const head = `ЭПИЗОД ${ep.number}. ${ep.title}\n${ep.logline}\nЛокация: ${ep.locationName}\nПерсонажи: ${ep.characters.join(", ")}\n`;
   const body = script.scenes
     .map((s) => {
-      const head2 = `\nСЦЕНА ${s.number}${s.sceneKind === "narration" ? " · ЗАКАДРОВЫЙ ГОЛОС" : isActionKind(s.sceneKind) ? " · ЭКШЕН" : ""} · ${s.shotType} · ~${s.durationSec}с\n${s.locationDesc}\n${s.action}`;
+      const head2 = `\nСЦЕНА ${s.number}${s.sceneKind === "narration" ? " · ЗАКАДРОВЫЙ ГОЛОС" : isActionKind(s.sceneKind) ? " · ЭКШЕН" : ""} · ${s.shotType} · ~${s.durationSec}с\n${s.locationDesc}\n${s.action}${(s.set ?? "").trim() ? `\n${/^SET:/i.test(s.set!.trim()) ? "" : "SET: "}${s.set!.replace(/\s+/g, " ").trim()}` : ""}`;
       const tail = renderStateLines(s);
       if (s.sceneKind === "narration" && (s.voiceover ?? "").trim()) {
         const local = (s.voiceoverLocal ?? "").trim();

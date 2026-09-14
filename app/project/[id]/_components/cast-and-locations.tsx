@@ -35,6 +35,8 @@ export interface LocationCardData {
   imageExtra?: string | null
   /** Stage 60: whether a one-step undo is available for this location. */
   hasUndo?: boolean | null
+  /** Stage 113: full physical set inventory, one "object — placement" per line (English); null for legacy rows. */
+  setInventory?: string | null
 }
 
 /** Tier badge (and group size for crowds) shown on character cards. */
@@ -137,6 +139,17 @@ export function LocationCard({
       <dl className="space-y-1.5 text-xs text-muted-foreground [overflow-wrap:anywhere]">
         <div><dt className="inline font-medium text-foreground">Description: </dt><dd className="inline">{loc.description || '—'}</dd></div>
         <div><dt className="inline font-medium text-foreground">Visual (EN): </dt><dd className="inline">{loc.visualPrompt || '—'}</dd></div>
+        {/* Stage 113: read-only set inventory (written at the idea stage; drawn on both reference frames). Hidden for legacy rows. */}
+        {(loc.setInventory ?? '').trim() && (
+          <div data-testid="location-set-inventory">
+            <dt className="font-medium text-foreground">Set inventory (EN):</dt>
+            <dd>
+              <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                {loc.setInventory!.split(/\r?\n/).map((e) => e.trim()).filter(Boolean).map((e, i) => <li key={i}>{e}</li>)}
+              </ul>
+            </dd>
+          </div>
+        )}
       </dl>
       {(onOpenPrompt || onResetPrompt) && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5" data-testid="location-prompt-tools">

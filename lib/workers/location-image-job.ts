@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import { generateImage, GenerationCanceledError } from "@/lib/providers/image-provider";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
-import { locationAnglePrompt, VISUAL_STYLE_ID } from "@/lib/visual-style";
+import { locationAnglePrompt, setInventoryEntries, MAX_INVENTORY_IN_PROMPT, VISUAL_STYLE_ID } from "@/lib/visual-style";
 import { LOCATION_MASTER_FRAMES } from "@/lib/location-scale";
 import { detectC2paFromUrl } from "@/lib/c2pa";
 
@@ -33,6 +33,8 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
     // Non-blocking C2PA diagnostic across every stored angle.
     let c2paMissing = 0;
     const c2paChecks: { locationId: string; angle: string; ok: boolean; signatures: string[]; bytes: number }[] = [];
+    // Stage 113 diagnostics: how many set-inventory entries reached the prompts per location (and whether they were trimmed).
+    const inventory: { locationId: string; items: number; truncated: boolean }[] = [];
     const checkC2pa = async (locationId: string, angle: string, url: string) => {
       const r = await detectC2paFromUrl(url);
       c2paChecks.push({ locationId, angle, ok: r.ok, signatures: r.signatures, bytes: r.bytes });
@@ -52,8 +54,13 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
       await updateJob(jobId, { progress: pct(), message: `Location reference "${loc.name}» (${done + 1}/${total})…` });
       try {
         const visual = loc.visualPrompt ?? loc.description ?? loc.name;
+        // Stage 113: the full set inventory (written at the idea stage) goes into BOTH mandatory frames so every
+        // object the season's scripts may use is drawn on the references. Legacy rows without it → old prompt.
+        const inventoryCount = setInventoryEntries(loc.setInventory).length;
+        inventory.push({ locationId: loc.id, items: inventoryCount, truncated: inventoryCount > MAX_INVENTORY_IN_PROMPT });
+        if (inventoryCount > MAX_INVENTORY_IN_PROMPT) console.warn(`[location-images] set inventory of "${loc.name}" trimmed in prompt: ${inventoryCount} → ${MAX_INVENTORY_IN_PROMPT} entries`);
         // 1) wide establishing angle — the anchor for the light and the place
-        const wideRemote = await gen({ prompt: locationAnglePrompt(visual, loc.name, "wide"), aspect_ratio: "9:16" });
+        const wideRemote = await gen({ prompt: locationAnglePrompt(visual, loc.name, "wide", loc.setInventory), aspect_ratio: "9:16" });
         if (await canceled()) throw new GenerationCanceledError(); // discard the result, keep the old master
         const stamp = Date.now();
         const wideUrl = await uploadRemoteToS3(wideRemote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${stamp}-wide.png`, "image/png");
@@ -64,7 +71,7 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
         // button); the caller's refund pass returns the credit for the missing frame.
         try {
           await updateJob(jobId, { progress: pct(), message: `Location layout view "${loc.name}» (${done + 1}/${total})…` });
-          const layoutRemote = await gen({ prompt: locationAnglePrompt(visual, loc.name, "layout"), aspect_ratio: "9:16", image_input: [wideUrl] });
+          const layoutRemote = await gen({ prompt: locationAnglePrompt(visual, loc.name, "layout", loc.setInventory), aspect_ratio: "9:16", image_input: [wideUrl] });
           if (await canceled()) throw new GenerationCanceledError();
           const layoutUrl = await uploadRemoteToS3(layoutRemote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${stamp}-layout.png`, "image/png");
           await prisma.location.update({ where: { id: loc.id }, data: { imageReverse: layoutUrl } });
@@ -84,7 +91,7 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
       await sleep(1500);
     }
     const summary = failed > 0 ? `Done — ${failed} of ${total} failed` : layoutFailed > 0 ? `Done — layout view missing for ${layoutFailed} location(s)` : "Location references are ready";
-    await completeJob(jobId, { total, failed, layoutFailed, framesPerLocation: LOCATION_MASTER_FRAMES, locationIds, c2paOk: c2paMissing === 0, c2paMissing, c2paChecks }, summary);
+    await completeJob(jobId, { total, failed, layoutFailed, framesPerLocation: LOCATION_MASTER_FRAMES, locationIds, c2paOk: c2paMissing === 0, c2paMissing, c2paChecks, inventory }, summary);
   } catch (err: any) {
     console.error("[location-images] failed:", err);
     await failJob(jobId, err?.message ?? "Location image generation failed");

@@ -47,7 +47,7 @@ ok(LOCATION_FRAMES_BY_DETAIL.low === 4 && LOCATION_FRAMES_BY_DETAIL.medium === 6
 ok(LOCATION_MASTER_FRAMES === 2 && LOCATION_SET_COST === 2 * CHARACTER_REFERENCE_COST, "one location master set = 2 frames = 2 × CHARACTER_REFERENCE_COST");
 
 const locJob = read("lib/workers/location-image-job.ts");
-ok(/locationAnglePrompt\(visual, loc\.name, "wide"\)/.test(locJob) && /locationAnglePrompt\(visual, loc\.name, "layout"\), aspect_ratio: "9:16", image_input: \[wideUrl\]/.test(locJob), "location-image-job: renders wide, then layout chained on the wide frame");
+ok(/locationAnglePrompt\(visual, loc\.name, "wide"(, loc\.setInventory)?\)/.test(locJob) && /locationAnglePrompt\(visual, loc\.name, "layout"(, loc\.setInventory)?\), aspect_ratio: "9:16", image_input: \[wideUrl\]/.test(locJob), "location-image-job: renders wide, then layout chained on the wide frame");
 ok(/ref-\$\{stamp\}-layout\.png/.test(locJob) && /data: \{ imageReverse: layoutUrl \}/.test(locJob), "location-image-job: the layout frame is written to imageReverse");
 ok(/layoutFailed/.test(locJob), "location-image-job: a layout failure keeps the wide frame and is counted");
 const locRefs = read("lib/location-refs.ts");

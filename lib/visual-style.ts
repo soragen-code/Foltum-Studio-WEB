@@ -209,14 +209,47 @@ export type LocationImageKey = (typeof LOCATION_ANGLES)[number]["key"];
 
 const LIGHT_LOCK = "Lighting is FIXED for this location: one time of day, one weather, one light direction and colour temperature — never changes between angles.";
 
-export function locationAnglePrompt(visualPrompt: string, name = "", angle: LocationAngle): string {
+/**
+ * Stage 113 — how many set-inventory entries may enter one reference prompt. The idea stage asks for
+ * 12-30 (hard-capped at 40 in storage), so this normally keeps everything; when it does trim, the caller
+ * logs it (never silently).
+ */
+export const MAX_INVENTORY_IN_PROMPT = 30;
+
+/** Stage 113 — DB text (one entry per line) or an array → clean entry list. */
+export function setInventoryEntries(setInventory: string[] | string | null | undefined): string[] {
+  const raw = Array.isArray(setInventory) ? setInventory : typeof setInventory === "string" ? setInventory.split(/\r?\n/) : [];
+  const out: string[] = [];
+  for (const e of raw) {
+    const t = (e ?? "").replace(/\s+/g, " ").trim();
+    if (t) out.push(t);
+  }
+  return out;
+}
+
+/**
+ * Stage 113 — the SET INVENTORY block appended (AFTER sanitizing the visual prompt, so object names are
+ * never rewritten) to the wide and layout reference prompts. Empty string when the location has no
+ * inventory (legacy rows → the pre-113 prompt, unchanged).
+ */
+export function formatSetInventoryBlock(setInventory: string[] | string | null | undefined, max = MAX_INVENTORY_IN_PROMPT): string {
+  const items = setInventoryEntries(setInventory).slice(0, max);
+  if (!items.length) return "";
+  return `SET INVENTORY (every item must be visible, exact placement): ${items.join("; ")}.`;
+}
+
+export function locationAnglePrompt(visualPrompt: string, name = "", angle: LocationAngle, setInventory?: string[] | string | null): string {
   const place = sanitizeVideoPrompt(visualPrompt, { keep: [name] }).prompt;
   const noPeople = "no people, no animals, no text, no signs with readable words, no logos. Real physical environment with authentic wear and detail.";
+  const inventory = formatSetInventoryBlock(setInventory);
   if (angle === "wide")
-    return `${VISUAL_STYLE}\nLocation establishing shot: ${place}. Wide vertical composition, eye-level camera, ${noPeople} ${LIGHT_LOCK}`;
+    return `${VISUAL_STYLE}\nLocation establishing shot: ${place}. ` +
+      (inventory ? `${inventory} A highly DETAILED frame: every listed object is present, clearly recognizable and placed exactly where listed, sharp and readable at its real scale. ` : "") +
+      `Wide vertical composition, eye-level camera, ${noPeople} ${LIGHT_LOCK}`;
   if (angle === "layout")
     return `${VISUAL_STYLE}\nThe reference image IS this location, already photographed — do not invent new architecture, materials or layout; this is the same photographed place seen from a SLIGHTLY ELEVATED position: camera raised to about 2.5–3 m at a corner of the space and tilted down ~30–40° (a high angle, NOT top-down and NOT a bird's-eye view — walls and depth stay visible), ` +
       `so the WHOLE LAYOUT is readable at once: where every zone, piece of furniture, prop, doorway and passage sits relative to the others, and how far the place extends: ${place}. ` +
+      (inventory ? `${inventory} This layout frame MUST show ALL listed items at once and make their relative placement unmistakable — each object stays exactly where it is in the reference image (same geometry), nothing added, nothing removed. ` : "") +
       `Same architecture, materials, props, time of day, weather and light direction as the reference — only the camera height, tilt and position changed. Wide framing, vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;
   return `${VISUAL_STYLE}\nThe reference image IS this location, already photographed — do not invent new architecture, materials or layout; this is the same photographed place as a medium shot 45° from the side, the action zone where characters would talk: ${place}. ` +
     `Same materials, props, time of day, weather and light direction as the reference — only the framing is closer. Vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;

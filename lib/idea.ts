@@ -89,8 +89,62 @@ export const locationCardSchema = z.object({
   name: str(120),
   description: str(2000),
   visualPrompt: str(2500),
+  /** Stage 113: full physical set inventory, one "object — placement" entry each (English). Soft: missing/short lists are accepted and retried once upstream. */
+  setInventory: z
+    .union([z.array(z.union([z.string(), z.null(), z.undefined()])), z.string(), z.null(), z.undefined()])
+    .optional()
+    .transform((v) => normalizeSetInventoryInput(v)),
 });
 export type LocationCard = z.infer<typeof locationCardSchema>;
+
+/* ------------------------------------------------------------------ */
+/*  Stage 113: set inventory helpers                                   */
+/* ------------------------------------------------------------------ */
+
+/** Minimum number of inventory entries considered a "full" inventory (below → one retry, then accept as-is). */
+export const MIN_SET_INVENTORY = 8;
+/** Hard cap on stored entries (the model is asked for 12-30). */
+export const MAX_SET_INVENTORY = 40;
+const MAX_SET_INVENTORY_ENTRY = 300;
+
+function normalizeSetInventoryInput(v: unknown): string[] {
+  const raw: unknown[] = Array.isArray(v) ? v : typeof v === "string" ? v.split(/\r?\n|;\s+/) : [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (typeof item !== "string") continue;
+    const t = item.replace(/\s+/g, " ").replace(/^[-*•\d.)\s]+/, "").trim().slice(0, MAX_SET_INVENTORY_ENTRY);
+    if (!t) continue;
+    const k = t.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+    if (out.length >= MAX_SET_INVENTORY) break;
+  }
+  return out;
+}
+
+/** DB text (one entry per line) → entries. Legacy rows (null/empty) → []. */
+export function parseSetInventory(text: string | null | undefined): string[] {
+  return normalizeSetInventoryInput(text ?? "");
+}
+
+/** Entries → DB text (one per line) or null when empty (legacy fallback everywhere downstream). */
+export function serializeSetInventory(items: string[] | null | undefined): string | null {
+  const arr = normalizeSetInventoryInput(items ?? []);
+  return arr.length ? arr.join("\n") : null;
+}
+
+/** True when the card carries a full inventory (≥ MIN_SET_INVENTORY entries). */
+export function hasFullSetInventory(card: { setInventory?: string[] | null }): boolean {
+  return (card.setInventory?.length ?? 0) >= MIN_SET_INVENTORY;
+}
+
+/** Appended to the user prompt on the single retry when a location came back with a short/missing inventory. */
+export function setInventoryRetryNote(names: string[]): string {
+  const list = names.length ? ` Locations with an incomplete inventory: ${names.map((n) => `"${n}"`).join(", ")}.` : "";
+  return `IMPORTANT: the previous answer had locations with fewer than ${MIN_SET_INVENTORY} "setInventory" entries.${list} Every location MUST include a COMPLETE "setInventory" array of 12-30 entries ("object — placement"), covering every physical object the whole season's story will need in that place.`;
+}
 
 export const MAX_CAST = 60;
 
@@ -150,7 +204,8 @@ export function sanitizeCharacterCard(card: CharacterCard, keepNames: string[] =
 
 /** Sanitize a location card: the English visual prompt must stay original (no brands / real landmarks by name). */
 export function sanitizeLocationCard(card: LocationCard): LocationCard {
-  return { ...card, visualPrompt: sanitizeVideoPrompt(card.visualPrompt, { keep: [card.name] }).prompt.trim() || card.visualPrompt };
+  const setInventory = (card.setInventory ?? []).map((e) => sanitizeVideoPrompt(e, { keep: [card.name] }).prompt.replace(/\s+/g, " ").trim() || e);
+  return { ...card, visualPrompt: sanitizeVideoPrompt(card.visualPrompt, { keep: [card.name] }).prompt.trim() || card.visualPrompt, setInventory };
 }
 
 /** Drop cast entries whose name duplicates an existing one (case-insensitive). */
@@ -208,9 +263,13 @@ const LOCATION_FIELD_RULES = `Location card fields (all REQUIRED):
 - "name": short name of the place in the story language (e.g. "Маяк на мысе", "Кухня семьи Орловых")
 - "description": 2-3 sentences in the story language — what the place is, its several distinct ZONES the characters move between, and what happens there in the season. Convey its OPENNESS, SCALE and ATMOSPHERE (how far it opens out, the sky or view above it, the weather and mood in the air). Make it a real, lived-in place that feels part of a bigger world, not a label.
 - "visualPrompt": ALWAYS in ENGLISH, 4-6 sentences, concrete, photoreal and deeply ATMOSPHERIC. Describe the place so it reads as a real, immersive world extending far beyond the frame, not a flat set. Build genuine DEPTH: a distinct foreground, mid-ground, and a far distance that recedes toward a visible HORIZON LINE, using deep atmospheric perspective (haze softening the far distance, layered planes, scale cues). Establish full IMMERSION through natural environmental ATMOSPHERE: the weather and air (mist, haze, drifting dust, low fog, wind moving through the scene), the time of day and its light (golden-hour or blue-hour glow, long raking shadows, god-rays, overcast diffusion), and living environmental detail. Give the SCALE and materials, architecture/terrain, colours and textures, and props or signs of everyday life (working machines, screens, papers, vehicles, plants) — but NO PEOPLE and no text/logos. Used verbatim as a prompt for an AI reference image (vertical 9:16 photograph).
+- "setInventory": REQUIRED, ALWAYS in ENGLISH — a JSON array of 12-30 strings, each "object — placement" (e.g. "long oak dining table — center of the room", "rusty pickup truck — parked by the right fence", "wooden staircase to the loft — back wall, left"). This is the COMPLETE physical inventory of the place for the WHOLE season's story: every piece of furniture, appliance/equipment/machine, vehicle, every door, window, staircase, gate or passage the characters use, every work surface, every plot-relevant object (the letter, the safe, the radio, the medicine cabinet…), and every light source (lamps, windows, neon, fire, screens). Each object gets ONE fixed placement (left / right / center / back wall / foreground / far end / by the entrance…) so it can be drawn at a fixed spot on the reference images and later scripts can only use what is listed. Think ahead: anything an episode may need to happen here must already be in this list. NO PEOPLE, no text, no logos, no brands.
 - OPEN-AIR EXTERIORS UNDER THE SKY MUST PREDOMINATE: the MAJORITY of locations should be outdoor / open-sky places (streets, rooftops, waterfronts and coastlines, fields and open landscapes, courtyards, hills, plazas, terraces, bridges) where a wide expanse of SKY and a HORIZON are clearly visible and the sky occupies a large part of the frame — so the world feels vast and open. Interiors are the minority; when an interior IS used, make it large and open with big windows, skylights or a view onto the outside so the sky and depth still read.
 - Locations must be ORIGINAL: no real landmarks, brands, or existing franchises by name.
 - The SET of locations must still be DIVERSE: vary the type of place, private vs public, intimate vs vast, and the time of day and weather — so the season never feels shot in one spot — but tilt the overall balance toward open exteriors under the sky.`;
+/** Stage 113 — test-only view of the location field rules (asserts the inventory instruction stays in every idea prompt). */
+export const LOCATION_FIELD_RULES_TEXT_FOR_TESTS = LOCATION_FIELD_RULES;
+
 
 export const CAST_TARGETS = { MAIN: "3-5", SUPPORTING: "5-10", MINOR: "5-10", CROWD: "2-5" } as const;
 
@@ -223,7 +282,7 @@ From the user's idea produce a season synopsis and the main characters. Return O
   "title": "<short catchy series title, 1-4 words, in the story language, no quotes>",
   "synopsis": "<plain text, 3-6 short paragraphs separated by blank lines>",
   "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
-  "locations": [ { "name": "...", "description": "...", "visualPrompt": "..." } ]
+  "locations": [ { "name": "...", "description": "...", "visualPrompt": "...", "setInventory": ["object — placement", "..."] } ]
 }
 Both arrays are REQUIRED ("locations" must contain 8-14 items).
 
@@ -272,7 +331,7 @@ export function reviseLocationSystemPrompt(language: IdeaLanguage): string {
   const lang = LANGUAGE_NAMES[language] ?? "the same language as the current card";
   return `You are a production designer for a short-form vertical drama series. Rewrite ONE location card according to the producer's instruction.
 
-Return ONLY valid JSON with ALL fields: { "name": "...", "description": "...", "visualPrompt": "..." }
+Return ONLY valid JSON with ALL fields: { "name": "...", "description": "...", "visualPrompt": "...", "setInventory": ["object — placement", "..."] }
 
 RULES:
 - name and description in ${lang}; "visualPrompt" ALWAYS in English, no people, no text/logos.
@@ -288,7 +347,7 @@ export function reviseLocationUserPrompt(synopsis: string, card: LocationCard, i
 /** Fallback when the idea call returned no locations: extract 8-14 key locations from the synopsis. */
 export function locationsFromSynopsisSystemPrompt(language: IdeaLanguage): string {
   return `You are a production designer for a short-form vertical drama series. From the season synopsis and cast list 8-14 distinct locations across the season (the leads' homes, workplaces, the central place of the story, transitional public places, and the finale's place). Diverse in type, scale and time of day; each visually distinct.
-Return ONLY valid JSON: { "locations": [ { "name": "...", "description": "...", "visualPrompt": "..." } ] }
+Return ONLY valid JSON: { "locations": [ { "name": "...", "description": "...", "visualPrompt": "...", "setInventory": ["object — placement", "..."] } ] }
 LANGUAGE of "name" and "description": ${LANGUAGE_NAMES[language]}.
 ${LOCATION_FIELD_RULES}
 ${ORIGINALITY_RULES}`;
@@ -315,7 +374,7 @@ export function seasonCastSystemPrompt(language: IdeaLanguage): string {
 From the season SYNOPSIS below produce the COMPLETE cast and the season's locations in ONE pass. Return ONLY valid JSON:
 {
   "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "...", "tier": "MAIN" | "SUPPORTING" | "MINOR" | "CROWD", "groupSize": <int or null> } ],
-  "locations": [ { "name": "...", "description": "...", "visualPrompt": "..." } ]
+  "locations": [ { "name": "...", "description": "...", "visualPrompt": "...", "setInventory": ["object — placement", "..."] } ]
 }
 Both arrays are REQUIRED ("locations" must contain 8-14 items).
 
@@ -337,7 +396,7 @@ export function seasonCastUserPrompt(synopsis: string): string {
 export function locationFromNameSystemPrompt(language: IdeaLanguage): string {
   const lang = LANGUAGE_NAMES[language] ?? "the story language";
   return `You are a production designer. Given a season synopsis and the name (and optional note) of a location, write its card.
-Return ONLY valid JSON: { "name": "...", "description": "...", "visualPrompt": "..." } — name and description in ${lang}, visualPrompt in English.
+Return ONLY valid JSON: { "name": "...", "description": "...", "visualPrompt": "...", "setInventory": ["object — placement", "..."] } — name and description in ${lang}, visualPrompt in English.
 ${LOCATION_FIELD_RULES}`;
 }
 
@@ -389,7 +448,7 @@ export function ideaAutoSystemPrompt(language: IdeaLanguage): string {
   "title": "<short catchy series title, 1-4 words, in the story language, no quotes>",
   "synopsis": "<plain text, 3-6 short paragraphs separated by blank lines>",
   "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
-  "locations": [ { "name": "...", "description": "...", "visualPrompt": "..." } ]
+  "locations": [ { "name": "...", "description": "...", "visualPrompt": "...", "setInventory": ["object — placement", "..."] } ]
 }
 Both arrays are REQUIRED ("locations" must contain 8-14 items).
 
@@ -429,7 +488,7 @@ export function ideaFromStorySystemPrompt(language: IdeaLanguage): string {
   "title": "<short catchy series title, 1-4 words, in the story language, no quotes>",
   "synopsis": "<plain text, 3-6 short paragraphs separated by blank lines>",
   "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
-  "locations": [ { "name": "...", "description": "...", "visualPrompt": "..." } ]
+  "locations": [ { "name": "...", "description": "...", "visualPrompt": "...", "setInventory": ["object — placement", "..."] } ]
 }
 Both arrays are REQUIRED ("locations" must contain 8-14 items).
 

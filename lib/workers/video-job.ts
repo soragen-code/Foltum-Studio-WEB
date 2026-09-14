@@ -180,7 +180,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       id: true,
       script: true, // Stage 54: source text the prop registry is extracted from
       propRegistry: true, // Stage 54: cached registry JSON ({hash, props}) reused across the episode's scenes
-      location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true } },
+      location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true, setInventory: true } },
       season: { select: { project: { select: { isTest: true } } } },
     } });
     // Stage 73: per-project generation providers (transport only).

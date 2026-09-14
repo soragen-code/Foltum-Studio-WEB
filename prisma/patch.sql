@@ -282,3 +282,6 @@ ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "keyframeUrl" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "keyframePrompt" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "keyframeStatus" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "keyframeError" TEXT;
+
+-- Stage 113: full physical set inventory per location (one "object — placement" entry per line), written at idea stage.
+ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "setInventory" TEXT;

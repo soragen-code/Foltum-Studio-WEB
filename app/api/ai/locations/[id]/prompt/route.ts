@@ -6,7 +6,7 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, locationPromptSchema } from "@/lib/validations";
 import { chatJSON } from "@/lib/ai";
-import { locationCardSchema, sanitizeLocationCard, locationFromNameSystemPrompt, normalizeLanguage } from "@/lib/idea";
+import { locationCardSchema, sanitizeLocationCard, locationFromNameSystemPrompt, normalizeLanguage, serializeSetInventory } from "@/lib/idea";
 
 /**
  * Stage 46E — location visual prompt: view, direct edit, «reset to auto». No credits are charged here.
@@ -31,7 +31,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
   if (limited) return limited;
 
   const { id } = await ctx.params;
-  const loc = await prisma.location.findFirst({ where: { id, project: { userId: session.user.id } }, select: { visualPrompt: true, visualPromptAuto: true } });
+  const loc = await prisma.location.findFirst({ where: { id, project: { userId: session.user.id } }, select: { visualPrompt: true, visualPromptAuto: true, setInventory: true } });
   if (!loc) return NextResponse.json({ error: "Location not found" }, { status: 404 });
   return NextResponse.json(view(loc));
 }
@@ -63,13 +63,13 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
         const raw = await chatJSON(
           locationFromNameSystemPrompt(language),
           `SYNOPSIS:\n${loc.project.synopsis ?? "(none)"}\n\nLOCATION NAME: ${loc.name}${loc.description ? `\nNOTE: ${loc.description}` : ""}`,
-          { temperature: 0.7, maxTokens: 900 }
+          { temperature: 0.7, maxTokens: 2000 }
         );
         card = sanitizeLocationCard(locationCardSchema.parse(raw));
       } catch (e: any) { lastError = e?.message ?? String(e); }
     }
     if (!card) return NextResponse.json({ error: "Failed to rebuild prompt: " + lastError }, { status: 502 });
-    const updated = await prisma.location.update({ where: { id: loc.id }, data: { visualPrompt: card.visualPrompt, visualPromptAuto: card.visualPrompt }, select: { visualPrompt: true, visualPromptAuto: true } });
+    const updated = await prisma.location.update({ where: { id: loc.id }, data: { visualPrompt: card.visualPrompt, visualPromptAuto: card.visualPrompt, setInventory: serializeSetInventory(card.setInventory) ?? loc.setInventory }, select: { visualPrompt: true, visualPromptAuto: true } });
     return NextResponse.json({ ...view(updated), regenerated: true });
   }
 

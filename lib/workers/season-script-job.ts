@@ -20,7 +20,7 @@ import type { GenerationJob } from "@prisma/client";
 import { chatJSON, SCRIPT_MODEL, EPISODE_SCRIPT_MODEL, EPISODE_SCRIPT_MAX_TOKENS, EPISODE_SCRIPT_TEMPERATURE, startBackgroundJSON, pollBackgroundJSON, cancelBackgroundResponse, type BackgroundPollResult } from "@/lib/ai";
 import { maxDetailLevel, isLocationDetailLevel } from "@/lib/location-scale";
 import { completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
-import { toCharacterCard, normalizeLanguage, seasonCastSystemPrompt, seasonCastUserPrompt, seasonCastResultSchema, characterCardToData, sanitizeCharacterCard, sanitizeLocationCard, dedupeCast, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
+import { toCharacterCard, normalizeLanguage, seasonCastSystemPrompt, seasonCastUserPrompt, seasonCastResultSchema, characterCardToData, sanitizeCharacterCard, sanitizeLocationCard, dedupeCast, hasFullSetInventory, setInventoryRetryNote, serializeSetInventory, parseSetInventory, locationsFromSynopsisSystemPrompt, locationsResultSchema, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
 import { parseStoredShortSynopsis, renderShortSynopsis } from "@/lib/short-synopsis";
 
 /** Stage 46A: the stored short synopsis (JSON) rendered as the outline block of the structure prompt. */
@@ -42,6 +42,7 @@ import {
   seasonStructureUserPrompt,
   episodeScriptSystemPrompt,
   episodeScriptUserPrompt,
+  checkSceneSetInventory,
   validateEpisodeScript,
   hardProblems,
   ensureEnglishDialogue,
@@ -423,11 +424,31 @@ export async function advanceSeasonJob(job: GenerationJob, deps: SeasonJobDeps =
  * ~30 s chatJSON call comfortably fits inside the job's 60 s advance lock, so it is concurrency-safe.
  */
 async function generateSeasonCast(projectId: string, synopsis: string, language: IdeaLanguage, deps: SeasonJobDeps): Promise<void> {
-  const raw = await deps.chatJSON(seasonCastSystemPrompt(language), seasonCastUserPrompt(synopsis), { temperature: 0.85, maxTokens: 8000 });
+  const raw = await deps.chatJSON(seasonCastSystemPrompt(language), seasonCastUserPrompt(synopsis), { temperature: 0.85, maxTokens: 12000 });
   const parsed = seasonCastResultSchema.parse(raw);
   const names = parsed.characters.map((c) => c.name);
   const characters = dedupeCast(parsed.characters).map((c) => sanitizeCharacterCard(c, names));
-  const locations = dedupeCast(parsed.locations).map(sanitizeLocationCard);
+  let locations = dedupeCast(parsed.locations).map(sanitizeLocationCard);
+  // Stage 113: every location must carry a FULL set inventory (≥ MIN_SET_INVENTORY entries). One targeted
+  // retry for the incomplete cards only (keeps their name/description/visualPrompt), then accept as-is —
+  // a short inventory must never block season creation.
+  const incomplete = locations.filter((l) => !hasFullSetInventory(l));
+  if (incomplete.length) {
+    try {
+      const retryUser = `SYNOPSIS:\n${synopsis}\n\nCURRENT LOCATIONS (keep "name", "description" and "visualPrompt" EXACTLY as given; add the complete "setInventory" to each):\n${JSON.stringify(incomplete.map((l) => ({ name: l.name, description: l.description, visualPrompt: l.visualPrompt })))}\n\n${setInventoryRetryNote(incomplete.map((l) => l.name))}\nReturn ONLY these ${incomplete.length} location(s).`;
+      const retryRaw = await deps.chatJSON(locationsFromSynopsisSystemPrompt(language), retryUser, { temperature: 0.5, maxTokens: 8000 });
+      const retried = locationsResultSchema.parse(retryRaw).locations.map(sanitizeLocationCard);
+      const byName = new Map(retried.map((l) => [l.name.trim().toLowerCase(), l]));
+      locations = locations.map((l) => {
+        const r = byName.get(l.name.trim().toLowerCase());
+        return r && (r.setInventory?.length ?? 0) > (l.setInventory?.length ?? 0) ? { ...l, setInventory: r.setInventory } : l;
+      });
+    } catch (err) {
+      console.warn(`[season] set inventory retry failed for ${incomplete.length} location(s), accepting as-is:`, err instanceof Error ? err.message : String(err));
+    }
+    const still = locations.filter((l) => !hasFullSetInventory(l));
+    if (still.length) console.warn(`[season] ${still.length} location(s) kept with a short set inventory: ${still.map((l) => `${l.name} (${l.setInventory?.length ?? 0})`).join(", ")}`);
+  }
   await prisma.$transaction(async (tx) => {
     // Idempotency guard: another poller (or a retry) may have already created the cast.
     if ((await tx.character.count({ where: { projectId } })) > 0) return;
@@ -435,7 +456,7 @@ async function generateSeasonCast(projectId: string, synopsis: string, language:
       await tx.character.create({ data: { projectId, ...characterCardToData(c), status: "draft", imageFront: "", imageProfile: "", imageFull: "" } });
     }
     for (const l of locations) {
-      await tx.location.create({ data: { projectId, name: l.name, description: l.description, visualPrompt: l.visualPrompt, visualPromptAuto: l.visualPrompt } });
+      await tx.location.create({ data: { projectId, name: l.name, description: l.description, visualPrompt: l.visualPrompt, visualPromptAuto: l.visualPrompt, setInventory: serializeSetInventory(l.setInventory) } });
     }
   }, { timeout: 30_000 });
 }
@@ -565,12 +586,17 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
     // direct continuation rather than a fresh start.
     const prevEp = season!.episodes.find((e) => e.number === ep.number - 1);
     const previousEnding = await loadPreviousEnding(season!.id, prevEp ? { id: prevEp.id, number: prevEp.number, title: prevEp.title, cliffhanger: prevEp.cliffhanger ?? null } : null);
+    // Stage 113 — the episode location's set inventory (written at the idea stage) is the only prop world the
+    // script may use; legacy locations without it → no block (script written exactly as before).
+    const epLocation = ep.locationId ? project.locations.find((l) => l.id === ep.locationId) : matchLocation(project.locations, ep.locationName ?? "");
+    const locationInventory = parseSetInventory(epLocation?.setInventory);
     responseId = await deps.start(
       episodeScriptSystemPrompt(language, ep.number),
       episodeScriptUserPrompt({
         synopsis: project.synopsis, season: seasonStruct!, episode: outlineFromEpisode(ep), characters: cards,
         previous: season!.episodes.filter((p) => p.number < ep.number).map((p) => ({ number: p.number, title: p.title, logline: p.logline ?? "", cliffhanger: p.cliffhanger ?? "" })),
         previousEnding,
+        locationInventory,
         ...(planned.instruction ? { instruction: reviseInstruction(planned.instruction, next) } : {}),
       }) + episodeRetryNote(state),
       // Stage 108 — the episode script is written by gpt-4o (EPISODE_SCRIPT_MODEL): non-reasoning →
@@ -649,6 +675,11 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
     const overNote = `episode ${ep.number} is longer than ${EPISODE_TOTAL_LABEL} (${total} s) - shorten the scenes`;
     state.warnings = (state.warnings ?? []).filter((w) => !w.startsWith(`episode ${ep.number} `));
     if (total > EPISODE_MAX_TOTAL_SECONDS) state.warnings.push(overNote);
+    // Stage 113 — soft set-inventory check: objects mentioned in a scene's "set" line that are not in the location
+    // inventory are only logged (diagnostics), never retried.
+    const epLoc = ep.locationId ? project.locations.find((l) => l.id === ep.locationId) : matchLocation(project.locations, ep.locationName ?? "");
+    const invWarnings = checkSceneSetInventory(script.scenes, epLoc?.setInventory);
+    if (invWarnings.length) console.warn(`[season-job] episode ${ep.number} set inventory: ${invWarnings.join(" | ")}`);
     await persistEpisodeScript(ep.id, outline, script, project.characters.map((c) => ({ id: c.id, name: c.name })), language);
     return loadSeason(projectId);
   }

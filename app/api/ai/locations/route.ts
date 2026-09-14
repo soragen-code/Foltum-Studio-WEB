@@ -7,7 +7,7 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, locationCreateSchema } from "@/lib/validations";
 import { chatJSON } from "@/lib/ai";
-import { locationCardSchema, locationFromNameSystemPrompt, sanitizeLocationCard, normalizeLanguage } from "@/lib/idea";
+import { locationCardSchema, locationFromNameSystemPrompt, sanitizeLocationCard, normalizeLanguage, serializeSetInventory } from "@/lib/idea";
 
 /** GET /api/ai/locations?projectId=… → project locations. */
 export async function GET(request: Request) {
@@ -41,12 +41,12 @@ export async function POST(request: Request) {
     let lastError = "";
     for (let attempt = 0; attempt < 2 && !card; attempt++) {
       try {
-        const raw = await chatJSON(locationFromNameSystemPrompt(language), `SYNOPSIS:\n${project.synopsis ?? "(none)"}\n\nLOCATION NAME: ${name}${note ? `\nNOTE: ${note}` : ""}`, { temperature: 0.7, maxTokens: 900 });
+        const raw = await chatJSON(locationFromNameSystemPrompt(language), `SYNOPSIS:\n${project.synopsis ?? "(none)"}\n\nLOCATION NAME: ${name}${note ? `\nNOTE: ${note}` : ""}`, { temperature: 0.7, maxTokens: 2000 });
         card = sanitizeLocationCard(locationCardSchema.parse(raw));
       } catch (e: any) { lastError = e?.message ?? String(e); }
     }
     if (!card) return NextResponse.json({ error: "AI returned an invalid result: " + lastError }, { status: 502 });
-    const location = await prisma.location.create({ data: { projectId, name: card.name || name, description: card.description, visualPrompt: card.visualPrompt, visualPromptAuto: card.visualPrompt } });
+    const location = await prisma.location.create({ data: { projectId, name: card.name || name, description: card.description, visualPrompt: card.visualPrompt, visualPromptAuto: card.visualPrompt, setInventory: serializeSetInventory(card.setInventory) } });
     return NextResponse.json({ location });
   } catch (err: any) {
     console.error("Location add error:", err);

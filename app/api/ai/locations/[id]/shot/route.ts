@@ -96,14 +96,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         const ctx = { jobId: job.id, imageModel };
         let remote: string;
         if (slot === "master") {
-          remote = await generateImage({ prompt: locationAnglePrompt(visual, loc.name, "wide"), aspect_ratio: "9:16" }, ctx);
+          remote = await generateImage({ prompt: locationAnglePrompt(visual, loc.name, "wide", loc.setInventory), aspect_ratio: "9:16" }, ctx);
         } else if (slot === "extra") {
           remote = await generateImage(
             { prompt: locationExtraAnglePrompt(visual, loc.name, index!), aspect_ratio: "9:16", image_input: extraJobImageInputs(loc, extras) },
             ctx
           );
         } else {
-          remote = await generateImage({ prompt: locationAnglePrompt(visual, loc.name, slot), aspect_ratio: "9:16", image_input: [loc.imageUrl!] }, ctx);
+          remote = await generateImage({ prompt: locationAnglePrompt(visual, loc.name, slot, loc.setInventory), aspect_ratio: "9:16", image_input: [loc.imageUrl!] }, ctx);
         }
         const url = await uploadRemoteToS3(remote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${Date.now()}-${slotKey}.png`, "image/png");
 

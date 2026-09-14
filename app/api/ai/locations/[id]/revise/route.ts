@@ -7,7 +7,7 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, locationReviseBodySchema } from "@/lib/validations";
 import { chatJSON } from "@/lib/ai";
-import { locationCardSchema, reviseLocationSystemPrompt, reviseLocationUserPrompt, sanitizeLocationCard, normalizeLanguage } from "@/lib/idea";
+import { locationCardSchema, reviseLocationSystemPrompt, reviseLocationUserPrompt, sanitizeLocationCard, normalizeLanguage, parseSetInventory, serializeSetInventory } from "@/lib/idea";
 import { startLocationImageJob } from "@/lib/location-refs";
 
 /**
@@ -32,12 +32,12 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     if (!location) return NextResponse.json({ error: "Location not found" }, { status: 404 });
 
     const language = normalizeLanguage(location.project.language, location.project.synopsis ?? "");
-    const current = { name: location.name, description: location.description ?? "—", visualPrompt: location.visualPrompt ?? "—" };
+    const current = { name: location.name, description: location.description ?? "—", visualPrompt: location.visualPrompt ?? "—", setInventory: parseSetInventory(location.setInventory) };
     let card: ReturnType<typeof locationCardSchema.parse> | null = null;
     let lastError = "";
     for (let attempt = 0; attempt < 2 && !card; attempt++) {
       try {
-        const raw = await chatJSON(reviseLocationSystemPrompt(language), reviseLocationUserPrompt(location.project.synopsis ?? "", current, instruction), { temperature: 0.6, maxTokens: 1200 });
+        const raw = await chatJSON(reviseLocationSystemPrompt(language), reviseLocationUserPrompt(location.project.synopsis ?? "", current, instruction), { temperature: 0.6, maxTokens: 2500 });
         card = sanitizeLocationCard(locationCardSchema.parse(raw));
       } catch (e: any) { lastError = e?.message ?? String(e); }
     }
@@ -53,12 +53,13 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       name: location.name,
       description: location.description,
       visualPrompt: location.visualPrompt,
+      setInventory: location.setInventory,
       imageUrl: location.imageUrl,
       imageReverse: location.imageReverse,
       imageDetail: location.imageDetail,
       imageExtra: location.imageExtra,
     };
-    const updated = await prisma.location.update({ where: { id }, data: { name: card.name, description: card.description, visualPrompt: card.visualPrompt, prevSnapshot } });
+    const updated = await prisma.location.update({ where: { id }, data: { name: card.name, description: card.description, visualPrompt: card.visualPrompt, setInventory: serializeSetInventory(card.setInventory) ?? location.setInventory, prevSnapshot } });
     // Keep bound episodes' display fields in sync (they still carry locationName/locationDesc for legacy views).
     await prisma.episode.updateMany({ where: { locationId: id }, data: { locationName: card.name, locationDesc: card.description } });
 

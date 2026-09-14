@@ -202,6 +202,7 @@ model Location {
   description  String?  @db.Text // project-language description shown in UI
   visualPrompt String?  @db.Text // English visual prompt for the reference image (no people)
   visualPromptAuto String? @db.Text // stage 46E: the LLM-written visual prompt as first produced — «reset to auto» restores it; null for legacy rows
+  setInventory     String? @db.Text // stage 113: full physical set inventory ("object — placement" per line) written at idea stage; null for legacy rows
   imageUrl     String?  // PNG reference — wide establishing angle
   imageReverse String?  // same place, reverse angle (generated from imageUrl as reference → identical light)
   imageDetail  String?  // same place, medium/detail angle
