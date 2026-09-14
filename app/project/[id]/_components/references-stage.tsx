@@ -380,7 +380,10 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
   }
 
   return (
-    <div className="space-y-6">
+    // Stage 85: location references render FIRST as a distinct highlighted block at the top
+    // (order-first, larger cards) — it is the base layer of the scene; character reference
+    // blocks follow below. Layout/render-order only; no generation logic changed.
+    <div className="flex flex-col gap-6">
       <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <h2 className="flex items-center gap-2 font-display text-xl font-bold">
@@ -498,9 +501,11 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
         </section>
       ))}
 
-      <section className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }} data-testid="location-references">
-        <h2 className="flex items-center gap-2 font-display text-xl font-bold">
+      {/* Stage 85: highlighted, order-first block — the location is the base layer of the scene. */}
+      <section className="order-first rounded-xl border-2 border-primary/40 bg-primary/5 p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }} data-testid="location-references">
+        <h2 className="flex flex-wrap items-center gap-2 font-display text-xl font-bold">
           <MapPin className="h-5 w-5 text-primary" /> Референсы локаций
+          <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">Базовый слой сцены — формируется первым</span>
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
           Фотореалистичный кадр каждой локации без людей (9:16). Он передаётся в видеомодель вместе с персонажами, чтобы место действия
@@ -509,8 +514,9 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
         <div className="mt-4">
           <AddLocationForm projectId={project.id} onAdded={(loc) => setLocations((prev) => [...prev, loc])} onError={setError} />
         </div>
+        {/* Stage 85: fewer columns than the character grid (lg:grid-cols-3) → location cards render slightly larger. */}
         {locations.length > 0 && (
-          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-2">
             {locations.map((loc) => {
               const gen = activeLoc[loc.id]
               const has = validUrl(loc.imageUrl)
@@ -525,7 +531,7 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                   onOpenPrompt={() => setPromptFor({ kind: 'location', id: loc.id, name: loc.name })}
                   onResetPrompt={() => resetLocationPrompt(loc.id)}
                   media={
-                    <div className="group relative mb-3 aspect-[9/16] max-h-64 w-full overflow-hidden rounded-lg bg-muted">
+                    <div className="group relative mb-3 aspect-[9/16] max-h-80 w-full overflow-hidden rounded-lg bg-muted">
                       {has ? (
                         <>
                           {/* eslint-disable-next-line @next/next/no-img-element */}
