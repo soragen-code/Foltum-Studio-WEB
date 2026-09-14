@@ -5,7 +5,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { buildScenePrompt } from "@/lib/scene-prompt";
-import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, applySeriesIntro, sceneHasLocationRef, resolveContinuity } from "@/lib/prompt-seam";
+import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, applyLocationConsistency, applySeriesIntro, sceneHasLocationRef, resolveContinuity } from "@/lib/prompt-seam";
 import { normalizePromptOverride } from "@/lib/prompt-override";
 
 /**
@@ -77,15 +77,20 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
   });
   // Stage 87: the FIRST scene of the episode is the series intro (wide/establishing shots + off-screen
   // voiceover backstory, no dialogue close-ups). Applied as the OUTERMOST wrapper, exactly like the worker.
+  // Stage 88: hard location consistency (LOCATION ANCHOR) is applied on top of the Stage 84 base-layer
+  // directive and below the Stage 87 series-intro wrapper, mirroring the video worker exactly.
   const prompt = applySeriesIntro(
-    applyLocationBaseLayer(
-      applyContinuousAction(
-        applyNewShotCameraMove(
-          applyReframeDirective(applySeamDirectives(built.prompt, { hasOverride: built.hasOverride }), built.retryRefs, { hasOverride: built.hasOverride }),
-          scene.number,
+    applyLocationConsistency(
+      applyLocationBaseLayer(
+        applyContinuousAction(
+          applyNewShotCameraMove(
+            applyReframeDirective(applySeamDirectives(built.prompt, { hasOverride: built.hasOverride }), built.retryRefs, { hasOverride: built.hasOverride }),
+            scene.number,
+            { hasOverride: built.hasOverride, continuity },
+          ),
           { hasOverride: built.hasOverride, continuity },
         ),
-        { hasOverride: built.hasOverride, continuity },
+        { hasOverride: built.hasOverride, hasLocationRef },
       ),
       { hasOverride: built.hasOverride, hasLocationRef },
     ),

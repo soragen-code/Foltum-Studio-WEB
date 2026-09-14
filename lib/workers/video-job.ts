@@ -24,7 +24,7 @@ import { nextChainScene, chainStopMessage, CHAIN_INSUFFICIENT_CREDITS } from "@/
 import { resolvePowerTier, SCENE_RESOLUTION } from "@/lib/power-tier";
 import { sceneProgressStage, SCENE_STAGE_PROGRESS, SCENE_STAGE_MESSAGE } from "@/lib/scene-progress";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
-import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, applySeriesIntro, sceneHasLocationRef, resolveContinuity, TEXT_ONLY_CONTINUITY_MESSAGE, type Continuity } from "@/lib/prompt-seam";
+import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, applyLocationConsistency, applySeriesIntro, sceneHasLocationRef, resolveContinuity, TEXT_ONLY_CONTINUITY_MESSAGE, type Continuity } from "@/lib/prompt-seam";
 
 export interface VideoJobParams {
   jobId: string;
@@ -273,6 +273,11 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       location: episodeLoc?.location ?? null,
     });
     prompt = applyLocationBaseLayer(prompt, { hasOverride: built.hasOverride, hasLocationRef });
+    // Stage 88: hard location consistency — one fixed geography (same landmarks, distances, materials,
+    // weather and light direction relative to the terrain) held byte-identically across every shot of
+    // the location; the master/top-down layout is a reference only (NOT a camera angle), the camera is
+    // placed relative to fixed landmarks, no object appears/disappears, and persistent state carries over.
+    prompt = applyLocationConsistency(prompt, { hasOverride: built.hasOverride, hasLocationRef });
     // Stage 87: the FIRST scene of the episode is the series intro — only wide/establishing shots of
     // the location and the world plus an off-screen voiceover carrying the backstory, no dialogue
     // close-ups. Keyed on scene.number === 1, so it applies retroactively for old projects too.

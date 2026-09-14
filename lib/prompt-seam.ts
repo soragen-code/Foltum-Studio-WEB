@@ -198,6 +198,42 @@ export function applyLocationBaseLayer(
 }
 
 /* ------------------------------------------------------------------------------------------ */
+/*  Stage 88 — HARD LOCATION CONSISTENCY (a fixed geography every shot obeys)                   */
+/*                                                                                             */
+/*  Requirement 2: within one location every shot must describe the SAME place — the same       */
+/*  landmarks at the same distances, the same materials, the same weather and the same          */
+/*  direction of light relative to the terrain — so cutting between shots never rebuilds or      */
+/*  rearranges the world. The location anchor block below is a CONSTANT string (byte-identical   */
+/*  in every prompt of that location) so the "same anchor in every shot" requirement is met by   */
+/*  construction. The master establishing shot / any top-down layout is a REFERENCE ONLY for     */
+/*  that fixed geography — explicitly NOT a camera angle to shoot from. The camera is defined     */
+/*  RELATIVE to the fixed landmarks (only the camera moves; the world geography stays put), no    */
+/*  object appears or disappears between shots, and persistent state (footprints, marks, moved    */
+/*  props, where each character was left) carries over from the previous shot. Pure post-         */
+/*  processing directive keyed on "the scene has a location reference"; the protected             */
+/*  lib/scene-prompt.ts is never touched, and it fires retroactively for old projects too.        */
+/* ------------------------------------------------------------------------------------------ */
+
+export const LOCATION_ANCHOR_LINE =
+  "LOCATION ANCHOR (one fixed geography for every shot here): treat this location as a single, unchanging place with a fixed map. Across every shot of it, keep the SAME landmarks at the SAME relative distances and directions, the SAME materials and surfaces, the SAME weather, and the SAME direction and quality of light relative to the terrain (the sun / key light always comes from the same side, casting shadows the same way). The location reference images and any master establishing view or top-down layout schematic are a REFERENCE for this fixed geography ONLY — they show where things are, and are explicitly NOT a camera angle to copy or shoot from. Position the camera RELATIVE to those fixed landmarks (e.g. looking across the space from beside a named landmark toward another): only the camera moves between shots, the world's geography never rotates, rescales or rearranges. Nothing appears that was not there and nothing vanishes that was: every object, structure and set-dressing element stays present and in its place from shot to shot. Persistent state carries over — footprints, tracks, marks, spilled or moved objects, opened doors and the exact spot where each character was last left all remain as they were, so consecutive shots read as the same continuous place in the same moment.";
+
+/**
+ * Append the Stage 88 LOCATION ANCHOR directive when the scene actually has a location reference
+ * (same detection as the Stage 84 base-layer directive). No location reference → there is no fixed
+ * geography to anchor, so it is left untouched. A manual override owns its full text and is returned
+ * unchanged. Idempotent (applying twice yields the same text).
+ */
+export function applyLocationConsistency(
+  prompt: string,
+  opts: { hasOverride: boolean; hasLocationRef: boolean }
+): string {
+  if (opts.hasOverride) return prompt;
+  if (!opts.hasLocationRef) return prompt;
+  if (prompt.includes(LOCATION_ANCHOR_LINE)) return prompt;
+  return `${prompt.trimEnd()}\n${LOCATION_ANCHOR_LINE}`;
+}
+
+/* ------------------------------------------------------------------------------------------ */
 /*  Stage 86 — "has a location reference" detection that also covers OLD projects              */
 /*                                                                                             */
 /*  Stage 84 fired the LOCATION-AS-BASE-LAYER directive only when a location image made it into */

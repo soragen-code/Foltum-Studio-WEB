@@ -85,7 +85,12 @@ export async function POST(request: Request) {
       clientFirstName: user.name ?? "",
       language: "AUTO",
       serviceUrl: `${base}/api/payment/wayforpay/callback`,
-      returnUrl: `${base}/pricing?order=${encodeURIComponent(orderReference)}`,
+      // Stage 88: after a successful purchase the browser returns to the app's MAIN screen
+      // (the dashboard), NOT back to the pricing page. The order ref is carried so the dashboard
+      // can poll the payment status and confirm the credits were granted. This returnUrl is the
+      // user-facing browser redirect only — the server-to-server credit callback (serviceUrl above)
+      // is untouched and still grants credits idempotently.
+      returnUrl: `${base}/dashboard?order=${encodeURIComponent(orderReference)}`,
       merchantSignature,
     };
 

@@ -64,7 +64,8 @@ ok("1: fires for a fractional scene 1.x (retroactive/legacy numbering)", applySe
 ok("1: worker imports applySeriesIntro", /applySeriesIntro/.test(worker) && /from "@\/lib\/prompt-seam"/.test(worker));
 ok("1: worker calls applySeriesIntro with the scene number", /applySeriesIntro\(prompt, scene\.number/.test(worker));
 ok("1: preview route imports applySeriesIntro", /applySeriesIntro/.test(previewRoute));
-ok("1: preview route applies applySeriesIntro as the OUTERMOST wrapper", /const prompt = applySeriesIntro\(\s*applyLocationBaseLayer\(/.test(previewRoute));
+// Stage 88: applyLocationConsistency now sits directly inside applySeriesIntro (still the outermost wrapper).
+ok("1: preview route applies applySeriesIntro as the OUTERMOST wrapper", /const prompt = applySeriesIntro\(\s*applyLocationConsistency\(/.test(previewRoute));
 // end-to-end order: the series-intro line sits after the location-base-layer line.
 {
   let p = applyLocationBaseLayer(base, { hasOverride: false, hasLocationRef: true });

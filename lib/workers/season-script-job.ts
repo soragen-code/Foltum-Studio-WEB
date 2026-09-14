@@ -299,6 +299,37 @@ async function loadSeason(projectId: string) {
   return prisma.season.findFirst({ where: { projectId, number: 1 }, include: seasonInclude });
 }
 
+/**
+ * Stage 88 — the concrete ENDING context of the immediately-preceding episode, so the next episode is
+ * written as a direct continuation. Reads the previous episode's LAST scene's scripted end state
+ * (endStateActual wins over endState when present) plus a short tail of its closing scenes (action +
+ * dialogue/voiceover). Returns null for episode 1 or when the previous episode has no scenes yet.
+ */
+export async function loadPreviousEnding(
+  seasonId: string,
+  previous: { id: string; number: number; title: string; cliffhanger: string | null } | undefined | null
+): Promise<{ number: number; title: string; cliffhanger: string; endState: string | null; tail: string | null } | null> {
+  if (!previous) return null;
+  const scenes = await prisma.scene.findMany({
+    where: { episodeId: previous.id },
+    orderBy: { number: "asc" },
+    select: { number: true, action: true, dialogue: true, dialogueEn: true, voiceover: true, sceneKind: true, endState: true, endStateActual: true },
+  });
+  if (!scenes.length) return null;
+  const last = scenes[scenes.length - 1];
+  const endState = ((last.endStateActual ?? "").trim() || (last.endState ?? "").trim()) || null;
+  const tailScenes = scenes.slice(Math.max(0, scenes.length - 2));
+  const tail = tailScenes
+    .map((s) => {
+      const line = s.sceneKind === "narration" ? (s.voiceover ?? "").trim() : (s.dialogueEn ?? s.dialogue ?? "").trim();
+      const act = (s.action ?? "").replace(/\s+/g, " ").trim();
+      return `- Scene ${s.number}: ${act}${line ? ` [${s.sceneKind === "narration" ? "voiceover" : "dialogue"}: ${line.replace(/\s+/g, " ")}]` : ""}`;
+    })
+    .join("\n")
+    .slice(0, 1200) || null;
+  return { number: previous.number, title: previous.title, cliffhanger: previous.cliffhanger ?? "", endState, tail };
+}
+
 /** Persist the state (+ optional job fields). Always bumps updatedAt so the job is never "stale" while it is being advanced. */
 async function saveState(jobId: string, state: SeasonJobState, extra: { status?: string; progress?: number; message?: string } = {}): Promise<void> {
   const { lockedAt: _drop, ...clean } = state;
@@ -467,11 +498,17 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
   } else {
     const ep = season!.episodes.find((e) => e.id === planned.episodeId)!;
     const next = season!.episodes.find((e) => e.number === ep.number + 1);
+    // Stage 88: cross-episode continuity — thread the immediately-preceding episode's concrete ENDING
+    // (its last scene's end state + closing beats) into this episode's brief, so it is written as a
+    // direct continuation rather than a fresh start.
+    const prevEp = season!.episodes.find((e) => e.number === ep.number - 1);
+    const previousEnding = await loadPreviousEnding(season!.id, prevEp ? { id: prevEp.id, number: prevEp.number, title: prevEp.title, cliffhanger: prevEp.cliffhanger ?? null } : null);
     responseId = await deps.start(
       episodeScriptSystemPrompt(language, ep.number),
       episodeScriptUserPrompt({
         synopsis: project.synopsis, season: seasonStruct!, episode: outlineFromEpisode(ep), characters: cards,
         previous: season!.episodes.filter((p) => p.number < ep.number).map((p) => ({ number: p.number, title: p.title, logline: p.logline ?? "", cliffhanger: p.cliffhanger ?? "" })),
+        previousEnding,
         ...(planned.instruction ? { instruction: reviseInstruction(planned.instruction, next) } : {}),
       }),
       { model: SCRIPT_MODEL, maxTokens: 32000 }

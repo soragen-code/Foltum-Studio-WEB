@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { toast } from 'sonner'
 import { Header } from '@/components/header'
 import { Film, Plus, Clapperboard, Clock, ChevronRight, Sparkles, Zap, Crown, Trash2, Loader2 } from 'lucide-react'
 import { motion } from 'framer-motion'
@@ -59,6 +60,40 @@ export function DashboardClient() {
       .then((d: any) => setProjects(d?.projects ?? []))
       .catch(() => {})
       .finally(() => setLoading(false))
+  }, [])
+
+  // Stage 88 — post-purchase landing: WayForPay returns the user to the MAIN screen (dashboard)
+  // with ?order=<ref>. Poll the payment status until the server-to-server callback has granted the
+  // credits (status === 'approved'), then show an English success toast and clean the URL. This is
+  // purely the browser-side confirmation; the credit balance is already granted by the webhook.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const order = params.get('order')
+    if (!order) return
+
+    let attempts = 0
+    const check = async () => {
+      attempts += 1
+      try {
+        const res = await fetch(`/api/payment/wayforpay/status?order=${encodeURIComponent(order)}`)
+        if (res.ok) {
+          const d = await res.json()
+          if (d.status === 'approved') {
+            toast.success(`Payment successful! +${d.credits} credits added.`)
+            window.history.replaceState({}, '', '/dashboard')
+            return
+          }
+          if (d.status === 'declined') {
+            toast.error('Payment was declined.')
+            window.history.replaceState({}, '', '/dashboard')
+            return
+          }
+        }
+      } catch {}
+      if (attempts < 10) setTimeout(check, 2000)
+      else window.history.replaceState({}, '', '/dashboard')
+    }
+    check()
   }, [])
 
   return (
