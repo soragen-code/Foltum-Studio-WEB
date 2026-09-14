@@ -81,7 +81,7 @@ ok("2: anchor keeps the same landmarks at the same distances", /SAME landmarks a
 ok("2: anchor keeps the same materials", /SAME materials/i.test(LOCATION_ANCHOR_LINE));
 ok("2: anchor keeps the same weather", /SAME weather/i.test(LOCATION_ANCHOR_LINE));
 ok("2: anchor keeps the light direction relative to the terrain", /direction[^.]*light[^.]*relative to the terrain/i.test(LOCATION_ANCHOR_LINE));
-ok("2: anchor names a top-down layout as a REFERENCE only", /top-down layout/i.test(LOCATION_ANCHOR_LINE) && /REFERENCE[^.]*ONLY/i.test(LOCATION_ANCHOR_LINE));
+ok("2: anchor names the elevated LAYOUT view as a REFERENCE only (Stage 111)", /elevated LAYOUT view/i.test(LOCATION_ANCHOR_LINE) && /REFERENCE[^.]*ONLY/i.test(LOCATION_ANCHOR_LINE));
 ok("2: anchor states the layout is NOT a camera angle to shoot from", /NOT a camera angle/i.test(LOCATION_ANCHOR_LINE));
 ok("2: anchor positions the camera RELATIVE to fixed landmarks", /camera RELATIVE to those fixed landmarks/i.test(LOCATION_ANCHOR_LINE));
 ok("2: anchor fixes the world geography (only the camera moves)", /only the camera moves[^.]*geography never/i.test(LOCATION_ANCHOR_LINE));
@@ -110,7 +110,7 @@ ok("2: worker imports applyLocationConsistency", /applyLocationConsistency/.test
 ok("2: worker calls applyLocationConsistency with hasLocationRef", /applyLocationConsistency\(prompt, \{ hasOverride: built\.hasOverride, hasLocationRef \}\)/.test(worker));
 ok("2: preview route imports applyLocationConsistency", /applyLocationConsistency/.test(previewRoute));
 ok("2: preview route nests applyLocationConsistency over applyLocationBaseLayer", /applyLocationConsistency\(\s*applyLocationBaseLayer\(/.test(previewRoute));
-ok("2: series intro remains the OUTERMOST wrapper over location consistency", /const prompt = applySeriesIntro\(\s*applyLocationConsistency\(/.test(previewRoute));
+ok("2: preview applies location consistency (series intro dropped in Stage 110)", /applyLocationConsistency\(/.test(previewRoute) && !/applySeriesIntro/.test(previewRoute));
 
 // 2e: end-to-end order — anchor sits after the base-layer line and before the series-intro line.
 {
@@ -148,15 +148,15 @@ ok("2: series intro remains the OUTERMOST wrapper over location consistency", /c
   ok("3: the first episode has NO previous-ending block", !/HOW THE PREVIOUS EPISODE .* ENDED/.test(first) && /this is the first episode/.test(first));
 }
 
-// 3b: the ep2+ opening-narration rule recaps / continues the previous episode (does not restart).
+// 3b: Stage 110/111 — the ep2+ opening-narration recap rule (R7) is gone with narration scenes; the continuation
+// is carried by the episode brief (previous-ending block, 3a/3c) and by the shot-1 set-up sentence.
 const ep1 = episodeScriptSystemPrompt("en", 1);
 const ep2 = episodeScriptSystemPrompt("en", 2);
 const ep3 = episodeScriptSystemPrompt("en", 3);
-ok("3: ep2 R7 says it is a DIRECT CONTINUATION of the previous episode", /DIRECT CONTINUATION of the previous episode/.test(ep2));
-ok("3: ep2 R7 recaps what happened at the end of the previous episode", /recaps what just happened at the end of the previous episode/i.test(ep2));
-ok("3: ep2 R7 forbids restarting the story from scratch", /NEVER restarts the story from scratch/i.test(ep2));
-ok("3: ep3 R7 is also a continuation", /DIRECT CONTINUATION of the previous episode/.test(ep3));
-ok("3: ep1 R7 is NOT a continuation (it is the series premiere)", !/DIRECT CONTINUATION of the previous episode/.test(ep1) && /this is EPISODE 1/.test(ep1));
+ok("3: ep2 shot 1 continues the previous episode's cliffhanger", /Shot 1 = the set-up that continues the previous episode's cliffhanger/.test(ep2));
+ok("3: ep2 has no narration recap scene (Stage 110)", !/"sceneKind": "narration"/.test(ep2) && !/DIRECT CONTINUATION of the previous episode/.test(ep2));
+ok("3: ep3 shot 1 also continues the previous cliffhanger", /Shot 1 = the set-up that continues the previous episode's cliffhanger/.test(ep3));
+ok("3: ep1 is the series premiere (pure exposition)", /As EPISODE 1 it is pure exposition/.test(ep1) && !/As EPISODE 1 it is pure exposition/.test(ep2));
 
 // 3c: season-script-job threads the previous-episode ending into the episode brief.
 ok("3: season job defines loadPreviousEnding", /export async function loadPreviousEnding/.test(seasonJob));
@@ -169,6 +169,6 @@ ok("3: episode step passes previousEnding into the user prompt", /previousEnding
 ok("4: LOCATION-AS-BASE-LAYER directive still present in the seam", /LOCATION IS THE BASE LAYER/.test(seam));
 ok("4: worker still applies applyLocationBaseLayer", /applyLocationBaseLayer\(prompt/.test(worker));
 ok("4: SERIES INTRO directive still present in the seam", /SERIES INTRO \(opening scene\)/.test(seam));
-ok("4: worker still applies applySeriesIntro", /applySeriesIntro\(prompt, scene\.number/.test(worker));
+ok("4: worker no longer applies applySeriesIntro (Stage 110)", !/applySeriesIntro\(/.test(worker));
 
 console.log(`\nStage 88: ${passed} checks passed`);

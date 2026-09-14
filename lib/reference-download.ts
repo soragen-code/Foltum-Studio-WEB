@@ -30,10 +30,10 @@ export function characterFrames(c: { name: string; imageFront: string | null; im
   return out;
 }
 
-/** All valid frames of a location (master, reverse, detail, extras). */
+/** All valid frames of a location (master, layout, detail, extras). Stage 111: imageReverse holds the elevated layout view. */
 export function locationFrames(l: { name: string; imageUrl: string | null; imageReverse: string | null; imageDetail: string | null; imageExtra: string | null }): OwnedFrame[] {
   const out: OwnedFrame[] = [];
-  const base: Array<[string, string | null]> = [["master", l.imageUrl], ["reverse", l.imageReverse], ["detail", l.imageDetail]];
+  const base: Array<[string, string | null]> = [["master", l.imageUrl], ["layout", l.imageReverse], ["detail", l.imageDetail]];
   for (const [slot, url] of base) if (valid(url)) out.push({ kind: "location", name: l.name, slot, url, fileName: referenceFileName("location", l.name, slot, url) });
   parseLocationExtra(l.imageExtra).forEach((url, i) => { if (valid(url)) out.push({ kind: "location", name: l.name, slot: "extra", index: i, url, fileName: referenceFileName("location", l.name, "extra", url, i) }); });
   return out;

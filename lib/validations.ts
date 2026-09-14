@@ -225,7 +225,7 @@ export type CharacterShotInput = z.infer<typeof characterShotSchema>;
 
 /** POST /api/ai/locations/[id]/shot — regenerate ONE reference frame of a location. */
 export const locationShotSchema = z.object({
-  slot: z.enum(["master", "reverse", "detail", "extra"]),
+  slot: z.enum(["master", "layout", "reverse", "detail", "extra"]),
   /** Position inside imageExtra (required for slot="extra"). */
   index: z.number().int().min(0).max(19).optional(),
   imageModel: z.string().max(100).optional(),
@@ -246,7 +246,7 @@ export const locationPromptSchema = z
   .refine((v) => v.reset === true || typeof v.prompt === "string", { message: "prompt or reset is required" });
 /** DELETE /api/ai/locations/[id]/frame — remove ONE reference frame (at least one must remain). */
 export const locationFrameDeleteSchema = z.object({
-  slot: z.enum(["master", "reverse", "detail", "extra"]),
+  slot: z.enum(["master", "layout", "reverse", "detail", "extra"]),
   index: z.number().int().min(0).max(19).optional(),
 });
 

@@ -2,14 +2,14 @@
 
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Loader2, Wand2, ArrowRight, ImageOff, Users, RefreshCw, MapPin, Camera, FileText, RotateCcw } from 'lucide-react'
+import { Loader2, Wand2, ArrowRight, ImageOff, Users, RefreshCw, MapPin, Camera, FileText, RotateCcw, Plus } from 'lucide-react'
 import { FrameToolbar, DownloadAllButton } from './frame-toolbar'
 import { PromptModal, CHARACTER_PROMPT_DESCRIPTION, LOCATION_PROMPT_DESCRIPTION } from './prompt-modal'
 import { referenceFileName } from '@/lib/download-name'
 import { CharacterCard, type CharacterCardData } from './idea-stage'
 import type { JobInfo } from './use-job-polling'
 import { CancelButton } from './cancel-button'
-import { CHARACTER_REFERENCE_COST } from '@/lib/power-tier'
+import { CHARACTER_REFERENCE_COST, LOCATION_SET_COST } from '@/lib/power-tier'
 import { TIER_LABELS, groupByTier, tierOf, type Tier, type LocationCardData, LocationCard, AddLocationForm } from './cast-and-locations'
 import { locationExtraLabel } from '@/lib/visual-style'
 import { CharacterUserRefs } from './character-user-refs'
@@ -197,7 +197,8 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
   const activeLoc: Record<string, JobInfo | 'local'> = {}
   for (const j of locJobs) for (const lid of jobLocationIds(j as any)) activeLoc[lid] = j
   for (const lid of Object.keys(localLoc)) if (!activeLoc[lid]) activeLoc[lid] = 'local'
-  const locReady = locations.filter((l) => validUrl(l.imageUrl)).length
+  // Stage 111: a location counts as ready only with both mandatory frames (wide master + elevated layout view).
+  const locReady = locations.filter((l) => validUrl(l.imageUrl) && validUrl(l.imageReverse)).length
   // Extra-angle job state (one location at a time)
   const activeExtra: Record<string, JobInfo | 'local'> = {}
   for (const j of locExtraJobs) { const lid = jobExtraLocationId(j as any); if (lid) activeExtra[lid] = j }
@@ -400,8 +401,9 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
           <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">Base scene layer — created first</span>
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          A photorealistic shot of each location without people (9:16). It is passed to the video model along with the characters so the setting
-          looked the same in all scenes. Done: {locReady} of {locations.length}. Cost — {CHARACTER_REFERENCE_COST} cr. per location.
+          Two mandatory photorealistic frames of each location without people (9:16): the wide master and an elevated LAYOUT view
+          (camera slightly raised, looking down so the placement of every object is visible). Both go to the video model with the characters
+          so the setting stays the same in all scenes. Done: {locReady} of {locations.length}. Cost — {LOCATION_SET_COST} cr. per location (2 frames).
         </p>
         <div className="mt-4">
           <AddLocationForm projectId={project.id} onAdded={(loc) => setLocations((prev) => [...prev, loc])} onError={setError} />
@@ -451,14 +453,14 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                       {has && (validUrl(loc.imageReverse) || validUrl(loc.imageDetail)) && (
                         /* Stage 46E: angle frames as full tiles with an always-visible toolbar (regen / download / delete). */
                         <div className="mb-3 flex flex-wrap gap-2" data-testid="location-angles">
-                          {[{ url: loc.imageReverse, label: 'Reverse angle', slot: 'reverse' }, { url: loc.imageDetail, label: 'Medium shot', slot: 'detail' }].filter((a) => validUrl(a.url)).map((a) => (
+                          {[{ url: loc.imageReverse, label: 'Layout (mandatory)', slot: 'layout' }, { url: loc.imageDetail, label: 'Medium shot', slot: 'detail' }].filter((a) => validUrl(a.url)).map((a) => (
                             <span key={a.label} className="relative block h-40 w-24 overflow-hidden rounded bg-muted" title={a.label}>
                               {/* eslint-disable-next-line @next/next/no-img-element */}
                               <img src={a.url as string} alt={`${loc.name} — ${a.label}`} className="h-full w-full object-cover" />
                               <FrameToolbar
                                 regen={{ testId: `regen-shot-${a.slot}`, busy: !!gen || !!activeExtra[loc.id], spinning: !!shotBusy[shotKey(loc.id, a.slot)], onClick: () => regenShot('location', loc.id, a.slot) }}
                                 download={{ url: a.url as string, name: referenceFileName('location', loc.name, a.slot, a.url as string) }}
-                                del={{ testId: `delete-shot-${a.slot}`, onClick: () => deleteFrame(loc.id, a.slot), disabled: !!gen || !!activeExtra[loc.id] || locationFrameCount(loc) <= 1, disabledTitle: locationFrameCount(loc) <= 1 ? 'At least one frame' : 'Wait for generation to finish' }}
+                                del={{ testId: `delete-shot-${a.slot}`, onClick: () => deleteFrame(loc.id, a.slot), disabled: !!gen || !!activeExtra[loc.id] || locationFrameCount(loc) <= 1 || a.slot === 'layout', disabledTitle: a.slot === 'layout' ? 'The layout view is mandatory — regenerate it instead' : locationFrameCount(loc) <= 1 ? 'At least one frame' : 'Wait for generation to finish' }}
                               />
                             </span>
                           ))}
@@ -474,11 +476,25 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                           data-testid="location-generate"
                         >
                           {gen ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
-                          {gen ? 'Generating…' : has ? `Regenerate (${CHARACTER_REFERENCE_COST} cr.)` : `Generate reference (${CHARACTER_REFERENCE_COST} cr.)`}
+                          {gen ? 'Generating…' : has ? `Regenerate (${LOCATION_SET_COST} cr.)` : `Generate reference (${LOCATION_SET_COST} cr.)`}
                         </button>
+                        {has && !validUrl(loc.imageReverse) && (
+                          /* Stage 111: legacy location with only the wide master — add the mandatory layout view alone (1 frame). */
+                          <button
+                            type="button"
+                            onClick={() => regenShot('location', loc.id, 'layout')}
+                            disabled={!!gen || !!activeExtra[loc.id] || !!shotBusy[shotKey(loc.id, 'layout')]}
+                            className="flex items-center gap-1 rounded-lg border border-amber-500/60 bg-amber-500/10 px-3 py-1.5 text-xs transition disabled:opacity-50"
+                            data-testid="location-add-layout"
+                            title={`Add the mandatory elevated layout view (${CHARACTER_REFERENCE_COST} cr.)`}
+                          >
+                            {shotBusy[shotKey(loc.id, 'layout')] ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                            Add layout view ({CHARACTER_REFERENCE_COST} cr.)
+                          </button>
+                        )}
                         {gen && gen !== 'local' && <CancelButton onCancel={() => cancelJob((gen as JobInfo).id)} testId="location-cancel" />}
                       </div>
-                      <p className="mt-2 text-[11px] text-muted-foreground">3 angles of the same place (wide, reverse, medium), same lighting — all go to Seedance as references.</p>
+                      <p className="mt-2 text-[11px] text-muted-foreground">Wide master + elevated layout view (mandatory), optional medium shot and extra angles — same place, same lighting; all go to Seedance as references.</p>
                       {has && (() => {
                         const extras = parseExtra(loc.imageExtra)
                         const extraJob = activeExtra[loc.id]

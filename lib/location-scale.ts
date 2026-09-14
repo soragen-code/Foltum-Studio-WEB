@@ -11,9 +11,11 @@ export type LocationLike = { name?: string | null; description?: string | null; 
 
 /** Base angles always generated on the Location row (imageUrl + imageReverse + imageDetail). */
 export const LOCATION_BASE_FRAMES = 3
-/** Total reference frames per detail level: low = 3+1, medium = 3+3, high = 3+6 (the full six-slot extra plan). */
-export const LOCATION_FRAMES_BY_DETAIL: Record<LocationDetailLevel, number> = { low: 4, medium: 6, high: 9 }
-/** Minimum / maximum possible total across detail levels (low=4 ... high=9). */
+/** Stage 111: frames the master job renders and charges per location — wide (imageUrl) + elevated layout view (imageReverse). */
+export { LOCATION_MASTER_FRAMES } from './power-tier'
+/** Total reference frames per detail level: low = 3+1, medium = 3+3, high = 3+5 (Stage 111: the extra plan has five slots — the elevated layout view became a mandatory base frame). */
+export const LOCATION_FRAMES_BY_DETAIL: Record<LocationDetailLevel, number> = { low: 4, medium: 6, high: 8 }
+/** Minimum / maximum possible total across detail levels (low=4 ... high=8). */
 export const LOCATION_TOTAL_MIN = LOCATION_FRAMES_BY_DETAIL.low
 export const LOCATION_TOTAL_MAX = LOCATION_FRAMES_BY_DETAIL.high
 
@@ -70,12 +72,12 @@ export function locationDetailLevel(loc?: LocationLike | null): LocationDetailLe
   return isLocationDetailLevel(loc.detailLevel) ? loc.detailLevel : inferDetailLevel(loc)
 }
 
-/** Total reference frames a location should have, by its required detail level (4 / 6 / 9). */
+/** Total reference frames a location should have, by its required detail level (4 / 6 / 8). */
 export function desiredTotalFrames(loc?: LocationLike | null): number {
   return LOCATION_FRAMES_BY_DETAIL[locationDetailLevel(loc)]
 }
 
-/** Extra frames on top of the 3 base angles (1 / 3 / 6) — never more than the six unique extra slots. */
+/** Extra frames on top of the 3 base angles (1 / 3 / 5) — never more than the five unique extra slots. */
 export function desiredExtraFrames(loc: LocationLike): number {
   return Math.min(LOCATION_TOTAL_MAX - LOCATION_BASE_FRAMES, Math.max(0, desiredTotalFrames(loc) - LOCATION_BASE_FRAMES))
 }

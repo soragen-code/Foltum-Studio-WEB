@@ -4,9 +4,9 @@ import { runLocationImagesJob } from "@/lib/workers/location-image-job";
 import { runLocationExtraImagesJob } from "@/lib/workers/location-extra-image-job";
 import { parseLocationExtra } from "@/lib/visual-style";
 import { LOCATION_TOTAL_MAX, LOCATION_BASE_FRAMES } from "@/lib/location-scale";
-import { CHARACTER_REFERENCE_COST } from "@/lib/power-tier";
+import { CHARACTER_REFERENCE_COST, LOCATION_SET_COST } from "@/lib/power-tier";
 
-/** Max extra angles one request may generate — the highest detail level top-up (high = 9 total → 6 extra). */
+/** Max extra angles one request may generate — the highest detail level top-up (high = 8 total → 5 extra). */
 const MAX_EXTRA_PER_REQUEST = LOCATION_TOTAL_MAX - LOCATION_BASE_FRAMES;
 
 export const LOCATION_JOB_TYPE = "location_image";
@@ -16,8 +16,11 @@ export const EXTRA_ANGLES_PER_REQUEST = 3;
 
 /**
  * Charge + start a background job that renders reference PNGs for the given locations.
- * Same price as a character reference (CHARACTER_REFERENCE_COST per location); refunds the ones that failed.
+ * Stage 111: two mandatory frames per location (wide master + elevated layout view), each priced like a
+ * character reference — LOCATION_MASTER_FRAMES × CHARACTER_REFERENCE_COST per location. Refunds per missing frame:
+ * both when the master did not change, one when only the layout view is missing.
  */
+export { LOCATION_SET_COST };
 export async function startLocationImageJob(opts: { user: { id: string; credits: number | null }; projectId: string; locationIds: string[]; imageModel?: string }) {
   const { user, projectId, imageModel } = opts;
   await failStaleJobs({ projectId, type: LOCATION_JOB_TYPE });
@@ -28,11 +31,12 @@ export async function startLocationImageJob(opts: { user: { id: string; credits:
     if (!rd.locationIds || opts.locationIds.some((l) => rd.locationIds!.includes(l))) return { jobId: active.id, resumed: true, count: 0, cost: 0 };
   }
   const locationIds = Array.from(new Set(opts.locationIds));
-  const cost = locationIds.length * CHARACTER_REFERENCE_COST;
+  const cost = locationIds.length * LOCATION_SET_COST;
   if ((user.credits ?? 0) < cost)
     return { error: `Insufficient credits: need ${cost}, balance ${user.credits ?? 0}`, status: 402 as const };
-  const names = await prisma.location.findMany({ where: { id: { in: locationIds } }, select: { id: true, name: true, imageUrl: true } });
+  const names = await prisma.location.findMany({ where: { id: { in: locationIds } }, select: { id: true, name: true, imageUrl: true, imageReverse: true } });
   const before = new Map(names.map((n) => [n.id, n.imageUrl]));
+  const beforeLayout = new Map(names.map((n) => [n.id, n.imageReverse]));
   await prisma.user.update({ where: { id: user.id }, data: { credits: { decrement: cost } } });
   await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Location reference: ${names.map((n) => n.name).join(", ")}` } });
   const job = await prisma.generationJob.create({
@@ -41,12 +45,18 @@ export async function startLocationImageJob(opts: { user: { id: string; credits:
   runInBackground(async () => {
     await runLocationImagesJob({ jobId: job.id, projectId, locationIds, imageModel });
     try {
-      const after = await prisma.location.findMany({ where: { id: { in: locationIds } }, select: { id: true, name: true, imageUrl: true } });
+      const after = await prisma.location.findMany({ where: { id: { in: locationIds } }, select: { id: true, name: true, imageUrl: true, imageReverse: true } });
       const failed = after.filter((l) => !l.imageUrl || l.imageUrl === before.get(l.id));
-      if (failed.length) {
-        const refund = failed.length * CHARACTER_REFERENCE_COST;
+      // Master changed but the elevated layout view is missing/unchanged → refund that one frame.
+      const layoutMissing = after.filter((l) => !failed.includes(l) && (!l.imageReverse || l.imageReverse === beforeLayout.get(l.id)));
+      const refund = failed.length * LOCATION_SET_COST + layoutMissing.length * CHARACTER_REFERENCE_COST;
+      if (refund > 0) {
+        const parts = [
+          failed.length ? `location reference was not generated (${failed.map((l) => l.name).join(", ")})` : "",
+          layoutMissing.length ? `layout view was not generated (${layoutMissing.map((l) => l.name).join(", ")})` : "",
+        ].filter(Boolean);
         await prisma.user.update({ where: { id: user.id }, data: { credits: { increment: refund } } });
-        await prisma.creditTransaction.create({ data: { userId: user.id, amount: refund, description: `Refund: location reference was not generated (${failed.map((l) => l.name).join(", ")})` } });
+        await prisma.creditTransaction.create({ data: { userId: user.id, amount: refund, description: `Refund: ${parts.join("; ")}` } });
       }
     } catch (e) { console.error("[location-refs] refund check failed:", e); }
   });

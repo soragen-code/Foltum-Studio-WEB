@@ -37,9 +37,11 @@ async function main() {
 
   // ── A4/A5: episode view ──
   const view = read("app/project/[id]/episode/[episodeId]/episode-view.tsx");
-  for (const s of ["Generate script", "Regenerate script", "generate-script", "regenerate-script", "hasScript", "/script"]) {
+  for (const s of ["Generate script", "generate-script", "hasScript", "/script"]) {
     ok(view.includes(s), `episode-view contains "${s}"`);
   }
+  // Stage 110: the "Regenerate script" button was removed from the episode view (rewrites go through the season planner).
+  ok(!view.includes("Regenerate script"), "episode-view no longer contains \"Regenerate script\" (Stage 110)");
   const nav = read("app/project/[id]/episode/[episodeId]/episode-nav-grid.tsx");
   ok(nav.includes("no script") && nav.includes("hasScript"), "episode-nav-grid: 'no script' status via hasScript");
   const page = read("app/project/[id]/episode/[episodeId]/page.tsx");

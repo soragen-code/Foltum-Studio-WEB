@@ -59,9 +59,8 @@ const LAST_SHOT_TEXT = SCENE_DURATIONS[SCENE_DURATIONS.length - 1] < SCENE_SECON
 
 /** Minimum number of purely visual beats (no spoken lines) per episode. */
 const MIN_SILENT_SCENES = 0;
-/** Maximum silent shots — with only 2 shots at most ONE may be silent (never both), so the episode
- *  stays dialogue-driven and characters actually talk to each other. */
-const MAX_SILENT_SCENES = Math.min(1, Math.max(0, SCENES_PER_EPISODE - 1));
+/** Maximum silent shots — Stage 110: ZERO. Both shots carry on-camera dialogue (aligned with lib/season.ts). */
+const MAX_SILENT_SCENES = 0;
 
 /**
  * Stage 103 — the episode structure sentence shared by the SYSTEM prompt and the user message
@@ -99,7 +98,7 @@ Given the project synopsis, this episode's description, and the characters, retu
       "number": 1,
       "durationSec": 30,
       "shotType": "Wide establishing shot | Wide shot | Medium shot | Close-up | Extreme close-up | Over-the-shoulder | POV | Tracking shot | Reaction shot | Insert",
-      "dialogue": "[NO DIALOGUE]  — or —  a short back-and-forth EXCHANGE with a delivery cue in parentheses on each line:\\nCHARACTER_NAME (low, guarded): \\"Short line.\\"\\nCHARACTER2 (a tired sigh, barely a whisper): \\"Short reply.\\"\\nCHARACTER_NAME (leaning in): \\"One more beat.\\"",
+      "dialogue": "a back-and-forth EXCHANGE in ENGLISH with a delivery cue in parentheses on each line (never \"[NO DIALOGUE]\"):\\nCHARACTER_NAME (low, guarded): \\"Short line.\\"\\nCHARACTER2 (a tired sigh, barely a whisper): \\"Short reply.\\"\\nCHARACTER_NAME (leaning in): \\"One more beat.\\"",
       "locationDesc": "INT/EXT — Location — Time. Vivid, filmable description of the setting, HOW the light falls (source, direction, quality, shadows, colour temperature) and the atmosphere/ambience.",
       "videoPrompt": "[SHOT TYPE]: ...\\n[VISUAL STYLE]: ...\\n[LIGHTING]: ...\\n[BLOCKING]: ...\\n[GAZE]: ...\\n[NON-VERBAL]: ...\\n[ACTION]: ...\\n[CHARACTER]: ...\\n[TRANSITION]: ..."
     }
@@ -126,7 +125,7 @@ Given the project synopsis, this episode's description, and the characters, retu
 
 6. TRANSITIONS — EVERY SHOT HANDS OFF TO THE NEXT. The [TRANSITION] line describes how this shot connects to the following one: what the camera lands on, what the character turns toward, what sound/motion carries over. Examples: "camera slowly pans right and settles on the closed door — the next shot opens on that door", "holds on her face as her eyes drop to the phone in her hand — next shot is the phone screen", "match cut: the glass she sets down becomes the glass on the lab table". The last shot's transition sets up the cliffhanger / next episode.
 
-7. DIALOGUE — CHARACTERS TALK TO EACH OTHER. The audience bonds with the characters through what they say, so this is a DIALOGUE-DRIVEN series: only ${MIN_SILENT_SCENES}–${MAX_SILENT_SCENES} scenes are purely visual (establishing, reaction, atmosphere, insert) — write exactly "[NO DIALOGUE]" for those; EVERY other scene carries spoken dialogue.
+7. DIALOGUE — CHARACTERS TALK TO EACH OTHER. The audience bonds with the characters through what they say, so this is a DIALOGUE-DRIVEN series: NO scene is purely visual (max silent scenes = ${MAX_SILENT_SCENES}) — EVERY scene carries spoken English dialogue between the named characters on camera; never write "[NO DIALOGUE]".
    • REQUIRED: A REAL BACK-AND-FORTH EXCHANGE, NOT A SINGLE LINE. Each talking scene MUST contain a short exchange between TWO characters — at least 2, ideally 3, lines that ANSWER each other (a line, a reply, and often a comeback), written as SEPARATE "SPEAKER: line" lines. A talking scene with only ONE isolated line is WRONG — the whole point is that the characters converse. Alternate the speakers (A, then B, then A).
    • FILL THE FULL CLIP — each talking scene is rendered as a full ~${DIALOGUE_CLIP_SECONDS}-second clip, so it needs a SUBSTANTIAL, uninterrupted exchange of roughly 50–60 spoken words spread over several quick back-and-forth lines so speech runs across the WHOLE ${DIALOGUE_CLIP_SECONDS} s with no dead air. Natural, punchy lines that answer each other — no monologues, but enough dialogue to actually fill ${DIALOGUE_CLIP_SECONDS} seconds.
    • A LONGER CONVERSATION SPANS SEVERAL SCENES, each still a full back-and-forth exchange. When a conversation runs long, keep it going across consecutive shots — but each of those shots still carries its OWN full exchange (never drop to a single line just because the talk continues next shot).
@@ -259,7 +258,7 @@ ${prevContext}
 >>> GENERATE SCENES ONLY FOR THIS EPISODE <<<
 ${episodeBriefBlock(episode)}
 
-Direct this episode as ONE continuous piece of film: first write "visualIdentity" and the "characterSheet", then exactly ${SCENES_PER_EPISODE} consecutive camera shots (shot 1 = set-up continuing the previous cliffhanger, shot 2 = escalation ending on this episode's cliffhanger). ${LAST_SHOT_TEXT} — set "durationSec" per shot to ${SCENE_DURATIONS.join(", ")} (in order) so the whole episode is ${SCENE_DURATIONS.join(" + ")} = ${EPISODE_TOTAL_SECONDS} s, exactly ${TOTAL_LABEL}. Scene 1 = wide establishing shot with someone ALREADY talking; only ${MIN_SILENT_SCENES}–${MAX_SILENT_SCENES} shots marked [NO DIALOGUE], EVERY other shot carrying a SUBSTANTIAL back-and-forth exchange of roughly 50–60 spoken words over several quick lines that fill the whole ${SCENE_SECONDS} s clip (the characters ANSWER each other — never a single isolated line), each spoken line on its own "SPEAKER (tone): line" row; a longer conversation spans several consecutive shots, each still a full exchange; every videoPrompt in the full 9-line format — [SHOT TYPE], [VISUAL STYLE] (identical every scene), [LIGHTING], [BLOCKING], [GAZE], [NON-VERBAL], [ACTION], [CHARACTER] (verbatim descriptions), [TRANSITION] handing off to the next shot) that dramatize ONLY this episode's description — from a natural continuation of the previous episode to this episode's cliffhanger.`;
+Direct this episode as ONE continuous piece of film: first write "visualIdentity" and the "characterSheet", then exactly ${SCENES_PER_EPISODE} consecutive camera shots (shot 1 = set-up continuing the previous cliffhanger, shot 2 = escalation ending on this episode's cliffhanger). ${LAST_SHOT_TEXT} — set "durationSec" per shot to ${SCENE_DURATIONS.join(", ")} (in order) so the whole episode is ${SCENE_DURATIONS.join(" + ")} = ${EPISODE_TOTAL_SECONDS} s, exactly ${TOTAL_LABEL}. Scene 1 = wide establishing shot with someone ALREADY talking; NO shot marked [NO DIALOGUE] (max silent = ${MAX_SILENT_SCENES}), EVERY shot carrying a SUBSTANTIAL back-and-forth exchange of roughly 50–60 spoken words over several quick lines that fill the whole ${SCENE_SECONDS} s clip (the characters ANSWER each other — never a single isolated line), each spoken line on its own "SPEAKER (tone): line" row; a longer conversation spans several consecutive shots, each still a full exchange; every videoPrompt in the full 9-line format — [SHOT TYPE], [VISUAL STYLE] (identical every scene), [LIGHTING], [BLOCKING], [GAZE], [NON-VERBAL], [ACTION], [CHARACTER] (verbatim descriptions), [TRANSITION] handing off to the next shot) that dramatize ONLY this episode's description — from a natural continuation of the previous episode to this episode's cliffhanger.`;
 
   return { userMsg };
 }

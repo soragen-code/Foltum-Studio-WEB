@@ -19,7 +19,7 @@
  */
 import { buildNativeAudioPrompt, buildNarrationAudioPrompt } from "@/lib/voiceover";
 import { PACE_DIRECTION, ACTION_PACE_DIRECTION, CONFRONTATION_STAGING_SENTENCE } from "@/lib/season";
-import { styledVisualPrompt, isStyledAsset, locationAngleImages, parseLocationExtra, locationExtraLabel } from "@/lib/visual-style";
+import { styledVisualPrompt, isStyledAsset, locationAngleImages, parseLocationExtra, locationExtraLabel, locationLayoutNote } from "@/lib/visual-style";
 import { normalizeVideoModel, videoModelSlug, type VideoModelId } from "@/lib/ai-models";
 import { matchPropsInText, type PropRegistryEntry } from "@/lib/prop-registry";
 
@@ -55,6 +55,13 @@ export const LOCATION_INSIDE_NOTE =
   "Camera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location references. Only the camera angle changes between shots. These frames are the SAME real place photographed from different positions — the characters are INSIDE this space: floor under their feet, walls/objects beside and behind them, real depth in front and behind; shoot them in wide/full shots within the environment, never as figures placed in front of a picture of the place. They interact with its objects and surfaces; the cuts show the same location from different angles with real depth (foreground, characters, background) — never a flat backdrop.";
 /** @deprecated alias kept for older imports — use REFERENCE_IMAGE_CAP. */
 export const MAX_REFERENCE_IMAGES = REFERENCE_IMAGE_CAP;
+/**
+ * Stage 111 — the scene's KEYFRAME (Seedream opening still, Stage 104) is no longer the i2v start image; it is
+ * sent as the FIRST reference image of the classic text-to-video submission with this note, so the video model
+ * opens on that exact composition while the full prompt (action timing, dialogue, camera) still drives the clip.
+ */
+export const KEYFRAME_REFERENCE_NOTE =
+  "the OPENING FRAME of this scene — the exact framing, poses, positions, wardrobe, props and light of second 0. Frame 1 of the clip matches this picture; start moving from this composition immediately (no freeze, no fade).";
 /**
  * Stage 62 (Variant A) / Stage 72 — the continuity note attached to the previous scene's LAST FRAME
  * when this scene CONTINUES the same location/sequence in CHAIN mode. It freezes the world of the
@@ -244,6 +251,12 @@ export interface BuildScenePromptInput {
    * Omitted / "parallel" → no previous_frame reference (all scenes render simultaneously).
    */
   chainMode?: "parallel" | "chain" | null;
+  /**
+   * Stage 111 — this scene's rendered KEYFRAME (Scene.keyframeUrl, Seedream still). When set it becomes
+   * `[Image1]` with KEYFRAME_REFERENCE_NOTE and every other reference shifts by one. Omitted / null = no
+   * keyframe reference (the preview passes the stored URL; the worker passes the one it just rendered).
+   */
+  keyframeUrl?: string | null;
 }
 
 /**
@@ -358,7 +371,7 @@ export function buildReferenceMap(individuals: { name: string }[], locationName:
     .map(x => `Image${x.i + 1 + offset} = ${x.nm}`);
   if (leading) parts.unshift(leading);
   const tail: string[] = [];
-  if (locationName) tail.push(`the location "${locationName}" from several angles (same place, same light — only the camera angle changes between shots)`);
+  if (locationName) tail.push(`the location "${locationName}" from several angles (same place, same light — only the camera angle changes between shots; its elevated LAYOUT view is for object placement only, not a shot angle)`);
   crowds.forEach(c => { const nm = (c.name ?? "").trim(); if (nm) tail.push(`the crowd "${nm}" (extras)`); });
   if (!parts.length && !tail.length) return "";
   const head = parts.length ? `${parts.join(", ")} (each character's single full-body reference, in this order)` : "";
@@ -401,6 +414,7 @@ export function characterReferenceNote(name: string): string {
 }
 /** Note attached to every location angle reference. */
 export function locationReferenceNote(locationName: string, angle: string): string {
+  if (angle === "layout") return locationLayoutNote(locationName); // Stage 111 — the elevated layout view is a placement reference, never the shot's camera
   return `the location "${locationName}" — ${angle} angle. Same place, same time of day, same light and palette in every shot. Keep the camera inside this location and match this lighting exactly.`;
 }
 
@@ -469,16 +483,20 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const lastFrameRefs: Ref[] = previousLastFrameUrl
     ? [{ url: previousLastFrameUrl, kind: "previous_frame", id: previous!.id, note: LAST_FRAME_CONTINUITY_NOTE }]
     : [];
-  // Reduced set (individual characters + the wide location angle) kept for diagnostics.
-  const fallbackRefs: SceneReference[] = [...characterRefs, ...locationRefs.slice(0, 1)].slice(0, REFERENCE_IMAGE_CAP).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
+  // Stage 111 — the scene's own keyframe leads the list (never trimmed: it sits before the characters).
+  const keyframeUrl = (input.keyframeUrl ?? "").trim();
+  const keyframeRefs: Ref[] = keyframeUrl ? [{ url: keyframeUrl, kind: "keyframe", id: scene.id, note: KEYFRAME_REFERENCE_NOTE }] : [];
+  // Reduced set (keyframe + individual characters + the wide location angle) kept for diagnostics.
+  const fallbackRefs: SceneReference[] = [...keyframeRefs, ...characterRefs, ...locationRefs.slice(0, 1)].slice(0, REFERENCE_IMAGE_CAP).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
 
   // Stage 54 — deterministic sectioned signals injected into the auto prompt (see helpers above):
   //  • REFERENCE MAP  — which attached image is who (identity binding before the action);
   //  • PEOPLE IN FRAME — the exact people counter from the ACTUAL cast (main "how many" signal);
   //  • CLOTHING & PROPS — the episode registry props shown in THIS scene, substituted VERBATIM;
   //  • NEGATIVES — the fixed do-not block (appended after the body).
+  const skipReferences = !!scene.skipReferences;
   const matchedProps = matchPropsInText(input.props ?? [], mentionText);
-  const referenceMap = buildReferenceMap(individuals, effectiveLocation ? effectiveLocation.name : null, crowds);
+  const referenceMap = buildReferenceMap(individuals, effectiveLocation ? effectiveLocation.name : null, crowds, keyframeRefs.length && !skipReferences ? "Image1 = the OPENING FRAME of this scene (frame 1 composition)" : undefined);
   const peopleCounter = buildPeopleCounter(characters.filter(c => c.tier !== "CROWD"), characters.some(c => c.tier === "CROWD"));
   const propsSection = buildPropsSection(matchedProps);
   const structureBlock = [referenceMap, peopleCounter, propsSection].filter(Boolean).join("\n");
@@ -580,14 +598,12 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // Stage 54 — the reference SELECTION above (anchorUrl / individuals / crowds / characterRefs /
   // locationRefs / crowdRefs / fallbackRefs) was hoisted to just after `dialogue` so the sectioned
   // REFERENCE MAP / PEOPLE / PROPS text can name exactly what is attached; the logic is unchanged.
-  const skipReferences = !!scene.skipReferences;
-
   if (skipReferences) {
     // Stage 33/36: producer asked for text-only submission (no reference images at all) — typically
     // after a provider block that the text alone cannot explain.
     reference = { mode: "text_only", sceneId: scene.id };
     referenceKind = "text_only";
-  } else if (characterRefs.length || locationRefs.length || crowdRefs.length) {
+  } else if (characterRefs.length || locationRefs.length || crowdRefs.length || keyframeRefs.length) {
     // Stage 51 (46B-0 known-good) + Stage 62 continuity. Priority order, highest first — the trim
     // (Seedance keeps the first REFERENCE_IMAGE_CAP=30) drops from the TAIL, so the order IS the
     // priority:
@@ -599,7 +615,8 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     //   5. crowds.
     // So the trim drops crowds → extra angles → base angles → last-frame, never the characters. With no
     // last-frame this collapses to the exact previous order (characters → base+extra location → crowds).
-    const ordered: Ref[] = [...characterRefs, ...lastFrameRefs, ...baseLocationRefs, ...extraLocationRefs, ...crowdRefs];
+    // Stage 111: the scene KEYFRAME (opening still) is [Image1] whenever it exists — ahead of everything.
+    const ordered: Ref[] = [...keyframeRefs, ...characterRefs, ...lastFrameRefs, ...baseLocationRefs, ...extraLocationRefs, ...crowdRefs];
     const refs: Ref[] = ordered.slice(0, REFERENCE_IMAGE_CAP);
     const keptLocation = refs.filter(r => r.kind === "location");
     const keptLastFrame = refs.some(r => r.kind === "previous_frame");
@@ -663,9 +680,8 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
 
 /**
  * Stage 104 — remove the `[ImageN] ...` reference legend (and the LOCATION_INSIDE_NOTE line that follows
- * it) from an assembled scene prompt. Used for the image-to-video submission: Seedance i2v receives the
- * keyframe as `image` (and optionally `last_image`) and NO reference_images list, so the legend would
- * point at pictures that are not attached. Pure; every other line is kept verbatim.
+ * it) from an assembled scene prompt. Stage 111: the i2v submission is gone (every scene is text-to-video
+ * with references again), so this is a plain utility kept for tools/tests. Pure; every other line is kept verbatim.
  */
 export function stripReferenceList(prompt: string): string {
   const lines = (prompt ?? "").split("\n");

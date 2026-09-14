@@ -5,7 +5,7 @@
  * Cyrillic is kept; only path-unsafe / control characters are stripped.
  */
 export const CHARACTER_SLOT_FILE_LABELS: Record<string, string> = { front: "face", profile: "profile", full: "height" };
-export const LOCATION_SLOT_FILE_LABELS: Record<string, string> = { master: "master", reverse: "reverse", detail: "detail" };
+export const LOCATION_SLOT_FILE_LABELS: Record<string, string> = { master: "master", layout: "layout", reverse: "layout", detail: "detail" };
 
 /** Strip characters that are illegal or risky in file names (keeps letters of any script, digits, space, -, _, .). */
 export function safeFileStem(name: string, fallback = "reference"): string {

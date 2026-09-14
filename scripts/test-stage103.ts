@@ -55,7 +55,7 @@ const episodeView = read("app/project/[id]/episode/[episodeId]/episode-view.tsx"
   ok(/EPISODE_TOTAL_LABEL/.test(scenesJob), "static: scenes-job.ts uses EPISODE_TOTAL_LABEL from season");
   ok(/\$\{EPISODE_STRUCTURE_TEXT\}/.test(scenesJob), "static: scenes-job SYSTEM prompt embeds EPISODE_STRUCTURE_TEXT");
   ok(!/1:59/.test(scenesJob) && !/\b119\b/.test(scenesJob), "static: scenes-job.ts has no 1:59 / 119 left");
-  ok(/MAX_SILENT_SCENES\s*=\s*Math\.min\(1/.test(scenesJob), "static: scenes-job silent-scene cap is derived (0–1)");
+  ok(/MAX_SILENT_SCENES\s*=\s*0/.test(scenesJob), "static: scenes-job silent-scene cap = 0 (Stage 110: dialogue in every scene)");
   ok(!/1:59/.test(seasonScriptJob) && !/\b119\b/.test(seasonScriptJob), "static: season-script-job.ts has no 1:59 / 119 left");
   ok(/EPISODE_TOTAL_LABEL/.test(seasonScriptJob), "static: season-script-job.ts uses EPISODE_TOTAL_LABEL");
   ok(/EPISODE_TOTAL_LABEL/.test(episodeView) && !/2 minutes/.test(episodeView), "static: episode-view.tsx copy uses EPISODE_TOTAL_LABEL (no '2 minutes')");
@@ -85,7 +85,7 @@ async function liveChecks() {
   ok(EPISODE_MIN_SCENES === 2, `live: EPISODE_MIN_SCENES === 2 (got ${EPISODE_MIN_SCENES})`);
   ok(EPISODE_SCENE_COUNT === 2, `live: EPISODE_SCENE_COUNT === 2 (got ${EPISODE_SCENE_COUNT})`);
   ok(SCENE_FIXED_SECONDS === 30, `live: SCENE_FIXED_SECONDS === 30 (got ${SCENE_FIXED_SECONDS})`);
-  ok(MAX_SILENT_SCENES === 1, `live: MAX_SILENT_SCENES === 1 (got ${MAX_SILENT_SCENES})`);
+  ok(MAX_SILENT_SCENES === 0, `live: MAX_SILENT_SCENES === 0 — Stage 110, dialogue in every scene (got ${MAX_SILENT_SCENES})`);
   assert.deepStrictEqual(sceneDurationsForCount(2), [30, 30]);
   ok(true, "live: sceneDurationsForCount(2) deep-equals [30, 30]");
   ok(EPISODE_TOTAL_LABEL === "1:00", `live: EPISODE_TOTAL_LABEL === "1:00" (got ${EPISODE_TOTAL_LABEL})`);

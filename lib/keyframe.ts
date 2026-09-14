@@ -13,7 +13,7 @@
 import { CAMERA_OF_THIS_FRAME_PREFIX } from "@/lib/frame-state";
 import { extractScriptedCamera, openingAngleForScene, stripPreviousCameraLine } from "@/lib/prompt-seam";
 import { characterAnchorUrl, type ScenePromptCharacterLink, type ScenePromptLocation } from "@/lib/scene-prompt";
-import { VISUAL_STYLE, isStyledAsset, locationAngleImages, locationExtraLabel, parseLocationExtra } from "@/lib/visual-style";
+import { VISUAL_STYLE, isStyledAsset, locationAngleImages, locationExtraLabel, locationLayoutNote, parseLocationExtra } from "@/lib/visual-style";
 import { WAVESPEED_IMAGE_MAX_REFS, WAVESPEED_SEEDREAM_EDIT } from "@/lib/providers/image-provider";
 
 /** Seedream edit request body (see WaveSpeed schema for bytedance/seedream-v5.0-pro/edit). */
@@ -107,7 +107,7 @@ export function buildKeyframeRequest(input: KeyframeBuildInput): KeyframeRequest
 
   const angles = location ? locationAngleImages(location) : [];
   const locationName = location?.name?.trim() || "the location";
-  for (const a of angles) refs.push({ url: a.url, kind: "location", note: `the location "${locationName}" — ${a.angle} angle` });
+  for (const a of angles) refs.push({ url: a.url, kind: "location", note: a.angle === "layout" ? locationLayoutNote(locationName) : `the location "${locationName}" — ${a.angle} angle` });
 
   const styled = characters.filter(c => isStyledAsset(c.imageFull) || isStyledAsset(c.imageFront));
   const individuals = styled.filter(c => c.tier !== "CROWD");
@@ -171,21 +171,4 @@ export function buildKeyframeRequest(input: KeyframeBuildInput): KeyframeRequest
     prompt_optimization_mode: "fast",
   };
   return { prompt, images, refs: kept, body, camera };
-}
-
-/** Frame-1 directive prepended to every image-to-video prompt. */
-export const I2V_FIRST_FRAME_LINE =
-  "FRAME 1 is given as the start image: it is the exact opening of this shot — begin moving immediately, no freeze, no fade.";
-/** Final-frame directive appended when the next scene's keyframe is sent as `last_image`. */
-export const I2V_LAST_FRAME_LINE =
-  "FINAL FRAME is given as the end image: during the last seconds the action and camera flow naturally into that framing (continuous camera move, never a jump cut inside the clip).";
-
-/**
- * The image-to-video prompt: the assembled scene prompt WITHOUT the `[ImageN]` legend (the caller passes the
- * variant built without the CONTINUE-FROM / previous-frame directive) framed by the first/last-frame lines.
- */
-export function buildImageToVideoPrompt(prompt: string, opts: { hasLastImage: boolean }): string {
-  const lines = (prompt ?? "").split("\n").filter(l => !/^\s*\[Image\d+\]/i.test(l));
-  const core = lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
-  return [I2V_FIRST_FRAME_LINE, core, opts.hasLastImage ? I2V_LAST_FRAME_LINE : ""].filter(Boolean).join("\n\n");
 }

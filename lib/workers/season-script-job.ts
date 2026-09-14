@@ -45,6 +45,8 @@ import {
   validateEpisodeScript,
   hardProblems,
   ensureEnglishDialogue,
+  nonEnglishScenes,
+  isEnglishDialogue,
   normalizeEpisodeScript,
   renderEpisodeScriptText,
   episodeTotalSeconds,
@@ -58,6 +60,7 @@ import {
   matchLocation,
 } from "@/lib/season";
 import { anchorSceneLocation } from "@/lib/location-anchor";
+import { translateDialogue } from "@/lib/voiceover";
 import { episodeCastFromScenes } from "@/lib/episode-cast";
 
 export const SEASON_JOB_TYPE = "season_script";
@@ -208,14 +211,42 @@ export function validateFullStory(raw: unknown): string {
 }
 
 /** Schema + normalization + hard-problem gate; soft problems are logged. Dialogue translation is done by the caller. */
-export function validateEpisode(raw: unknown, episodeNumber: number, characters: CharacterCard[]): EpisodeScript {
+export function validateEpisode(raw: unknown, episodeNumber: number, characters: CharacterCard[], opts: { finalAttempt?: boolean } = {}): EpisodeScript {
   const script = normalizeEpisodeScript(episodeScriptSchema.parse(raw), characters);
-  const problems = validateEpisodeScript(script);
-  // Word-count drift is tolerated (logged); hard problems (count, missing prompt lines, no dialogue) fail → retry.
+  // Stage 110 — dialogue must be English with the cast's English speaker names. First attempt: a violation is
+  // HARD (→ retry with a correction note). Final attempt: language problems are soft — the caller repairs
+  // the text itself (ensureEnglishDialogue / translateDialogue) instead of failing the job. A silent scene is
+  // ALWAYS hard (we cannot invent lines).
+  const problems = validateEpisodeScript(script, { characterNames: characters.map((c) => c.name), languageIsSoft: !!opts.finalAttempt });
+  // Word-count drift is tolerated (logged); hard problems (count, missing prompt lines, silent scene) fail → retry.
   const hard = hardProblems(problems);
   if (hard.length) throw new Error(`episode ${episodeNumber} script invalid: ${hard.slice(0, 3).join("; ")}`);
   if (problems.length) console.warn(`[season] ep ${episodeNumber} soft issues:`, problems);
   return script;
+}
+
+/** Stage 110 — targeted correction appended to the episode brief on a retry after a rejected script. */
+export function episodeRetryNote(state: { attempt: number; lastFailure?: string }): string {
+  if (state.attempt <= 0) return "";
+  return `\n\nCORRECTION (your previous script was REJECTED${state.lastFailure ? `: ${state.lastFailure}` : ""}). Fix it now: EVERY scene has on-camera dialogue — no "[NO DIALOGUE]", no narrator, no voice-over-only or "previously on" scene; "dialogue" is STRICTLY ENGLISH (Latin letters only) with the project's ENGLISH character names exactly as given in the cast as speaker labels; each scene has 3–6 lines NAME (cue): "line" (an action scene 3–4 short lines in the pauses); every videoPrompt has all 9 tags with a timed 0–10s / 10–20s / 20–30s choreography in [ACTION].`;
+}
+
+/** Stage 110 — translate any remaining non-English scene dialogue with the voiceover translator; never throws. */
+export async function forceEnglishDialogue(script: EpisodeScript, translate: (dialogue: string, target: "en") => Promise<string> = translateDialogue): Promise<EpisodeScript> {
+  const bad = nonEnglishScenes(script);
+  if (!bad.length) return script;
+  const scenes = await Promise.all(script.scenes.map(async (s) => {
+    if (!bad.includes(s.number)) return s;
+    try {
+      const en = (await translate(s.dialogue, "en")).trim();
+      if (!en || !isEnglishDialogue(en)) return s;
+      return { ...s, dialogue: en, dialogueLocal: s.dialogueLocal && isEnglishDialogue(s.dialogueLocal) ? s.dialogue : (s.dialogueLocal ?? s.dialogue) };
+    } catch (err) {
+      console.error(`[season] forceEnglishDialogue scene ${s.number} failed:`, err);
+      return s;
+    }
+  }));
+  return { ...script, scenes };
 }
 
 /** Replace an episode's Scene rows with the given script (keeps the episode row / id). */
@@ -541,7 +572,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
         previous: season!.episodes.filter((p) => p.number < ep.number).map((p) => ({ number: p.number, title: p.title, logline: p.logline ?? "", cliffhanger: p.cliffhanger ?? "" })),
         previousEnding,
         ...(planned.instruction ? { instruction: reviseInstruction(planned.instruction, next) } : {}),
-      }),
+      }) + episodeRetryNote(state),
       // Stage 108 — the episode script is written by gpt-4o (EPISODE_SCRIPT_MODEL): non-reasoning →
       // temperature + max_output_tokens ≤ 16 384. Still a background response (same polling path).
       { model: EPISODE_SCRIPT_MODEL, maxTokens: EPISODE_SCRIPT_MAX_TOKENS, temperature: EPISODE_SCRIPT_TEMPERATURE }
@@ -607,7 +638,11 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
     if (!ep) throw new Error("episode missing");
     const outline = outlineFromEpisode(ep);
     // Seedance voices `dialogue` → it must be English; swap swapped fields / translate leftovers (short gpt-4o pass).
-    const script = await ensureEnglishDialogue(validateEpisode(raw, ep.number, cards), deps.chatJSON);
+    const finalAttempt = state.attempt >= MAX_ATTEMPTS - 1;
+    let script = await ensureEnglishDialogue(validateEpisode(raw, ep.number, cards, { finalAttempt }), deps.chatJSON);
+    // Stage 110 — last line of defence on the final attempt: any scene still not English after the swap /
+    // batch translation is translated line-by-line (lib/voiceover translateDialogue); the original stays in dialogueLocal.
+    script = await forceEnglishDialogue(script);
     // Stage 45/103 — the episode budget (EPISODE_TOTAL_LABEL) is enforced by normalize where speech allows;
     // what is left over is shown to the author instead of failing the job (no line of dialogue is ever cut to make it fit).
     const total = episodeTotalSeconds(script.scenes);

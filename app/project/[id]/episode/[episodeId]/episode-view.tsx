@@ -10,7 +10,7 @@ import { referenceFileName } from '@/lib/download-name'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
-import { EpisodeFootage, RewriteNote } from '../../_components/episode-footage'
+import { EpisodeFootage } from '../../_components/episode-footage'
 import { JobProgressBar, SmoothProgress, useJobPolling, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
 import { RewritePlaceholder } from '../../_components/rewrite-placeholder'
 import { isEpisodeRevisePending } from '@/lib/episode-revise-state'
@@ -19,7 +19,7 @@ import { rewriteViewState } from '@/lib/rewrite-view-state'
 import { CancelButton } from '../../_components/cancel-button'
 import { desiredTotalFrames, locationDetailLevel, locationDetailLabel, episodeLocations } from '@/lib/location-scale'
 import { CHARACTER_PHOTO_COUNT } from '@/lib/reference-counts'
-import { CHARACTER_REFERENCE_COST, POWER_TIERS, POWER_TIER_CONFIG, DEFAULT_POWER_TIER, legacyTierToPower, isPowerTier, type PowerTier } from '@/lib/power-tier'
+import { CHARACTER_REFERENCE_COST, LOCATION_SET_COST, POWER_TIERS, POWER_TIER_CONFIG, DEFAULT_POWER_TIER, legacyTierToPower, isPowerTier, type PowerTier } from '@/lib/power-tier'
 import { IMAGE_MODELS, DEFAULT_IMAGE_MODEL, VIDEO_MODEL_LABEL, type ImageModelId } from '@/lib/ai-models'
 import { EpisodeNavGrid } from './episode-nav-grid'
 import { locationExtraLabel } from '@/lib/visual-style'
@@ -255,7 +255,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   }, [])
 
   // ---- Reference readiness ----
-  const locBaseReady = (l: any) => validUrl(l?.imageUrl)
+  // Stage 111: a location is ready only with BOTH mandatory frames — the wide master AND the elevated layout view.
+  const locBaseReady = (l: any) => validUrl(l?.imageUrl) && validUrl(l?.imageReverse)
+  const locHasMaster = (l: any) => validUrl(l?.imageUrl)
+  const locNeedsLayout = (l: any) => locHasMaster(l) && !validUrl(l?.imageReverse)
   // Stage 46A: a location is "ready" with its MASTER frame alone — extra angles are optional and are
   // added one by one with the «+ "Angle" button. The scenes step unlocks as soon as every character
   // has its full photo set and every episode location has a master frame.
@@ -1011,16 +1014,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             {rewriteViewState(revising, revisePoll.job?.status) === 'placeholder' ? (
               <RewritePlaceholder job={revisePoll.job} expectedTotalSec={EPISODE_REVISE_EXPECTED_SEC} label={hasScript ? 'Rewriting episode script…' : 'Writing the episode script…'} testId="episode-revise-progress" />
             ) : hasScript ? (
-              <>
-                <BookScript text={episode.script} scenes={scenes} />
-                {/* Stage 107 — full regeneration from the footage (no confirmation; the note states the consequence). */}
-                <div className="mt-4 flex flex-wrap items-center gap-3" data-testid="regenerate-script-row">
-                  <button type="button" onClick={generateScript} disabled={revising} className="inline-flex items-center gap-2 rounded-lg border border-border bg-muted px-4 py-2 text-sm font-medium hover:bg-muted/80 disabled:opacity-50" data-testid="regenerate-script">
-                    <RefreshCw className="h-4 w-4" /> Regenerate script
-                  </button>
-                  <RewriteNote className="basis-full sm:basis-auto" testId="regenerate-script-note" />
-                </div>
-              </>
+              /* Stage 110 — the script re-generation button was removed; the script is generated once when missing. */
+              <BookScript text={episode.script} scenes={scenes} />
             ) : (
               <div className="rounded-lg border border-dashed border-border bg-background p-6 text-center" data-testid="no-script">
                 <p className="text-sm text-muted-foreground">No script yet — the script is written from the episode&apos;s 60-second footage above.</p>
@@ -1075,7 +1070,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {refLocs.map((l) => {
               const detail = locationDetailLevel(l)
-              const base = [{ url: l.imageUrl, label: 'Wide shot', slot: 'master' }, { url: l.imageReverse, label: 'Reverse angle', slot: 'reverse' }, { url: l.imageDetail, label: 'Medium shot', slot: 'detail' }].filter((a) => validUrl(a.url))
+              const base = [{ url: l.imageUrl, label: 'Wide shot', slot: 'master' }, { url: l.imageReverse, label: 'Layout (mandatory)', slot: 'layout' }, { url: l.imageDetail, label: 'Medium shot', slot: 'detail' }].filter((a) => validUrl(a.url))
               const extras = parseExtra(l.imageExtra)
               // This location has a running master-frame / extra-angle job (server truth; before the first tick — the job we just started).
               const locGen = refSession && !locCanceled.current.has(l.id) && (locActive.has(l.id) || (!tickSeen && (!!refJobs.current.loc[l.id] || !!refJobs.current.extra[l.id])))
@@ -1098,7 +1093,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                             <FrameToolbar
                               regen={{ testId: `regen-shot-${a.slot}${a.idx !== undefined ? `-${a.idx}` : ''}`, busy, spinning: shotIsBusy(l.id, a.slot, a.idx), onClick: () => regenShot('location', l.id, a.slot, a.idx) }}
                               download={{ url: a.url, name: referenceFileName('location', l.name, a.slot, a.url, a.idx) }}
-                              del={{ testId: `delete-shot-${a.slot}${a.idx !== undefined ? `-${a.idx}` : ''}`, onClick: () => deleteFrame(l.id, a.slot, a.idx), disabled: busy || all.length <= 1, disabledTitle: all.length <= 1 ? 'At least one frame' : 'Wait for generation to finish' }}
+                              del={{ testId: `delete-shot-${a.slot}${a.idx !== undefined ? `-${a.idx}` : ''}`, onClick: () => deleteFrame(l.id, a.slot, a.idx), disabled: busy || all.length <= 1 || a.slot === 'layout', disabledTitle: a.slot === 'layout' ? 'The layout view is mandatory — regenerate it instead' : all.length <= 1 ? 'At least one frame' : 'Wait for generation to finish' }}
                             />
                           </button>
                         ))}
@@ -1148,11 +1143,23 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                             disabled={busy || refStarting}
                             className="inline-flex flex-1 items-center justify-center gap-1 rounded-lg bg-primary px-2 py-1 text-xs font-medium text-primary-foreground disabled:opacity-50"
                             data-testid="ref-location-generate"
-                            title={locBaseReady(l) ? 'Create a new location master frame (old angles will be reset)' : 'Generate one master frame for this location'}
+                            title={locHasMaster(l) ? 'Create a new master frame + layout view of this location (old angles will be reset)' : 'Generate the two mandatory frames of this location: wide master + elevated layout view'}
                           >
-                            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : locBaseReady(l) ? <RefreshCw className="h-3.5 w-3.5" /> : <Wand2 className="h-3.5 w-3.5" />}
-                            {busy ? 'Generating...' : `${locBaseReady(l) ? 'Regenerate' : 'Generate'} master frame (${CHARACTER_REFERENCE_COST} cr.)`}
+                            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : locHasMaster(l) ? <RefreshCw className="h-3.5 w-3.5" /> : <Wand2 className="h-3.5 w-3.5" />}
+                            {busy ? 'Generating...' : `${locHasMaster(l) ? 'Regenerate' : 'Generate'} master frames (${LOCATION_SET_COST} cr.)`}
                           </button>
+                          {locNeedsLayout(l) && (
+                            /* Stage 111: legacy location with only the wide master — add the mandatory layout view alone. */
+                            <button
+                              onClick={() => regenShot('location', l.id, 'layout')}
+                              disabled={busy || refStarting || shotIsBusy(l.id, 'layout')}
+                              className="inline-flex items-center justify-center gap-1 rounded-lg border border-amber-500/60 bg-amber-500/10 px-2 py-1 text-xs font-medium disabled:opacity-50"
+                              data-testid="ref-location-add-layout"
+                              title={`Add the mandatory elevated layout view of this location (${CHARACTER_REFERENCE_COST} cr.)`}
+                            >
+                              {shotIsBusy(l.id, 'layout') ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} Layout view
+                            </button>
+                          )}
                           {locBaseReady(l) && (
                             <button
                               onClick={() => addLocationAngle(l.id)}
@@ -1418,8 +1425,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   </div>
                 )}
 
-                {/* Stage 104 — KEYFRAME: the Seedream opening still that seeds the image-to-video clip (frame 1;
-                    the next scene's keyframe is this clip's final frame). Regenerating it never deletes the video. */}
+                {/* Stage 104/111 — KEYFRAME: the Seedream opening still of this scene. Stage 111: it is NOT the i2v
+                    start frame any more — it is sent as the FIRST reference image ([Image1], "opening frame") of the
+                    text-to-video request. Regenerating it never deletes the video. */}
                 <div className="mt-3 flex items-center gap-3 rounded-lg border border-border/60 bg-muted/30 p-2" data-testid="scene-keyframe">
                   <div className="relative aspect-[9/16] h-24 shrink-0 overflow-hidden rounded bg-black/70">
                     {validUrl(scene.keyframeUrl) ? (

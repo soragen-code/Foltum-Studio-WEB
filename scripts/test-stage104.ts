@@ -86,11 +86,11 @@ for (const f of [
   const validations = read("lib/validations.ts");
   ok(/GENERATION_PROVIDERS\s*=\s*\[\s*"wavespeed"\s*\]/.test(validations), "validations: GENERATION_PROVIDERS = [\"wavespeed\"]");
   const videoJob = read("lib/workers/video-job.ts");
-  ok(videoJob.includes("startImageToVideoGeneration("), "video-job: submits Seedance image-to-video");
-  ok(videoJob.includes("ensureKeyframe(sceneId)") && videoJob.includes("ensureKeyframe(nextScene.id)"), "video-job: keyframe N (retried) + keyframe N+1 (last_image)");
-  ok(videoJob.includes("buildImageToVideoPrompt(stripReferenceList(keyframePrompt)"), "video-job: i2v prompt = stripReferenceList + first/last-frame lines");
-  ok(videoJob.includes("keyframeMode") && videoJob.includes("lastImageUrl"), "video-job: pipelineExtra records keyframeMode / lastImageUrl");
-  ok(videoJob.includes("startVideoGeneration({ ...input,"), "video-job: text-to-video fallback kept");
+  // Stage 111: back to text-to-video with references — the keyframe is the FIRST reference image, not an i2v start frame.
+  ok(!videoJob.includes("startImageToVideoGeneration("), "video-job: no longer submits Seedance image-to-video (Stage 111)");
+  ok(videoJob.includes("ensureKeyframe(sceneId)") && !videoJob.includes("ensureKeyframe(nextScene.id)"), "video-job: keyframe N still rendered (retried); no next-scene keyframe (Stage 111)");
+  ok(videoJob.includes("pipelineExtra.keyframeMode = false") && videoJob.includes("pipelineExtra.lastImageUrl = null"), "video-job: pipelineExtra records keyframeMode=false / lastImageUrl=null");
+  ok(videoJob.includes("startVideoGeneration({ ...input,"), "video-job: text-to-video with reference_images is the only path");
   ok(exists("app/api/ai/scenes/[id]/keyframe/route.ts"), "route: POST /api/ai/scenes/[id]/keyframe");
   const route = read("app/api/ai/scenes/[id]/keyframe/route.ts");
   ok(route.includes("episode: { season: { project: { userId: session.user.id } } }") && route.includes("rateLimitByUser("), "route: ownership + rate limit");
@@ -182,17 +182,11 @@ async function liveChecks() {
   ok(r4.images.length === 10 && r4.images[0] === kf1 && r4.images[1] === location.imageUrl, "cap: at most 10 images; continuity + location kept first");
   ok(r4.prompt.split("\n").filter(l => /^Image \d+ = /.test(l)).length === 9, "cap: the prompt lists only the 9 attached non-continuity images");
 
-  // (iv) i2v prompt.
+  // (iv) Stage 111: the i2v prompt builder is gone; stripReferenceList stays (used by the keyframe request).
   const legend = "OPENING STATE: x\n\n[SHOT TYPE]: wide\n[Image1] defines Anna's photorealistic appearance\n[Image2] the location \"Harbour pier\" — wide angle\n" + sp.LOCATION_INSIDE_NOTE;
   const stripped = sp.stripReferenceList(legend);
   ok(!stripped.includes("[Image") && !stripped.includes(sp.LOCATION_INSIDE_NOTE) && stripped.includes("[SHOT TYPE]: wide"), "stripReferenceList: legend + LOCATION_INSIDE_NOTE removed, body kept");
-  const i2vA = kf.buildImageToVideoPrompt(stripped, { hasLastImage: false });
-  ok(i2vA.startsWith("FRAME 1 is given as the start image"), "i2v: starts with FRAME 1 line");
-  ok(!i2vA.includes("FINAL FRAME"), "i2v: no FINAL FRAME line without last_image");
-  ok(!i2vA.includes("[Image"), "i2v: no [ImageN] legend");
-  const i2vB = kf.buildImageToVideoPrompt(legend, { hasLastImage: true });
-  ok(i2vB.endsWith(kf.I2V_LAST_FRAME_LINE) && i2vB.includes("FINAL FRAME is given as the end image"), "i2v: FINAL FRAME line with last_image");
-  ok(!i2vB.includes("[Image"), "i2v: legend lines dropped even when passed unstripped");
+  ok(!("buildImageToVideoPrompt" in kf), "keyframe.ts: buildImageToVideoPrompt removed (Stage 111)");
 
   // (v) Seedance i2v body.
   const U1 = "https:" + "//x/1.jpg"; const U2 = "https:" + "//x/2.jpg";

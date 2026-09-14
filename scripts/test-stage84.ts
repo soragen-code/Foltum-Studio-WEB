@@ -69,7 +69,7 @@ ok("3: preview route imports applyLocationBaseLayer", /applyLocationBaseLayer/.t
 ok("3: preview route derives the same hasLocationRef signal via sceneHasLocationRef", /const hasLocationRef = sceneHasLocationRef\(/.test(previewRoute));
 // Stage 87/88: applySeriesIntro is the OUTERMOST wrapper, and Stage 88's applyLocationConsistency now
 // wraps applyLocationBaseLayer; applyLocationBaseLayer is still applied directly over applyContinuousAction.
-ok("3: preview route applies applyLocationBaseLayer over applyContinuousAction (inside applySeriesIntro/applyLocationConsistency)", /const prompt = applySeriesIntro\(\s*applyLocationConsistency\(\s*applyLocationBaseLayer\(\s*applyContinuousAction\(/.test(previewRoute));
+ok("3: preview route applies applyLocationBaseLayer over applyContinuousAction (inside applyLocationConsistency; Stage 110 dropped applySeriesIntro)", /const prompt = applyLocationConsistency\(\s*applyLocationBaseLayer\(\s*applyContinuousAction\(/.test(previewRoute));
 
 // ---- (4) does not touch the protected [ImageN] ordering / notes -------------
 ok("4: directive explicitly does NOT reorder the [ImageN] reference set", /does NOT reorder the \[ImageN\] reference set/.test(seam));

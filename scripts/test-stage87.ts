@@ -61,11 +61,11 @@ ok("1: idempotent (applied twice = once)", applySeriesIntro(applySeriesIntro(bas
 ok("1: fires for a fractional scene 1.x (retroactive/legacy numbering)", applySeriesIntro(base, 1.5, { hasOverride: false }).includes(SERIES_INTRO_LINE));
 
 // 1c: applied as the OUTERMOST wrapper in both worker and preview route.
-ok("1: worker imports applySeriesIntro", /applySeriesIntro/.test(worker) && /from "@\/lib\/prompt-seam"/.test(worker));
-ok("1: worker calls applySeriesIntro with the scene number", /applySeriesIntro\(prompt, scene\.number/.test(worker));
-ok("1: preview route imports applySeriesIntro", /applySeriesIntro/.test(previewRoute));
-// Stage 88: applyLocationConsistency now sits directly inside applySeriesIntro (still the outermost wrapper).
-ok("1: preview route applies applySeriesIntro as the OUTERMOST wrapper", /const prompt = applySeriesIntro\(\s*applyLocationConsistency\(/.test(previewRoute));
+// Stage 110/111: the series-intro (b-roll + narrator, no dialogue on scene 1) is NO LONGER applied — every
+// scene carries dialogue. The helper stays exported (pure), but neither the worker nor the preview uses it.
+ok("1: worker does NOT apply applySeriesIntro any more (Stage 110)", !/applySeriesIntro/.test(worker));
+ok("1: preview route does NOT apply applySeriesIntro any more (Stage 110)", !/applySeriesIntro/.test(previewRoute));
+ok("1: preview route keeps applyLocationConsistency", /applyLocationConsistency\(/.test(previewRoute));
 // end-to-end order: the series-intro line sits after the location-base-layer line.
 {
   let p = applyLocationBaseLayer(base, { hasOverride: false, hasLocationRef: true });
@@ -73,14 +73,15 @@ ok("1: preview route applies applySeriesIntro as the OUTERMOST wrapper", /const 
   ok("1: SERIES INTRO is outermost (appended after LOCATION-BASE-LAYER)", p.indexOf(SERIES_INTRO_LINE) > p.indexOf("LOCATION"));
 }
 
-// 1d: season.ts R7 — MANDATORY narration scene 1 for EVERY episode (ep1 AND ep2/ep3+).
+// 1d: Stage 110/111 — the R7 "MANDATORY narration scene 1" rule is GONE: every scene (scene 1 included) has
+// characters talking on camera; there are no narrator / voice-over-only scenes any more.
 const ep1 = episodeScriptSystemPrompt("en", 1);
 const ep2 = episodeScriptSystemPrompt("en", 2);
 const ep3 = episodeScriptSystemPrompt("en", 3);
-ok("1: ep1 forces a MANDATORY opening narration scene", /MANDATORY/.test(ep1) && /"sceneKind": "narration"/.test(ep1) && /off-screen NARRATOR/i.test(ep1));
-ok("1: ep2 ALSO forces a MANDATORY opening narration scene (Stage 87)", /MANDATORY/.test(ep2) && /"sceneKind": "narration"/.test(ep2) && /off-screen NARRATOR/i.test(ep2));
-ok("1: ep3 ALSO forces a MANDATORY opening narration scene (Stage 87)", /MANDATORY/.test(ep3) && /"sceneKind": "narration"/.test(ep3));
-ok("1: opening narration is wide b-roll with no lip-sync (all episodes)", /no lip-sync/i.test(ep1) && /no lip-sync/i.test(ep2) && /no lip-sync/i.test(ep3));
+ok("1: ep1 no longer forces an opening narration scene (Stage 110)", !/"sceneKind": "narration"/.test(ep1) && /NO narrator scenes/i.test(ep1));
+ok("1: ep2 no longer forces an opening narration scene (Stage 110)", !/"sceneKind": "narration"/.test(ep2) && /NO narrator scenes/i.test(ep2));
+ok("1: ep3 no longer forces an opening narration scene (Stage 110)", !/"sceneKind": "narration"/.test(ep3));
+ok("1: every scene (scene 1 included) has on-camera dialogue", /EVERY scene \(scene 1 included\) has characters talking ON CAMERA/.test(ep1) && /EVERY scene \(scene 1 included\) has characters talking ON CAMERA/.test(ep2));
 
 /* ── (2) Prices in USD ──────────────────────────────────────────────────────── */
 ok("2: charge currency is USD", WFP_CURRENCY === "USD");

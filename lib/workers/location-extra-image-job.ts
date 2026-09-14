@@ -32,7 +32,7 @@ export function extraJobImageInputs(
  * Background job: generate N EXTRA angle/shot references for ONE location, beyond the base 3.
  * Stage 44: each is generated WITH the stored photographs of the place (master wide shot first, then the
  * other base angles and the extras made so far) as Seedream image_input so the place, light, weather
- * and materials stay identical — only the camera position changes (six-slot LOCATION_SHOT_PLAN). The new URLs are
+ * and materials stay identical — only the camera position changes (five-slot LOCATION_SHOT_PLAN). The new URLs are
  * APPENDED to Location.imageExtra (JSON array). Job type "location_extra_image".
  */
 export async function runLocationExtraImagesJob({ jobId, projectId, locationId, count, imageModel }: { jobId: string; projectId: string; locationId: string; count: number; imageModel?: string }): Promise<void> {

@@ -17,18 +17,21 @@ import { CHARACTER_REFERENCE_COST } from "@/lib/power-tier";
 /** Job type of a single-frame regeneration — distinct from the location set jobs so their polling ignores it. */
 export const LOCATION_SHOT_JOB_TYPE = "location_shot";
 
-const FIELD: Record<"master" | "reverse" | "detail", "imageUrl" | "imageReverse" | "imageDetail"> = {
+const FIELD: Record<"master" | "layout" | "detail", "imageUrl" | "imageReverse" | "imageDetail"> = {
   master: "imageUrl",
-  reverse: "imageReverse",
+  layout: "imageReverse", // Stage 111: the mandatory elevated layout view lives in the former reverse column
   detail: "imageDetail",
 };
 
 /**
- * POST /api/ai/locations/[id]/shot  { slot: "master"|"reverse"|"detail"|"extra", index?, imageModel? }
+ * POST /api/ai/locations/[id]/shot  { slot: "master"|"layout"|"detail"|"extra", index?, imageModel? }
+ * ("reverse" is accepted as a legacy alias of "layout".)
  *
  * Stage 46B-2: "Regenerate" on ONE location frame. Charges one frame (CHARACTER_REFERENCE_COST),
- * regenerates only that slot (master = text-to-image wide plate; reverse/detail chained on the master;
+ * regenerates only that slot (master = text-to-image wide plate; layout/detail chained on the master;
  * extra chained on the existing set) and writes ONLY that column — the other angles are kept.
+ * Stage 111: { slot: "layout" } is also the "Add layout frame" action for legacy locations that only have
+ * the wide master — it fills the mandatory elevated layout view (imageReverse) without touching the master.
  * Returns { jobId } — the UI polls /api/jobs/[id] and refreshes the references when done.
  */
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -41,7 +44,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     const { id: locationId } = await params;
     const parsed = await parseBody(request, locationShotSchema);
     if (!parsed.ok) return parsed.response;
-    const { slot, index } = parsed.data;
+    const slot = parsed.data.slot === "reverse" ? "layout" : parsed.data.slot;
+    const { index } = parsed.data;
     const imageModel = normalizeImageModel(parsed.data.imageModel);
     if (slot === "extra" && index === undefined) return NextResponse.json({ error: "index is required for extra slots" }, { status: 400 });
 

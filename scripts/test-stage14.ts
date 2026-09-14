@@ -52,15 +52,15 @@ async function main() {
 
   // --- (B) location scale: Stage 18 → 3 / 6 / 9 angles by scale ---------------
   ok(LOCATION_BASE_FRAMES === 3, "location base angles = 3");
-  ok(LOCATION_TOTAL_MIN === 4 && LOCATION_TOTAL_MAX === 9, "location total ranges 4..9 by detail level");
+  ok(LOCATION_TOTAL_MIN === 4 && LOCATION_TOTAL_MAX === 8, "location total ranges 4..8 by detail level (Stage 111: bird's-eye slot removed)");
   ok(desiredTotalFrames({ name: "Кабинет", detailLevel: "low" }) === 4, "low detail → 4 angles total");
   ok(desiredTotalFrames({ name: "Склад", detailLevel: "medium" }) === 6, "medium detail → 6 angles total");
-  ok(desiredTotalFrames({ name: "Ночной город", detailLevel: "high" }) === 9, "high detail → 9 angles total");
+  ok(desiredTotalFrames({ name: "Ночной город", detailLevel: "high" }) === 8, "high detail → 8 angles total");
   ok(
     desiredExtraFrames({ name: "Кабинет" }) === desiredTotalFrames({ name: "Кабинет" }) - LOCATION_BASE_FRAMES,
     "extra frames = total − base (base 3 subtracted)",
   );
-  ok(desiredExtraFrames({ name: "Ночной город", detailLevel: "high" }) === 6, "high detail → 6 extra frames");
+  ok(desiredExtraFrames({ name: "Ночной город", detailLevel: "high" }) === 5, "high detail → 5 extra frames (Stage 111)");
   ok(desiredExtraFrames({ name: "Пустыня", description: "Endless flat sand under a white sky.", detailLevel: "low" }) === 1, "low detail → 1 extra frame (size does not matter)");
   // Detail level: never downgrade a stored level; legacy heuristic; LLM schema field (optional, default medium).
   ok(maxDetailLevel(null, "low") === "low" && maxDetailLevel("high", "low") === "high" && maxDetailLevel("low", "high") === "high" && maxDetailLevel("medium", "bogus") === "medium", "maxDetailLevel: takes the max, never downgrades, ignores junk");

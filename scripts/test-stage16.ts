@@ -66,23 +66,23 @@ ok(ex0 !== ex1, "A2: the two extra prompts differ");
 // Unity: every character prompt keeps the same appearance description.
 ok([front, profile, full, ex0, ex1].every((p) => /fisherman|beard/i.test(p)), "A2: all 5 prompts embed the same appearance (unity)");
 
-// --- A3: location frames follow the required detail level (4 / 6 / 9), not the size ---
-for (const [label, loc, total] of [["low", { name: "Ночной город", detailLevel: "low" }, 4], ["medium", { name: "Склад", detailLevel: "medium" }, 6], ["high", { name: "Кабинет", detailLevel: "high" }, 9]] as const) {
+// --- A3: location frames follow the required detail level (4 / 6 / 8 — Stage 111), not the size ---
+for (const [label, loc, total] of [["low", { name: "Ночной город", detailLevel: "low" }, 4], ["medium", { name: "Склад", detailLevel: "medium" }, 6], ["high", { name: "Кабинет", detailLevel: "high" }, 8]] as const) {
   ok(desiredTotalFrames(loc) === total, `A3: ${label} location → ${total} total`);
   ok(desiredExtraFrames(loc) === total - LOCATION_BASE_FRAMES, `A3: ${label} location → ${total - 3} extra`);
 }
 
 // --- B2: ≥15 distinct location camera formulations --------------------------
-ok(LOCATION_EXTRA_VARIANTS.length === 6, "B2 (Stage 44): fixed six-slot extra plan");
+ok(LOCATION_EXTRA_VARIANTS.length === 5, "B2 (Stage 44/111): fixed five-slot extra plan (bird's-eye slot became the mandatory layout base frame)");
 ok(new Set(LOCATION_EXTRA_VARIANTS).size === LOCATION_EXTRA_VARIANTS.length, "B2: extra variants are all distinct");
 const allFormulations = new Set<string>([...LOCATION_ANGLES.map((a) => a.angle), ...LOCATION_EXTRA_VARIANTS]);
-ok(allFormulations.size >= 9, `B2: ≥9 distinct camera formulations total (${allFormulations.size})`);
+ok(allFormulations.size >= 8, `B2: ≥8 distinct camera formulations total (${allFormulations.size})`);
 // The 12 formulations actually used (indices 0..11) are all distinct.
-const used = Array.from({ length: 6 }, (_, i) => locationExtraAnglePrompt("a wooden cabin interior", "Cabin", i));
-ok(new Set(used).size === 6, "B2: the 6 used extra prompts are all distinct");
+const used = Array.from({ length: 5 }, (_, i) => locationExtraAnglePrompt("a wooden cabin interior", "Cabin", i));
+ok(new Set(used).size === 5, "B2: the 5 used extra prompts are all distinct");
 // Spot-check that genuinely different camera language appears across the set.
 const joined = LOCATION_EXTRA_VARIANTS.join(" \n ").toLowerCase();
-for (const kw of ["high", "low angle", "corner", "doorway", "entrance", "length", "window", "light source"]) {
+for (const kw of ["low angle", "corner", "doorway", "entrance", "length", "window", "light source"]) {
   ok(joined.includes(kw), `B2: extra variants include a '${kw}' camera formulation`);
 }
 

@@ -3,14 +3,18 @@ import { generateImage, GenerationCanceledError } from "@/lib/providers/image-pr
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { locationAnglePrompt, VISUAL_STYLE_ID } from "@/lib/visual-style";
+import { LOCATION_MASTER_FRAMES } from "@/lib/location-scale";
 import { detectC2paFromUrl } from "@/lib/c2pa";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Background job: a photoreal 9:16 PNG reference SET per location (Seedream, C2PA kept):
- * ONE wide establishing master frame per location (Stage 46A — extra angles are added on demand
- * by the location_extra_image job), uploaded to S3 and written to Location.imageUrl. Job type "location_image".
+ * Stage 111: TWO mandatory frames per location — the wide establishing master (Location.imageUrl) and the
+ * elevated LAYOUT view chained on it (Location.imageReverse; camera raised ~2.5–3 m, looking slightly down so the
+ * placement of every object is readable). Extra angles are still added on demand by the location_extra_image job.
+ * Job type "location_image". Charged LOCATION_MASTER_FRAMES (= 2) frames per location; the caller refunds any
+ * frame that did not change.
  */
 export async function runLocationImagesJob({ jobId, projectId, locationIds, imageModel }: { jobId: string; projectId: string; locationIds: string[]; imageModel?: string }): Promise<void> {
   // User cancel: checked before every provider call (inside generateImage, which also cancels the running
@@ -25,6 +29,7 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
     const total = locations.length;
     let done = 0;
     let failed = 0;
+    let layoutFailed = 0; // wide frame saved, elevated layout view missing
     // Non-blocking C2PA diagnostic across every stored angle.
     let c2paMissing = 0;
     const c2paChecks: { locationId: string; angle: string; ok: boolean; signatures: string[]; bytes: number }[] = [];
@@ -54,8 +59,22 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
         const wideUrl = await uploadRemoteToS3(wideRemote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${stamp}-wide.png`, "image/png");
         await prisma.location.update({ where: { id: loc.id }, data: { imageUrl: wideUrl, imageReverse: null, imageDetail: null, imageExtra: null } }); // new master → the old angles no longer match; re-shot from this frame
         await checkC2pa(loc.id, "wide", wideUrl);
-        // Stage 46A: ONLY the master frame is generated here. Additional angles are requested one at a time
-        // by the author ("+ Angle" → location_extra_image job), never automatically.
+        // 2) Stage 111: mandatory elevated LAYOUT view, chained on the wide frame so it shows the SAME space.
+        // A layout failure keeps the wide frame (the author can add the layout alone via the "Add layout frame"
+        // button); the caller's refund pass returns the credit for the missing frame.
+        try {
+          await updateJob(jobId, { progress: pct(), message: `Location layout view "${loc.name}» (${done + 1}/${total})…` });
+          const layoutRemote = await gen({ prompt: locationAnglePrompt(visual, loc.name, "layout"), aspect_ratio: "9:16", image_input: [wideUrl] });
+          if (await canceled()) throw new GenerationCanceledError();
+          const layoutUrl = await uploadRemoteToS3(layoutRemote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${stamp}-layout.png`, "image/png");
+          await prisma.location.update({ where: { id: loc.id }, data: { imageReverse: layoutUrl } });
+          await checkC2pa(loc.id, "layout", layoutUrl);
+        } catch (e: any) {
+          if (e instanceof GenerationCanceledError) throw e;
+          layoutFailed += 1;
+          console.error(`[location-images] layout view failed for ${loc.name}:`, e?.message ?? e);
+        }
+        // Additional angles are requested one at a time by the author ("+ Angle" → location_extra_image job).
       } catch (e: any) {
         if (e instanceof GenerationCanceledError) { await markCanceled(jobId, CANCEL_MSG); return; }
         failed += 1;
@@ -64,7 +83,8 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
       done += 1;
       await sleep(1500);
     }
-    await completeJob(jobId, { total, failed, locationIds, c2paOk: c2paMissing === 0, c2paMissing, c2paChecks }, failed > 0 ? `Done — ${failed} of ${total} failed` : "Location references are ready");
+    const summary = failed > 0 ? `Done — ${failed} of ${total} failed` : layoutFailed > 0 ? `Done — layout view missing for ${layoutFailed} location(s)` : "Location references are ready";
+    await completeJob(jobId, { total, failed, layoutFailed, framesPerLocation: LOCATION_MASTER_FRAMES, locationIds, c2paOk: c2paMissing === 0, c2paMissing, c2paChecks }, summary);
   } catch (err: any) {
     console.error("[location-images] failed:", err);
     await failJob(jobId, err?.message ?? "Location image generation failed");

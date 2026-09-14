@@ -3,9 +3,8 @@ import { prisma } from "@/lib/db";
 // Stage 73: scene video and scene-still transports are routed through the per-project provider layer
 // (WaveSpeed only since Stage 104). Prompt building, refs and chain logic are unchanged.
 import { startImageGeneration, getImageGenerationState } from "@/lib/providers/image-provider";
-import { startVideoGeneration, startImageToVideoGeneration, getVideoGenerationState, cancelVideoGeneration } from "@/lib/providers/video-provider";
+import { startVideoGeneration, getVideoGenerationState, cancelVideoGeneration } from "@/lib/providers/video-provider";
 import { ensureKeyframe } from "@/lib/workers/keyframe-job";
-import { buildImageToVideoPrompt } from "@/lib/keyframe";
 import { translateDialogue, detectSpokenLanguage } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
 import { extractLastFrameBuffer } from "@/lib/ffmpeg";
@@ -13,7 +12,7 @@ import { normalizeVideoModel, videoModelSlug } from "@/lib/ai-models";
 import type { PredictionState } from "@/lib/wavespeed";
 import { getBucketConfig } from "@/lib/aws-config";
 import { VISUAL_STYLE_ID } from "@/lib/visual-style";
-import { buildScenePrompt, resolveOpeningState, stripReferenceList, type SceneReference } from "@/lib/scene-prompt";
+import { buildScenePrompt, resolveOpeningState, type SceneReference } from "@/lib/scene-prompt";
 import { rewriteSceneLook, parseLookCache } from "@/lib/character-look";
 import { buildPropRegistry, parsePropRegistry } from "@/lib/prop-registry";
 import { GenerationAttempt, safeProviderError, classifyProviderError, logAttempt, safeDiagnosticInput } from "@/lib/generation-diagnostics";
@@ -25,7 +24,7 @@ import { nextChainScene, chainStopMessage, CHAIN_INSUFFICIENT_CREDITS } from "@/
 import { resolvePowerTier, SCENE_RESOLUTION } from "@/lib/power-tier";
 import { sceneProgressStage, SCENE_STAGE_PROGRESS, SCENE_STAGE_MESSAGE } from "@/lib/scene-progress";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
-import { stripPreviousCameraLine, applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, applyLocationConsistency, applySeriesIntro, sceneHasLocationRef, resolveContinuity, TEXT_ONLY_CONTINUITY_MESSAGE, type Continuity } from "@/lib/prompt-seam";
+import { stripPreviousCameraLine, applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, applyLocationConsistency, sceneHasLocationRef, resolveContinuity, TEXT_ONLY_CONTINUITY_MESSAGE, type Continuity } from "@/lib/prompt-seam";
 
 export interface VideoJobParams {
   jobId: string;
@@ -75,7 +74,7 @@ export interface VideoJobState {
   /** character_references | new_scene_reference | text_only */
   referenceKind?: string;
   /** Counts of the reference images actually sent (Stage 38: `chained` is always false — the previous frame is never sent; kept for old state records). */
-  refCounts?: { characters: number; location: number; crowd: number; scene: number; chained: boolean };
+  refCounts?: { characters: number; location: number; crowd: number; scene: number; keyframe?: number; chained: boolean };
   /** Width the references were downscaled to before submission. */
   referenceWidth?: number;
   /** Stage 36: the exact ordered list of reference images sent (768px URLs), for UI previews. */
@@ -84,12 +83,12 @@ export interface VideoJobState {
   previousFrameSceneId?: string | null;
   /** Stage 78: how this scene was tied to the previous one (last frame image / text only / none). */
   continuity?: Continuity;
-  /* --- Stage 104: keyframe-driven image-to-video --- */
-  /** true when the clip was submitted as Seedance image-to-video (keyframe = frame 1). */
+  /* --- Stage 104 → Stage 111: the scene keyframe --- */
+  /** Stage 111: always false — image-to-video is gone; kept so old state records still type-check. */
   keyframeMode?: boolean;
-  /** This scene's keyframe sent as `image`. */
+  /** This scene's keyframe (Seedream opening still); Stage 111: sent as the FIRST reference image `[Image1]`. */
   keyframeUrl?: string | null;
-  /** The next scene's keyframe sent as `last_image` (null when there is no next scene / it failed). */
+  /** Legacy Stage 104 field (the next scene's keyframe as `last_image`); always null since Stage 111. */
   lastImageUrl?: string | null;
 }
 
@@ -240,8 +239,27 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
         await prisma.episode.update({ where: { id: episodeLoc.id }, data: { propRegistry: JSON.stringify(propBuild.registry) } }).catch(() => {});
       }
     }
+    // Stage 111 — the scene KEYFRAME (Seedream opening still, Stage 104) is rendered FIRST and then sent as the
+    // FIRST reference image `[Image1]` of the classic text-to-video submission (the i2v `image`/`last_image`
+    // path is gone — it animated the scenes poorly). Best-effort: two attempts, on failure the scene is
+    // submitted without it and the error is recorded on the scene. Skipped for text-only scenes and for
+    // reference-less test episodes. The NEXT scene's keyframe is no longer pre-rendered.
+    const isTestProject = Boolean(episodeLoc?.season?.project?.isTest);
+    const wantsKeyframe = !scene.skipReferences && !(isTestProject && links.length === 0 && !episodeLoc?.location?.imageUrl);
+    let keyframeUrl: string | null = null;
+    if (wantsKeyframe) {
+      await updateJob(jobId, { progress: 8, message: "Rendering the scene keyframe (opening-frame reference)..." });
+      for (let k = 1; k <= 2 && !keyframeUrl; k++) {
+        try { keyframeUrl = await ensureKeyframe(sceneId); }
+        catch (err) {
+          console.warn(`[video-job] keyframe ${scene.number} attempt ${k} failed:`, safeProviderError(err));
+          if (k === 2) await prisma.scene.update({ where: { id: sceneId }, data: { keyframeError: `Keyframe failed twice — video generated from text and references without the opening frame: ${safeProviderError(err)}` } }).catch(() => {});
+        }
+      }
+    }
     const built = buildScenePrompt({
       scene: lookScene,
+      keyframeUrl, // Stage 111: [Image1] = the opening frame
       characters: links.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront, imageProfile: l.character.imageProfile, imageFull: l.character.imageFull, imageExtra: l.character.imageExtra, appearance: l.character.appearance, age: l.character.age })),
       location: episodeLoc?.location ?? null,
       previous: lookPrevious,
@@ -249,7 +267,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       resolvedDialogueEn: dialogueEn,
       props: episodeProps, // Stage 54: canonical episode props, substituted VERBATIM per scene
       // Stage 40: a test episode has no linked characters/location → plain text-to-video, no Flux still.
-      textOnlyWhenNoReferences: Boolean(episodeLoc?.season?.project?.isTest),
+      textOnlyWhenNoReferences: isTestProject,
       // Stage 100: parallel mode removed — generation is always chain, so the previous scene's last
       // frame is always a continuity reference for same-location continuations.
       chainMode: "chain",
@@ -267,11 +285,8 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     // scene's last frame. Stage 81: a NEW-SHOT CAMERA MOVE so a continuing scene starts its own camera
     // motion from frame 1 instead of inheriting the static end framing of the previous scene.
     // Same transforms as the GET prompt preview; a manual override is untouched.
-    // Stage 104: two variants are built from here on — the classic text-to-video prompt (WITH the CONTINUE-FROM /
-    // re-frame directive on the previous last frame) and the keyframe prompt (WITHOUT it: frame 1 IS the keyframe,
-    // so no previous-frame directive is needed). Every later transform is applied to both identically.
+    // Stage 111: ONE prompt variant again — the full text-to-video prompt (the Stage 104 keyframe variant is gone).
     const seamed = applySeamDirectives(prompt, { hasOverride: built.hasOverride });
-    let keyframePrompt = seamed;
     prompt = applyReframeDirective(seamed, built.retryRefs, {
       hasOverride: built.hasOverride,
       // Stage 101: the directive names this scene's concrete frame-1 camera (scripted CAMERA block wins).
@@ -281,11 +296,9 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       previousEndState: previousEndStateRaw,
     });
     prompt = applyNewShotCameraMove(prompt, scene.number, { hasOverride: built.hasOverride, continuity });
-    keyframePrompt = applyNewShotCameraMove(keyframePrompt, scene.number, { hasOverride: built.hasOverride, continuity });
     // Stage 82: the whole episode is one continuous event — a continuing scene carries the previous
     // shot's world/action on in real time (persistent world, not a frozen composition).
     prompt = applyContinuousAction(prompt, { hasOverride: built.hasOverride, continuity });
-    keyframePrompt = applyContinuousAction(keyframePrompt, { hasOverride: built.hasOverride, continuity });
     // Stage 84: the location reference is the base layer of the frame — the environment is built first,
     // then the characters are placed INTO it. Applied when the scene has a location reference.
     // Stage 86: detection is type-based and retroactive — a location-typed ref, a named locationId, OR
@@ -297,18 +310,13 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       location: episodeLoc?.location ?? null,
     });
     prompt = applyLocationBaseLayer(prompt, { hasOverride: built.hasOverride, hasLocationRef });
-    keyframePrompt = applyLocationBaseLayer(keyframePrompt, { hasOverride: built.hasOverride, hasLocationRef });
     // Stage 88: hard location consistency — one fixed geography (same landmarks, distances, materials,
     // weather and light direction relative to the terrain) held byte-identically across every shot of
-    // the location; the master/top-down layout is a reference only (NOT a camera angle), the camera is
+    // the location; the elevated LAYOUT frame (Stage 111) is a placement reference only (NOT a camera angle), the camera is
     // placed relative to fixed landmarks, no object appears/disappears, and persistent state carries over.
     prompt = applyLocationConsistency(prompt, { hasOverride: built.hasOverride, hasLocationRef });
-    keyframePrompt = applyLocationConsistency(keyframePrompt, { hasOverride: built.hasOverride, hasLocationRef });
-    // Stage 87: the FIRST scene of the episode is the series intro — only wide/establishing shots of
-    // the location and the world plus an off-screen voiceover carrying the backstory, no dialogue
-    // close-ups. Keyed on scene.number === 1, so it applies retroactively for old projects too.
-    prompt = applySeriesIntro(prompt, scene.number, { hasOverride: built.hasOverride });
-    keyframePrompt = applySeriesIntro(keyframePrompt, scene.number, { hasOverride: built.hasOverride });
+    // Stage 110: the Stage 87 series-intro directive (scene 1 = b-roll + off-screen narrator, no talking) is
+    // NO LONGER applied — every scene, scene 1 included, is on-camera dialogue.
     console.log("[video-job] continuity", JSON.stringify({ sceneId, sceneNumber: scene.number, continuity, previousFrameSceneId: built.previousFrameSceneId ?? null, hasLocationRef }));
     const basePrompt = built.basePrompt;
     const fallbackRefs = built.fallbackRefs;
@@ -382,6 +390,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       location: retryRefs.filter(r => r.kind === "location").length,
       crowd: retryRefs.filter(r => r.kind === "crowd").length,
       scene: retryRefs.filter(r => r.kind === "scene").length,
+      keyframe: retryRefs.filter(r => r.kind === "keyframe").length, // Stage 111
       chained: false, // Stage 38: the previous scene's last frame is never sent as a reference.
     };
     // Exact submitted list (downscaled URLs, same order as [ImageN]) for the scene-card previews.
@@ -391,38 +400,6 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       referenceWidth: REFERENCE_WIDTH, referenceImageCount: referenceImages.length,
       previousFrameSceneId: built.previousFrameSceneId, continuity,
     };
-    // Stage 104: KEYFRAME MODE — every non-text-only scene is rendered as Seedance IMAGE-TO-VIDEO: this scene's
-    // keyframe (Seedream still) is frame 1 and the NEXT scene's keyframe (when it exists) is the final frame, so
-    // the seam into the next shot is a real continuous move. Keyframes are generated here, sequentially
-    // (ensureKeyframe returns an existing done keyframe or renders one now). Keyframe N is retried once; when it
-    // still fails the scene falls back to the classic text-to-video path (reference_images) and the error is
-    // recorded on the scene. Keyframe N+1 is best-effort (no last_image on failure).
-    let keyframeUrl: string | null = null;
-    let lastImageUrl: string | null = null;
-    if (built.referenceKind !== "text_only") {
-      await updateJob(jobId, { progress: 8, message: "Rendering the scene keyframe..." });
-      for (let k = 1; k <= 2 && !keyframeUrl; k++) {
-        try { keyframeUrl = await ensureKeyframe(sceneId); }
-        catch (err) {
-          console.warn(`[video-job] keyframe ${scene.number} attempt ${k} failed:`, safeProviderError(err));
-          if (k === 2) await prisma.scene.update({ where: { id: sceneId }, data: { keyframeError: `Keyframe failed twice — video generated from text and references instead: ${safeProviderError(err)}` } }).catch(() => {});
-        }
-      }
-      if (keyframeUrl) {
-        const nextScene = await prisma.scene.findFirst({ where: { episodeId: scene.episodeId, number: scene.number + 1 }, select: { id: true, videoPrompt: true } });
-        if (nextScene?.videoPrompt) {
-          await updateJob(jobId, { progress: 12, message: "Rendering the next scene's keyframe (final frame)..." });
-          try { lastImageUrl = await ensureKeyframe(nextScene.id); }
-          catch (err) { console.warn(`[video-job] keyframe ${scene.number + 1} (last_image) failed:`, safeProviderError(err)); }
-        }
-      }
-    }
-    const keyframeMode = !!keyframeUrl;
-    if (keyframeMode) {
-      // The i2v prompt: the variant WITHOUT the CONTINUE-FROM directive, minus the [ImageN] legend (no reference
-      // list is attached), framed by the first/last-frame lines.
-      prompt = buildImageToVideoPrompt(stripReferenceList(keyframePrompt), { hasLastImage: !!lastImageUrl });
-    }
     // Stage 46B: scenes are always rendered at 480p — the requested `params.resolution` is ignored.
     const input = {
       prompt, model: modelSlug, duration: clipDuration, resolution: SCENE_RESOLUTION,
@@ -431,22 +408,16 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     attempt = {
       jobId, sceneId, attempt: 1, model: input.model, phase: "video", status: "submitting",
       style: VISUAL_STYLE_ID, language: scene.language || "en",
-      input: safeDiagnosticInput({ ...input, reference, ...submission, keyframeMode, keyframeUrl, lastImageUrl }),
+      input: safeDiagnosticInput({ ...input, reference, ...submission, keyframeUrl }),
     };
     diagnostics.push(attempt); await persist(); logAttempt(attempt);
-    if (keyframeMode) {
-      predictionId = await startImageToVideoGeneration({
-        prompt, image: keyframeUrl!, ...(lastImageUrl ? { last_image: lastImageUrl } : {}),
-        resolution: SCENE_RESOLUTION, duration: clipDuration, generate_audio: true,
-      });
-    } else {
-      // Stage 40: `reference_images` is omitted entirely for text-only submissions (never sent as []).
-      predictionId = await startVideoGeneration({ ...input, ...(referenceImages.length ? { reference_images: referenceImages } : {}) });
-    }
+    // Stage 40: `reference_images` is omitted entirely for text-only submissions (never sent as []).
+    // Stage 111: ALWAYS text-to-video with references — the keyframe is referenceImages[0] when it exists.
+    predictionId = await startVideoGeneration({ ...input, ...(referenceImages.length ? { reference_images: referenceImages } : {}) });
     pipelineExtra.provider = "wavespeed";
-    pipelineExtra.keyframeMode = keyframeMode;
+    pipelineExtra.keyframeMode = false;
     pipelineExtra.keyframeUrl = keyframeUrl;
-    pipelineExtra.lastImageUrl = lastImageUrl;
+    pipelineExtra.lastImageUrl = null;
     // Stage 46B: "Queued" until the provider reports processing; Stage 78: in chain mode without the
     // previous last frame the card says once that the scene is generated from the description only.
     submitMessage = continuity === "text_only" ? TEXT_ONLY_CONTINUITY_MESSAGE : SCENE_STAGE_MESSAGE.queued;
@@ -463,10 +434,8 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     pipelineExtra.referenceKind = built.referenceKind;
     pipelineExtra.refCounts = refCounts;
     pipelineExtra.referenceWidth = REFERENCE_WIDTH;
-    // Stage 104: in keyframe mode no reference list is sent — the card shows the keyframe (+ final frame) instead.
-    pipelineExtra.submittedReferences = keyframeMode
-      ? [{ url: keyframeUrl!, kind: "keyframe" }, ...(lastImageUrl ? [{ url: lastImageUrl, kind: "last_frame" }] : [])]
-      : submittedReferences;
+    // Stage 111: the exact ordered reference list (keyframe first when present) — the card shows it as sent.
+    pipelineExtra.submittedReferences = submittedReferences;
     pipelineExtra.previousFrameSceneId = built.previousFrameSceneId;
     pipelineExtra.continuity = continuity;
     attempt.predictionId = predictionId; attempt.status = "processing";

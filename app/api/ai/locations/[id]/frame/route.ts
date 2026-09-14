@@ -35,7 +35,7 @@ export async function DELETE(request: Request, ctx: { params: Promise<{ id: stri
 
   const result = removeLocationFrame(
     { imageUrl: loc.imageUrl, imageReverse: loc.imageReverse, imageDetail: loc.imageDetail, extras: parseLocationExtra(loc.imageExtra) },
-    slot,
+    slot === "layout" ? "reverse" : slot, // Stage 111: "layout" = the mandatory elevated view stored in imageReverse (locked)
     index
   );
   if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status });

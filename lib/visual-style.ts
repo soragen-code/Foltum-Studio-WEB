@@ -187,9 +187,23 @@ export function locationImagePrompt(visualPrompt: string, name = ""): string {
  */
 export const LOCATION_ANGLES = [
   { key: "imageUrl", angle: "wide", label: "Общий план" },
-  { key: "imageReverse", angle: "reverse", label: "Обратный ракурс" },
+  // Stage 111 — the SECOND MANDATORY frame of every location: a slightly ELEVATED view (camera ~2.5–3 m,
+  // tilted down) that shows where every zone / object / doorway sits relative to the others. Stored in
+  // the `imageReverse` column (free since Stage 46A — no DB migration); it is a LAYOUT reference for the
+  // video model, never the camera angle of a shot.
+  { key: "imageReverse", angle: "layout", label: "Ракурс сверху (планировка)" },
   { key: "imageDetail", angle: "detail", label: "Средний план" },
 ] as const;
+/** Stage 111 — the mandatory base angles every location must carry before the scenes step unlocks. */
+export const LOCATION_REQUIRED_ANGLES: readonly LocationAngle[] = ["wide", "layout"];
+/** Stage 111 — the note attached to the layout frame wherever it is sent as a reference. */
+export function locationLayoutNote(locationName: string): string {
+  return `the location "${locationName}" — elevated LAYOUT view (camera raised, looking slightly down over the whole space). Use it ONLY to place objects, furniture, doorways and characters correctly relative to each other; it is NOT the camera angle of this shot.`;
+}
+/** Stage 111 — true when the location carries both mandatory frames (wide + layout). */
+export function locationBaseReady(loc: { imageUrl?: string | null; imageReverse?: string | null }): boolean {
+  return isStyledAsset(loc.imageUrl) && isStyledAsset(loc.imageReverse);
+}
 export type LocationAngle = (typeof LOCATION_ANGLES)[number]["angle"];
 export type LocationImageKey = (typeof LOCATION_ANGLES)[number]["key"];
 
@@ -200,21 +214,22 @@ export function locationAnglePrompt(visualPrompt: string, name = "", angle: Loca
   const noPeople = "no people, no animals, no text, no signs with readable words, no logos. Real physical environment with authentic wear and detail.";
   if (angle === "wide")
     return `${VISUAL_STYLE}\nLocation establishing shot: ${place}. Wide vertical composition, eye-level camera, ${noPeople} ${LIGHT_LOCK}`;
-  if (angle === "reverse")
-    return `${VISUAL_STYLE}\nThe reference image IS this location, already photographed — do not invent new architecture, materials or layout; this is the same photographed place from the opposite side (reverse angle, camera turned ~180°): ${place}. ` +
-      `Same architecture, materials, props, time of day, weather and light direction as the reference — only the camera position changed. Eye-level, vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;
+  if (angle === "layout")
+    return `${VISUAL_STYLE}\nThe reference image IS this location, already photographed — do not invent new architecture, materials or layout; this is the same photographed place seen from a SLIGHTLY ELEVATED position: camera raised to about 2.5–3 m at a corner of the space and tilted down ~30–40° (a high angle, NOT top-down and NOT a bird's-eye view — walls and depth stay visible), ` +
+      `so the WHOLE LAYOUT is readable at once: where every zone, piece of furniture, prop, doorway and passage sits relative to the others, and how far the place extends: ${place}. ` +
+      `Same architecture, materials, props, time of day, weather and light direction as the reference — only the camera height, tilt and position changed. Wide framing, vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;
   return `${VISUAL_STYLE}\nThe reference image IS this location, already photographed — do not invent new architecture, materials or layout; this is the same photographed place as a medium shot 45° from the side, the action zone where characters would talk: ${place}. ` +
     `Same materials, props, time of day, weather and light direction as the reference — only the framing is closer. Vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;
 }
 
 /**
- * Stage 44 — a FIXED six-shot photo plan for the extra angles of the SAME location (beyond the base
- * 3 = wide / reverse / detail). Each slot names its side, height and zone explicitly so the six frames
- * are six recognizably different camera positions of ONE photographed place — never near-copies of
- * the wide shot. Still NO people (reference plates stay people-free).
+ * Stage 44 — a FIXED photo plan for the extra angles of the SAME location (beyond the base
+ * wide / layout / detail). Each slot names its side, height and zone explicitly so the frames are
+ * recognizably different camera positions of ONE photographed place — never near-copies of the wide
+ * shot. Still NO people (reference plates stay people-free). Stage 111: the bird's-eye "top" slot was
+ * removed — the elevated LAYOUT view is now a mandatory base frame (LOCATION_ANGLES), so five slots remain.
  */
 export const LOCATION_SHOT_PLAN = [
-  { key: "top", label: "Сверху", prompt: "a HIGH bird's-eye angle from the top corner of the space looking down over the WHOLE layout — floor plan, every zone and how far the place extends" },
   { key: "far-edge", label: "С дальнего края", prompt: "a LOW angle (camera near the floor) from the FAR / opposite short edge of the space, the far end now closest to camera, the main zone receding deep behind" },
   { key: "other-zone", label: "Другая зона", prompt: "an eye-level view from the 90° SIDE of a SEPARATE zone or corner of the place not shown in the previous frames (a secondary area, seating, storage, passage) — revealing more of the same place" },
   { key: "threshold", label: "От входа", prompt: "a threshold / doorway view from the ENTRANCE at standing eye height, looking through the opening into the depth of the space (foreground frame, mid-ground, deep background)" },
@@ -222,7 +237,7 @@ export const LOCATION_SHOT_PLAN = [
   { key: "light", label: "К источнику света", prompt: "a shot aimed TOWARD the main window / light source from mid-height on the shaded side, backlit, showing how the light enters and falls across the surfaces" },
 ] as const;
 export const LOCATION_EXTRA_LABELS = LOCATION_SHOT_PLAN.map((p) => p.label) as readonly string[];
-/** Russian UI label of extra slot `i` (wraps for legacy locations that still carry more than six extras). */
+/** Russian UI label of extra slot `i` (wraps for legacy locations that carry more extras than the plan has slots). */
 export function locationExtraLabel(i: number): string {
   const n = LOCATION_SHOT_PLAN.length;
   return LOCATION_SHOT_PLAN[((i % n) + n) % n].label;

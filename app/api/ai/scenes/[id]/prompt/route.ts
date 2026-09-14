@@ -6,7 +6,7 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { buildScenePrompt } from "@/lib/scene-prompt";
 import { isRefusal } from "@/lib/frame-state";
-import { stripPreviousCameraLine, applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, applyLocationConsistency, applySeriesIntro, sceneHasLocationRef, resolveContinuity } from "@/lib/prompt-seam";
+import { stripPreviousCameraLine, applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, applyLocationConsistency, sceneHasLocationRef, resolveContinuity } from "@/lib/prompt-seam";
 import { normalizePromptOverride } from "@/lib/prompt-override";
 
 /**
@@ -62,6 +62,8 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     textOnlyWhenNoReferences: Boolean(scene.episode.season?.project?.isTest),
     // Stage 100: parallel mode removed — generation is always chain.
     chainMode: "chain",
+    // Stage 111: an already rendered keyframe is [Image1] in the worker too (the worker renders one when missing).
+    keyframeUrl: scene.keyframeStatus === "done" ? scene.keyframeUrl : null,
   });
   const continuity = resolveContinuity({
     chainMode: "chain",
@@ -79,12 +81,10 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     reference: built.reference as { locationId?: string | null } | null,
     location: scene.episode.location ?? null,
   });
-  // Stage 87: the FIRST scene of the episode is the series intro (wide/establishing shots + off-screen
-  // voiceover backstory, no dialogue close-ups). Applied as the OUTERMOST wrapper, exactly like the worker.
-  // Stage 88: hard location consistency (LOCATION ANCHOR) is applied on top of the Stage 84 base-layer
-  // directive and below the Stage 87 series-intro wrapper, mirroring the video worker exactly.
-  const prompt = applySeriesIntro(
-    applyLocationConsistency(
+  // Stage 110: the Stage 87 series-intro wrapper (scene 1 = b-roll + narrator, no talking) is removed —
+  // every scene is on-camera dialogue. Stage 88: hard location consistency (LOCATION ANCHOR) is applied on
+  // top of the Stage 84 base-layer directive, mirroring the video worker exactly.
+  const prompt = applyLocationConsistency(
       applyLocationBaseLayer(
         applyContinuousAction(
           applyNewShotCameraMove(
@@ -97,10 +97,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
         { hasOverride: built.hasOverride, hasLocationRef },
       ),
       { hasOverride: built.hasOverride, hasLocationRef },
-    ),
-    scene.number,
-    { hasOverride: built.hasOverride },
-  );
+    );
 
   return NextResponse.json({
     prompt,

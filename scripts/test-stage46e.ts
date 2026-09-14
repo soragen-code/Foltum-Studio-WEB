@@ -10,7 +10,7 @@ import {
 } from "../lib/full-body-prompt";
 import { VISUAL_STYLE, FULL_BODY_FRAMING } from "../lib/visual-style";
 import { normalizePromptOverride } from "../lib/prompt-override";
-import { removeLocationFrame, countLocationFrames, MIN_FRAMES_ERROR, type LocationFrameState } from "../lib/location-frames";
+import { removeLocationFrame, countLocationFrames, MIN_FRAMES_ERROR, LAYOUT_LOCKED_ERROR, type LocationFrameState } from "../lib/location-frames";
 import { referenceFileName, referencesZipName, safeFileStem, extFromUrl, attachmentDisposition, slotFileLabel } from "../lib/download-name";
 import { characterFrames, locationFrames } from "../lib/reference-download";
 import { characterPromptSchema, locationPromptSchema, locationFrameDeleteSchema } from "../lib/validations";
@@ -71,15 +71,18 @@ const ok = (name: string, cond: boolean) => { assert.ok(cond, name); n++; };
   const onlyExtra = removeLocationFrame(st({ extras: ["e1"] }), "extra", 0);
   ok("min 1: only extra → 400", !onlyExtra.ok && onlyExtra.status === 400);
 
+  // Stage 111: imageReverse holds the mandatory LAYOUT view — never promoted to master; cleared with the master it was chained on.
   const r1 = removeLocationFrame(st({ imageUrl: "m", imageReverse: "r", imageDetail: "d" }), "master");
-  ok("master → reverse promoted", r1.ok && r1.state.imageUrl === "r" && r1.state.imageReverse === null && r1.state.imageDetail === "d");
+  ok("master → detail promoted, layout cleared (Stage 111)", r1.ok && r1.state.imageUrl === "d" && r1.state.imageReverse === null && r1.state.imageDetail === null);
+  const r1b = removeLocationFrame(st({ imageUrl: "m", imageReverse: "r" }), "master");
+  ok("master with only the layout view → refused (min 1 real frame)", !r1b.ok && r1b.status === 400 && r1b.error === MIN_FRAMES_ERROR);
   const r2 = removeLocationFrame(st({ imageUrl: "m", imageDetail: "d", extras: ["e1"] }), "master");
   ok("master (no reverse) → detail promoted", r2.ok && r2.state.imageUrl === "d" && r2.state.imageDetail === null && r2.state.extras.length === 1);
   const r3 = removeLocationFrame(st({ imageUrl: "m", extras: ["e1", "e2"] }), "master");
   ok("master (only extras) → extra[0] promoted, removed from extras", r3.ok && r3.state.imageUrl === "e1" && JSON.stringify(r3.state.extras) === '["e2"]');
 
-  const r4 = removeLocationFrame(st({ imageUrl: "m", imageReverse: "r" }), "reverse");
-  ok("reverse cleared, master intact", r4.ok && r4.state.imageUrl === "m" && r4.state.imageReverse === null);
+  const r4 = removeLocationFrame(st({ imageUrl: "m", imageReverse: "r", imageDetail: "d" }), "reverse");
+  ok("layout view (reverse slot) is locked → 400 (Stage 111)", !r4.ok && r4.status === 400 && r4.error === LAYOUT_LOCKED_ERROR);
   const r5 = removeLocationFrame(st({ imageUrl: "m", imageDetail: "d" }), "detail");
   ok("detail cleared", r5.ok && r5.state.imageDetail === null && countLocationFrames(r5.state) === 1);
 
@@ -93,8 +96,8 @@ const ok = (name: string, cond: boolean) => { assert.ok(cond, name); n++; };
   ok("missing named slot → 404", !r9.ok && r9.status === 404);
   const r10 = removeLocationFrame(st({ imageUrl: "m", imageReverse: "  ", extras: ["", "e1"] }), "reverse");
   ok("blank strings are not frames", !r10.ok && r10.status === 404);
-  const r11 = removeLocationFrame(st({ imageUrl: "m", imageReverse: "r" }), "master");
-  ok("input state not mutated", r11.ok && r11.state !== undefined);
+  const r11 = removeLocationFrame(st({ imageUrl: "m", imageReverse: "r", extras: ["e1"] }), "master");
+  ok("master (layout + extra) → extra[0] promoted, layout cleared", r11.ok && r11.state.imageUrl === "e1" && r11.state.imageReverse === null && r11.state.extras.length === 0);
 }
 
 // ---------------------------------------------------------------- 4. download names
