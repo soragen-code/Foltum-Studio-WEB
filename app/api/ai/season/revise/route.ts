@@ -11,6 +11,7 @@ import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { toCharacterCard, normalizeLanguage } from "@/lib/idea";
 import { runSeasonScriptJob, SEASON_JOB_TYPE, outlineFromEpisode } from "@/lib/workers/season-script-job";
 import { seasonReviseSchema, seasonReviseSystemPrompt, seasonReviseUserPrompt, affectedEpisodes, matchLocation, SEASON_SYNC_INSTRUCTION, validateEpisodeDescriptions, EPISODE_FOOTAGE_RETRY_NOTE, buildFullStoryFromStructure, type SeasonStructure } from "@/lib/season";
+import { repairEpisodeDescriptions } from "@/lib/footage-repair";
 
 /**
  * POST /api/ai/season/revise { projectId, instruction?, sync?, force? }
@@ -55,22 +56,26 @@ export async function POST(request: Request) {
   try {
     // Stage 105 — descriptions must be 60-second footage (3-line format, OPENS ON chain); one retry with the format note.
     const userPrompt = seasonReviseUserPrompt({ synopsis: project.synopsis, structure: before, characters: cards, locations: project.locations, instruction });
-    const attempt = async (note: string): Promise<SeasonStructure> => {
+    const attempt = async (note: string, strict: boolean): Promise<SeasonStructure> => {
       const raw = await chatJSON(seasonReviseSystemPrompt(language, before.episodes.length), userPrompt + note, { temperature: 0.4, maxTokens: 8000 });
       const parsed = seasonReviseSchema.parse(raw);
       if (parsed.episodes.length !== before.episodes.length) throw new Error(`LLM returned ${parsed.episodes.length} episodes instead of ${before.episodes.length}`);
       const out = { ...parsed, episodes: parsed.episodes.map((e, i) => ({ ...e, number: i + 1 })) };
-      const problems = validateEpisodeDescriptions(out.episodes);
-      if (problems.length) throw new Error(`episode descriptions invalid: ${problems.slice(0, 4).join("; ")}`);
+      const problems = strict ? validateEpisodeDescriptions(out.episodes) : [];
+      if (problems.length) throw new Error(`episode descriptions need repair: ${problems.slice(0, 4).join("; ")}`);
       return out;
     };
     try {
-      after = await attempt("");
+      after = await attempt("", true);
     } catch (first) {
       const why = first instanceof Error ? first.message : String(first);
       console.warn(`[season-revise] first attempt rejected (${why}) — retrying once with the format note`);
-      after = await attempt(`\n\n${EPISODE_FOOTAGE_RETRY_NOTE} Problems found: ${why}`);
+      after = await attempt(`\n\n${EPISODE_FOOTAGE_RETRY_NOTE} Problems found: ${why}`, false);
     }
+    // Stage 107b — never fail on footage caps: targeted repair passes + deterministic clamp.
+    const fixed = await repairEpisodeDescriptions(after.episodes, language, (sys, usr) => chatJSON(sys, usr, { temperature: 0.3, maxTokens: 6000 }));
+    if (fixed.repaired.length || fixed.clamped.length) console.warn(`[season-revise] footage repaired for episodes ${fixed.repaired.join(", ") || "-"}; clamped ${fixed.clamped.join(", ") || "-"}`);
+    after = { ...after, episodes: fixed.episodes };
   } catch (err) {
     return NextResponse.json({ error: "Failed to rebuild season: " + (err instanceof Error ? err.message : String(err)) }, { status: 502 });
   }

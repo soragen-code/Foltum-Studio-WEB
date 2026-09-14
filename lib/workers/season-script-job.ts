@@ -31,6 +31,9 @@ import {
   seasonStructureSchema,
   validateEpisodeDescriptions,
   EPISODE_FOOTAGE_RETRY_NOTE,
+} from "../season";
+import { repairEpisodeDescriptions } from "../footage-repair";
+import {
   seasonFullStorySchema,
   buildFullStoryFromStructure,
   episodeScriptSchema,
@@ -182,14 +185,18 @@ const defaultDeps: SeasonJobDeps = { start: startBackgroundJSON, poll: pollBackg
 // Step result validation (pure — schema + business rules)
 // ---------------------------------------------------------------------------
 
-export function validateStructure(raw: unknown, episodeCount: number): SeasonStructure {
+export function validateStructure(raw: unknown, episodeCount: number, attempt = 0): SeasonStructure {
   const parsed = seasonStructureSchema.parse(raw);
   // Stage 14 (B2): the producer sets the episode count — enforce it exactly (retry if the model drifts).
   if (parsed.episodes.length !== episodeCount) throw new Error(`structure returned ${parsed.episodes.length} episodes, expected exactly ${episodeCount}`);
   const structure = { ...parsed, episodes: parsed.episodes.map((e, i) => ({ ...e, number: i + 1 })) };
-  // Stage 105 — every description is 60-second footage (SHOT 1 / SHOT 2 / CLIFFHANGER, ≤ 120 words, OPENS ON chain). Invalid → retry (never truncate).
-  const problems = validateEpisodeDescriptions(structure.episodes);
-  if (problems.length) throw new Error(`episode descriptions invalid: ${problems.slice(0, 4).join("; ")}`);
+  // Stage 105/107b — every description is 60-second footage (SHOT 1 / SHOT 2 / CLIFFHANGER, OPENS ON chain).
+  // Problems on the FIRST attempt → throw (one cheap retry with EPISODE_FOOTAGE_RETRY_NOTE); on the retry the
+  // caller repairs the failing episodes (repairEpisodeDescriptions) instead of failing the job.
+  if (attempt === 0) {
+    const problems = validateEpisodeDescriptions(structure.episodes);
+    if (problems.length) throw new Error(`episode descriptions need repair: ${problems.slice(0, 4).join("; ")}`);
+  }
   return structure;
 }
 
@@ -555,7 +562,11 @@ type LoadedProject = NonNullable<Awaited<ReturnType<typeof loadProject>>>;
 async function applyStepResult(project: LoadedProject, season: LoadedSeason | null, state: SeasonJobState, raw: unknown, language: IdeaLanguage, cards: CharacterCard[], deps: SeasonJobDeps): Promise<LoadedSeason | null> {
   const projectId = project.id;
   if (state.step === "structure") {
-    const structure = validateStructure(raw, state.episodeCount);
+    const validated = validateStructure(raw, state.episodeCount, state.attempt);
+    // Stage 107b — never fail on footage caps: targeted repair passes + deterministic clamp (always valid).
+    const fixed = await repairEpisodeDescriptions(validated.episodes, language, (sys, usr) => deps.chatJSON(sys, usr, { temperature: 0.3, maxTokens: 6000 }));
+    if (fixed.repaired.length || fixed.clamped.length) console.warn(`[season-job] footage repaired for episodes ${fixed.repaired.join(", ") || "-"}; clamped ${fixed.clamped.join(", ") || "-"}`);
+    const structure: SeasonStructure = { ...validated, episodes: fixed.episodes };
     const byName = new Map(project.characters.map((c) => [c.name.toLowerCase(), c.id]));
     await prisma.$transaction(async (tx) => {
       const s = season
