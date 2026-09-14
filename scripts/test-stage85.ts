@@ -4,7 +4,7 @@
  * follow below. This is a layout / render-order change only — no generation logic touched.
  *
  * Covered:
- *  (1) the location section is marked to render first (order-first) and is visually highlighted;
+ *  (1) the location section renders first (guaranteed by source/DOM order — Stage 90) and is highlighted;
  *  (2) the location block carries the "base layer" emphasis (ties to Stage 84);
  *  (3) location cards are larger than character cards (fewer grid columns + taller preview);
  *  (4) no generation logic / handlers were removed; Stage 75/79-84 wiring preserved.
@@ -31,8 +31,11 @@ ok("0: location section is well-formed", secOpenStart >= 0 && secClose > locStar
 const locSection = refs.slice(secOpenStart, secClose);
 
 // ---- (1) location renders first + highlighted -------------------------------
-ok("1: outer container is a flex column (enables order-first reorder)", /className="flex flex-col gap-6"/.test(refs));
-ok("1: location section is order-first (renders before character blocks)", /order-first/.test(locSection));
+// Stage 90: the "location first" intent is preserved but the mechanism changed — it is now guaranteed by
+// SOURCE ORDER (the location <section> is emitted first in the JSX) rather than the CSS `order-first`
+// utility, which was never emitted into the compiled CSS and therefore never actually reordered anything.
+ok("1: outer container is a flex column", /className="flex flex-col gap-6"/.test(refs));
+ok("1: location section renders before the character blocks (source/DOM order)", refs.indexOf('data-testid="location-references"') < refs.indexOf("groups.map((g)"));
 ok("1: location section is visually highlighted (accent border + tint)", /border-primary\/40/.test(locSection) && /bg-primary\/5/.test(locSection));
 
 // ---- (2) base-layer emphasis (ties to Stage 84) -----------------------------
@@ -56,8 +59,11 @@ ok("4: character user-refs (Stage 75) intact", /CharacterUserRefs/.test(refs));
 ok("4: continue-to-script intact", /data-testid="continue-to-script"/.test(refs) && /continueToScript/.test(refs));
 ok("4: provider picker intact", /ProviderPicker/.test(refs));
 
-// ---- render-order sanity: location section physically before OR order-first --
-// With flex + order-first the DOM position may remain later in source, but the CSS forces it first.
-ok("5: reorder achieved via order-first utility (layout-only, no JSX move needed)", /order-first[^"]*rounded-xl border-2 border-primary\/40/.test(locSection) || /order-first/.test(locSection));
+// ---- render-order sanity: location section physically first in the JSX/DOM --
+// Stage 90: order is guaranteed by source order (location emitted first), NOT by the inert `order-first`
+// CSS utility. Layout-only; the section is physically before the character header and groups.
+ok("5: location section is physically first (before the characters header and groups)",
+  refs.indexOf('data-testid="location-references"') < refs.indexOf("Step 2 — Characters (references)") &&
+  refs.indexOf('data-testid="location-references"') < refs.indexOf("groups.map((g)"));
 
 console.log(`\nAll ${passed} Stage 85 checks passed.`);

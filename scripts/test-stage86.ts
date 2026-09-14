@@ -95,7 +95,9 @@ ok("B: location section exists", locStart > 0);
 const secOpen = refs.lastIndexOf("<section", locStart);
 const secClose = refs.indexOf("</section>", locStart);
 const locSection = refs.slice(secOpen, secClose);
-ok("B: location section is order-first (rendered first regardless of DB record order)", /order-first/.test(locSection));
+// Stage 90: "rendered first" is now guaranteed by SOURCE ORDER (location <section> emitted first in the
+// JSX), not the CSS `order-first` utility (which was never emitted into the compiled CSS and was inert).
+ok("B: location section renders first, before the character groups (source/DOM order, independent of DB order)", refs.indexOf('data-testid="location-references"') < refs.indexOf("groups.map((g)"));
 ok("B: location section is rendered from the dedicated locations relation", /locations\.map\(\(loc\)/.test(refs));
 ok("B: location section highlighted + base-layer emphasis retained (Stage 85)", /border-primary\/40/.test(locSection) && /Base scene layer/.test(locSection));
 ok("B: character groups render from the tier groups, never mixed with locations", /groups\.map\(\(g\)/.test(refs) && /data-testid=\{`ref-group-\$\{g\.tier\}`\}/.test(refs));

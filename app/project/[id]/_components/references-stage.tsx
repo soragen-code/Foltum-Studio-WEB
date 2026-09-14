@@ -380,132 +380,22 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
   }
 
   return (
-    // Stage 85/86: location references render FIRST as a distinct highlighted block at the top
-    // (order-first, larger cards) — it is the base layer of the scene; character reference blocks
-    // follow below. The order is enforced by TYPE (the location section carries `order-first`, and
-    // it is rendered from the dedicated `locations` relation — never mixed into the character groups),
-    // so it holds for OLD projects too, regardless of the order records were created / returned by the
-    // DB. Layout/render-order only; no generation logic changed.
+    // Stage 90: location references render FIRST as a distinct highlighted block at the top — it is the base
+    // layer of the scene; character reference blocks follow below. The order is guaranteed by SOURCE ORDER
+    // (the location <section> is the first child in this JSX, so it is physically first in the DOM) and by TYPE
+    // (rendered from the dedicated `locations` relation — never mixed into the character groups), so it holds
+    // for OLD projects too, regardless of the order records were created / returned by the DB. Layout/render
+    // order only; no generation logic changed.
     <div className="flex flex-col gap-6">
-      <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <h2 className="flex items-center gap-2 font-display text-xl font-bold">
-            <Users className="h-5 w-5 text-primary" /> {optional ? 'References' : 'Step 2 — Characters (references)'}
-          </h2>
-          {/* Stage 74: reference-image provider (transport only; model fixed to Seedream 5.0 Pro). Always visible. */}
-          <ProviderPicker kind="image" projectId={project.id} value={project?.imageProvider} compact onChange={onRefresh} />
-        </div>
-        {optional && (
-          <p className="mt-1 text-sm text-muted-foreground">
-            References are not required for the script — they are needed to generate scene videos: characters and locations will look consistent across all shots.
-          </p>
-        )}
-        <p className="mt-1 text-sm text-muted-foreground">
-          Photorealistic references are generated from each character's appearance description. Done: {readyCount} of {characters.length}.
-          References are created automatically for main characters; supporting, episodic, and crowd/extras can be generated
-          using the buttons below ({CHARACTER_REFERENCE_COST} cr. per character or group).
-        </p>
-        {error && <div className="mt-4 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
-        {projectJob && (
-          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground" data-testid="references-progress">
-            <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-primary" />
-            <span className="min-w-0 flex-1 truncate">{projectJob.message ?? 'Generating references...'}</span>
-            <span className="flex-shrink-0 tabular-nums">{Math.round(projectJob.progress)}%</span>
-            <CancelButton onCancel={() => cancelJob(projectJob.id)} testId="references-cancel" />
-          </div>
-        )}
-        {!anyActive && missing.length > 0 && (
-          <div className="mt-4 flex flex-wrap gap-2" data-testid="references-bulk">
-            {missingByTier(['MAIN']).length > 0 && (
-              <button
-                onClick={startReferences}
-                disabled={starting || !!bulk}
-                className="flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
-                data-testid="references-start"
-              >
-                {starting ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-                Generate main characters ({missingByTier(['MAIN']).length} × {CHARACTER_REFERENCE_COST} cr.)
-              </button>
-            )}
-            {missingByTier(['SUPPORTING']).length > 0 && (
-              <button
-                onClick={() => startBulk('supporting', ['SUPPORTING'])}
-                disabled={starting || !!bulk}
-                className="flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
-                data-testid="references-start-supporting"
-              >
-                {bulk === 'supporting' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Users className="h-3 w-3" />}
-                Generate supporting characters ({missingByTier(['SUPPORTING']).length} × {CHARACTER_REFERENCE_COST} cr.)
-              </button>
-            )}
-            {missingByTier(['MINOR', 'CROWD']).length > 0 && (
-              <button
-                onClick={() => startBulk('minor', ['MINOR', 'CROWD'])}
-                disabled={starting || !!bulk}
-                className="flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
-                data-testid="references-start-minor"
-              >
-                {bulk === 'minor' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Users className="h-3 w-3" />}
-                Episodic characters and extras ({missingByTier(['MINOR', 'CROWD']).length} × {CHARACTER_REFERENCE_COST} cr.)
-              </button>
-            )}
-            {missing.length > 1 && (
-              <button
-                onClick={() => startBulk('all')}
-                disabled={starting || !!bulk}
-                className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
-                data-testid="references-start-all"
-              >
-                {bulk === 'all' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />}
-                Generate all ({missing.length} × {CHARACTER_REFERENCE_COST} = {missing.length * CHARACTER_REFERENCE_COST} cr.)
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-
-      {groups.map((g) => (
-        <section key={g.tier} className="space-y-3" data-testid={`ref-group-${g.tier}`}>
-          <h3 className="flex flex-wrap items-center gap-2 text-sm font-semibold">
-            {TIER_LABELS[g.tier]} <span className="text-xs font-normal text-muted-foreground">· {g.items.filter(hasAnyImage).length} of {g.items.length} with references</span>
-          </h3>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {g.items.map((c) => {
-              const gen = activeGen[c.id]
-              return (
-                <CharacterCard
-                  key={c.id}
-                  char={c}
-                  busy={!!gen}
-                  onUndo={undoCharacter}
-                  extra={
-                    <>
-                      <ReferenceImages char={c} generating={!!gen} message={gen && gen !== 'local' ? gen.message : null} onRegen={(shot) => regenShot('character', c.id, shot)} shotBusy={(shot) => !!shotBusy[shotKey(c.id, shot)]} />
-                      {/* Stage 75: user-uploaded photo references (fed as image_input to every reference shot) */}
-                      <CharacterUserRefs characterId={c.id} userRefs={c.userRefs} disabled={!!c.refLocked} />
-                      {/* Stage 46E: prompt view/edit + download all */}
-                      <div className="mb-3 flex flex-wrap items-center gap-1.5">
-                        <button type="button" onClick={() => setPromptFor({ kind: 'character', id: c.id, name: c.name })} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs" data-testid="character-prompt" title="View, copy, or edit the character prompt">
-                          <FileText className="h-3.5 w-3.5" /> Prompt
-                        </button>
-                        <DownloadAllButton kind="character" id={c.id} count={characterFrameCount(c)} />
-                        <button type="button" disabled={!!gen || !!charResetting[c.id]} onClick={() => resetCharacterPrompt(c.id)} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="char-prompt-reset" title="Remove manual prompt and restore automatic">
-                            {charResetting[c.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Reset prompt to auto
-                          </button>
-                        {!!(c.promptOverride && c.promptOverride.trim()) && <span className="rounded bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="character-prompt-override">Prompt changed manually</span>}
-                      </div>
-                    </>
-                  }
-                  footer={<AppearanceEditor characterId={c.id} disabled={!!gen} onSubmit={changeAppearance} />}
-                />
-              )
-            })}
-          </div>
-        </section>
-      ))}
-
-      {/* Stage 85: highlighted, order-first block — the location is the base layer of the scene. */}
-      <section className="order-first rounded-xl border-2 border-primary/40 bg-primary/5 p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }} data-testid="location-references">
+      {/* Stage 90: the location renders FIRST because it is emitted first in the JSX (physically first in the
+          DOM) — NOT via a CSS order utility. The prior Stage 85/86 approach floated this block up with
+          Tailwind's `order-first`, but that utility was never emitted into the compiled CSS, so the class was
+          inert and the section fell back to its natural (last) DOM position — that is why the location kept
+          appearing below the characters. Rendering it first in source is layout-only and robust for old and
+          new projects alike: the location comes from the dedicated `locations` relation (by TYPE), never mixed
+          into the character groups, so it does not depend on DB record order. Larger cards (lg:grid-cols-2 vs
+          the character grid's lg:grid-cols-3). No generation logic changed. */}
+      <section className="rounded-xl border-2 border-primary/40 bg-primary/5 p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }} data-testid="location-references">
         <h2 className="flex flex-wrap items-center gap-2 font-display text-xl font-bold">
           <MapPin className="h-5 w-5 text-primary" /> Location references
           <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary">Base scene layer — created first</span>
@@ -636,6 +526,124 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
           </div>
         )}
       </section>
+
+      <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <h2 className="flex items-center gap-2 font-display text-xl font-bold">
+            <Users className="h-5 w-5 text-primary" /> {optional ? 'References' : 'Step 2 — Characters (references)'}
+          </h2>
+          {/* Stage 74: reference-image provider (transport only; model fixed to Seedream 5.0 Pro). Always visible. */}
+          <ProviderPicker kind="image" projectId={project.id} value={project?.imageProvider} compact onChange={onRefresh} />
+        </div>
+        {optional && (
+          <p className="mt-1 text-sm text-muted-foreground">
+            References are not required for the script — they are needed to generate scene videos: characters and locations will look consistent across all shots.
+          </p>
+        )}
+        <p className="mt-1 text-sm text-muted-foreground">
+          Photorealistic references are generated from each character's appearance description. Done: {readyCount} of {characters.length}.
+          References are created automatically for main characters; supporting, episodic, and crowd/extras can be generated
+          using the buttons below ({CHARACTER_REFERENCE_COST} cr. per character or group).
+        </p>
+        {error && <div className="mt-4 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
+        {projectJob && (
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground" data-testid="references-progress">
+            <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-primary" />
+            <span className="min-w-0 flex-1 truncate">{projectJob.message ?? 'Generating references...'}</span>
+            <span className="flex-shrink-0 tabular-nums">{Math.round(projectJob.progress)}%</span>
+            <CancelButton onCancel={() => cancelJob(projectJob.id)} testId="references-cancel" />
+          </div>
+        )}
+        {!anyActive && missing.length > 0 && (
+          <div className="mt-4 flex flex-wrap gap-2" data-testid="references-bulk">
+            {missingByTier(['MAIN']).length > 0 && (
+              <button
+                onClick={startReferences}
+                disabled={starting || !!bulk}
+                className="flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
+                data-testid="references-start"
+              >
+                {starting ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+                Generate main characters ({missingByTier(['MAIN']).length} × {CHARACTER_REFERENCE_COST} cr.)
+              </button>
+            )}
+            {missingByTier(['SUPPORTING']).length > 0 && (
+              <button
+                onClick={() => startBulk('supporting', ['SUPPORTING'])}
+                disabled={starting || !!bulk}
+                className="flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
+                data-testid="references-start-supporting"
+              >
+                {bulk === 'supporting' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Users className="h-3 w-3" />}
+                Generate supporting characters ({missingByTier(['SUPPORTING']).length} × {CHARACTER_REFERENCE_COST} cr.)
+              </button>
+            )}
+            {missingByTier(['MINOR', 'CROWD']).length > 0 && (
+              <button
+                onClick={() => startBulk('minor', ['MINOR', 'CROWD'])}
+                disabled={starting || !!bulk}
+                className="flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
+                data-testid="references-start-minor"
+              >
+                {bulk === 'minor' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Users className="h-3 w-3" />}
+                Episodic characters and extras ({missingByTier(['MINOR', 'CROWD']).length} × {CHARACTER_REFERENCE_COST} cr.)
+              </button>
+            )}
+            {missing.length > 1 && (
+              <button
+                onClick={() => startBulk('all')}
+                disabled={starting || !!bulk}
+                className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
+                data-testid="references-start-all"
+              >
+                {bulk === 'all' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />}
+                Generate all ({missing.length} × {CHARACTER_REFERENCE_COST} = {missing.length * CHARACTER_REFERENCE_COST} cr.)
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {groups.map((g) => (
+        <section key={g.tier} className="space-y-3" data-testid={`ref-group-${g.tier}`}>
+          <h3 className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+            {TIER_LABELS[g.tier]} <span className="text-xs font-normal text-muted-foreground">· {g.items.filter(hasAnyImage).length} of {g.items.length} with references</span>
+          </h3>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {g.items.map((c) => {
+              const gen = activeGen[c.id]
+              return (
+                <CharacterCard
+                  key={c.id}
+                  char={c}
+                  busy={!!gen}
+                  onUndo={undoCharacter}
+                  extra={
+                    <>
+                      <ReferenceImages char={c} generating={!!gen} message={gen && gen !== 'local' ? gen.message : null} onRegen={(shot) => regenShot('character', c.id, shot)} shotBusy={(shot) => !!shotBusy[shotKey(c.id, shot)]} />
+                      {/* Stage 75: user-uploaded photo references (fed as image_input to every reference shot) */}
+                      <CharacterUserRefs characterId={c.id} userRefs={c.userRefs} disabled={!!c.refLocked} />
+                      {/* Stage 46E: prompt view/edit + download all */}
+                      <div className="mb-3 flex flex-wrap items-center gap-1.5">
+                        <button type="button" onClick={() => setPromptFor({ kind: 'character', id: c.id, name: c.name })} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs" data-testid="character-prompt" title="View, copy, or edit the character prompt">
+                          <FileText className="h-3.5 w-3.5" /> Prompt
+                        </button>
+                        <DownloadAllButton kind="character" id={c.id} count={characterFrameCount(c)} />
+                        <button type="button" disabled={!!gen || !!charResetting[c.id]} onClick={() => resetCharacterPrompt(c.id)} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs disabled:opacity-50" data-testid="char-prompt-reset" title="Remove manual prompt and restore automatic">
+                            {charResetting[c.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />} Reset prompt to auto
+                          </button>
+                        {!!(c.promptOverride && c.promptOverride.trim()) && <span className="rounded bg-primary/15 px-2 py-0.5 text-[11px] font-medium text-primary" data-testid="character-prompt-override">Prompt changed manually</span>}
+                      </div>
+                    </>
+                  }
+                  footer={<AppearanceEditor characterId={c.id} disabled={!!gen} onSubmit={changeAppearance} />}
+                />
+              )
+            })}
+          </div>
+        </section>
+      ))}
+
 
       {promptFor && (
         <PromptModal
