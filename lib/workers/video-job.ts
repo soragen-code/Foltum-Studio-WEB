@@ -24,7 +24,7 @@ import { nextChainScene, chainStopMessage, CHAIN_INSUFFICIENT_CREDITS } from "@/
 import { resolvePowerTier, SCENE_RESOLUTION } from "@/lib/power-tier";
 import { sceneProgressStage, SCENE_STAGE_PROGRESS, SCENE_STAGE_MESSAGE } from "@/lib/scene-progress";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
-import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, resolveContinuity, TEXT_ONLY_CONTINUITY_MESSAGE, type Continuity } from "@/lib/prompt-seam";
+import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, resolveContinuity, TEXT_ONLY_CONTINUITY_MESSAGE, type Continuity } from "@/lib/prompt-seam";
 
 export interface VideoJobParams {
   jobId: string;
@@ -262,7 +262,11 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     // Stage 82: the whole episode is one continuous event — a continuing scene carries the previous
     // shot's world/action on in real time (persistent world, not a frozen composition).
     prompt = applyContinuousAction(prompt, { hasOverride: built.hasOverride, continuity });
-    console.log("[video-job] continuity", JSON.stringify({ sceneId, sceneNumber: scene.number, continuity, previousFrameSceneId: built.previousFrameSceneId ?? null }));
+    // Stage 84: the location reference is the base layer of the frame — the environment is built first,
+    // then the characters are placed INTO it. Applied only when a location reference is actually sent.
+    const hasLocationRef = built.retryRefs.some((r) => r.kind === "location");
+    prompt = applyLocationBaseLayer(prompt, { hasOverride: built.hasOverride, hasLocationRef });
+    console.log("[video-job] continuity", JSON.stringify({ sceneId, sceneNumber: scene.number, continuity, previousFrameSceneId: built.previousFrameSceneId ?? null, hasLocationRef }));
     const basePrompt = built.basePrompt;
     const fallbackRefs = built.fallbackRefs;
     let referenceImages = built.referenceImages;

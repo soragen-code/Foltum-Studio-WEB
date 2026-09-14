@@ -5,7 +5,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { buildScenePrompt } from "@/lib/scene-prompt";
-import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, resolveContinuity } from "@/lib/prompt-seam";
+import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, resolveContinuity } from "@/lib/prompt-seam";
 import { normalizePromptOverride } from "@/lib/prompt-override";
 
 /**
@@ -65,15 +65,20 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     previousFrameSceneId: built.previousFrameSceneId,
     refs: built.retryRefs,
   });
-  // Stage 78/81/82: the preview shows EXACTLY what the worker submits — same seam / RE-FRAME transforms,
-  // the Stage 81 NEW-SHOT CAMERA MOVE and the Stage 82 CONTINUOUS ACTION directive for a continuing scene.
-  const prompt = applyContinuousAction(
-    applyNewShotCameraMove(
-      applyReframeDirective(applySeamDirectives(built.prompt, { hasOverride: built.hasOverride }), built.retryRefs, { hasOverride: built.hasOverride }),
-      scene.number,
+  // Stage 78/81/82/84: the preview shows EXACTLY what the worker submits — same seam / RE-FRAME
+  // transforms, the Stage 81 NEW-SHOT CAMERA MOVE, the Stage 82 CONTINUOUS ACTION directive for a
+  // continuing scene, and the Stage 84 LOCATION-AS-BASE-LAYER directive when a location ref is sent.
+  const hasLocationRef = built.retryRefs.some((r) => r.kind === "location");
+  const prompt = applyLocationBaseLayer(
+    applyContinuousAction(
+      applyNewShotCameraMove(
+        applyReframeDirective(applySeamDirectives(built.prompt, { hasOverride: built.hasOverride }), built.retryRefs, { hasOverride: built.hasOverride }),
+        scene.number,
+        { hasOverride: built.hasOverride, continuity },
+      ),
       { hasOverride: built.hasOverride, continuity },
     ),
-    { hasOverride: built.hasOverride, continuity },
+    { hasOverride: built.hasOverride, hasLocationRef },
   );
 
   return NextResponse.json({

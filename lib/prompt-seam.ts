@@ -170,6 +170,34 @@ export function applyContinuousAction(
 }
 
 /* ------------------------------------------------------------------------------------------ */
+/*  Stage 84 — LOCATION AS THE BASE LAYER                                                       */
+/*  The location reference is the foundation of the frame: the environment / set / background   */
+/*  is established FIRST from the location reference images, and only THEN are the characters    */
+/*  placed INTO that already-built location (composited on top of / inside it). The location is  */
+/*  never rebuilt, restyled or re-composed to fit the characters — it comes first, the people    */
+/*  occupy it. This does NOT reorder the [ImageN] reference set (that mapping is owned by the     */
+/*  protected lib/scene-prompt.ts); it makes the layering order explicit for the video model.    */
+/* ------------------------------------------------------------------------------------------ */
+
+export const LOCATION_BASE_LAYER_LINE =
+  "LOCATION IS THE BASE LAYER: build the frame from the location reference images first — the environment, set, walls, floor, objects, depth, lighting and palette of that place are laid down as the foundation of the shot. The characters are then placed INTO this already-established location, standing on its floor with its walls and objects beside and behind them, composited on top of / inside it. Never rebuild, restyle, relight or re-compose the location around the characters, and never render them as figures pasted in front of a picture of the place: the location comes first as the base plate, the people occupy it second.";
+
+/**
+ * Append the LOCATION-AS-BASE-LAYER directive when a location reference is actually attached to the
+ * scene (Stage 84). No location reference → nothing to layer under, so it is left untouched. A manual
+ * override owns its full text and is returned unchanged. Idempotent.
+ */
+export function applyLocationBaseLayer(
+  prompt: string,
+  opts: { hasOverride: boolean; hasLocationRef: boolean }
+): string {
+  if (opts.hasOverride) return prompt;
+  if (!opts.hasLocationRef) return prompt;
+  if (prompt.includes(LOCATION_BASE_LAYER_LINE)) return prompt;
+  return `${prompt.trimEnd()}\n${LOCATION_BASE_LAYER_LINE}`;
+}
+
+/* ------------------------------------------------------------------------------------------ */
 /*  Part C — continuity channel of a scene submission                                          */
 /* ------------------------------------------------------------------------------------------ */
 
