@@ -22,7 +22,7 @@ import { CHARACTER_REFERENCE_COST, POWER_TIERS, POWER_TIER_CONFIG, DEFAULT_POWER
 import { IMAGE_MODELS, DEFAULT_IMAGE_MODEL, VIDEO_MODEL_LABEL, type ImageModelId } from '@/lib/ai-models'
 import { EpisodeNavGrid } from './episode-nav-grid'
 import { locationExtraLabel } from '@/lib/visual-style'
-import { episodeTotalSeconds, EPISODE_MAX_TOTAL_SECONDS } from '@/lib/season'
+import { episodeTotalSeconds, EPISODE_MAX_TOTAL_SECONDS, EPISODE_TOTAL_LABEL } from '@/lib/season'
 import { ASSEMBLE_QUALITIES, ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY, DEFAULT_ASSEMBLE_FPS, type AssembleQuality, type AssembleFps } from '@/lib/assemble-options'
 import { ProviderPicker } from '@/app/project/[id]/_components/provider-picker'
 
@@ -1277,7 +1277,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         )}
 
         {/* Scenes */}
-        {/* Stage 45 — running-time budget: the whole episode must stay under 2 minutes. */}
+        {/* Stage 45/103 — running-time budget: the whole episode is EPISODE_TOTAL_LABEL (1:00). */}
         {(() => {
           const total = episodeTotalSeconds(scenes)
           const over = total > EPISODE_MAX_TOTAL_SECONDS
@@ -1285,8 +1285,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           return (
             <div className="mt-8 flex flex-wrap items-baseline gap-x-4 gap-y-1">
               <h2 className="font-display text-xl font-bold">Scenes ({scenes.length})</h2>
-              <span className={`text-sm ${over ? 'font-semibold text-destructive' : 'text-muted-foreground'}`} title={over ? 'Episode is longer than 2 minutes — shorten the scenes' : 'Episode limit — 2 minutes'}>
-                Total duration: {mmss(total)} / {mmss(EPISODE_MAX_TOTAL_SECONDS)}{over ? ' — longer than 2 minutes, shorten the scenes' : ''}
+              <span className={`text-sm ${over ? 'font-semibold text-destructive' : 'text-muted-foreground'}`} title={over ? `Episode is longer than ${EPISODE_TOTAL_LABEL} — shorten the scenes` : `Episode length — ${EPISODE_TOTAL_LABEL}`}>
+                Total duration: {mmss(total)} / {mmss(EPISODE_MAX_TOTAL_SECONDS)}{over ? ` — longer than ${EPISODE_TOTAL_LABEL}, shorten the scenes` : ''}
               </span>
             </div>
           )

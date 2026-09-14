@@ -44,6 +44,7 @@ import {
   renderEpisodeScriptText,
   episodeTotalSeconds,
   EPISODE_MAX_TOTAL_SECONDS,
+  EPISODE_TOTAL_LABEL,
   SEASON_DEFAULT_EPISODES,
   type EpisodeOutline,
   type EpisodeScript,
@@ -83,7 +84,7 @@ export type SeasonJobState = {
   skipFullStory?: boolean;
   /** Author-requested rewrite of specific (already written) episodes. */
   revise?: { episodeIds: string[]; instruction: string; force?: boolean };
-  /** Stage 45 — advisory notes shown with the final job message (e.g. an episode over the 2-minute budget). */
+  /** Stage 45 — advisory notes shown with the final job message (e.g. an episode over the 1:00 budget). */
   warnings?: string[];
 };
 
@@ -571,10 +572,10 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
     const outline = outlineFromEpisode(ep);
     // Seedance voices `dialogue` → it must be English; swap swapped fields / translate leftovers (short gpt-4o pass).
     const script = await ensureEnglishDialogue(validateEpisode(raw, ep.number, cards), deps.chatJSON);
-    // Stage 45 — the 2-minute budget is enforced by normalize where speech allows; what is left over is
-    // shown to the author instead of failing the job (no line of dialogue is ever cut to make it fit).
+    // Stage 45/103 — the episode budget (EPISODE_TOTAL_LABEL) is enforced by normalize where speech allows;
+    // what is left over is shown to the author instead of failing the job (no line of dialogue is ever cut to make it fit).
     const total = episodeTotalSeconds(script.scenes);
-    const overNote = `episode ${ep.number} is longer than 2 minutes (${total} s) - shorten the scenes`;
+    const overNote = `episode ${ep.number} is longer than ${EPISODE_TOTAL_LABEL} (${total} s) - shorten the scenes`;
     state.warnings = (state.warnings ?? []).filter((w) => !w.startsWith(`episode ${ep.number} `));
     if (total > EPISODE_MAX_TOTAL_SECONDS) state.warnings.push(overNote);
     await persistEpisodeScript(ep.id, outline, script, project.characters.map((c) => ({ id: c.id, name: c.name })), language);

@@ -7,11 +7,11 @@
  *    shooting-script prompt (lib/season.ts episodeScriptSystemPrompt) and the single-scene
  *    revise prompt (lib/season.ts sceneReviseSystemPrompt).
  *
- *  Change C — fixed-length shots: every episode is EXACTLY EPISODE_SCENE_COUNT (4) scenes,
- *    every scene a full SCENE_FIXED_SECONDS (30 s) EXCEPT the last (a little shorter), so the
- *    whole episode stays ≤ EPISODE_MAX_TOTAL_SECONDS (119 s / under 1:59). The canonical split
- *    for 4 scenes is 30 + 30 + 30 + 29 = 119. sceneDurationsForCount() produces that, and both
- *    lib/season.ts and lib/workers/scenes-job.ts drive their prompts and persistence from it.
+ *  Change C — fixed-length shots: every episode is EXACTLY EPISODE_SCENE_COUNT scenes, every
+ *    scene a full SCENE_FIXED_SECONDS (30 s), the last trimmed only if the split requires it, so
+ *    the whole episode is EXACTLY EPISODE_MAX_TOTAL_SECONDS. Since Stage 103 that is 2 scenes ×
+ *    30 s = 60 s (1:00): the canonical split is 30 + 30 = 60. sceneDurationsForCount() produces
+ *    that, and both lib/season.ts and lib/workers/scenes-job.ts drive their prompts from it.
  *
  *  (Change B — the references-screen location card now matches the character card size/layout —
  *   is a visual/JSX change verified in the build + test-stage9x DOM tests; a light static check
@@ -63,9 +63,9 @@ const episodeView = readFileSync(EPISODE_VIEW, "utf8");
   ok(epScript.includes("${DIRECTING_RULES}"), "A: episodeScriptSystemPrompt embeds DIRECTING_RULES");
 }
 
-// ── C. Fixed 30 s scenes, last shorter, episode capped at 119 s / under 1:59 ──
+// ── C. Fixed 30 s scenes, episode = EXACTLY 60 s (1:00) since Stage 103 ──
 {
-  ok(/EPISODE_MAX_TOTAL_SECONDS\s*=\s*119/.test(season), "C: EPISODE_MAX_TOTAL_SECONDS = 119 (under 1:59)");
+  ok(/EPISODE_MAX_TOTAL_SECONDS\s*=\s*60/.test(season), "C: EPISODE_MAX_TOTAL_SECONDS = 60 (1:00)");
   ok(/export function sceneDurationsForCount/.test(season), "C: season.ts exports sceneDurationsForCount");
   ok(/export function applyFixedSceneDurations/.test(season), "C: season.ts exports applyFixedSceneDurations");
 
@@ -80,15 +80,15 @@ async function liveChecks() {
   const mod = await import("../lib/season.ts");
   const { sceneDurationsForCount, EPISODE_SCENE_COUNT, EPISODE_MAX_TOTAL_SECONDS, SCENE_FIXED_SECONDS } = mod as any;
 
-  ok(EPISODE_SCENE_COUNT === 4, `C-live: EPISODE_SCENE_COUNT === 4 (got ${EPISODE_SCENE_COUNT})`);
-  ok(EPISODE_MAX_TOTAL_SECONDS === 119, `C-live: EPISODE_MAX_TOTAL_SECONDS === 119 (got ${EPISODE_MAX_TOTAL_SECONDS})`);
+  ok(EPISODE_SCENE_COUNT === 2, `C-live: EPISODE_SCENE_COUNT === 2 (got ${EPISODE_SCENE_COUNT})`);
+  ok(EPISODE_MAX_TOTAL_SECONDS === 60, `C-live: EPISODE_MAX_TOTAL_SECONDS === 60 (got ${EPISODE_MAX_TOTAL_SECONDS})`);
   ok(SCENE_FIXED_SECONDS === 30, `C-live: SCENE_FIXED_SECONDS === 30 (got ${SCENE_FIXED_SECONDS})`);
 
-  const d = sceneDurationsForCount(4);
-  ok(JSON.stringify(d) === JSON.stringify([30, 30, 30, 29]), `C-live: sceneDurationsForCount(4) === [30,30,30,29] (got ${JSON.stringify(d)})`);
-  ok(d.reduce((a: number, b: number) => a + b, 0) === 119, "C-live: the 4 durations sum to 119");
+  const d = sceneDurationsForCount(2);
+  ok(JSON.stringify(d) === JSON.stringify([30, 30]), `C-live: sceneDurationsForCount(2) === [30,30] (got ${JSON.stringify(d)})`);
+  ok(d.reduce((a: number, b: number) => a + b, 0) === 60, "C-live: the 2 durations sum to 60");
   ok(d.slice(0, -1).every((x: number) => x === 30), "C-live: every non-last scene is exactly 30 s");
-  ok(d[d.length - 1] < 30, "C-live: the last scene is shorter than 30 s");
+  ok(d[d.length - 1] === 30, "C-live: the last scene is a full 30 s (no trim needed for 2 × 30)");
   ok(d.every((x: number) => x <= 30), "C-live: no scene exceeds 30 s");
 }
 

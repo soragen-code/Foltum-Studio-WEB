@@ -28,6 +28,7 @@ import { DIRECTING_RULES } from "@/lib/directing-rules";
 import {
   EPISODE_MAX_TOTAL_SECONDS,
   EPISODE_SCENE_COUNT,
+  EPISODE_TOTAL_LABEL,
   SCENE_FIXED_SECONDS,
   sceneDurationsForCount,
 } from "@/lib/season";
@@ -38,26 +39,43 @@ export const SCENES_JOB_TYPE = "scenes";
 /** Roughly how long the scene breakdown takes with gpt-6-astra — drives the smooth 0→100 % client bar. */
 export const SCENES_EXPECTED_SEC = 240;
 
-// Stage 93 — an episode is a FIXED number of shots (EPISODE_SCENE_COUNT = 4). Every shot is a
-// full SCENE_FIXED_SECONDS (30 s) clip EXCEPT the last, which is a little shorter so the whole
-// episode stays UNDER 1:59 (≤ EPISODE_MAX_TOTAL_SECONDS). For 4 scenes the split is 30+30+30+29 = 119.
+// Stage 103 — an episode is a FIXED number of shots (EPISODE_SCENE_COUNT = 2). Every shot is a
+// full SCENE_FIXED_SECONDS (30 s) clip, so the whole episode is EXACTLY EPISODE_MAX_TOTAL_SECONDS
+// (60 s = 1:00). The split is derived from sceneDurationsForCount: [30, 30] (the last shot is trimmed
+// only if the split ever requires it). Every label below is DERIVED — nothing is hardcoded.
 const SCENES_PER_EPISODE = EPISODE_SCENE_COUNT;
 const SCENE_SECONDS = SCENE_FIXED_SECONDS;
-/** Per-scene durations, in order: [30, 30, 30, 29] for a 4-scene episode. */
+/** Per-scene durations, in order: [30, 30] for a 2-scene episode. */
 const SCENE_DURATIONS = sceneDurationsForCount(SCENES_PER_EPISODE);
 const EPISODE_TOTAL_SECONDS = EPISODE_MAX_TOTAL_SECONDS;
+/** "1:00" — the whole-episode running time as m:ss (derived). */
+const TOTAL_LABEL = EPISODE_TOTAL_LABEL;
+/** Conditional "last shot" wording: with [30, 30] every shot is a full 30 s. */
+const LAST_SHOT_TEXT = SCENE_DURATIONS[SCENE_DURATIONS.length - 1] < SCENE_SECONDS
+  ? `every shot is a full ${SCENE_SECONDS} s clip EXCEPT the LAST, trimmed to ${SCENE_DURATIONS[SCENE_DURATIONS.length - 1]} s so the split fits`
+  : `every shot is a full ${SCENE_SECONDS} s clip (the last is trimmed only if the split requires it — here it does not)`;
 
 /** Minimum number of purely visual beats (no spoken lines) per episode. */
 const MIN_SILENT_SCENES = 0;
-/** Maximum silent shots — kept low so the MAJORITY of shots carry spoken dialogue
- *  and characters actually talk to each other across the episode. */
-const MAX_SILENT_SCENES = 1;
+/** Maximum silent shots — with only 2 shots at most ONE may be silent (never both), so the episode
+ *  stays dialogue-driven and characters actually talk to each other. */
+const MAX_SILENT_SCENES = Math.min(1, Math.max(0, SCENES_PER_EPISODE - 1));
+
+/**
+ * Stage 103 — the episode structure sentence shared by the SYSTEM prompt and the user message
+ * (exported so tests can check the derived labels without a DB): 2 shots, 1:00, set-up → escalation.
+ */
+export const EPISODE_STRUCTURE_TEXT =
+  `Every episode is EXACTLY ${SCENES_PER_EPISODE} shots and runs EXACTLY ${TOTAL_LABEL} (${EPISODE_TOTAL_SECONDS} s) of total screen time: ` +
+  `${LAST_SHOT_TEXT}; the split is ${SCENE_DURATIONS.join(" + ")} = ${EPISODE_TOTAL_SECONDS} s. ` +
+  `Shot 1 = the SET-UP — it carries the episode's continuation straight out of the previous episode's cliffhanger (episode 1: the season opening) and states this episode's conflict; ` +
+  `shot 2 = the ESCALATION — the conflict sharpens and the shot ENDS on this episode's cliffhanger.`;
 
 /** Every scene is rendered as a full ~SCENE_FIXED_SECONDS (30 s) clip with Seedance native
  *  audio, so each talking scene must carry enough dialogue to fill the whole clip. */
 const DIALOGUE_CLIP_SECONDS = SCENE_FIXED_SECONDS;
 
-const SYSTEM = `You are a film director + cinematographer + editor working on a short-form VERTICAL drama series (9:16, TikTok/Reels format). Every episode is EXACTLY ${SCENES_PER_EPISODE} shots and runs UNDER 1:59 (${EPISODE_TOTAL_SECONDS} s) of total screen time.
+const SYSTEM = `You are a film director + cinematographer + editor working on a short-form VERTICAL drama series (9:16, TikTok/Reels format). ${EPISODE_STRUCTURE_TEXT}
 
 ${DIRECTING_RULES}
 
@@ -88,7 +106,7 @@ Given the project synopsis, this episode's description, and the characters, retu
 
 ============ SHOT DESIGN RULES ============
 
-1. HARD RUNNING-TIME BUDGET (FIXED-LENGTH SHOTS). The episode is EXACTLY ${SCENES_PER_EPISODE} scenes. EVERY scene is a full ${SCENE_SECONDS}-second clip EXCEPT the LAST, which is a little shorter so the whole episode stays UNDER 1:59 — set "durationSec" = ${SCENE_SECONDS} for scenes 1..${SCENES_PER_EPISODE - 1} and "durationSec" = ${SCENE_DURATIONS[SCENES_PER_EPISODE - 1]} for scene ${SCENES_PER_EPISODE} (the exact split is ${SCENE_DURATIONS.join(" + ")} = ${EPISODE_TOTAL_SECONDS} s). NO scene may exceed ${SCENE_SECONDS} s. Because each clip is a long ${SCENE_SECONDS} s, WRITE ENOUGH DIALOGUE TO FILL IT (see rule 7). Scene 1 opens on a wide or aerial ESTABLISHING SHOT (EXT — Location — Time, or a wide interior) that grounds the viewer in place, time and mood and defines the episode's visual identity — but someone is ALREADY talking in it (dialogue over the establishing shot), unless scene 1 is the single allowed silent beat.
+1. HARD RUNNING-TIME BUDGET (FIXED-LENGTH SHOTS). The episode is EXACTLY ${SCENES_PER_EPISODE} scenes; ${LAST_SHOT_TEXT}, so the whole episode runs EXACTLY ${TOTAL_LABEL} — set "durationSec" per scene to ${SCENE_DURATIONS.join(", ")} (in order; the exact split is ${SCENE_DURATIONS.join(" + ")} = ${EPISODE_TOTAL_SECONDS} s). NO scene may exceed ${SCENE_SECONDS} s. Because each clip is a long ${SCENE_SECONDS} s, WRITE ENOUGH DIALOGUE TO FILL IT (see rule 7). Scene 1 opens on a wide or aerial ESTABLISHING SHOT (EXT — Location — Time, or a wide interior) that grounds the viewer in place, time and mood and defines the episode's visual identity — but someone is ALREADY talking in it (dialogue over the establishing shot), unless scene 1 is the single allowed silent beat.
 
 2. SHOT PROGRESSION, NOT SCENE JUMPS. Think like a cinematographer covering one continuous action: wide → medium → close-up → reaction shot → back to medium → insert → ... Action, location and time flow CONTINUOUSLY from shot to shot: shot N+1 starts exactly where shot N ended (same room, same light, same positions, same props). A change of location/time is allowed ONLY when explicitly motivated and written into locationDesc as a transition ("CUT TO: 2 hours later —", "SMASH CUT TO: EXT —"). At most 1–2 such transitions per episode.
 
@@ -226,7 +244,7 @@ Episode ${episode.number}: "${episode.title}"
 Description: ${episode.description}
 This episode's ending cliffhanger (build toward it): ${episode.cliffhanger ?? "N/A"}
 
-Direct this episode as ONE continuous piece of film: first write "visualIdentity" and the "characterSheet", then exactly ${SCENES_PER_EPISODE} consecutive camera shots. Every shot is a full ${SCENE_SECONDS} s clip except the LAST (a little shorter) — set "durationSec" per shot to ${SCENE_DURATIONS.join(", ")} (in order) so the whole episode is ${SCENE_DURATIONS.join(" + ")} = ${EPISODE_TOTAL_SECONDS} s, under 1:59. Scene 1 = wide establishing shot with someone ALREADY talking; only ${MIN_SILENT_SCENES}–${MAX_SILENT_SCENES} shots marked [NO DIALOGUE], EVERY other shot carrying a SUBSTANTIAL back-and-forth exchange of roughly 50–60 spoken words over several quick lines that fill the whole ${SCENE_SECONDS} s clip (the characters ANSWER each other — never a single isolated line), each spoken line on its own "SPEAKER (tone): line" row; a longer conversation spans several consecutive shots, each still a full exchange; every videoPrompt in the full 9-line format — [SHOT TYPE], [VISUAL STYLE] (identical every scene), [LIGHTING], [BLOCKING], [GAZE], [NON-VERBAL], [ACTION], [CHARACTER] (verbatim descriptions), [TRANSITION] handing off to the next shot) that dramatize ONLY this episode's description — from a natural continuation of the previous episode to this episode's cliffhanger.`;
+Direct this episode as ONE continuous piece of film: first write "visualIdentity" and the "characterSheet", then exactly ${SCENES_PER_EPISODE} consecutive camera shots (shot 1 = set-up continuing the previous cliffhanger, shot 2 = escalation ending on this episode's cliffhanger). ${LAST_SHOT_TEXT} — set "durationSec" per shot to ${SCENE_DURATIONS.join(", ")} (in order) so the whole episode is ${SCENE_DURATIONS.join(" + ")} = ${EPISODE_TOTAL_SECONDS} s, exactly ${TOTAL_LABEL}. Scene 1 = wide establishing shot with someone ALREADY talking; only ${MIN_SILENT_SCENES}–${MAX_SILENT_SCENES} shots marked [NO DIALOGUE], EVERY other shot carrying a SUBSTANTIAL back-and-forth exchange of roughly 50–60 spoken words over several quick lines that fill the whole ${SCENE_SECONDS} s clip (the characters ANSWER each other — never a single isolated line), each spoken line on its own "SPEAKER (tone): line" row; a longer conversation spans several consecutive shots, each still a full exchange; every videoPrompt in the full 9-line format — [SHOT TYPE], [VISUAL STYLE] (identical every scene), [LIGHTING], [BLOCKING], [GAZE], [NON-VERBAL], [ACTION], [CHARACTER] (verbatim descriptions), [TRANSITION] handing off to the next shot) that dramatize ONLY this episode's description — from a natural continuation of the previous episode to this episode's cliffhanger.`;
 
   return { userMsg };
 }
@@ -247,9 +265,9 @@ async function persistScenes(episodeId: string, data: { visualIdentity?: string;
   const characterSheet = data.characterSheet ?? {};
 
   const trimmed = rawScenes.slice(0, SCENES_PER_EPISODE);
-  // Stage 93 — fixed-length shots: every scene is SCENE_FIXED_SECONDS (30 s) except the last,
-  // which is trimmed so the whole episode stays ≤ EPISODE_MAX_TOTAL_SECONDS (1:59). Ignore any
-  // durationSec the model emitted and force the canonical split (e.g. 30 + 30 + 30 + 29 = 119).
+  // Stage 103 — fixed-length shots: every scene is SCENE_FIXED_SECONDS (30 s); the last is trimmed
+  // only if needed so the whole episode stays ≤ EPISODE_MAX_TOTAL_SECONDS (1:00). Ignore any
+  // durationSec the model emitted and force the canonical split (30 + 30 = 60).
   const durations = sceneDurationsForCount(trimmed.length);
   const scenesOut = trimmed.map((s, i) => {
     let videoPrompt = String(s?.videoPrompt ?? "").trim();
