@@ -5,7 +5,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { buildScenePrompt, KEYFRAME_REFERENCE_NOTE, LAST_FRAME_CONTINUITY_NOTE, type ScenePromptCharacterLink, type ScenePromptLocation, type ScenePromptScene } from "../lib/scene-prompt";
+import { buildScenePrompt, type ScenePromptCharacterLink, type ScenePromptLocation, type ScenePromptScene } from "../lib/scene-prompt";
 import {
   LOCATION_ANGLES, LOCATION_REQUIRED_ANGLES, LOCATION_SHOT_PLAN, VISUAL_STYLE_ID,
   locationAnglePrompt, locationBaseReady, locationLayoutNote,
@@ -23,53 +23,11 @@ function ok(cond: unknown, msg: string) {
 }
 const read = (rel: string) => fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
 
-/* ---------------------------------------------------------------- A. video path: text-to-video + keyframe as [Image1] */
+/* Stage112 supersedes the old keyframe/reference path; its executable mock tests are in test-stage112.ts. */
 const worker = read("lib/workers/video-job.ts");
-ok(!/startImageToVideoGeneration/.test(worker), "video-job: no image-to-video import / call");
-ok(!/buildKeyframeVideoPrompt|buildImageToVideoPrompt/.test(worker), "video-job: no i2v prompt builders");
-ok(!/KEYFRAME MODE|if \(keyframeMode\)/.test(worker), "video-job: the Stage 104 keyframe-mode branch is gone");
-ok(/startVideoGeneration\(\{ \.\.\.input,/.test(worker), "video-job: submits text-to-video with reference_images");
-ok(/ensureKeyframe\(sceneId\)/.test(worker) && !/ensureKeyframe\(nextScene\.id\)/.test(worker), "video-job: renders THIS scene's keyframe only (no next-scene pre-render)");
-ok(/keyframeUrl,\s*\n?\s*textOnlyWhenNoReferences/.test(worker) || /buildScenePrompt\(\{[\s\S]*?keyframeUrl/.test(worker), "video-job: passes keyframeUrl into buildScenePrompt");
-ok(/pipelineExtra\.keyframeMode = false/.test(worker) && /pipelineExtra\.lastImageUrl = null/.test(worker), "video-job: pipelineExtra records keyframeMode=false / lastImageUrl=null");
-ok(/without the opening frame/.test(worker), "video-job: keyframe failure degrades to a plain submission with a keyframeError note");
-ok(!("buildKeyframeVideoPrompt" in kf) && !("buildImageToVideoPrompt" in kf) && !("dialogueLinesForVideo" in kf), "keyframe.ts: i2v prompt helpers removed");
-ok(typeof kf.buildKeyframeRequest === "function", "keyframe.ts: Seedream keyframe request builder kept");
 const previewRoute = read("app/api/ai/scenes/[id]/prompt/route.ts");
-ok(/keyframeUrl: scene\.keyframeStatus === "done" \? scene\.keyframeUrl : null/.test(previewRoute), "preview route: passes the stored keyframe as keyframeUrl only when done");
-
-// buildScenePrompt: keyframe is referenceImages[0] with KEYFRAME_REFERENCE_NOTE; everything else shifts by one.
-const SCHEME = "http" + "s://";
-const styled = (n: string) => SCHEME + "media.invalid/" + VISUAL_STYLE_ID + "/" + n + ".webp";
-const KEYFRAME = SCHEME + "media.invalid/keyframes/p/e/s2.jpg";
-const LAST_FRAME = SCHEME + "frames.invalid/prev-last.png";
-const mkChar = (id: string, name: string): ScenePromptCharacterLink => ({ characterId: id, name, tier: "LEAD", imageFull: styled("char-" + id), imageFront: styled("char-" + id + "-front"), appearance: name + " looks weathered", age: "40" });
-const loc: ScenePromptLocation = { id: "loc1", name: "The Office", imageUrl: styled("loc-wide"), imageReverse: styled("loc-layout"), imageDetail: styled("loc-detail"), imageExtra: null };
-const scene: ScenePromptScene = { id: "s2", number: 2, videoPrompt: "[ACTION]: 0–10s Anna crosses to the desk. 10–20s Mark rises. 20–30s both at the window.\n[CHARACTER]: Anna, Mark\n[TRANSITION]: hard cut", continuesFrom: "same-location-continuation" };
-const previous = { id: "s1", number: 1, lastFrameUrl: LAST_FRAME, endState: "WORLD: Anna by the window.\nCAMERA: wide" };
-const withKf = buildScenePrompt({ scene, characters: [mkChar("a", "Anna"), mkChar("m", "Mark")], location: loc, previous, chainMode: "chain", keyframeUrl: KEYFRAME });
-const noKf = buildScenePrompt({ scene, characters: [mkChar("a", "Anna"), mkChar("m", "Mark")], location: loc, previous, chainMode: "chain", keyframeUrl: null });
-ok(withKf.referenceImages[0] === KEYFRAME, "buildScenePrompt: the keyframe is referenceImages[0]");
-ok(withKf.referenceImages.length === noKf.referenceImages.length + 1, "buildScenePrompt: exactly one extra reference when the keyframe is set");
-ok(withKf.referenceImages.slice(1).join("|") === noKf.referenceImages.join("|"), "buildScenePrompt: the other references keep their order, shifted by one");
-ok(withKf.prompt.includes(`[Image1] ${KEYFRAME_REFERENCE_NOTE}`) || withKf.prompt.includes("[Image1] " + KEYFRAME_REFERENCE_NOTE), "buildScenePrompt: [Image1] carries KEYFRAME_REFERENCE_NOTE");
-ok(/OPENING FRAME/.test(KEYFRAME_REFERENCE_NOTE) && /second 0/.test(KEYFRAME_REFERENCE_NOTE), "KEYFRAME_REFERENCE_NOTE says it is the opening frame (second 0)");
-ok(withKf.prompt.includes("[Image2] defines Anna's") && noKf.prompt.includes("[Image1] defines Anna's"), "buildScenePrompt: character legend indices shift by one with the keyframe");
-ok(withKf.prompt.includes("Image1 = the OPENING FRAME"), "buildScenePrompt: the REFERENCE MAP names Image1 as the opening frame");
-ok(!withKf.prompt.includes(KEYFRAME), "buildScenePrompt: the real keyframe URL never appears in the prompt text");
-ok(withKf.retryRefs.some((r) => r.kind === "keyframe" && r.url === KEYFRAME), "buildScenePrompt: retryRefs carries the keyframe with kind 'keyframe'");
-ok(withKf.reference.kinds?.includes("keyframe"), "buildScenePrompt: reference.kinds records 'keyframe'");
-ok(withKf.referenceImages.includes(LAST_FRAME) && withKf.prompt.includes(LAST_FRAME_CONTINUITY_NOTE), "buildScenePrompt: the previous last frame is still sent in chain mode");
-// The layout frame follows the wide frame and carries the placement-only note.
-const iWide = withKf.referenceImages.indexOf(styled("loc-wide"));
-const iLayout = withKf.referenceImages.indexOf(styled("loc-layout"));
-ok(iWide >= 0 && iLayout === iWide + 1, "buildScenePrompt: the layout frame comes right after the wide frame");
-ok(withKf.prompt.includes(locationLayoutNote("The Office")), "buildScenePrompt: the layout frame carries locationLayoutNote");
-ok(/NOT the camera angle of this shot/.test(locationLayoutNote("X")) && /ONLY to place objects/.test(locationLayoutNote("X")), "locationLayoutNote: placement only, not the shot's camera");
-ok(/elevated LAYOUT view is for object placement only/.test(withKf.prompt), "REFERENCE MAP: location tail explains the layout view");
-// Manual override still skips every reference (keyframe included).
-const manual = buildScenePrompt({ scene: { ...scene, skipReferences: true } as ScenePromptScene, characters: [mkChar("a", "Anna")], location: loc, previous, chainMode: "chain", keyframeUrl: KEYFRAME });
-ok(manual.referenceImages.length === 0, "buildScenePrompt: skipReferences drops the keyframe as well");
+const styled = (n: string) => "https" + "://media.invalid/" + VISUAL_STYLE_ID + "/" + n + ".webp";
+ok(!/startImageToVideoGeneration|ensureKeyframe/.test(worker), "Stage112: T2V only, old still generation removed");
 
 /* ---------------------------------------------------------------- B. mandatory elevated layout location frame */
 ok(LOCATION_ANGLES.length === 3 && LOCATION_ANGLES[0].angle === "wide" && LOCATION_ANGLES[1].angle === "layout" && LOCATION_ANGLES[1].key === "imageReverse" && LOCATION_ANGLES[2].angle === "detail", "LOCATION_ANGLES: wide / layout(imageReverse) / detail");
@@ -110,7 +68,7 @@ ok(/label: 'Layout \(mandatory\)', slot: 'layout'/.test(view) && !/Reverse angle
 ok(/data-testid="ref-location-add-layout"/.test(view) && /regenShot\('location', l\.id, 'layout'\)/.test(view), "episode-view: 'Layout view' button adds only the layout frame for legacy locations");
 ok(/master frames \(\$\{LOCATION_SET_COST\} cr\.\)/.test(view), "episode-view: master button shows the 2-frame cost");
 ok(/a\.slot === 'layout' \? 'The layout view is mandatory/.test(view), "episode-view: delete disabled on the layout tile");
-ok(!/keyframe is this clip's final frame/.test(view) && /FIRST reference image/.test(view), "episode-view: keyframe comment describes the opening-frame reference");
+ok(!/keyframe/i.test(view), "Stage112: no old scene keyframe controls");
 const refs = read("app/project/[id]/_components/references-stage.tsx");
 ok(/validUrl\(l\.imageUrl\) && validUrl\(l\.imageReverse\)/.test(refs) && /data-testid="location-add-layout"/.test(refs) && /label: 'Layout \(mandatory\)', slot: 'layout'/.test(refs), "references-stage: ready count, add-layout button and label");
 ok(/LOCATION_SET_COST/.test(refs) && !/Reverse angle/.test(refs), "references-stage: 2-frame cost, no 'Reverse angle'");

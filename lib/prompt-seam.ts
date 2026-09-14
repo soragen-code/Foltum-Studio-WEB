@@ -416,7 +416,7 @@ export function applySeriesIntro(
 /* ------------------------------------------------------------------------------------------ */
 
 /** How the scene is tied to the previous one: its last frame as an image, text only, or nothing (scene 1 / parallel). */
-export type Continuity = "last_frame" | "text_only" | "none";
+export type Continuity = "last_frame" | "reangled_frame" | "text_only" | "none";
 
 /** Russian job message shown when chain mode has no previous last frame yet. */
 export const TEXT_ONLY_CONTINUITY_MESSAGE = "The previous scene frame is not ready - generating from the description";

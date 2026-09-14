@@ -85,7 +85,7 @@ const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.ima
 // Stage 17: top up location extras in serverless-safe chunks (a single 12-frame job can overrun the
 // serverless window and get killed — chunking + re-firing guarantees the target is actually reached).
 
-type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; keyframeUrl?: string | null; keyframePrompt?: string | null; keyframeStatus?: string | null; keyframeError?: string | null; lookStale?: boolean | null; videoModel?: string | null; status: string; hasUndo?: boolean | null; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
+type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; lookStale?: boolean | null; videoModel?: string | null; status: string; hasUndo?: boolean | null; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null; hasScript?: boolean }
 
 export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits }: { episode: any; project: any; siblings?: Sibling[]; credits: number }) {
@@ -119,8 +119,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   })
   const [sceneEdit, setSceneEdit] = useState<Record<string, string>>({})
   const [sceneBusy, setSceneBusy] = useState<Record<string, boolean>>({})
-  // Stage 104: per-scene keyframe (Seedream opening still) generation — polled until the job is terminal.
-  const [kfBusy, setKfBusy] = useState<Record<string, boolean>>({})
   const [cancelAsk, setCancelAsk] = useState<string | null>(null) // sceneId awaiting «Cancel generation confirmation
   const [cancelling, setCancelling] = useState<Record<string, boolean>>({}) // per-scene: cancel request in flight
   const [sceneError, setSceneError] = useState<Record<string, string>>({}) // per-scene generation error shown on the card
@@ -226,27 +224,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const goPhase = (p: EpisodePhase) => { setPhase(p); if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' }) }
 
   const patchScene = (sceneId: string, patch: Partial<Scene>) => setScenes((prev) => prev.map((s) => (s.id === sceneId ? { ...s, ...patch } : s)))
-  /** Stage 104: POST /api/ai/scenes/[id]/keyframe, then poll the "scene-keyframe" job; the video is never touched. */
-  const generateKeyframe = async (sceneId: string) => {
-    if (kfBusy[sceneId]) return
-    setError(''); setKfBusy((b) => ({ ...b, [sceneId]: true }))
-    patchScene(sceneId, { keyframeStatus: 'pending', keyframeError: null })
-    try {
-      const res = await fetch(`/api/ai/scenes/${sceneId}/keyframe`, { method: 'POST' })
-      const d = await res.json().catch(() => ({}))
-      if (!res.ok && res.status !== 409) { setError(d?.error ?? 'Failed to start the keyframe'); patchScene(sceneId, { keyframeStatus: 'error', keyframeError: d?.error ?? 'Failed to start the keyframe' }); return }
-      for (let i = 0; i < 400 && d?.jobId; i++) {
-        await new Promise((r) => setTimeout(r, 3000))
-        const jr = await fetch(`/api/jobs/${d.jobId}`, { cache: 'no-store' }).catch(() => null)
-        if (!jr || !jr.ok) continue
-        const jd = await jr.json().catch(() => ({}))
-        const sc = jd?.scene
-        if (sc) patchScene(sceneId, { keyframeUrl: sc.keyframeUrl ?? null, keyframePrompt: sc.keyframePrompt ?? null, keyframeStatus: sc.keyframeStatus ?? null, keyframeError: sc.keyframeError ?? null })
-        const st = jd?.job?.status
-        if (st === 'completed' || st === 'failed' || st === 'canceled') break
-      }
-    } catch { setError('Network error') } finally { setKfBusy((b) => { const n = { ...b }; delete n[sceneId]; return n }) }
-  }
   const stopPolling = (sceneId: string) => { const t = pollTimers.current[sceneId]; if (t) clearTimeout(t); delete pollTimers.current[sceneId] }
   const clearGen = (sceneId: string) => setActiveGen((p) => { const n = { ...p }; delete n[sceneId]; return n })
 
@@ -678,7 +655,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
 
   // Stage 107 — episode scripts are written on demand: POST /api/ai/episodes/[id]/script starts a one-episode
   // season_script job (no instruction = write from the 60-second footage; an existing script is fully
-  // regenerated and its scenes/keyframes/videos reset). Polled through the same revisePoll as the rewrite.
+  // regenerated and its scenes/videos reset). Polled through the same revisePoll as the rewrite.
   const hasScript = !!(episode.script && String(episode.script).trim())
   const generateScript = async () => {
     if (revising) return
@@ -1425,50 +1402,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   </div>
                 )}
 
-                {/* Stage 104/111 — KEYFRAME: the Seedream opening still of this scene. Stage 111: it is NOT the i2v
-                    start frame any more — it is sent as the FIRST reference image ([Image1], "opening frame") of the
-                    text-to-video request. Regenerating it never deletes the video. */}
-                <div className="mt-3 flex items-center gap-3 rounded-lg border border-border/60 bg-muted/30 p-2" data-testid="scene-keyframe">
-                  <div className="relative aspect-[9/16] h-24 shrink-0 overflow-hidden rounded bg-black/70">
-                    {validUrl(scene.keyframeUrl) ? (
-                      // Stage 109 — the keyframe opens full-size in the shared lightbox (click the still or the
-                      // always-visible expand control; Esc / backdrop / X close it, "Open original" links the raw file).
-                      <button
-                        type="button"
-                        onClick={() => openLightbox([scene.keyframeUrl], 0, `Scene ${scene.number} — keyframe`)}
-                        className="block h-full w-full cursor-zoom-in"
-                        aria-label="Open keyframe"
-                        title="Open keyframe at full size"
-                        data-testid="scene-keyframe-open"
-                      >
-                        <img src={scene.keyframeUrl as string} alt={`Keyframe of scene ${scene.number}`} className="h-full w-full object-cover" data-testid="scene-keyframe-thumb" />
-                        <span className="pointer-events-none absolute bottom-1 right-1 rounded bg-black/60 p-1 text-white" aria-hidden="true"><Maximize2 className="h-3 w-3" /></span>
-                      </button>
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-[10px] text-muted-foreground">{kfBusy[scene.id] || scene.keyframeStatus === 'running' || scene.keyframeStatus === 'pending' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'No keyframe'}</div>
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1 text-xs">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="font-medium">Keyframe</span>
-                      <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${scene.keyframeStatus === 'done' ? 'bg-emerald-500/15 text-emerald-700' : scene.keyframeStatus === 'error' ? 'bg-destructive/15 text-destructive' : scene.keyframeStatus ? 'bg-primary/15 text-primary' : 'bg-muted text-muted-foreground'}`} data-testid="scene-keyframe-badge">
-                        {scene.keyframeStatus ?? 'none'}
-                      </span>
-                    </div>
-                    {scene.keyframeError && <p className="mt-1 line-clamp-3 text-[11px] text-destructive" data-testid="scene-keyframe-error">{scene.keyframeError}</p>}
-                    {!scene.keyframeError && <p className="mt-1 text-[11px] text-muted-foreground">Opening still of the shot — frame 1 of the video; the next scene's keyframe is its final frame.</p>}
-                  </div>
-                  <button
-                    onClick={() => generateKeyframe(scene.id)}
-                    disabled={gen || !!kfBusy[scene.id] || scene.keyframeStatus === 'running' || scene.keyframeStatus === 'pending' || !scene.videoPrompt}
-                    className="inline-flex shrink-0 items-center justify-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-50"
-                    data-testid="scene-keyframe-generate"
-                    title={validUrl(scene.keyframeUrl) ? 'Render the opening still again (the video is kept)' : 'Render the opening still of this shot'}
-                  >
-                    {kfBusy[scene.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Images className="h-3.5 w-3.5" />}
-                    {validUrl(scene.keyframeUrl) ? 'Regenerate keyframe' : 'Generate keyframe'}
-                  </button>
-                </div>
+
 
                 <div className="mt-3 space-y-2">
                   {/* Stage 35 — one row, two half-width buttons under the preview: the primary action
@@ -1572,7 +1506,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           label="Edit the episode script by prompt (the whole episode or a specific scene)"
           placeholder="For example: remove the kitchen scene, heighten the conflict in scene 3…"
           submitLabel="Rewrite"
-          hint="Rewriting clears the generated scenes, keyframes and videos of the affected episodes. You can specify a scene by number. Ctrl/⌘+Enter — send."
+          hint="Rewriting clears the generated scenes and videos of the affected episodes. You can specify a scene by number. Ctrl/⌘+Enter — send."
         />
       )}
 

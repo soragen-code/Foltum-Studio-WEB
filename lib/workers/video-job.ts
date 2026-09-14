@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db";
 // Stage 73: scene video and scene-still transports are routed through the per-project provider layer
 // (WaveSpeed only since Stage 104). Prompt building, refs and chain logic are unchanged.
-import { startImageGeneration, getImageGenerationState } from "@/lib/providers/image-provider";
 import { startVideoGeneration, getVideoGenerationState, cancelVideoGeneration } from "@/lib/providers/video-provider";
-import { ensureKeyframe } from "@/lib/workers/keyframe-job";
+import { resolveVideoPredecessor, assertPredecessorReady, buildReangleRequest } from "@/lib/reangle";
+import { ensureReangle } from "@/lib/reangle-store";
+import { finalVideoPrompt } from "@/lib/video-prompt-final";
 import { translateDialogue, detectSpokenLanguage } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
 import { extractLastFrameBuffer } from "@/lib/ffmpeg";
@@ -24,7 +25,7 @@ import { nextChainScene, chainStopMessage, CHAIN_INSUFFICIENT_CREDITS } from "@/
 import { resolvePowerTier, SCENE_RESOLUTION } from "@/lib/power-tier";
 import { sceneProgressStage, SCENE_STAGE_PROGRESS, SCENE_STAGE_MESSAGE } from "@/lib/scene-progress";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
-import { stripPreviousCameraLine, applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, applyLocationConsistency, sceneHasLocationRef, resolveContinuity, TEXT_ONLY_CONTINUITY_MESSAGE, type Continuity } from "@/lib/prompt-seam";
+import { stripPreviousCameraLine, type Continuity } from "@/lib/prompt-seam";
 
 export interface VideoJobParams {
   jobId: string;
@@ -74,7 +75,7 @@ export interface VideoJobState {
   /** character_references | new_scene_reference | text_only */
   referenceKind?: string;
   /** Counts of the reference images actually sent (Stage 38: `chained` is always false — the previous frame is never sent; kept for old state records). */
-  refCounts?: { characters: number; location: number; crowd: number; scene: number; keyframe?: number; chained: boolean };
+  refCounts?: { characters: number; location: number; crowd: number; scene: number; reangle?: number; chained: boolean };
   /** Width the references were downscaled to before submission. */
   referenceWidth?: number;
   /** Stage 36: the exact ordered list of reference images sent (768px URLs), for UI previews. */
@@ -83,13 +84,8 @@ export interface VideoJobState {
   previousFrameSceneId?: string | null;
   /** Stage 78: how this scene was tied to the previous one (last frame image / text only / none). */
   continuity?: Continuity;
-  /* --- Stage 104 → Stage 111: the scene keyframe --- */
-  /** Stage 111: always false — image-to-video is gone; kept so old state records still type-check. */
-  keyframeMode?: boolean;
-  /** This scene's keyframe (Seedream opening still); Stage 111: sent as the FIRST reference image `[Image1]`. */
-  keyframeUrl?: string | null;
-  /** Legacy Stage 104 field (the next scene's keyframe as `last_image`); always null since Stage 111. */
-  lastImageUrl?: string | null;
+  reangle?: { cacheId: string; cacheHit: boolean; sourceSceneId: string; camera: string };
+
 }
 
 export interface ModerationRetryInput {
@@ -146,6 +142,9 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
   const { jobId, sceneId, projectId, userId } = params;
   const cost = Number(params.cost ?? 0);
 
+  const claimed = await prisma.generationJob.updateMany({ where: { id: jobId, status: { in: ["pending", "processing"] }, resultData: null },
+    data: { resultData: JSON.stringify({ preparing: true }), status: "processing" } });
+  if (!claimed.count) return;
   const diagnostics: GenerationAttempt[] = [];
   let state: VideoJobState | null = null;
   const persist = () => updateJob(jobId, { resultData: JSON.stringify({ ...state, diagnostics }) });
@@ -168,13 +167,11 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     await updateJob(jobId, { status: "processing", progress: 5, message: "Preparing photorealistic visual references..." });
     // Stage 40: a (re)generation invalidates the previously described actual end-state of this scene.
     if (scene.endStateActual) await prisma.scene.update({ where: { id: sceneId }, data: { endStateActual: null } }).catch(() => {});
-    const links = await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true } });
+    const links = await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true }, orderBy: { characterId: "asc" } });
     // Stage 40: the previous scene's end-state (actual description of its last frame in chain mode,
     // otherwise the scripted "Final frame") opens this scene's prompt. Its image is never sent.
-    const previousRow = scene.number > 1 ? await prisma.scene.findFirst({
-      where: { episodeId: scene.episodeId, number: scene.number - 1 },
-      select: { id: true, number: true, locationDesc: true, lastFrameUrl: true, endState: true, endStateActual: true },
-    }) : null;
+    const previousRow = await resolveVideoPredecessor(prisma, scene);
+    assertPredecessorReady(previousRow);
     // Stage 102: a refusal-looking vision answer ("I'm sorry, I can't help…", legacy rows) is treated as absent;
     // the raw description keeps its "CAMERA OF THIS FRAME" line for the anti-example, the OPENING STATE text does not.
     const previousEndStateRaw = previousRow && !isRefusal(previousRow.endStateActual) ? previousRow.endStateActual : null;
@@ -224,7 +221,6 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       endState: look.texts.endState ?? scene.endState,
     };
     // The rewritten opening state replaces the previous scene's stored states so resolveOpeningState picks it.
-    const lookPrevious = previous && look.texts.openingState ? { ...previous, endStateActual: null, endState: null } : previous;
     // Stage 54: EPISODE PROP REGISTRY — canonical descriptions of the key recurring props, extracted once
     // from the episode script and cached on Episode.propRegistry (keyed by a hash of the script, exactly
     // like Scene.lookCache). The first scene of the episode that regenerates extracts it; every later
@@ -239,30 +235,31 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
         await prisma.episode.update({ where: { id: episodeLoc.id }, data: { propRegistry: JSON.stringify(propBuild.registry) } }).catch(() => {});
       }
     }
-    // Stage 111 — the scene KEYFRAME (Seedream opening still, Stage 104) is rendered FIRST and then sent as the
-    // FIRST reference image `[Image1]` of the classic text-to-video submission (the i2v `image`/`last_image`
-    // path is gone — it animated the scenes poorly). Best-effort: two attempts, on failure the scene is
-    // submitted without it and the error is recorded on the scene. Skipped for text-only scenes and for
-    // reference-less test episodes. The NEXT scene's keyframe is no longer pre-rendered.
     const isTestProject = Boolean(episodeLoc?.season?.project?.isTest);
-    const wantsKeyframe = !scene.skipReferences && !(isTestProject && links.length === 0 && !episodeLoc?.location?.imageUrl);
-    let keyframeUrl: string | null = null;
-    if (wantsKeyframe) {
-      await updateJob(jobId, { progress: 8, message: "Rendering the scene keyframe (opening-frame reference)..." });
-      for (let k = 1; k <= 2 && !keyframeUrl; k++) {
-        try { keyframeUrl = await ensureKeyframe(sceneId); }
-        catch (err) {
-          console.warn(`[video-job] keyframe ${scene.number} attempt ${k} failed:`, safeProviderError(err));
-          if (k === 2) await prisma.scene.update({ where: { id: sceneId }, data: { keyframeError: `Keyframe failed twice — video generated from text and references without the opening frame: ${safeProviderError(err)}` } }).catch(() => {});
-        }
-      }
+    const characters = links.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier,
+      imageFront: l.character.imageFront, imageFull: l.character.imageFull, appearance: l.character.appearance, age: l.character.age }));
+    const forbiddenReferenceUrls = [scene.keyframeUrl, previousRow?.lastFrameUrl, (previousRow as any)?.keyframeUrl].filter((u): u is string => !!u);
+    const support = buildScenePrompt({ scene, characters, location: episodeLoc?.location ?? null, previous,
+      forbiddenReferenceUrls }).retryRefs;
+    let reangleUrl: string | null = null;
+    let reangleInfo: VideoJobState["reangle"];
+    let reangleRequest: ReturnType<typeof buildReangleRequest> | null = null;
+    if (previousRow) {
+      if (!episodeLoc?.location?.imageUrl || !episodeLoc.location.imageReverse)
+        throw new Error("Add the location's mandatory wide and layout views before generating this transition.");
+      await updateJob(jobId, { progress: 8, message: "Re-angling the previous video's last frame (Seedream camera edit)..." });
+      reangleRequest = buildReangleRequest({ sceneId, number: scene.number, startState: scene.startState,
+        videoPrompt: scene.videoPrompt, promptOverride: scene.promptOverride, previous: previousRow, refs: support, castState: characters });
+      const edited = await ensureReangle(reangleRequest, { jobId, sceneId, projectId });
+      reangleUrl = edited.url;
+      reangleInfo = { cacheId: reangleRequest.cacheId, cacheHit: edited.cacheHit, sourceSceneId: previousRow.id, camera: reangleRequest.camera };
     }
     const built = buildScenePrompt({
       scene: lookScene,
-      keyframeUrl, // Stage 111: [Image1] = the opening frame
+      reangleUrl, forbiddenReferenceUrls,
       characters: links.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront, imageProfile: l.character.imageProfile, imageFull: l.character.imageFull, imageExtra: l.character.imageExtra, appearance: l.character.appearance, age: l.character.age })),
       location: episodeLoc?.location ?? null,
-      previous: lookPrevious,
+      previous,
       provider: params.provider,
       resolvedDialogueEn: dialogueEn,
       props: episodeProps, // Stage 54: canonical episode props, substituted VERBATIM per scene
@@ -272,94 +269,14 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       // frame is always a continuity reference for same-location continuations.
       chainMode: "chain",
     });
-    let prompt = built.prompt;
-    // Stage 78 (Part C): continuity channel — the previous last frame as an image, or text only
-    // (chain, frame not ready yet). Scene 1 has no prior shot, so it resolves to "none".
-    const continuity: Continuity = resolveContinuity({
-      chainMode: "chain",
-      sceneNumber: scene.number,
-      previousFrameSceneId: built.previousFrameSceneId,
-      refs: built.retryRefs,
-    });
-    // Stage 78: seam directives (motion to the last frame, no silent beat) + RE-FRAME of the previous
-    // scene's last frame. Stage 81: a NEW-SHOT CAMERA MOVE so a continuing scene starts its own camera
-    // motion from frame 1 instead of inheriting the static end framing of the previous scene.
-    // Same transforms as the GET prompt preview; a manual override is untouched.
-    // Stage 111: ONE prompt variant again — the full text-to-video prompt (the Stage 104 keyframe variant is gone).
-    const seamed = applySeamDirectives(prompt, { hasOverride: built.hasOverride });
-    prompt = applyReframeDirective(seamed, built.retryRefs, {
-      hasOverride: built.hasOverride,
-      // Stage 101: the directive names this scene's concrete frame-1 camera (scripted CAMERA block wins).
-      sceneNumber: scene.number,
-      startState: look.texts.openingState ?? scene.startState,
-      // Stage 102: the previous shot's real final camera is named as a FORBIDDEN anti-example for frame 1.
-      previousEndState: previousEndStateRaw,
-    });
-    prompt = applyNewShotCameraMove(prompt, scene.number, { hasOverride: built.hasOverride, continuity });
-    // Stage 82: the whole episode is one continuous event — a continuing scene carries the previous
-    // shot's world/action on in real time (persistent world, not a frozen composition).
-    prompt = applyContinuousAction(prompt, { hasOverride: built.hasOverride, continuity });
-    // Stage 84: the location reference is the base layer of the frame — the environment is built first,
-    // then the characters are placed INTO it. Applied when the scene has a location reference.
-    // Stage 86: detection is type-based and retroactive — a location-typed ref, a named locationId, OR
-    // (for OLD projects whose location image predates the current visual-style id and is therefore not
-    // attached as a styled [ImageN] ref) the location row simply carrying a real image URL.
-    const hasLocationRef = sceneHasLocationRef({
-      retryRefs: built.retryRefs,
-      reference: built.reference as { locationId?: string | null } | null,
-      location: episodeLoc?.location ?? null,
-    });
-    prompt = applyLocationBaseLayer(prompt, { hasOverride: built.hasOverride, hasLocationRef });
-    // Stage 88: hard location consistency — one fixed geography (same landmarks, distances, materials,
-    // weather and light direction relative to the terrain) held byte-identically across every shot of
-    // the location; the elevated LAYOUT frame (Stage 111) is a placement reference only (NOT a camera angle), the camera is
-    // placed relative to fixed landmarks, no object appears/disappears, and persistent state carries over.
-    prompt = applyLocationConsistency(prompt, { hasOverride: built.hasOverride, hasLocationRef });
-    // Stage 110: the Stage 87 series-intro directive (scene 1 = b-roll + off-screen narrator, no talking) is
-    // NO LONGER applied — every scene, scene 1 included, is on-camera dialogue.
-    console.log("[video-job] continuity", JSON.stringify({ sceneId, sceneNumber: scene.number, continuity, previousFrameSceneId: built.previousFrameSceneId ?? null, hasLocationRef }));
+    const prompt = finalVideoPrompt(built);
+    const continuity = reangleUrl ? "reangled_frame" : "none";
     const basePrompt = built.basePrompt;
     const fallbackRefs = built.fallbackRefs;
     let referenceImages = built.referenceImages;
     let retryRefs: SceneReference[] = built.retryRefs;
     let reference = built.reference;
 
-    if (built.newSceneReference) {
-      // One new scene composition (no chain, no references): generate an original still (Flux) and
-      // substitute its real URL. The prompt text — including the [Image1] note — already comes from
-      // the pure builder, so the submitted prompt stays byte-identical to the preview.
-      const referencePrompt = built.referencePrompt!;
-      const attempt: GenerationAttempt = {
-        jobId, sceneId, attempt: 1, model: "black-forest-labs/flux-1.1-pro", phase: "reference",
-        status: "submitting", style: VISUAL_STYLE_ID,
-        input: safeDiagnosticInput({ prompt: referencePrompt, aspect_ratio: "9:16", safety_tolerance: 2, source: "original_scene_description" }),
-      };
-      diagnostics.push(attempt); await persist(); logAttempt(attempt);
-      attempt.predictionId = (await startImageGeneration({ prompt: referencePrompt, aspect_ratio: "9:16", kind: "scene_still" })).id;
-      attempt.status = "processing"; await persist(); logAttempt(attempt);
-      const started = Date.now();
-      let referenceUrl = "";
-      while (!referenceUrl) {
-        const prediction = await getImageGenerationState(attempt.predictionId);
-        if (prediction.status === "succeeded" && prediction.outputUrl) {
-          referenceUrl = prediction.outputUrl; attempt.status = "succeeded"; await persist(); logAttempt(attempt); break;
-        }
-        if (prediction.status === "failed") {
-          attempt.status = "failed";
-          throw new Error(prediction.error || "Reference model failed");
-        }
-        if (Date.now() - started > 180_000) throw new Error("Reference model timed out; no automatic resubmission");
-        await heartbeatJob(jobId); await sleep(POLL_INTERVAL_MS);
-      }
-      const { folderPrefix } = getBucketConfig();
-      // Seedream reference is PNG (keeps its C2PA content-credentials watermark on purpose).
-      const key = `${folderPrefix}public/references/${projectId}/${VISUAL_STYLE_ID}/${sceneId}-${jobId}.png`;
-      const stored = await uploadRemoteToS3(referenceUrl, key, "image/png");
-      // The still is downscaled to 768px together with the rest of the list below (PNG master stays in S3).
-      referenceImages = [stored];
-      reference = { ...reference, referencePredictionId: attempt.predictionId };
-      retryRefs = [{ url: stored, kind: "scene", note: built.newSceneReferenceNote! }];
-    }
     // One paid video attempt. Copyright, general moderation, E003 and timeout remain distinct;
     // none silently trigger another generation or switch the audio off.
     // Stage 33: Seedance 2.5 is the only video model (native audio, up to 30 s per clip).
@@ -369,7 +286,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     let attempt: GenerationAttempt;
     let submitMessage: string;
     // Extra state persisted alongside the prediction (moderation auto-recovery).
-    const pipelineExtra: Partial<VideoJobState> = {};
+    const pipelineExtra: Partial<VideoJobState> = { reangle: reangleInfo };
 
     // The planned duration is already ≤30 s upstream (Seedance 2.5 limit); no per-model cap.
     const clipDuration = Number(params.duration ?? 5);
@@ -390,7 +307,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       location: retryRefs.filter(r => r.kind === "location").length,
       crowd: retryRefs.filter(r => r.kind === "crowd").length,
       scene: retryRefs.filter(r => r.kind === "scene").length,
-      keyframe: retryRefs.filter(r => r.kind === "keyframe").length, // Stage 111
+      reangle: retryRefs.filter(r => r.kind === "reangle").length,
       chained: false, // Stage 38: the previous scene's last frame is never sent as a reference.
     };
     // Exact submitted list (downscaled URLs, same order as [ImageN]) for the scene-card previews.
@@ -408,19 +325,33 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     attempt = {
       jobId, sceneId, attempt: 1, model: input.model, phase: "video", status: "submitting",
       style: VISUAL_STYLE_ID, language: scene.language || "en",
-      input: safeDiagnosticInput({ ...input, reference, ...submission, keyframeUrl }),
+      input: safeDiagnosticInput({ ...input, reference, ...submission, reangle: reangleInfo }),
     };
     diagnostics.push(attempt); await persist(); logAttempt(attempt);
     // Stage 40: `reference_images` is omitted entirely for text-only submissions (never sent as []).
-    // Stage 111: ALWAYS text-to-video with references — the keyframe is referenceImages[0] when it exists.
+    // Re-read the actual source just before submission: a concurrently regenerated predecessor invalidates the edit.
+    const freshScene = await prisma.scene.findUnique({ where: { id: sceneId }, include: {
+      characters: { include: { character: true }, orderBy: { characterId: "asc" } }, episode: { include: { location: true } },
+    } });
+    if (!freshScene) throw new Error("Scene was removed during preprocessing.");
+    const currentPrevious = await resolveVideoPredecessor(prisma, freshScene);
+    assertPredecessorReady(currentPrevious);
+    const freshCharacters = freshScene.characters.map(l => ({ characterId: l.characterId, name: l.character.name,
+      tier: l.character.tier, imageFront: l.character.imageFront, imageFull: l.character.imageFull,
+      appearance: l.character.appearance, age: l.character.age }));
+    const freshRefs = buildScenePrompt({ scene: freshScene, characters: freshCharacters, location: freshScene.episode.location,
+      previous: currentPrevious, forbiddenReferenceUrls }).retryRefs;
+    if (reangleRequest && (!currentPrevious || buildReangleRequest({ sceneId, number: freshScene.number,
+      startState: freshScene.startState, videoPrompt: freshScene.videoPrompt, promptOverride: freshScene.promptOverride,
+      previous: currentPrevious, refs: freshRefs, castState: freshCharacters }).hash !== reangleRequest.hash))
+      throw new Error("The previous video, camera or references changed during preprocessing. Retry this scene to use the current inputs.");
+    if (await isCancelRequested(jobId)) throw new Error("Video generation canceled before submission");
+    if (referenceImages.some(u => forbiddenReferenceUrls.includes(u))) throw new Error("Forbidden source frame in video references");
     predictionId = await startVideoGeneration({ ...input, ...(referenceImages.length ? { reference_images: referenceImages } : {}) });
     pipelineExtra.provider = "wavespeed";
-    pipelineExtra.keyframeMode = false;
-    pipelineExtra.keyframeUrl = keyframeUrl;
-    pipelineExtra.lastImageUrl = null;
     // Stage 46B: "Queued" until the provider reports processing; Stage 78: in chain mode without the
     // previous last frame the card says once that the scene is generated from the description only.
-    submitMessage = continuity === "text_only" ? TEXT_ONLY_CONTINUITY_MESSAGE : SCENE_STAGE_MESSAGE.queued;
+    submitMessage = SCENE_STAGE_MESSAGE.queued;
     // Retry plan is still persisted for diagnostics, but moderation is now fail-fast:
     // no automatic rewrite/resubmit happens (see resumeVideoJob). The user edits the prompt manually.
     pipelineExtra.retry = {
@@ -434,7 +365,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     pipelineExtra.referenceKind = built.referenceKind;
     pipelineExtra.refCounts = refCounts;
     pipelineExtra.referenceWidth = REFERENCE_WIDTH;
-    // Stage 111: the exact ordered reference list (keyframe first when present) — the card shows it as sent.
+    // Stage 111: the exact ordered reference list (camera-edit output first when present) — the card shows it as sent.
     pipelineExtra.submittedReferences = submittedReferences;
     pipelineExtra.previousFrameSceneId = built.previousFrameSceneId;
     pipelineExtra.continuity = continuity;
@@ -568,7 +499,7 @@ async function stopChainRun(sceneId: string, error: string): Promise<void> {
  * submit time), not from the scene's stored text. The message lists exactly what was sent — portraits,
  * location angles, crowd groups and whether the previous scene's last frame was included — and, when
  * the text is a manual override without textual triggers, names the images as the likely cause and
- * points to the text-only toggle. Fail-fast: no automatic rewrite or resubmission.
+ * points to the scene prompt editor. Fail-fast: no automatic rewrite or resubmission.
  */
 async function moderationMessage(sceneId: string, error: unknown, state?: VideoJobState): Promise<string> {
   let submitted = state?.submittedPrompt ?? "";

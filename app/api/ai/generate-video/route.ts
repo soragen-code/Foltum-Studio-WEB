@@ -10,6 +10,7 @@ import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runVideoJob } from "@/lib/workers/video-job";
 import { sceneClipSeconds } from "@/lib/season";
 import { resolvePowerTier, isPowerTier } from "@/lib/power-tier";
+import { resolveVideoPredecessor, assertPredecessorReady } from "@/lib/reangle";
 import { normalizeVideoModel } from "@/lib/ai-models";
 
 /** Tier (power) determines credit cost AND video quality — single config in lib/power-tier.ts. */
@@ -107,6 +108,8 @@ export async function POST(request: Request) {
       );
     }
 
+    try { assertPredecessorReady(await resolveVideoPredecessor(prisma, sceneData)); }
+    catch (error: any) { return NextResponse.json({ error: error.message }, { status: 409 }); }
     // Deduct credits (refunded by the worker if generation fails)
     await prisma.user.update({ where: { id: user.id }, data: { credits: { decrement: config.cost } } });
     await prisma.creditTransaction.create({

@@ -320,7 +320,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
         placeholder="For example: make the ending more dramatic"
         submitLabel="Edit story"
         testId="story-revise"
-        hint="Rewriting clears the generated scenes, keyframes and videos of the affected episodes."
+        hint="Rewriting clears the generated scenes and videos of the affected episodes."
       />
     </div>
   )

@@ -63,7 +63,6 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
       startState: scene.startState,
       endState: scene.endState,
       endStateActual: scene.endStateActual,
-      keyframePrompt: scene.keyframePrompt,
       characters: scene.characters.map((l) => l.character.name),
     },
     previous,

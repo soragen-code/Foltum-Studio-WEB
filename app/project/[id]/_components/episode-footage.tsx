@@ -3,7 +3,7 @@
 import { parseEpisodeFootage } from '@/lib/season'
 
 /** Stage 105 — shown next to every story / structure / episode-script rewrite control (visible, not hover). */
-export const REWRITE_NOTE = 'Rewriting clears the generated scenes, keyframes and videos of the affected episodes.'
+export const REWRITE_NOTE = 'Rewriting clears the generated scenes and videos of the affected episodes.'
 
 export function RewriteNote({ className = '', testId = 'rewrite-note' }: { className?: string; testId?: string }) {
   return (

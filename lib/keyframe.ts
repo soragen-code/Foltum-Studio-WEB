@@ -1,15 +1,4 @@
-/**
- * Stage 104 — KEYFRAME-DRIVEN SCENES (pure builders, no network).
- *
- * Every scene first gets a KEYFRAME: one Seedream (edit) still that is the exact opening frame of the shot.
- * The video is then rendered with Seedance IMAGE-TO-VIDEO: keyframe N = `image` (frame 1) and keyframe N+1
- * (when the next scene exists) = `last_image` (the final frame), so the cut into the next shot is a real
- * continuation and the world never has to be re-invented from text.
- *
- * Standing rules encoded here: the location reference comes first, then the cast; the CAMERA changes
- * between shots while the WORLD does not; scenes are generated sequentially (scene N-1's keyframe is the
- * continuity image of scene N).
- */
+/** Retired Stage112: pure historical builders retained only for old offline tests. No active route or worker imports this file. */
 import { CAMERA_OF_THIS_FRAME_PREFIX } from "@/lib/frame-state";
 import { extractScriptedCamera, openingAngleForScene, stripPreviousCameraLine } from "@/lib/prompt-seam";
 import { characterAnchorUrl, type ScenePromptCharacterLink, type ScenePromptLocation } from "@/lib/scene-prompt";

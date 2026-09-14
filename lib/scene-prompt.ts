@@ -13,7 +13,7 @@
  *   2. app/api/ai/scenes/[sceneId]/prompt — the authorized "show full prompt" preview.
  *
  * What stays OUTSIDE this function (worker-only, impure): translating legacy non-English dialogue
- * (translateDialogue), generating the new-scene reference still (Flux) and substituting real
+ * (translateDialogue), camera-only editing of a completed predecessor frame and substituting real
  * reference URLs. The preview never does any of those — it uses the stored scene fields as-is and
  * only ever emits `[ImageN]` placeholders, so no real reference URL is exposed to the client.
  */
@@ -23,30 +23,7 @@ import { styledVisualPrompt, isStyledAsset, locationAngleImages, parseLocationEx
 import { normalizeVideoModel, videoModelSlug, type VideoModelId } from "@/lib/ai-models";
 import { matchPropsInText, type PropRegistryEntry } from "@/lib/prop-registry";
 
-/**
- * Stage 36: hard cap on reference images per submission — the provider maximum for Seedance 2.5
- * `reference_images` (30). Every scene is submitted in reference mode with its whole cast, every
- * styled location angle and the linked crowd groups. Stage 38: the previous scene's last frame is
- * NEVER sent any more (it was the recurring moderation trigger and made characters drift);
- * continuity between scenes now rests on the script text alone (presence / entrances / continuesFrom).
- * Stage 51: reverted to the known-good 46B-0 selection after 46B-1/46B-2/49/50 regressed Seedance
- * moderation with E005 ("flagged as sensitive"). Each individual sends EXACTLY ONE photo to video.
- * Stage 53: that one photo is now the styled FULL-BODY FRONT photo (imageFull) — the sole visual
- * anchor so the character looks in-scene EXACTLY like the reference; legacy characters that only have
- * the old front portrait fall back to imageFront (imageFull ?? imageFront). Then ALL styled location
- * angles (base + extras), then the crowds (their one anchor). The profile and the extra character
- * angles are NEVER sent to video: they stay on the character card for regen/download only. The rule
- * that PASSED moderation on 11-09 23:13 is still ONE photo per character (sending several at once —
- * face+profile+full+extras, added in 46B-1/46B-2 — is what triggered E005); Stage 53 only swaps WHICH
- * single photo that is. Stage 62 (Variant A): the Stage 38 rule is relaxed for CONTINUATION scenes only —
- * when a scene continues the SAME location/sequence (a previous scene exists AND !breaksSequence), the
- * previous scene's LAST FRAME is added back as ONE continuity reference (with the lock-placement note) so
- * the set dressing / object positions carry over instead of being re-invented on every clip; it is never
- * added after a sequence break (location-change/new-sequence) nor in text-only mode. If the set exceeds
- * the cap the trim order is: crowds → extra location angles → base location angles → last-frame; the
- * one-per-character refs are never dropped, and the last-frame is prioritized above the base angles so it
- * is never dropped before the characters or the base angles. See buildScenePrompt.
- */
+/** Seedance limit. Stage 112 order: re-angle (if predecessor), cast, wide, layout, crowd. */
 export const REFERENCE_IMAGE_CAP = 30;
 /** Stage 44 — how many extra location angles (Location.imageExtra) may join the three base angles as references. */
 export const LOCATION_EXTRA_REF_CAP = 6;
@@ -55,22 +32,8 @@ export const LOCATION_INSIDE_NOTE =
   "Camera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location references. Only the camera angle changes between shots. These frames are the SAME real place photographed from different positions — the characters are INSIDE this space: floor under their feet, walls/objects beside and behind them, real depth in front and behind; shoot them in wide/full shots within the environment, never as figures placed in front of a picture of the place. They interact with its objects and surfaces; the cuts show the same location from different angles with real depth (foreground, characters, background) — never a flat backdrop.";
 /** @deprecated alias kept for older imports — use REFERENCE_IMAGE_CAP. */
 export const MAX_REFERENCE_IMAGES = REFERENCE_IMAGE_CAP;
-/**
- * Stage 111 — the scene's KEYFRAME (Seedream opening still, Stage 104) is no longer the i2v start image; it is
- * sent as the FIRST reference image of the classic text-to-video submission with this note, so the video model
- * opens on that exact composition while the full prompt (action timing, dialogue, camera) still drives the clip.
- */
-export const KEYFRAME_REFERENCE_NOTE =
-  "the OPENING FRAME of this scene — the exact framing, poses, positions, wardrobe, props and light of second 0. Frame 1 of the clip matches this picture; start moving from this composition immediately (no freeze, no fade).";
-/**
- * Stage 62 (Variant A) / Stage 72 — the continuity note attached to the previous scene's LAST FRAME
- * when this scene CONTINUES the same location/sequence in CHAIN mode. It freezes the world of the
- * previous shot's final instant (people, placement, wardrobe, props, light) while demanding a NEW
- * camera on that instant. Only ever attached to the previous last-frame reference — never to
- * characters/location.
- */
-export const LAST_FRAME_CONTINUITY_NOTE =
-  "This frame is the EXACT FINAL INSTANT of the previous shot — this shot starts on that same instant. Keep the same people at the same spots in the same phase of movement, with the same wardrobe, props, set dressing, light and time of day; do not add, remove or move anything. BUT this shot is a NEW CAMERA on that instant: change at least two of shot scale / camera height / angle — never reproduce the previous framing.";
+/** Stage 112: only a camera edit of the ACTUAL predecessor frame can lead video references. */
+export const REANGLE_REFERENCE_NOTE = "the OPENING FRAME: the actual previous video's final instant already re-rendered from THIS shot's new camera. Match this camera/composition at frame 1; do not re-angle it again. Then immediately perform this scene's action and dialogue, without freezing.";
 
 export interface ScenePromptScene {
   id: string;
@@ -251,12 +214,9 @@ export interface BuildScenePromptInput {
    * Omitted / "parallel" → no previous_frame reference (all scenes render simultaneously).
    */
   chainMode?: "parallel" | "chain" | null;
-  /**
-   * Stage 111 — this scene's rendered KEYFRAME (Scene.keyframeUrl, Seedream still). When set it becomes
-   * `[Image1]` with KEYFRAME_REFERENCE_NOTE and every other reference shifts by one. Omitted / null = no
-   * keyframe reference (the preview passes the stored URL; the worker passes the one it just rendered).
-   */
-  keyframeUrl?: string | null;
+  reangleUrl?: string | null;
+  /** URLs forbidden from video, even if accidentally assigned to cast/location. */
+  forbiddenReferenceUrls?: string[];
 }
 
 /**
@@ -453,9 +413,9 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const mentioned = individualsAll.filter(c => isMentioned(c.name));
   const unmentioned = individualsAll.filter(c => !isMentioned(c.name));
   const individuals = [...mentioned, ...unmentioned];
-  const locationAngles = location ? locationAngleImages(location) : [];
+  const locationAngles = location ? [{ url: location.imageUrl, angle: "wide" }, { url: location.imageReverse, angle: "layout" }].filter((a): a is { url: string; angle: string } => !!a.url) : [];
   // Stage 44 — the extra angles of the same photographed place are references too (within the cap).
-  const locationExtras = location ? parseLocationExtra(location.imageExtra).slice(0, LOCATION_EXTRA_REF_CAP) : [];
+  const locationExtras: string[] = []; // Only the mandatory wide + layout plates.
   const effectiveLocation = locationAngles.length ? location : null;
   type Ref = SceneReference & { id: string };
   const characterRefs: Ref[] = individuals.map(c => ({ url: anchorUrl(c), kind: "character", id: c.characterId, note: characterReferenceNote(c.name) }));
@@ -468,35 +428,22 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // ref can be prioritized above the extras (and above crowds) but not above the base angles.
   const baseLocationRefs = locationRefs.slice(0, locationAngles.length);
   const extraLocationRefs = locationRefs.slice(locationAngles.length);
-  // Stage 62 (Variant A) — scene continuity: when this scene CONTINUES the same location/sequence
-  // (there IS a previous scene AND it is not a sequence break — i.e. not location-change/new-sequence),
-  // feed the previous scene's LAST FRAME as a reference with the lock-placement note so the set dressing
-  // and object positions carry over instead of being re-invented on every clip. Graceful: if the previous
-  // frame URL is missing (scene rendered out of order, or the previous clip has no last frame yet) nothing
-  // is added and the scene behaves exactly as before (continuity rests on the script text). Never added
-  // for a sequence break (a new arrangement starts) nor in text-only mode (no references are sent at all).
-  // Stage 72 — ONLY in chain mode (scenes render one after another, so the previous frame exists); in
-  // parallel mode all scenes render simultaneously and no last frame is ever sent.
-  const chainMode = input.chainMode === "chain";
-  const continuesSameLocation = chainMode && !!previous && !breaksSequence(scene.continuesFrom);
-  const previousLastFrameUrl = continuesSameLocation ? (previous!.lastFrameUrl ?? "").trim() : "";
-  const lastFrameRefs: Ref[] = previousLastFrameUrl
-    ? [{ url: previousLastFrameUrl, kind: "previous_frame", id: previous!.id, note: LAST_FRAME_CONTINUITY_NOTE }]
-    : [];
-  // Stage 111 — the scene's own keyframe leads the list (never trimmed: it sits before the characters).
-  const keyframeUrl = (input.keyframeUrl ?? "").trim();
-  const keyframeRefs: Ref[] = keyframeUrl ? [{ url: keyframeUrl, kind: "keyframe", id: scene.id, note: KEYFRAME_REFERENCE_NOTE }] : [];
-  // Reduced set (keyframe + individual characters + the wide location angle) kept for diagnostics.
-  const fallbackRefs: SceneReference[] = [...keyframeRefs, ...characterRefs, ...locationRefs.slice(0, 1)].slice(0, REFERENCE_IMAGE_CAP).map(r => ({ url: r.url, kind: r.kind, note: r.note }));
+  const forbidden = new Set([previous?.lastFrameUrl, ...(input.forbiddenReferenceUrls ?? [])].filter(Boolean));
+  const reangleUrl = (input.reangleUrl ?? "").trim();
+  if (reangleUrl && forbidden.has(reangleUrl)) throw new Error("The raw last frame cannot be a video reference.");
+  const openingRefs: Ref[] = reangleUrl ? [{ url: reangleUrl, kind: "reangle", id: scene.id, note: REANGLE_REFERENCE_NOTE }] : [];
+  const ordered = [...openingRefs, ...characterRefs, ...baseLocationRefs, ...crowdRefs].filter(r => !forbidden.has(r.url));
+  if (ordered.length > REFERENCE_IMAGE_CAP) throw new Error("Too many required video references. Reduce the scene cast.");
+  const fallbackRefs: SceneReference[] = ordered.map(({ url, kind, note }) => ({ url, kind, note }));
 
   // Stage 54 — deterministic sectioned signals injected into the auto prompt (see helpers above):
   //  • REFERENCE MAP  — which attached image is who (identity binding before the action);
   //  • PEOPLE IN FRAME — the exact people counter from the ACTUAL cast (main "how many" signal);
   //  • CLOTHING & PROPS — the episode registry props shown in THIS scene, substituted VERBATIM;
   //  • NEGATIVES — the fixed do-not block (appended after the body).
-  const skipReferences = !!scene.skipReferences;
+  const skipReferences = false; // Legacy text-only switches cannot bypass the approved chain.
   const matchedProps = matchPropsInText(input.props ?? [], mentionText);
-  const referenceMap = buildReferenceMap(individuals, effectiveLocation ? effectiveLocation.name : null, crowds, keyframeRefs.length && !skipReferences ? "Image1 = the OPENING FRAME of this scene (frame 1 composition)" : undefined);
+  const referenceMap = ""; // Generated from the ACTUAL ordered refs below, including overrides.
   const peopleCounter = buildPeopleCounter(characters.filter(c => c.tier !== "CROWD"), characters.some(c => c.tier === "CROWD"));
   const propsSection = buildPropsSection(matchedProps);
   const structureBlock = [referenceMap, peopleCounter, propsSection].filter(Boolean).join("\n");
@@ -516,14 +463,14 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // model starts frame 1 exactly where the last clip ended. The previous frame IMAGE is still never sent.
   // Stage 41 — the scene's own scripted END STATE follows the OPENING STATE block so the model knows
   // both where frame 1 starts and where the last frame must end.
-  const openingState = resolveOpeningState(scene, previous);
+  const openingState = reangleUrl ? oneLine(previous?.endStateActual) || null : resolveOpeningState(scene, previous);
   const endState = resolveEndState(scene);
   // Stage 44 — match cut on action: on a continuous seam the opening WORLD is the previous shot's final
   // instant while the CAMERA is new; the directive line makes that explicit for the video model.
   const continuousSeam = !!previous && !breaksSequence(scene.continuesFrom) && !!openingState;
   const stateBlocks = [
     openingState ? `${OPENING_STATE_PREFIX}${openingState}` : "",
-    continuousSeam ? NEW_CAMERA_ON_CUT_LINE : "",
+    continuousSeam && !reangleUrl ? NEW_CAMERA_ON_CUT_LINE : "",
     endState ? `${END_STATE_PREFIX}${endState}` : "",
     SPEECH_BEFORE_CUT_LINE,
   ].filter(Boolean);
@@ -551,7 +498,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     // Stage 46B-0: the producer's text is kept verbatim, except a [CHARACTER] line it still carries —
     // that one is rebuilt from the live character rows too (no line → nothing is added). A manual
     // override is authored end-to-end, so Stage 54's fixed NEGATIVES block is NOT appended to it.
-    prompt = refreshCharacterLine(override, characters, false);
+    prompt = buildNativeAudioPrompt(stripReferenceList(refreshCharacterLine(override, characters, false)).replace(/^REFERENCE MAP:.*$/gm, ""), dialogue, characters.map(c => ({ name: c.name })), targetLanguage);
   } else {
     // Stage 54 — the fixed do-not block closes the auto-assembled prompt (after the AUDIO TRACK and the
     // pace direction), covering logos/watermarks/subtitles/extra people plus the narration-only bits.
@@ -572,87 +519,20 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // Stage 62: set to the previous scene's id when its last frame is sent as a continuity reference; else null.
   let previousFrameSceneId: string | null = null;
 
-  // Stage 36 — reference mode for EVERY scene. Ordered set (Stage 51 — reverted to the known-good
-  // 46B-0 selection after 46B-1/46B-2/49/50 regressed Seedance moderation with E005):
-  //   1. ALL individual (non-CROWD) characters linked to THIS scene (SceneCharacter is written per
-  //      scene by the season worker) that have a styled anchor photo — no character cap. Characters
-  //      named in this scene's dialogue / videoPrompt are ranked first, then the rest of the linked
-  //      list in its original order (deterministic). Each individual contributes EXACTLY ONE photo to
-  //      video: the styled FULL-BODY FRONT photo (imageFull), falling back to the legacy front portrait
-  //      (imageFront) for characters generated before Stage 53. The profile and the extra angles are
-  //      NEVER sent to video — they remain on the character card for regen/download/generation only;
-  //   2. ALL styled location angles (wide first — locationAngleImages' own order), then the extra
-  //      location angles, each with its own note;
-  //   3. crowd groups linked to the scene (front only).
-  //   Stage 38: the previous scene's last frame is NOT sent any more (neither as first-frame `image`
-  //   nor as a "previous_frame" reference) — it was the recurring moderation trigger and made
-  //   characters drift. Continuity rests on the script text (presence / entrances / continuesFrom).
-  // Stage 51 rationale: this exact set (single front face per character + ALL location angles) is the
-  // configuration that PASSED Seedance moderation on 11-09 23:13 (see /tmp/ok.json and the "OLD" probe
-  // in scripts/_exp/stage48-results.json). Sending several character photos at once (face+profile+full+
-  // extras, added in 46B-1/46B-2) is what triggered E005 ("flagged as sensitive"). Trim order when the
-  // set exceeds REFERENCE_IMAGE_CAP: crowds first, then extra location angles (the wide angle is kept),
-  // never the characters.
-  // Stage 53 — the single video anchor per character is the full-body front photo (imageFull); legacy
-  // characters that only have the old front portrait fall back to imageFront so nothing breaks.
-  // Stage 54 — the reference SELECTION above (anchorUrl / individuals / crowds / characterRefs /
-  // locationRefs / crowdRefs / fallbackRefs) was hoisted to just after `dialogue` so the sectioned
-  // REFERENCE MAP / PEOPLE / PROPS text can name exactly what is attached; the logic is unchanged.
-  if (skipReferences) {
-    // Stage 33/36: producer asked for text-only submission (no reference images at all) — typically
-    // after a provider block that the text alone cannot explain.
-    reference = { mode: "text_only", sceneId: scene.id };
-    referenceKind = "text_only";
-  } else if (characterRefs.length || locationRefs.length || crowdRefs.length || keyframeRefs.length) {
-    // Stage 51 (46B-0 known-good) + Stage 62 continuity. Priority order, highest first — the trim
-    // (Seedance keeps the first REFERENCE_IMAGE_CAP=30) drops from the TAIL, so the order IS the
-    // priority:
-    //   1. one-per-character front refs (never dropped);
-    //   2. the previous scene's LAST FRAME (Stage 62) — above the base location angles so it is never
-    //      dropped before the characters or the base angles;
-    //   3. the BASE location angles (wide first);
-    //   4. the EXTRA location angles;
-    //   5. crowds.
-    // So the trim drops crowds → extra angles → base angles → last-frame, never the characters. With no
-    // last-frame this collapses to the exact previous order (characters → base+extra location → crowds).
-    // Stage 111: the scene KEYFRAME (opening still) is [Image1] whenever it exists — ahead of everything.
-    const ordered: Ref[] = [...keyframeRefs, ...characterRefs, ...lastFrameRefs, ...baseLocationRefs, ...extraLocationRefs, ...crowdRefs];
-    const refs: Ref[] = ordered.slice(0, REFERENCE_IMAGE_CAP);
-    const keptLocation = refs.filter(r => r.kind === "location");
-    const keptLastFrame = refs.some(r => r.kind === "previous_frame");
-    previousFrameSceneId = keptLastFrame ? previous!.id : null;
+  if (ordered.length) {
+    const refs = ordered;
     referenceImages = refs.map(r => r.url);
-    retryRefs = refs.map(r => ({ url: r.url, kind: r.kind, note: r.note }));
-    reference = {
-      mode: "character_references",
+    retryRefs = refs.map(({ url, kind, note }) => ({ url, kind, note }));
+    previousFrameSceneId = reangleUrl ? previous?.id ?? null : null;
+    reference = { mode: "character_references", kinds: refs.map(r => r.kind),
       characterIds: refs.filter(r => r.kind === "character" || r.kind === "crowd").map(r => r.id),
-      locationId: keptLocation.length ? effectiveLocation!.id : null,
-      kinds: refs.map(r => r.kind),
-      previousFrameSceneId, // Stage 62: the previous scene's id when its last frame is a continuity ref, else null
-    };
+      locationId: refs.some(r => r.kind === "location") ? location?.id : null,
+      previousFrameSceneId };
     referenceKind = "character_references";
-    // With a manual override the producer owns the full text — never append the reference notes
-    // (the images are still sent).
-    if (!hasOverride) {
-      prompt += "\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
-      if (keptLocation.length) prompt += "\n" + LOCATION_INSIDE_NOTE;
-    }
-  } else if (input.textOnlyWhenNoReferences) {
-    // Stage 40 — «Тестовая серия» / scenes with no linked characters or location: submit text-only
-    // instead of generating a Flux still first (no reference_images key at all).
+    prompt += "\nREFERENCE MAP:\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
+  } else {
     reference = { mode: "text_only", sceneId: scene.id, reason: "no_references" };
     referenceKind = "text_only";
-  } else {
-    // One new scene composition, never overwrite the user's old portraits or frames. This is
-    // original text-to-image design, not a way to bypass a provider refusal. The worker generates
-    // this still (Flux) and substitutes the real URL; the pure function only appends the note.
-    referencePrompt = `${visualPrompt}\nSingle still establishing the described scene with the same characters, clothing and setting. No text or subtitles.`;
-    reference = { mode: "new_scene_reference", sceneId: scene.id };
-    referenceKind = "new_scene_reference";
-    newSceneReference = true;
-    newSceneReferenceNote = "defines the scene's original photorealistic character designs, clothing and environment. Preserve those designs while performing the scripted action.";
-    // With a manual override the producer owns the full text — never append the reference note.
-    if (!hasOverride) prompt += `\n[Image1] ${newSceneReferenceNote}`;
   }
 
   return {
@@ -688,6 +568,7 @@ export function stripReferenceList(prompt: string): string {
   const kept = lines.filter(line => {
     const t = line.trim();
     if (/^\[Image\d+\]/i.test(t)) return false;
+    if (/keyframe|last_image|^CONTINUE FROM \[Image|^REFERENCE MAP:/i.test(t)) return false;
     if (t === LOCATION_INSIDE_NOTE.trim()) return false;
     return true;
   });

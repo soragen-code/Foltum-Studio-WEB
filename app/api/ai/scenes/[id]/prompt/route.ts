@@ -4,9 +4,15 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
+import { resolveOpeningState } from "@/lib/scene-prompt";
+import { resolveVideoPredecessor, assertPredecessorReady, buildReangleRequest } from "@/lib/reangle";
+import { readReangleCache } from "@/lib/reangle-store";
+import { finalVideoPrompt } from "@/lib/video-prompt-final";
+import { parseLookCache, lookHash } from "@/lib/character-look";
+import { parsePropRegistry } from "@/lib/prop-registry";
 import { buildScenePrompt } from "@/lib/scene-prompt";
 import { isRefusal } from "@/lib/frame-state";
-import { stripPreviousCameraLine, applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, applyLocationConsistency, sceneHasLocationRef, resolveContinuity } from "@/lib/prompt-seam";
+import { stripPreviousCameraLine } from "@/lib/prompt-seam";
 import { normalizePromptOverride } from "@/lib/prompt-override";
 
 /**
@@ -36,77 +42,56 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
   const scene = await prisma.scene.findFirst({
     where: { id, episode: { season: { project: { userId: session.user.id } } } },
     include: {
-      characters: { include: { character: true } },
-      episode: { select: { id: true, location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true } }, season: { select: { project: { select: { isTest: true } } } } } },
+      characters: { include: { character: true }, orderBy: { characterId: "asc" } },
+      episode: { select: { id: true, propRegistry: true, location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true } }, season: { select: { project: { select: { isTest: true } } } } } },
     },
   });
   if (!scene) return NextResponse.json({ error: "Scene not found" }, { status: 404 });
   if (!scene.videoPrompt) return NextResponse.json({ error: "The scene doesn't have a video prompt yet" }, { status: 400 });
 
-  // Stage 38: the previous scene's frame is never sent as a reference. Stage 40: its END STATE
-  // (actual last-frame description in chain mode, otherwise the scripted "Final frame") opens the prompt.
-  const previousRow = scene.number > 1 ? await prisma.scene.findFirst({
-    where: { episodeId: scene.episode.id, number: scene.number - 1 },
-    select: { id: true, number: true, locationDesc: true, lastFrameUrl: true, endState: true, endStateActual: true },
-  }) : null;
-  // Stage 102: same sanitising as the worker — refusal-looking description = absent; camera line stripped from the state text.
+  // Read-only: resolve the SAME predecessor and cache key as the video worker; never run an edit in preview.
+  let previousRow;
+  try { previousRow = await resolveVideoPredecessor(prisma, scene); assertPredecessorReady(previousRow); }
+  catch (error: any) { return NextResponse.json({ error: error.message, preprocessing: "blocked" }, { status: 409 }); }
   const previousEndStateRaw = previousRow && !isRefusal(previousRow.endStateActual) ? previousRow.endStateActual : null;
   const previous = previousRow ? { ...previousRow, endStateActual: previousEndStateRaw ? stripPreviousCameraLine(previousEndStateRaw) || null : null } : null;
-  const built = buildScenePrompt({
-    scene,
-    characters: scene.characters.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront, imageProfile: l.character.imageProfile, imageFull: l.character.imageFull, imageExtra: l.character.imageExtra, appearance: l.character.appearance, age: l.character.age })),
-    location: scene.episode.location ?? null,
-    previous,
-    // Stage 33: always Seedance 2.5 (legacy stored ids are normalized the same way in the worker).
-    provider: scene.videoModel,
-    textOnlyWhenNoReferences: Boolean(scene.episode.season?.project?.isTest),
-    // Stage 100: parallel mode removed — generation is always chain.
-    chainMode: "chain",
-    // Stage 111: an already rendered keyframe is [Image1] in the worker too (the worker renders one when missing).
-    keyframeUrl: scene.keyframeStatus === "done" ? scene.keyframeUrl : null,
-  });
-  const continuity = resolveContinuity({
-    chainMode: "chain",
-    sceneNumber: scene.number,
-    previousFrameSceneId: built.previousFrameSceneId,
-    refs: built.retryRefs,
-  });
-  // Stage 78/81/82/84: the preview shows EXACTLY what the worker submits — same seam / RE-FRAME
-  // transforms, the Stage 81 NEW-SHOT CAMERA MOVE, the Stage 82 CONTINUOUS ACTION directive for a
-  // continuing scene, and the Stage 84 LOCATION-AS-BASE-LAYER directive when a location ref is sent.
-  // Stage 86: type-based, retroactive detection — a location-typed ref, a named locationId, OR (for OLD
-  // projects whose location image predates the current visual-style id) the location row's own image URL.
-  const hasLocationRef = sceneHasLocationRef({
-    retryRefs: built.retryRefs,
-    reference: built.reference as { locationId?: string | null } | null,
-    location: scene.episode.location ?? null,
-  });
-  // Stage 110: the Stage 87 series-intro wrapper (scene 1 = b-roll + narrator, no talking) is removed —
-  // every scene is on-camera dialogue. Stage 88: hard location consistency (LOCATION ANCHOR) is applied on
-  // top of the Stage 84 base-layer directive, mirroring the video worker exactly.
-  const prompt = applyLocationConsistency(
-      applyLocationBaseLayer(
-        applyContinuousAction(
-          applyNewShotCameraMove(
-            applyReframeDirective(applySeamDirectives(built.prompt, { hasOverride: built.hasOverride }), built.retryRefs, { hasOverride: built.hasOverride, sceneNumber: scene.number, startState: scene.startState, previousEndState: previousEndStateRaw }),
-            scene.number,
-            { hasOverride: built.hasOverride, continuity },
-          ),
-          { hasOverride: built.hasOverride, continuity },
-        ),
-        { hasOverride: built.hasOverride, hasLocationRef },
-      ),
-      { hasOverride: built.hasOverride, hasLocationRef },
-    );
-
+  const characters = scene.characters.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier,
+    imageFront: l.character.imageFront, imageFull: l.character.imageFull, appearance: l.character.appearance, age: l.character.age }));
+  const forbiddenReferenceUrls = [scene.keyframeUrl, previousRow?.lastFrameUrl, (previousRow as any)?.keyframeUrl].filter((u): u is string => !!u);
+  const support = buildScenePrompt({ scene, characters, location: scene.episode.location, previous, forbiddenReferenceUrls }).retryRefs;
+  let reangleUrl: string | null = null;
+  let preprocessing = "not_required";
+  if (previousRow) {
+    if (!scene.episode.location?.imageUrl || !scene.episode.location.imageReverse)
+      return NextResponse.json({ error: "Add the location's mandatory wide and layout views before generating this transition.", preprocessing: "blocked" }, { status: 409 });
+    const request = buildReangleRequest({ sceneId: scene.id, number: scene.number, startState: scene.startState,
+      videoPrompt: scene.videoPrompt, promptOverride: scene.promptOverride, previous: previousRow, refs: support, castState: characters });
+    const cache = await readReangleCache(request);
+    // Placeholder is only an internal descriptor, never returned or submitted as a URL.
+    reangleUrl = cache?.phase === "ready" && cache.url ? cache.url : "pending:camera-edit";
+    preprocessing = cache?.phase === "ready" ? "cached" : "required_before_video";
+  }
+  const original = { videoPrompt: scene.promptOverride?.trim() || scene.videoPrompt, startState: scene.startState,
+    endState: scene.endState, openingState: resolveOpeningState(scene, previous) };
+  const cachedLook = parseLookCache(scene.lookCache);
+  const look = cachedLook?.hash === lookHash(characters, original) ? cachedLook : null;
+  const lookedScene = look ? { ...scene, videoPrompt: scene.promptOverride?.trim() ? scene.videoPrompt : look.videoPrompt,
+    promptOverride: scene.promptOverride?.trim() ? look.videoPrompt : scene.promptOverride,
+    startState: look.openingState ?? scene.startState, endState: look.endState ?? scene.endState } : scene;
+  const built = buildScenePrompt({ scene: lookedScene, characters, location: scene.episode.location, previous,
+    forbiddenReferenceUrls, reangleUrl, props: parsePropRegistry(scene.episode.propRegistry)?.props ?? [], provider: scene.videoModel });
+  const prompt = finalVideoPrompt(built);
+  const continuity = reangleUrl ? "reangled_frame" : "none";
   return NextResponse.json({
-    prompt,
+    prompt, preprocessing,
+    referenceKinds: built.retryRefs.map(r => r.kind),
+    previewNote: look ? "Uses cached look text" : "Read-only plan; worker may refresh look text and translate legacy non-English dialogue before submission",
     // Stage 78: last_frame | text_only | none — how the scene is tied to the previous one.
     continuity,
     model: built.model,
     hasOverride: !!(scene.promptOverride ?? "").trim(),
     // Stage 33: the per-scene "no reference images" toggle and the resolved reference strategy.
-    skipReferences: !!scene.skipReferences,
+    skipReferences: false,
     referenceKind: built.referenceKind,
     // Stage 40: the end-state hand-off actually used (null for scene 1 / location change / new sequence).
     openingState: built.openingState,
@@ -157,6 +142,7 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
   if (raw === undefined && rawSkip === undefined) {
     return NextResponse.json({ error: "Nothing to save" }, { status: 400 });
   }
+  if (rawSkip === true) return NextResponse.json({ error: "Reference-free generation is no longer supported. Character/location references and required camera continuity are automatic." }, { status: 400 });
   const normalized = normalizePromptOverride((raw ?? "").toString());
   const promptOverride = normalized.length ? normalized : null;
 

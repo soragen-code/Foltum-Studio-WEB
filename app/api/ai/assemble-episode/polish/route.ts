@@ -249,7 +249,7 @@ export async function POST(request: Request) {
         await prisma.scene.update({
           where: { id: scene.id },
           // Stage 40 — the corrected scene gets its corrected scripted end state; the vision-described actual state is stale.
-          data: { videoPrompt: sel.correctedVideoPrompt, videoUrl: null, status: "generating", language: "en", ...(sel.correctedEndState ? { endState: sel.correctedEndState } : {}), ...(sel.correctedStartState ? { startState: sel.correctedStartState } : {}), endStateActual: null, keyframeUrl: null, keyframePrompt: null, keyframeStatus: null, keyframeError: null },
+          data: { videoPrompt: sel.correctedVideoPrompt, videoUrl: null, status: "generating", language: "en", ...(sel.correctedEndState ? { endState: sel.correctedEndState } : {}), ...(sel.correctedStartState ? { startState: sel.correctedStartState } : {}), endStateActual: null },
         });
         await prisma.user.update({ where: { id: user.id }, data: { credits: { decrement: cost } } });
         await prisma.creditTransaction.create({
