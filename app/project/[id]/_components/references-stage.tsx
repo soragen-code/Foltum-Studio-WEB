@@ -380,9 +380,12 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
   }
 
   return (
-    // Stage 85: location references render FIRST as a distinct highlighted block at the top
-    // (order-first, larger cards) — it is the base layer of the scene; character reference
-    // blocks follow below. Layout/render-order only; no generation logic changed.
+    // Stage 85/86: location references render FIRST as a distinct highlighted block at the top
+    // (order-first, larger cards) — it is the base layer of the scene; character reference blocks
+    // follow below. The order is enforced by TYPE (the location section carries `order-first`, and
+    // it is rendered from the dedicated `locations` relation — never mixed into the character groups),
+    // so it holds for OLD projects too, regardless of the order records were created / returned by the
+    // DB. Layout/render-order only; no generation logic changed.
     <div className="flex flex-col gap-6">
       <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
         <div className="flex flex-wrap items-start justify-between gap-3">

@@ -5,7 +5,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { buildScenePrompt } from "@/lib/scene-prompt";
-import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, resolveContinuity } from "@/lib/prompt-seam";
+import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, sceneHasLocationRef, resolveContinuity } from "@/lib/prompt-seam";
 import { normalizePromptOverride } from "@/lib/prompt-override";
 
 /**
@@ -68,7 +68,13 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
   // Stage 78/81/82/84: the preview shows EXACTLY what the worker submits — same seam / RE-FRAME
   // transforms, the Stage 81 NEW-SHOT CAMERA MOVE, the Stage 82 CONTINUOUS ACTION directive for a
   // continuing scene, and the Stage 84 LOCATION-AS-BASE-LAYER directive when a location ref is sent.
-  const hasLocationRef = built.retryRefs.some((r) => r.kind === "location");
+  // Stage 86: type-based, retroactive detection — a location-typed ref, a named locationId, OR (for OLD
+  // projects whose location image predates the current visual-style id) the location row's own image URL.
+  const hasLocationRef = sceneHasLocationRef({
+    retryRefs: built.retryRefs,
+    reference: built.reference as { locationId?: string | null } | null,
+    location: scene.episode.location ?? null,
+  });
   const prompt = applyLocationBaseLayer(
     applyContinuousAction(
       applyNewShotCameraMove(

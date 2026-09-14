@@ -24,7 +24,7 @@ import { nextChainScene, chainStopMessage, CHAIN_INSUFFICIENT_CREDITS } from "@/
 import { resolvePowerTier, SCENE_RESOLUTION } from "@/lib/power-tier";
 import { sceneProgressStage, SCENE_STAGE_PROGRESS, SCENE_STAGE_MESSAGE } from "@/lib/scene-progress";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
-import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, resolveContinuity, TEXT_ONLY_CONTINUITY_MESSAGE, type Continuity } from "@/lib/prompt-seam";
+import { applySeamDirectives, applyReframeDirective, applyNewShotCameraMove, applyContinuousAction, applyLocationBaseLayer, sceneHasLocationRef, resolveContinuity, TEXT_ONLY_CONTINUITY_MESSAGE, type Continuity } from "@/lib/prompt-seam";
 
 export interface VideoJobParams {
   jobId: string;
@@ -263,8 +263,15 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     // shot's world/action on in real time (persistent world, not a frozen composition).
     prompt = applyContinuousAction(prompt, { hasOverride: built.hasOverride, continuity });
     // Stage 84: the location reference is the base layer of the frame — the environment is built first,
-    // then the characters are placed INTO it. Applied only when a location reference is actually sent.
-    const hasLocationRef = built.retryRefs.some((r) => r.kind === "location");
+    // then the characters are placed INTO it. Applied when the scene has a location reference.
+    // Stage 86: detection is type-based and retroactive — a location-typed ref, a named locationId, OR
+    // (for OLD projects whose location image predates the current visual-style id and is therefore not
+    // attached as a styled [ImageN] ref) the location row simply carrying a real image URL.
+    const hasLocationRef = sceneHasLocationRef({
+      retryRefs: built.retryRefs,
+      reference: built.reference as { locationId?: string | null } | null,
+      location: episodeLoc?.location ?? null,
+    });
     prompt = applyLocationBaseLayer(prompt, { hasOverride: built.hasOverride, hasLocationRef });
     console.log("[video-job] continuity", JSON.stringify({ sceneId, sceneNumber: scene.number, continuity, previousFrameSceneId: built.previousFrameSceneId ?? null, hasLocationRef }));
     const basePrompt = built.basePrompt;

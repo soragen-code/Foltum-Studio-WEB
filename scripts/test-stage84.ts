@@ -63,10 +63,10 @@ ok("3: LOCATION-BASE-LAYER is applied OUTERMOST (after CONTINUOUS ACTION)", p.in
 ok("3: whole pipeline idempotent end-to-end", applyLocationBaseLayer(applyContinuousAction(p, { hasOverride: false, continuity: cont }), { hasOverride: false, hasLocationRef: true }) === p);
 
 ok("3: worker imports applyLocationBaseLayer", /applyLocationBaseLayer/.test(worker) && /from "@\/lib\/prompt-seam"/.test(worker));
-ok("3: worker derives hasLocationRef from refs whose kind === 'location'", /const hasLocationRef = built\.retryRefs\.some\(\(r\) => r\.kind === "location"\)/.test(worker));
+ok("3: worker derives hasLocationRef via sceneHasLocationRef (Stage 86 retroactive, kind==='location' superset)", /const hasLocationRef = sceneHasLocationRef\(/.test(worker));
 ok("3: worker applies the directive after applyContinuousAction", worker.indexOf("applyLocationBaseLayer(prompt") > worker.indexOf("applyContinuousAction(prompt"));
 ok("3: preview route imports applyLocationBaseLayer", /applyLocationBaseLayer/.test(previewRoute));
-ok("3: preview route derives the same hasLocationRef signal", /const hasLocationRef = built\.retryRefs\.some\(\(r\) => r\.kind === "location"\)/.test(previewRoute));
+ok("3: preview route derives the same hasLocationRef signal via sceneHasLocationRef", /const hasLocationRef = sceneHasLocationRef\(/.test(previewRoute));
 ok("3: preview route applies applyLocationBaseLayer as the OUTERMOST wrapper", /const prompt = applyLocationBaseLayer\(\s*applyContinuousAction\(/.test(previewRoute));
 
 // ---- (4) does not touch the protected [ImageN] ordering / notes -------------
