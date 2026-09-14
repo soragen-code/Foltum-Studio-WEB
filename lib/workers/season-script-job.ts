@@ -9,7 +9,7 @@
  *
  * Steps:  structure → fullStory → episode (× N, plus the revise queue) → done.
  *   structure: season structure (episodeCount episodes) → Season + Episode rows (script = null).
- *   fullStory: whole-season prose story (non-fatal — skipped after 2 failed attempts).
+ *   fullStory: Stage 106 — built deterministically from the structure (buildFullStoryFromStructure), no LLM call.
  *   episode:   full shooting script → Episode.script + Scene rows (+ cast links) for every episode
  *              without a script, and for every episode in `revise.episodeIds` (author instruction).
  * Progress is persisted per episode, so a re-run only fills in what is missing.
@@ -32,8 +32,7 @@ import {
   validateEpisodeDescriptions,
   EPISODE_FOOTAGE_RETRY_NOTE,
   seasonFullStorySchema,
-  seasonFullStorySystemPrompt,
-  seasonFullStoryUserPrompt,
+  buildFullStoryFromStructure,
   episodeScriptSchema,
   seasonStructureSystemPrompt,
   seasonStructureUserPrompt,
@@ -482,8 +481,19 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
   }
 
   // (c) Start the next step (or retry the failed one).
-  const planned = retryStep ?? planNextStep(season, state);
-  const seasonStruct: SeasonStructure | null = season ? { title: season.title ?? "", logline: season.logline ?? "", episodes: season.episodes.map(outlineFromEpisode) } : null;
+  let planned = retryStep ?? planNextStep(season, state);
+  let seasonStruct: SeasonStructure | null = season ? { title: season.title ?? "", logline: season.logline ?? "", episodes: season.episodes.map(outlineFromEpisode) } : null;
+  if (planned.step === "fullStory" && season && seasonStruct) {
+    // Stage 106 — the season plot is NOT written by the LLM any more: it is built deterministically from the
+    // validated structure (season logline + every episode's 3-line footage) and saved at once, then the job
+    // proceeds straight to the episode scripts. No prompt, no attempts, no "too short" failures.
+    const fullStory = buildFullStoryFromStructure(seasonStruct, language, project.synopsis);
+    await prisma.season.update({ where: { id: season.id }, data: { fullStory } });
+    season = await loadSeason(projectId);
+    state = { ...state, attempt: 0, lastFailure: undefined };
+    planned = planNextStep(season, state);
+    seasonStruct = season ? { title: season.title ?? "", logline: season.logline ?? "", episodes: season.episodes.map(outlineFromEpisode) } : null;
+  }
   const done = countDone();
   const curTotal = season && season.episodes.length ? season.episodes.length : state.episodeCount;
   const remaining = season ? season.episodes.filter((e) => !e.script).length + (state.revise?.episodeIds.length ?? 0) : state.episodeCount;
@@ -505,12 +515,8 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
     responseId = await deps.start(seasonStructureSystemPrompt(language, state.episodeCount), seasonStructureUserPrompt(project.synopsis, cards, project.locations, shortSynopsisOutline(project.shortSynopsis)) + retryNote, { model: SCRIPT_MODEL, maxTokens: Math.min(64000, 4000 + 800 * state.episodeCount) });
     message = "Building the season structure..."; progress = 3;
   } else if (planned.step === "fullStory") {
-    responseId = await deps.start(
-      seasonFullStorySystemPrompt(language, seasonStruct!.episodes.length),
-      seasonFullStoryUserPrompt({ synopsis: project.synopsis, structure: seasonStruct!, characters: cards, locations: project.locations }),
-      { model: SCRIPT_MODEL, maxTokens: 32000 }
-    );
-    message = "Writing the season plot..."; progress = 4;
+    // Unreachable since Stage 106 (handled deterministically above); kept so the state machine stays exhaustive.
+    throw new Error("fullStory step is built from the structure, not generated");
   } else {
     const ep = season!.episodes.find((e) => e.id === planned.episodeId)!;
     const next = season!.episodes.find((e) => e.number === ep.number + 1);

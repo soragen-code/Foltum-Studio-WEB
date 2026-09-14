@@ -10,7 +10,7 @@ import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { toCharacterCard, normalizeLanguage } from "@/lib/idea";
 import { runSeasonScriptJob, SEASON_JOB_TYPE, outlineFromEpisode } from "@/lib/workers/season-script-job";
-import { seasonReviseSchema, seasonReviseSystemPrompt, seasonReviseUserPrompt, affectedEpisodes, matchLocation, SEASON_SYNC_INSTRUCTION, validateEpisodeDescriptions, EPISODE_FOOTAGE_RETRY_NOTE, type SeasonStructure } from "@/lib/season";
+import { seasonReviseSchema, seasonReviseSystemPrompt, seasonReviseUserPrompt, affectedEpisodes, matchLocation, SEASON_SYNC_INSTRUCTION, validateEpisodeDescriptions, EPISODE_FOOTAGE_RETRY_NOTE, buildFullStoryFromStructure, type SeasonStructure } from "@/lib/season";
 
 /**
  * POST /api/ai/season/revise { projectId, instruction?, sync?, force? }
@@ -87,7 +87,8 @@ export async function POST(request: Request) {
   const byName = new Map(project.characters.map((c) => [c.name.toLowerCase(), c.id]));
   const locs: { id: string; name: string; detailLevel: string | null }[] = project.locations.map((l) => ({ id: l.id, name: l.name, detailLevel: l.detailLevel }));
   await prisma.$transaction(async (tx) => {
-    await tx.season.update({ where: { id: season.id }, data: { title: after.title, logline: after.logline } });
+    // Stage 106 — keep the "Season plot" screen in sync: rebuild the plot text from the revised structure.
+    await tx.season.update({ where: { id: season.id }, data: { title: after.title, logline: after.logline, fullStory: buildFullStoryFromStructure(after, language, project.synopsis) } });
     for (const e of after.episodes) {
       const ep = season.episodes.find((x) => x.number === e.number);
       if (!ep) continue;

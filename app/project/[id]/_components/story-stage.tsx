@@ -9,6 +9,8 @@ import { rewriteViewState } from '@/lib/rewrite-view-state'
 import { CancelButton } from './cancel-button'
 import { StickyReviseBar } from './sticky-revise-bar'
 import { type SeasonEpisode } from './season-stage'
+import { EpisodeFootage } from './episode-footage'
+import { parseEpisodeFootage } from '@/lib/season'
 
 // GenerationJob.type values (mirrored from the server workers — this is a client component, so we can't
 // import the worker modules, which pull in prisma/openai). The job's `type` field arrives as a string.
@@ -17,36 +19,51 @@ const SEASON_JOB_TYPE = 'season_script'
 const STORY_REVISE_EXPECTED_SEC = 90 // prose rewrite + structure sync
 const SEASON_REWRITE_EXPECTED_SEC = 480 // affected-episode script rewrite phase
 
-// Fixed episode-boundary bars written by the LLM (see lib/season.ts fullStoryFormatRules).
+// Fixed episode-boundary bars (see lib/season.ts buildFullStoryFromStructure — Stage 106: built from the structure).
 const START_MARK = '═══'
 const END_MARK = '───'
 
 type SeasonData = { id: string; title?: string | null; logline?: string | null; status: string; fullStory?: string | null; episodes: SeasonEpisode[] } | null
 type Job = { id: string; status: string; progress: number; message?: string | null; error?: string | null; resultData?: string | null } | null
 
-/** Render the whole-season prose story, styling the ═══/─── episode markers as dividers. */
+/**
+ * Render the season plot: the overview (text before the first ═══ marker) as paragraphs, then each episode block
+ * with its ═══ header as a divider and — Stage 106 — its body as the three footage rows (Shot 1 / Shot 2 /
+ * Cliffhanger) when it parses; legacy prose blocks keep the plain-paragraph rendering. ─── closings are hidden.
+ */
 function FullStoryView({ text }: { text: string }) {
   const lines = text.split(/\r?\n/)
+  type Block = { key: number; header: string | null; body: string[] }
+  const blocks: Block[] = [{ key: 0, header: null, body: [] }]
+  lines.forEach((line, i) => {
+    const t = line.trimStart()
+    if (t.startsWith(START_MARK)) { blocks.push({ key: i + 1, header: t.replace(/═+/g, '').trim(), body: [] }); return }
+    if (t.startsWith(END_MARK)) return
+    blocks[blocks.length - 1].body.push(line)
+  })
+  const renderPlain = (body: string[], keyBase: number) => body.map((line, i) => {
+    if (!line.trim()) return <div key={`${keyBase}-${i}`} className="h-2" />
+    return <p key={`${keyBase}-${i}`} className="text-sm leading-relaxed">{line}</p>
+  })
   return (
     <div className="space-y-2" data-testid="full-story">
-      {lines.map((line, i) => {
-        const t = line.trimStart()
-        if (t.startsWith(START_MARK)) {
-          const label = t.replace(/═+/g, '').trim()
-          return (
-            <div key={i} className="mt-6 flex items-center gap-2 first:mt-0" data-testid="full-story-episode-start">
-              <span className="h-px flex-1 bg-primary/40" />
-              <span className="rounded-full bg-primary/10 px-3 py-1 text-sm font-bold text-primary">{label}</span>
-              <span className="h-px flex-1 bg-primary/40" />
-            </div>
-          )
-        }
-        // Stage 14 (A3): the "end of episode N" markers are no longer shown — a new episode header
-        // already implies the previous one ended. Old stories still contain the ─── bars, so we skip
-        // them silently here (both legacy and new content render cleanly).
-        if (t.startsWith(END_MARK)) return null
-        if (!t) return <div key={i} className="h-2" />
-        return <p key={i} className="text-sm leading-relaxed">{line}</p>
+      {blocks.map((b) => {
+        const bodyText = b.body.join('\n').trim()
+        const footage = b.header ? parseEpisodeFootage(bodyText) : null
+        return (
+          <div key={b.key}>
+            {b.header && (
+              <div className="mt-6 flex items-center gap-2 first:mt-0" data-testid="full-story-episode-start">
+                <span className="h-px flex-1 bg-primary/40" />
+                <span className="rounded-full bg-primary/10 px-3 py-1 text-sm font-bold text-primary">{b.header}</span>
+                <span className="h-px flex-1 bg-primary/40" />
+              </div>
+            )}
+            {footage
+              ? <EpisodeFootage description={bodyText} className="mt-3 [&>p]:text-sm [&>p]:leading-relaxed" />
+              : renderPlain(b.body, b.key)}
+          </div>
+        )
       })}
     </div>
   )
@@ -219,7 +236,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
           {episodeCount > 0 && <span className="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-sm" data-testid="episode-count"><BookOpen className="h-4 w-4" /> {episodeCount} episodes</span>}
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          The full season story in one text. Each episode starts with its own header label; locations and characters are described directly in the text, and their references are generated on the episode screen. Make plot edits in the panel below — they won’t break already generated episodes or assets.
+          The season, episode by episode: each episode is 60 seconds of footage — two 30-second shots and the final frame. Edit in the panel below; rewriting clears the generated scenes and videos of the affected episodes.
         </p>
         {season?.title && (
           <div className="mt-3">

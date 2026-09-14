@@ -95,7 +95,7 @@ ok(cleanStoryText("x".repeat(STORY_MAX_CHARS + 500)).length === STORY_MAX_CHARS,
     fullStory: "x".repeat(300),
   };
   ok(seasonStoryReviseSchema.safeParse(reviseGood).success, "seasonStoryReviseSchema accepts structure + fullStory");
-  ok(!seasonStoryReviseSchema.safeParse({ ...reviseGood, fullStory: "" }).success, "seasonStoryReviseSchema requires fullStory");
+  ok(seasonStoryReviseSchema.safeParse({ ...reviseGood, fullStory: "" }).success, "seasonStoryReviseSchema accepts empty fullStory (Stage 106: plot is rebuilt from the structure)");
   ok(!seasonStoryReviseSchema.safeParse({ ...reviseGood, episodes: reviseGood.episodes.slice(0, 2) }).success === (SEASON_MIN_EPISODES > 2), "seasonStoryReviseSchema enforces min episodes");
 
   // --- (B) full-story prompts ------------------------------------------------

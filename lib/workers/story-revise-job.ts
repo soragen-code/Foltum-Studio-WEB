@@ -26,6 +26,7 @@ import {
   SEASON_MIN_EPISODES,
   SEASON_MAX_EPISODES,
   type SeasonStructure,
+  buildFullStoryFromStructure,
 } from "@/lib/season";
 
 /** GenerationJob.type value for the whole-season story rewrite. */
@@ -98,7 +99,10 @@ export async function runStoryReviseJob(jobId: string, projectId: string, params
         result = await attempt(`\n\n${EPISODE_FOOTAGE_RETRY_NOTE} Problems found: ${why}`);
       }
       after = { title: result.title, logline: result.logline, episodes: result.episodes };
-      fullStory = result.fullStory;
+      // Stage 106 — the model's "fullStory" is ignored: the season plot is rebuilt from the validated structure
+      // so the text and the episodes can never diverge.
+      void result.fullStory;
+      fullStory = buildFullStoryFromStructure(after, language, project.synopsis);
     } catch (err) {
       await failJob(jobId, "Failed to rewrite plot: " + (err instanceof Error ? err.message : String(err)));
       return;

@@ -1269,13 +1269,81 @@ export const FULL_STORY_START_MARK = "═══";
 export const FULL_STORY_END_MARK = "───";
 export const seasonFullStorySchema = z.object({ fullStory: z.string().min(1) });
 /** Story-screen revise returns BOTH the (possibly re-counted) structure and the rewritten prose. */
-export const seasonStoryReviseSchema = seasonStructureSchema.extend({ fullStory: z.string().min(1) });
+/** Stage 106 — "fullStory" from the model is IGNORED (the plot is rebuilt from the structure); it may be empty. */
+export const seasonStoryReviseSchema = seasonStructureSchema.extend({ fullStory: z.string().optional().default("") });
 export type SeasonStoryRevise = z.infer<typeof seasonStoryReviseSchema>;
 
 /** How many episode blocks a full-story text contains (counts the start-marker lines). */
 export function countFullStoryEpisodes(text: string | null | undefined): number {
   if (!text) return 0;
   return text.split(/\r?\n/).filter((l) => l.trimStart().startsWith(FULL_STORY_START_MARK)).length;
+}
+
+// ─── Stage 106: the season plot is BUILT from the structure, not written by the LLM ──────────
+/** Header / closing words per language (UPPERCASE, as the prose LLM used to write them). */
+const FULL_STORY_WORDS: Record<IdeaLanguage, { episode: string; end: string }> = {
+  ru: { episode: "ЭПИЗОД", end: "КОНЕЦ ЭПИЗОДА" },
+  en: { episode: "EPISODE", end: "END OF EPISODE" },
+  uk: { episode: "ЕПІЗОД", end: "КІНЕЦЬ ЕПІЗОДУ" },
+  de: { episode: "EPISODE", end: "ENDE DER EPISODE" },
+  fr: { episode: "ÉPISODE", end: "FIN DE L'ÉPISODE" },
+  es: { episode: "EPISODIO", end: "FIN DEL EPISODIO" },
+  it: { episode: "EPISODIO", end: "FINE DELL'EPISODIO" },
+  pl: { episode: "ODCINEK", end: "KONIEC ODCINKA" },
+  pt: { episode: "EPISÓDIO", end: "FIM DO EPISÓDIO" },
+  tr: { episode: "BÖLÜM", end: "BÖLÜM SONU" },
+};
+export function fullStoryEpisodeHeader(language: IdeaLanguage, n: number, title: string): string {
+  const w = FULL_STORY_WORDS[language] ?? FULL_STORY_WORDS.en;
+  return `${FULL_STORY_START_MARK} ${w.episode} ${n}: ${title.trim()} ${FULL_STORY_START_MARK}`;
+}
+export function fullStoryEpisodeClosing(language: IdeaLanguage, n: number): string {
+  const w = FULL_STORY_WORDS[language] ?? FULL_STORY_WORDS.en;
+  return `${FULL_STORY_END_MARK} ${w.end} ${n} ${FULL_STORY_END_MARK}`;
+}
+
+/**
+ * Normalize an episode description to exactly THREE lines (one per label). A one-line description is split
+ * at the SHOT 2 / CLIFFHANGER labels; anything unparseable is returned trimmed as-is (legacy prose).
+ */
+export function footageToLines(description: string | null | undefined): string {
+  const f = parseEpisodeFootage(description);
+  if (!f) return (description ?? "").trim();
+  return [`${SHOT1_LABEL} ${f.shot1}`, `${SHOT2_LABEL} ${f.shot2}`, `${CLIFFHANGER_LABEL} ${f.cliffhanger}`].join("\n");
+}
+
+const FULL_STORY_OVERVIEW_MAX_WORDS = 60;
+function firstSentence(text: string | null | undefined): string {
+  const t = (text ?? "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  const m = /^(.+?[.!?…])(\s|$)/.exec(t);
+  return (m ? m[1] : t).trim();
+}
+
+/**
+ * Build Season.fullStory deterministically from the validated structure: a short overview (season logline,
+ * optionally the first sentence of the synopsis, ≤ ~60 words), then one block per episode:
+ * `═══ EPISODE n: title ═══` / three labelled footage lines / `─── END OF EPISODE n ───`, blank line between blocks.
+ * No prose paragraphs, no character or location intros — the text is the list of 60-second episodes.
+ */
+export function buildFullStoryFromStructure(
+  structure: { title?: string | null; logline?: string | null; episodes: { number: number; title: string; description?: string | null }[] },
+  language: IdeaLanguage,
+  synopsisLine?: string | null,
+): string {
+  const parts: string[] = [];
+  const overview: string[] = [];
+  const logline = (structure.logline ?? "").replace(/\s+/g, " ").trim();
+  if (logline) overview.push(logline);
+  const syn = firstSentence(synopsisLine);
+  if (syn && norm(syn) !== norm(logline) && countWords(overview.join(" ")) + countWords(syn) <= FULL_STORY_OVERVIEW_MAX_WORDS) overview.push(syn);
+  if (overview.length) parts.push(overview.join(" "));
+  const episodes = [...structure.episodes].sort((a, b) => a.number - b.number);
+  for (const e of episodes) {
+    const body = footageToLines(e.description);
+    parts.push([fullStoryEpisodeHeader(language, e.number, e.title), body, fullStoryEpisodeClosing(language, e.number)].filter((l) => l.length > 0).join("\n"));
+  }
+  return parts.join("\n\n");
 }
 
 function fullStoryFormatRules(language: IdeaLanguage, episodeCount: number): string {
@@ -1308,11 +1376,12 @@ export function seasonFullStoryUserPrompt(input: { synopsis: string; structure: 
 
 /** Story-screen revise: rewrite the prose per the author's instruction AND keep the structure in sync (count may change). */
 export function seasonStoryReviseSystemPrompt(language: IdeaLanguage, episodeCount: number): string {
-  return `You are the showrunner of a short-form vertical drama. You receive the CURRENT season structure (${episodeCount} episodes), the CURRENT full-story prose, and an INSTRUCTION from the author. Apply the instruction and return the FULL updated season as STRICT JSON:
+  return `You are the showrunner of a short-form vertical drama. You receive the CURRENT season structure (${episodeCount} episodes), the CURRENT season plot (= the list of episode descriptions in the 60-second footage format), and an INSTRUCTION from the author. Apply the instruction and return the FULL updated season as STRICT JSON:
 {"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string, "description": string (60-SECOND FOOTAGE — 3 labelled lines, see the rule)}], "fullStory": string}.
 RULES:
-- MINIMAL CHANGE: keep the structure and prose the author did NOT ask to change VERBATIM. Only touch what the instruction (or the story consistency it forces) requires — the system regenerates scripts only for episodes whose logline / arc / location / cast changed, so needless edits waste the author's work.
-- EPISODE COUNT: keep ${episodeCount} episodes UNLESS the author explicitly asks to add or remove episodes; then return the new count (allowed range ${SEASON_MIN_EPISODES}–${SEASON_MAX_EPISODES}), renumber episodes 1..N contiguously, and make "episodes" and "fullStory" agree exactly (same number of episode blocks, same titles/order). Episode 1 = завязка, last = финал.
+- SEASON PLOT = EPISODES: the season plot the author reads IS the ordered list of episode "description" fields (3 labelled footage lines each) — there is NO separate prose story. The app builds the plot text from "episodes" itself, so "fullStory" may be returned as an empty string "" or a 1–2 sentence season overview; never write prose there.
+- MINIMAL CHANGE: keep the structure and descriptions the author did NOT ask to change VERBATIM. Only touch what the instruction (or the story consistency it forces) requires — the system regenerates scripts only for episodes whose logline / arc / location / cast changed, so needless edits waste the author's work.
+- EPISODE COUNT: keep ${episodeCount} episodes UNLESS the author explicitly asks to add or remove episodes; then return the new count (allowed range ${SEASON_MIN_EPISODES}–${SEASON_MAX_EPISODES}), renumber episodes 1..N contiguously (the OPENS ON chain must stay unbroken after renumbering). Episode 1 = завязка, last = финал.
 - Use ONLY the given character names verbatim; "locationName" should be one of the given LOCATIONS (verbatim) unless the story truly needs a new place. "logline" is ONE sentence; "cliffhanger" = the CLIFFHANGER line verbatim.
 - ${EPISODE_FOOTAGE_RULE}
   If an episode's current "description" is not yet in the 3-line format, rewrite it into the format WITHOUT changing its events (that alone does not count as a story change).
@@ -1320,11 +1389,10 @@ RULES:
 - ${LOCATION_DETAIL_RULE}
 - ${CREATIVE_RULE}
 - ${MODERATION_SAFE_RULE}
-- In "episodes", all text except "locationDesc" is in ${langName(language)}; "locationDesc" is detailed English. Character names stay exactly as given (Western names in Latin letters).
-${fullStoryFormatRules(language, episodeCount)}`;
+- In "episodes", all text except "locationDesc" is in ${langName(language)}; "locationDesc" is detailed English. Character names stay exactly as given (Western names in Latin letters).`;
 }
 export function seasonStoryReviseUserPrompt(input: { synopsis: string; structure: SeasonStructure; fullStory: string; characters: CharacterCard[]; locations: LocationRef[]; instruction: string }): string {
-  return `SYNOPSIS:\n${input.synopsis}\n\nCHARACTERS (with tiers):\n${charactersBlock(input.characters)}\n\nLOCATIONS:\n${input.locations.length ? locationsBlock(input.locations) : "(none)"}\n\nCURRENT SEASON STRUCTURE (JSON):\n${JSON.stringify(input.structure, null, 1)}\n\n${cliffhangerChainGivens(input.structure)}\n\nCURRENT FULL STORY:\n${input.fullStory || "(not written yet)"}\n\nINSTRUCTION FROM THE AUTHOR:\n${input.instruction}`;
+  return `SYNOPSIS:\n${input.synopsis}\n\nCHARACTERS (with tiers):\n${charactersBlock(input.characters)}\n\nLOCATIONS:\n${input.locations.length ? locationsBlock(input.locations) : "(none)"}\n\nCURRENT SEASON STRUCTURE (JSON):\n${JSON.stringify(input.structure, null, 1)}\n\n${cliffhangerChainGivens(input.structure)}\n\nCURRENT SEASON PLOT (built from the episode descriptions — for reference only):\n${input.fullStory || "(not written yet)"}\n\nINSTRUCTION FROM THE AUTHOR:\n${input.instruction}`;
 }
 
 const norm = (s: string | null | undefined) => (s ?? "").replace(/\s+/g, " ").trim().toLowerCase();
