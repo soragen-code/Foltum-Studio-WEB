@@ -34,9 +34,12 @@ const eps = (scripts: (string | null)[]) => scripts.map((s, i) => ({ id: `ep${i 
 assert(planNextStep(null, {}).step === "structure", "no season → structure");
 assert(planNextStep({ fullStory: null, episodes: [] }, {}).step === "structure", "season without episodes → structure");
 assert(planNextStep({ fullStory: null, episodes: eps([null, null]) }, {}).step === "fullStory", "episodes but no full story → fullStory");
-assert(planNextStep({ fullStory: null, episodes: eps([null, null]) }, { skipFullStory: true }).step === "episode", "full story skipped after failures → episode");
+// Stage 107 — the season job never writes scripts on its own: without a revise queue it is done.
+assert(planNextStep({ fullStory: null, episodes: eps([null, null]) }, { skipFullStory: true }).step === "done", "full story skipped after failures → done (no script fallback)");
 let p = planNextStep({ fullStory: "story", episodes: eps(["done", null, null]) }, {});
-assert(p.step === "episode" && p.episodeId === "ep2" && !p.instruction, "first episode without a script is next");
+assert(p.step === "done", "episodes without scripts are NOT picked up by the season job (Stage 107)");
+p = planNextStep({ fullStory: "story", episodes: eps(["done", null, null]) }, { revise: { episodeIds: ["ep2"], instruction: "" } });
+assert(p.step === "episode" && p.episodeId === "ep2" && !p.instruction, "one-episode queue with an empty instruction → first-write step for that episode");
 p = planNextStep({ fullStory: "story", episodes: eps(["done", "done"]) }, { revise: { episodeIds: ["ep1"], instruction: "more conflict" } });
 assert(p.step === "episode" && p.episodeId === "ep1" && p.instruction === "more conflict", "revise queue goes first (already-written episode, with instruction)");
 p = planNextStep({ fullStory: "story", episodes: eps(["done", "done"]) }, { revise: { episodeIds: ["gone"], instruction: "x" } });

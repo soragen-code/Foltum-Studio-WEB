@@ -27,8 +27,8 @@ export default async function EpisodePage({ params }: { params: Promise<{ id: st
   const siblings = await prisma.episode.findMany({
     where: { seasonId: episode.seasonId },
     orderBy: { number: 'asc' },
-    select: { id: true, number: true, title: true, status: true, videoUrl: true },
+    select: { id: true, number: true, title: true, status: true, videoUrl: true, script: true },
   })
 
-  return <EpisodeView episode={JSON.parse(JSON.stringify(episode))} project={JSON.parse(JSON.stringify(episode.season.project))} siblings={JSON.parse(JSON.stringify(siblings))} credits={user.credits ?? 0} />
+  return <EpisodeView episode={JSON.parse(JSON.stringify(episode))} project={JSON.parse(JSON.stringify(episode.season.project))} siblings={JSON.parse(JSON.stringify(siblings.map(({ script, ...s }) => ({ ...s, hasScript: !!script }))))} credits={user.credits ?? 0} />
 }

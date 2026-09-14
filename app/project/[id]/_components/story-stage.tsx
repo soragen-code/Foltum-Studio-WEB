@@ -92,14 +92,11 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
   }, [project.id])
 
   const jobActive = !!job && (job.status === 'pending' || job.status === 'processing')
-  const result = (() => { try { return job?.resultData ? JSON.parse(job.resultData) : null } catch { return null } })()
-  const paused = !!job && job.status === 'completed' && result && result.done === false
   const total = season?.episodes.length ?? 0
-  const scriptsDone = season?.episodes.filter((e) => e.script).length ?? 0
   const episodeCount = total
-  // Stage 59 (step 3 «Season plot): the first episode that already has a script — the entry point into
-  // step 4 (episode creation). Used by the identical «Go to first episode buttons at top and bottom.
-  const firstEpisode = season?.episodes.find((e) => !!e.script) ?? null
+  // Stage 107: the season job writes structure + plot only; scripts are written on demand from the episode
+  // page. «Go to first episode therefore always points at episode 1 (lowest number), script or not.
+  const firstEpisode = season ? ([...season.episodes].sort((a, b) => a.number - b.number)[0] ?? null) : null
 
   useEffect(() => { load() }, [load])
   useEffect(() => {
@@ -123,20 +120,11 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
     if (!job?.id) return
     const res = await fetch(`/api/ai/jobs/${job.id}/cancel`, { method: 'POST' })
     if (res.ok) {
-      continuedFor.current = job.id
       setJob((j) => (j ? { ...j, status: 'canceled', message: 'Stopping generation...' } : j))
       setTimeout(load, 1500)
     }
   }
 
-  // Auto-continue when the worker paused on the time budget.
-  const continuedFor = useRef<string | null>(null)
-  useEffect(() => {
-    if (!paused || jobActive || starting || !job) return
-    if (continuedFor.current === job.id) return
-    continuedFor.current = job.id
-    void start()
-  }, [paused, jobActive, starting, job]) // eslint-disable-line react-hooks/exhaustive-deps
   const wasActive = useRef(false)
   useEffect(() => {
     if (jobActive) { wasActive.current = true; return }
@@ -268,7 +256,6 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
               <span className="flex min-w-0 items-center gap-2">
                 <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-primary" />
                 <span className="truncate">{job?.message ?? 'Starting...'}</span>
-                {total > 0 && <span className="flex-shrink-0 text-muted-foreground">· scripts {scriptsDone}/{total}</span>}
               </span>
               {job?.id && !starting && <CancelButton onCancel={cancelSeason} testId="season-cancel" className="flex-shrink-0" />}
             </div>
@@ -280,23 +267,18 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
         {job?.status === 'canceled' && !jobActive && (
           <div className="mt-4 space-y-2" data-testid="season-canceled">
             <p className="text-sm text-amber-500">{job.message ?? 'Generation canceled'}</p>
-            <button onClick={start} disabled={starting} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm" data-testid="season-continue">
-              <Wand2 className="h-4 w-4" /> Continue generation
+            <button onClick={start} disabled={starting} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm" data-testid="season-restart">
+              <Wand2 className="h-4 w-4" /> Restart generation
             </button>
           </div>
         )}
         {job?.status === 'failed' && (
           <div className="mt-4 space-y-2">
             <p className="text-sm text-destructive">Error: {job.error ?? 'generation interrupted'}</p>
-            <button onClick={start} disabled={starting} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm" data-testid="season-continue">
-              <Wand2 className="h-4 w-4" /> Continue generation
+            <button onClick={start} disabled={starting} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm" data-testid="season-restart">
+              <Wand2 className="h-4 w-4" /> Restart generation
             </button>
           </div>
-        )}
-        {paused && !jobActive && (
-          <button onClick={start} disabled={starting} className="mt-4 inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm" data-testid="season-continue">
-            <Wand2 className="h-4 w-4" /> Continue generation ({result?.remaining} episodes left)
-          </button>
         )}
 
         {/* Stage 77: while the rewrite runs the OLD story is replaced by a placeholder with the smooth bar. */}
@@ -314,6 +296,9 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
               <div className="mt-5 rounded-lg border border-border/60 bg-muted/10 p-4" data-testid="story-body">
                 <FullStoryView text={season.fullStory} />
               </div>
+            )}
+            {season?.fullStory && !jobActive && (
+              <p className="mt-3 text-sm text-muted-foreground" data-testid="plot-ready">Season plot is ready. Open an episode to write its script.</p>
             )}
             {season && !season.fullStory && !jobActive && (
               <p className="mt-4 text-sm text-muted-foreground">The plot hasn't been written yet. Editing below will generate it.</p>

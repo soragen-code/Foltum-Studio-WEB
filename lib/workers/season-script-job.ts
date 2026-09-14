@@ -7,11 +7,11 @@
  * (`SeasonJobState`) and `advanceSeasonJob()` — called from the GET polling routes — polls it,
  * persists the finished step and starts the next one. Nothing long-running lives inside a request.
  *
- * Steps:  structure → fullStory → episode (× N, plus the revise queue) → done.
+ * Steps:  structure → fullStory → episode (ONLY for the revise/generate queue, Stage 107) → done.
  *   structure: season structure (episodeCount episodes) → Season + Episode rows (script = null).
  *   fullStory: Stage 106 — built deterministically from the structure (buildFullStoryFromStructure), no LLM call.
- *   episode:   full shooting script → Episode.script + Scene rows (+ cast links) for every episode
- *              without a script, and for every episode in `revise.episodeIds` (author instruction).
+ *   episode:   full shooting script → Episode.script + Scene rows (+ cast links) for every episode in the
+ *              `revise.episodeIds` queue (author instruction = rewrite; empty = write from the structure).
  * Progress is persisted per episode, so a re-run only fills in what is missing.
  */
 import { prisma } from "@/lib/db";
@@ -145,10 +145,11 @@ export function planNextStep(
   if (!season.fullStory && !state.skipFullStory) return { step: "fullStory" };
   const queue = state.revise?.episodeIds ?? [];
   for (const id of queue) {
-    if (season.episodes.some((e) => e.id === id)) return { step: "episode", episodeId: id, instruction: state.revise!.instruction };
+    if (season.episodes.some((e) => e.id === id)) return { step: "episode", episodeId: id, instruction: state.revise!.instruction || undefined };
   }
-  const missing = season.episodes.find((e) => !e.script);
-  if (missing) return { step: "episode", episodeId: missing.id };
+  // Stage 107 — the season job writes ONLY the structure + season plot. Episode scripts are written on demand
+  // from the episode page (POST /api/ai/episodes/[id]/script → a job with a one-episode queue); the old
+  // "first episode without a script" fallback is gone, so episodes stay script=null after the season job.
   return { step: "done" };
 }
 
@@ -502,7 +503,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
     if (season) await prisma.season.update({ where: { id: season.id }, data: { status: "script_ready" } });
     await saveState(jobId, { ...state, step: "done", remaining: 0, total: curTotal, done: true });
     const note = state.warnings?.length ? ` · ${state.warnings.join("; ")}` : "";
-    await completeJob(jobId, { ...state, step: "done", remaining: 0, total: curTotal, done: true, lockedAt: undefined }, `Season script ready${note}`);
+    await completeJob(jobId, { ...state, step: "done", remaining: 0, total: curTotal, done: true, lockedAt: undefined }, `Season plot ready${note}`);
     return;
   }
 
@@ -537,7 +538,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
     );
     message = planned.instruction
       ? `Rewriting the script for episode ${ep.number}... (the model is reasoning, usually 5-10 minutes)`
-      : `Writing the script for episode ${ep.number} of ${curTotal}... (the model is reasoning, usually 5-10 minutes)`;
+      : `Writing the episode script... (the model is reasoning, usually 5-10 minutes)`;
     progress = episodeProgress(done, curTotal);
   }
   await saveState(

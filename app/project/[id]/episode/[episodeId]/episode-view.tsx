@@ -10,7 +10,7 @@ import { referenceFileName } from '@/lib/download-name'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
-import { EpisodeFootage } from '../../_components/episode-footage'
+import { EpisodeFootage, RewriteNote } from '../../_components/episode-footage'
 import { JobProgressBar, SmoothProgress, useJobPolling, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
 import { RewritePlaceholder } from '../../_components/rewrite-placeholder'
 import { isEpisodeRevisePending } from '@/lib/episode-revise-state'
@@ -86,7 +86,7 @@ const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.ima
 // serverless window and get killed — chunking + re-firing guarantees the target is actually reached).
 
 type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; keyframeUrl?: string | null; keyframePrompt?: string | null; keyframeStatus?: string | null; keyframeError?: string | null; lookStale?: boolean | null; videoModel?: string | null; status: string; hasUndo?: boolean | null; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
-type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null }
+type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null; hasScript?: boolean }
 
 export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits }: { episode: any; project: any; siblings?: Sibling[]; credits: number }) {
   const [episode, setEpisode] = useState<any>(initial)
@@ -220,6 +220,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     const anyScene = ((initial.scenes ?? []) as Scene[]).some((s) => validUrl(s.videoUrl))
     // Stage 59 (step 4): tabs are ordered Script → References → Scenes, so an unfilled episode opens on
     // «Script by default; only jump straight to Scenes when the episode already has generated video.
+    if (!initial.script) return 'script' // Stage 107 — no script yet: everything else is locked
     return anyScene || validUrl(initial.videoUrl) ? 'scenes' : 'script'
   })
   const goPhase = (p: EpisodePhase) => { setPhase(p); if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' }) }
@@ -672,6 +673,22 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     } catch {}
   }
 
+  // Stage 107 — episode scripts are written on demand: POST /api/ai/episodes/[id]/script starts a one-episode
+  // season_script job (no instruction = write from the 60-second footage; an existing script is fully
+  // regenerated and its scenes/keyframes/videos reset). Polled through the same revisePoll as the rewrite.
+  const hasScript = !!(episode.script && String(episode.script).trim())
+  const generateScript = async () => {
+    if (revising) return
+    setRevising(true); setError(null); setReviseNotice(null)
+    try {
+      const res = await fetch(`/api/ai/episodes/${episode.id}/script`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (res.status === 409 && data?.jobId) { revisePoll.start(data.jobId); return }
+      if (!res.ok) throw new Error(data?.error ?? 'Failed to start the script job')
+      if (data?.jobId) { revisePoll.start(data.jobId); return }
+      await reloadEpisode(); setRevising(false)
+    } catch (e) { setError(e instanceof Error ? e.message : 'Failed to start the script job'); setRevising(false) }
+  }
   const reviseEpisode = async (force = false) => {
     const instruction = reviseText.trim(); if (!instruction) return
     setRevising(true); setError(null); setReviseNotice(null)
@@ -967,7 +984,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         {/* Stage 14 (D): guided steps — script → references → scenes */}
         <div className="mt-4 flex flex-wrap items-center gap-2 text-xs" data-testid="phase-steps">
           {(([['script', '1 · Script'], ['references', '2 · References'], ['scenes', '3 · Scenes']]) as [EpisodePhase, string][]).map(([key, label]) => {
-            const reached = key === 'script' || key === 'references' || refsReady || scenes.some((s) => validUrl(s.videoUrl))
+            // Stage 107 — References and Scenes are locked until the episode has a script.
+            const reached = key === 'script' || (hasScript && (key === 'references' || refsReady || scenes.some((s) => validUrl(s.videoUrl))))
             const active = phase === key
             return (
               <button
@@ -991,14 +1009,30 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             <h2 className="mb-3 font-display text-xl font-bold">Episode script</h2>
             {/* Stage 77: while the rewrite job runs the OLD script is hidden behind a placeholder. */}
             {rewriteViewState(revising, revisePoll.job?.status) === 'placeholder' ? (
-              <RewritePlaceholder job={revisePoll.job} expectedTotalSec={EPISODE_REVISE_EXPECTED_SEC} label="Rewriting episode script…" testId="episode-revise-progress" />
+              <RewritePlaceholder job={revisePoll.job} expectedTotalSec={EPISODE_REVISE_EXPECTED_SEC} label={hasScript ? 'Rewriting episode script…' : 'Writing the episode script…'} testId="episode-revise-progress" />
+            ) : hasScript ? (
+              <>
+                <BookScript text={episode.script} scenes={scenes} />
+                {/* Stage 107 — full regeneration from the footage (no confirmation; the note states the consequence). */}
+                <div className="mt-4 flex flex-wrap items-center gap-3" data-testid="regenerate-script-row">
+                  <button type="button" onClick={generateScript} disabled={revising} className="inline-flex items-center gap-2 rounded-lg border border-border bg-muted px-4 py-2 text-sm font-medium hover:bg-muted/80 disabled:opacity-50" data-testid="regenerate-script">
+                    <RefreshCw className="h-4 w-4" /> Regenerate script
+                  </button>
+                  <RewriteNote className="basis-full sm:basis-auto" testId="regenerate-script-note" />
+                </div>
+              </>
             ) : (
-              <BookScript text={episode.script} scenes={scenes} />
+              <div className="rounded-lg border border-dashed border-border bg-background p-6 text-center" data-testid="no-script">
+                <p className="text-sm text-muted-foreground">No script yet — the script is written from the episode&apos;s 60-second footage above.</p>
+                <button type="button" onClick={generateScript} disabled={revising} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50" data-testid="generate-script">
+                  {revising ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Generate script
+                </button>
+              </div>
             )}
             {reviseNotice && <p className="mt-3 text-sm text-primary" data-testid="episode-revise-notice">{reviseNotice}</p>}
             {/* Stage 59 navigation — Script is step 1: single forward button to references. */}
             <div className="mt-5 flex flex-wrap items-center justify-end gap-3 border-t border-border pt-4">
-              <button onClick={() => goPhase('references')} disabled={revising} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:brightness-110 disabled:opacity-50" data-testid="script-to-references">
+              <button onClick={() => goPhase('references')} disabled={revising || !hasScript} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:brightness-110 disabled:opacity-50" data-testid="script-to-references">
                 To references <ArrowRight className="h-4 w-4" />
               </button>
             </div>
@@ -1493,7 +1527,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         </div>
       )}
       {/* Stage 14 (D3): episode-level revise-by-prompt as a sticky bottom bar (whole episode or a named scene) */}
-      {phase === 'script' && (
+      {phase === 'script' && hasScript && (
         <StickyReviseBar
           value={reviseText}
           onChange={setReviseText}

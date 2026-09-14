@@ -19,14 +19,14 @@ const root = path.resolve(__dirname, "..");
 const read = (p: string) => fs.readFileSync(path.join(root, p), "utf8");
 
 const E1 = [
-  "SHOT 1 (30 s): Night, a rain-soaked dugout. Sergeant Orlov counts three flares while a radio crackles with a voice he refuses to answer.",
-  "SHOT 2 (30 s): The voice names his dead brother. Orlov grabs the handset and demands proof; the answer is a childhood nickname.",
+  "SHOT 1 (30 s): Night, a rain-soaked dugout. Sergeant Orlov counts three flares beside a hissing radio.",
+  "SHOT 2 (30 s): The voice names his dead brother; Orlov grabs the handset and shouts into it.",
   "CLIFFHANGER (last frame): Orlov's hand freezes on the handset as glowing eyes open in the dark corner.",
 ].join("\n");
 const E2 = [
-  "SHOT 1 (30 s): OPENS ON: Orlov's hand freezes on the handset as glowing eyes open in the dark corner. He raises the flare gun; the eyes belong to a starving dog wearing his brother's collar tag.",
-  "SHOT 2 (30 s): The radio voice laughs: the dog found its way home. Orlov reads the coordinates scratched into the tag aloud.",
-  "CLIFFHANGER (last frame): The coordinates match the dugout — and footsteps stop right above the hatch.",
+  "SHOT 1 (30 s): OPENS ON: Orlov's hand freezes on the handset as glowing eyes open in the dark corner. He raises the flare gun at a starving dog wearing his brother's collar tag.",
+  "SHOT 2 (30 s): The radio voice laughs; Orlov reads the coordinates scratched into the tag aloud.",
+  "CLIFFHANGER (last frame): The coordinates match the dugout — footsteps stop right above the hatch.",
 ].join("\n");
 
 async function main() {
@@ -106,10 +106,11 @@ main().catch((e) => { console.error("FAIL:", e?.message ?? e); process.exit(1); 
   const prod1 = "SHOT 1 (30 s): Alex Winters заводит группу за баррикады, желая поймать ответ на радиостанцию; Emma Clarke перевязывает его рану, Liam Johnson прячется за ней, Marcus Reed размечает маршрут, Sara Mitchell требует искать топливо вместо чужих голосов. SHOT 2 (30 s): Среди помех звучит приглашение в отапливаемое убежище, а за снежным валом поднимаются пять светящихся пар глаз. CLIFFHANGER (last frame): Голос обещает: «Не выключайте маяк. По нему вас найдут». За баррикадой одна из тварей поворачивает голову точно к радиостанции.";
   const problems = season.validateEpisodeDescriptions([{ number: 1, description: prod1 }]);
   if (!problems.some((p: string) => /SHOT 1 has/.test(p))) { console.error("FAIL: Stage 105b — long prod SHOT 1 must fail per-line cap", problems); process.exit(1); }
-  const tight = "SHOT 1 (30 s): Alex's team climbs down into the dugout; his wife patches his wound, a man tunes the radio, the kids stand shivering. SHOT 2 (30 s): The radio locks onto a voice announcing a new shelter; everyone freezes and listens. CLIFFHANGER (last frame): Over the rim of the dugout, five pairs of glowing eyes open in the dark.";
-  const tight2 = "SHOT 1 (30 s): OPENS ON: Over the rim of the dugout, five pairs of glowing eyes open in the dark. A child screams; the creatures pour over the rim into the dugout. SHOT 2 (30 s): The team fights back with a rifle butt, a shovel and the radio while the wife drags the kids into the corner. CLIFFHANGER (last frame): A clawed hand closes around the child's ankle as the lamp goes out.";
+  // Stage 107 — action-only example (no dialogue, one action per shot, 20/14/50 caps).
+  const tight = "SHOT 1 (30 s): Alex's team climbs down into the dugout and huddles around a hissing radio. SHOT 2 (30 s): A voice on the radio promises shelter; the man turns the volume up and everyone leans toward the speaker. CLIFFHANGER (last frame): Over the dugout's rim, five pairs of glowing eyes open in the dark.";
+  const tight2 = "SHOT 1 (30 s): OPENS ON: Over the dugout's rim, five pairs of glowing eyes open in the dark. The creatures pour over the rim onto the huddled group. SHOT 2 (30 s): Alex swings a shovel at the nearest creature; the kids press into the far corner. CLIFFHANGER (last frame): A clawed hand closes around a child's ankle as the lamp goes out.";
   const p2 = season.validateEpisodeDescriptions([{ number: 1, description: tight }, { number: 2, description: tight2 }]);
   if (p2.length) { console.error("FAIL: Stage 105b — example descriptions must pass", p2); process.exit(1); }
-  if (season.EPISODE_FOOTAGE_MAX_WORDS !== 60) { console.error("FAIL: max words must be 60"); process.exit(1); }
-  console.log("OK: Stage 105b tight budget (60 total / 24 per shot / 16 cliffhanger)");
+  if (season.EPISODE_FOOTAGE_MAX_WORDS !== 50) { console.error("FAIL: max words must be 50 (Stage 107)"); process.exit(1); }
+  console.log("OK: Stage 105b/107 tight budget (50 total / 20 per shot / 14 cliffhanger)");
 }

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { ChevronDown, Check, Loader2 } from 'lucide-react'
 
-export type NavEpisode = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null }
+export type NavEpisode = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null; hasScript?: boolean }
 
 function validUrl(u?: string | null) {
   return !!u && /^https?:\/\//.test(u)
@@ -16,6 +16,8 @@ function statusOf(s: NavEpisode): { label: string; done: boolean } {
   if (s.status === 'scenes_ready') return { label: 'scenes', done: false }
   if (s.status === 'approved') return { label: 'refs', done: false }
   if (s.status === 'script_ready') return { label: 'plot', done: false }
+  // Stage 107 — scripts are written on demand from the episode page; until then the episode has none.
+  if (s.hasScript === false || s.status === 'draft' || !s.status) return { label: 'no script', done: false }
   return { label: '—', done: false }
 }
 

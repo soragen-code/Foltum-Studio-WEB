@@ -128,10 +128,10 @@ export type EpisodeOutline = z.infer<typeof episodeOutlineSchema>;
 // written as exactly three labelled lines (SHOT 1 / SHOT 2 / CLIFFHANGER). Episode N ≥ 2 opens on the
 // previous episode's cliffhanger ("OPENS ON: …" at the start of SHOT 1). The scenes are built from these
 // three beats as hard givens (scene 1 = SHOT 1, scene 2 = SHOT 2, final frame = CLIFFHANGER).
-export const EPISODE_FOOTAGE_MAX_WORDS = 60;
-/** Stage 105b — per-line caps (the OPENS ON repetition in SHOT 1 is not counted): a shot line is one sentence-ish beat, the cliffhanger is one image. */
-export const FOOTAGE_SHOT_MAX_WORDS = 24;
-export const FOOTAGE_CLIFFHANGER_MAX_WORDS = 16;
+export const EPISODE_FOOTAGE_MAX_WORDS = 50;
+/** Stage 105b/107 — per-line caps (the OPENS ON repetition in SHOT 1 is not counted): a shot line is ONE action in one sentence, the cliffhanger is one image. */
+export const FOOTAGE_SHOT_MAX_WORDS = 20;
+export const FOOTAGE_CLIFFHANGER_MAX_WORDS = 14;
 export const SHOT1_LABEL = "SHOT 1 (30 s):";
 export const SHOT2_LABEL = "SHOT 2 (30 s):";
 export const CLIFFHANGER_LABEL = "CLIFFHANGER (last frame):";
@@ -144,6 +144,20 @@ const OPENS_ON_RE = /^\s*opens\s+on\s*:\s*([\s\S]*?)(?<=[.!?…])(?:\s+|$)/i;
 /** Word count by whitespace split (the length budget of a description). */
 export function countWords(text: string | null | undefined): number {
   return (text ?? "").trim().split(/\s+/).filter(Boolean).length;
+}
+
+/** Stage 107 — sentence count: terminators (.!?…) followed by whitespace and an uppercase letter split sentences. */
+export function countSentences(text: string | null | undefined): number {
+  const t = (text ?? "").trim();
+  if (!t) return 0;
+  const breaks = t.match(/[.!?…]+["»”')]*\s+(?=\p{Lu})/gu);
+  return (breaks?.length ?? 0) + 1;
+}
+
+/** Stage 107 — quoted dialogue: a quote pair («…», “…” or "…") enclosing at least two words (apostrophes in "episode's" are not quotes). */
+const QUOTED_DIALOGUE_RE = /[«“"]([^«»“”"\n]*?\S\s+\S[^«»“”"\n]*?)[»”"]/u;
+export function hasQuotedDialogue(text: string | null | undefined): boolean {
+  return QUOTED_DIALOGUE_RE.test(text ?? "");
 }
 
 /** Parse a 3-line footage description; null when any label is missing (→ callers fall back to the plain text). */
@@ -178,6 +192,15 @@ export function validateEpisodeDescriptions(episodes: { number: number; descript
     if (shot1Words > FOOTAGE_SHOT_MAX_WORDS) problems.push(`episode ${e.number}: SHOT 1 has ${shot1Words} own words (max ${FOOTAGE_SHOT_MAX_WORDS})`);
     if (countWords(f.shot2) > FOOTAGE_SHOT_MAX_WORDS) problems.push(`episode ${e.number}: SHOT 2 has ${countWords(f.shot2)} words (max ${FOOTAGE_SHOT_MAX_WORDS})`);
     if (countWords(f.cliffhanger) > FOOTAGE_CLIFFHANGER_MAX_WORDS) problems.push(`episode ${e.number}: CLIFFHANGER has ${countWords(f.cliffhanger)} words (max ${FOOTAGE_CLIFFHANGER_MAX_WORDS})`);
+    // Stage 107 — footage is ACTION ONLY: no quoted dialogue, one action (one sentence, max two short) per shot, one image cliffhanger.
+    const shot1Body = f.opensOn && shot1Own.includes(f.opensOn) ? shot1Own.slice(shot1Own.indexOf(f.opensOn) + f.opensOn.length).trim() : shot1Own;
+    const lines: [string, string][] = [["SHOT 1", shot1Body], ["SHOT 2", f.shot2], ["CLIFFHANGER", f.cliffhanger]];
+    for (const [label, text] of lines) {
+      if (hasQuotedDialogue(text)) problems.push(`episode ${e.number}: ${label} contains quoted dialogue — describe the action the camera sees, never quote speech`);
+    }
+    if (countSentences(shot1Body) > 2) problems.push(`episode ${e.number}: SHOT 1 has ${countSentences(shot1Body)} sentences (one action, max two short sentences)`);
+    if (countSentences(f.shot2) > 2) problems.push(`episode ${e.number}: SHOT 2 has ${countSentences(f.shot2)} sentences (one action, max two short sentences)`);
+    if (countSentences(f.cliffhanger) > 1) problems.push(`episode ${e.number}: CLIFFHANGER has ${countSentences(f.cliffhanger)} sentences (one visible image, one sentence)`);
     if (i > 0 && !/opens\s+on\s*:/i.test(f.shot1)) problems.push(`episode ${e.number}: SHOT 1 must begin with "${OPENS_ON_LABEL} <the CLIFFHANGER of episode ${e.number - 1}>"`);
   });
   return problems;
@@ -185,27 +208,28 @@ export function validateEpisodeDescriptions(episodes: { number: number; descript
 
 /** Appended to the prompt on the single retry after validateEpisodeDescriptions failed (never truncate silently). */
 export const EPISODE_FOOTAGE_RETRY_NOTE =
-  `Your previous answer was too long / not in the SHOT 1 / SHOT 2 / CLIFFHANGER format — rewrite EVERY episode "description" in the 3-line format ("${SHOT1_LABEL} …" / "${SHOT2_LABEL} …" / "${CLIFFHANGER_LABEL} …"), max ${EPISODE_FOOTAGE_MAX_WORDS} words per description, and start SHOT 1 of every episode after the first with "${OPENS_ON_LABEL} <the previous episode's CLIFFHANGER text>".`;
+  `Your previous answer was too long / not in the SHOT 1 / SHOT 2 / CLIFFHANGER format, or it contained dialogue or explanations — rewrite EVERY episode "description" in the 3-line format ("${SHOT1_LABEL} ..." / "${SHOT2_LABEL} ..." / "${CLIFFHANGER_LABEL} ..."), max ${EPISODE_FOOTAGE_MAX_WORDS} words per description, each SHOT ≤ ${FOOTAGE_SHOT_MAX_WORDS} words, CLIFFHANGER ≤ ${FOOTAGE_CLIFFHANGER_MAX_WORDS} words; ONE physical action per shot in ONE sentence; NO quotes or dialogue (describe the sound instead: a voice on the radio promises shelter), NO explanations of why anyone does anything; and start SHOT 1 of every episode after the first with "${OPENS_ON_LABEL} <the previous episode's CLIFFHANGER text>".`;
 
 /** The user's reference example (dugout), in the 3-line format — embedded in the structure / revise prompts. */
 export const EPISODE_FOOTAGE_EXAMPLE = `EXAMPLE (reference for the FORMAT and the level of concreteness — do not reuse its content):
 Episode 1 "description":
-${SHOT1_LABEL} Alex's team climbs down into the dugout; his wife patches his wound, a man tunes the radio, the kids stand shivering.
-${SHOT2_LABEL} The radio locks onto a voice announcing a new shelter; everyone freezes and listens.
-${CLIFFHANGER_LABEL} Over the rim of the dugout, five pairs of glowing eyes open in the dark.
+${SHOT1_LABEL} Alex's team climbs down into the dugout and huddles around a hissing radio.
+${SHOT2_LABEL} A voice on the radio promises shelter; the man turns the volume up and everyone leans toward the speaker.
+${CLIFFHANGER_LABEL} Over the dugout's rim, five pairs of glowing eyes open in the dark.
 Episode 2 "description":
-${SHOT1_LABEL} ${OPENS_ON_LABEL} Over the rim of the dugout, five pairs of glowing eyes open in the dark. A child screams; the creatures pour over the rim into the dugout.
-${SHOT2_LABEL} The team fights back with a rifle butt, a shovel and the radio while the wife drags the kids into the corner.
-${CLIFFHANGER_LABEL} A clawed hand closes around the child's ankle as the lamp goes out.`;
+${SHOT1_LABEL} ${OPENS_ON_LABEL} Over the dugout's rim, five pairs of glowing eyes open in the dark. The creatures pour over the rim onto the huddled group.
+${SHOT2_LABEL} Alex swings a shovel at the nearest creature; the kids press into the far corner.
+${CLIFFHANGER_LABEL} A clawed hand closes around a child's ankle as the lamp goes out.`;
 
 /** The description format rule shared by the structure prompt and both revise prompts. */
 export const EPISODE_FOOTAGE_RULE = `EPISODE "description" = 60-SECOND FOOTAGE (MANDATORY FORMAT). Write what the CAMERA SEES in the episode's 60 seconds, as EXACTLY three labelled lines (labels in English verbatim, the text after each label in the story language):
-  ${SHOT1_LABEL} ONE action in ONE location — who is in frame, what they physically do, what they talk about.
-  ${SHOT2_LABEL} the escalation of the SAME action in the SAME location — the turn that makes the situation worse or irreversible.
-  ${CLIFFHANGER_LABEL} a concrete VISUAL image of the final frame — a picture the viewer sees (what is in frame, where), never a hint, a question or "will they…".
-  Length (STRICT — this is a shot list, not prose): the whole description 35–50 words, HARD MAX ${EPISODE_FOOTAGE_MAX_WORDS} words (labels and the OPENS ON repetition not counted); each SHOT line ≤ ${FOOTAGE_SHOT_MAX_WORDS} words — ONE sentence, ONE beat; CLIFFHANGER ≤ ${FOOTAGE_CLIFFHANGER_MAX_WORDS} words — ONE image. Name at most 2–3 characters acting per shot; everyone else is "the group" / "the kids" in the background. No sub-clauses listing what each person separately does. "cliffhanger" = the CLIFFHANGER line's text copied verbatim. "logline" = ONE sentence (what this episode is about).
+  ${SHOT1_LABEL} ONE continuous physical action in ONE location that the camera SEES — who is in frame and what they physically do. ONE sentence (max two short).
+  ${SHOT2_LABEL} the escalation of the SAME action in the SAME location — the visible turn that makes the situation worse or irreversible. ONE sentence (max two short).
+  ${CLIFFHANGER_LABEL} a SINGLE visible image of the final frame — one sentence, a picture the viewer sees (what is in frame, where), never a hint, a question or "will they…".
+  ACTION ONLY: NO dialogue and NO quotes of any kind — if speech matters, describe what is heard (a voice on the radio promises shelter); NO motivations or explanations ("in order to", "because", "wants to", "decides to"); NO inner states, feelings, thoughts or backstory; NO chains of micro-events — one action per shot.
+  Length (STRICT — this is a shot list, not prose): the whole description 30–45 words, HARD MAX ${EPISODE_FOOTAGE_MAX_WORDS} words (labels and the OPENS ON repetition not counted); each SHOT line ≤ ${FOOTAGE_SHOT_MAX_WORDS} words — ONE action; CLIFFHANGER ≤ ${FOOTAGE_CLIFFHANGER_MAX_WORDS} words — ONE image. Name at most 2–3 characters acting per shot; everyone else is "the group" / "the kids" in the background. No sub-clauses listing what each person separately does. "cliffhanger" = the CLIFFHANGER line's text copied verbatim. "logline" = ONE sentence (what this episode is about).
   ${OPENS_ON_LABEL} for EVERY episode after the first, SHOT 1 MUST begin with "${OPENS_ON_LABEL} <the CLIFFHANGER text of the previous episode>" — the SAME instant, the SAME location, the same people in the same places; never "an hour later", never a reset. Then the action continues from that image.
-  BANNED in a description: voice-over retelling of backstory or of a whole period ("a week when…", "over the following days…"); parallel actions that cannot fit into one camera shot (five characters doing five different things in five places); a location change inside the episode; more than ONE event per shot; more than 3 named characters acting in one shot (the rest are a background group); time skips inside the episode; summaries ("tension rises", "they argue about the past").
+  BANNED in a description: voice-over retelling of backstory or of a whole period ("a week when…", "over the following days…"); parallel actions that cannot fit into one camera shot (five characters doing five different things in five places); a location change inside the episode; more than ONE event per shot; more than 3 named characters acting in one shot (the rest are a background group); time skips inside the episode; summaries ("tension rises", "they argue about the past"); quoted lines of speech; explanations of why a character acts.
 ${EPISODE_FOOTAGE_EXAMPLE}`;
 
 /** Stage 105 — the three footage beats as HARD GIVENS for the shooting-script prompts ("" when the description is not in the 3-line format → callers keep the old whole-description behaviour). */
