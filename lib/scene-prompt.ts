@@ -161,6 +161,11 @@ export const END_STATE_PREFIX = "END STATE (last frame — end exactly here): ";
 /** Stage 115 — anti-freeze: the clip runs on continuous motion and cuts the instant the action / line ends, never padding to length with a held pose or a stare into the camera. */
 export const NO_FROZEN_PADDING_LINE =
   "NO FROZEN PADDING: the clip is filled edge to edge with continuous, natural motion and cuts the instant the shown action and lines finish — its length matches its content, so it may run short. Do NOT stretch it to a fixed length: nobody holds a static pose, freezes, or stares into the camera at the end waiting for the cut, and there is no still final beat — the last motion runs straight into the hard cut.";
+/** Stage 116 — the character / crowd reference photos are FRONTAL, standing, camera-facing full-body portraits;
+ *  this directive stops Seedance from copying that pose. References fix ONLY identity / appearance — pose and
+ *  orientation come from the scene's action, and the cast is never lined up frontally staring at the viewer. */
+export const REFERENCE_APPEARANCE_ONLY_LINE =
+  "REFERENCES DEFINE APPEARANCE ONLY, NOT POSE OR CAMERA ORIENTATION: the attached reference images fix each person's IDENTITY and LOOK only — face, hair, skin, build, wardrobe and colours. They do NOT dictate pose, body orientation or gaze. IGNORE the frontal, standing, camera-facing pose of the reference photos entirely. Every character's pose and which way they face come from THIS scene's action: they may be shown in three-quarter, in profile, from behind, at an angle, seated, bent over, crouched, mid-move, partly out of frame, or deep in the background, busy with what they are doing. Do NOT line the characters up frontally in a row facing the viewer, and do NOT have them all look at the camera — distribute them through the depth of the frame (foreground / mid-ground / background) with natural body angles driven by the action. A face turns toward the camera ONLY when the beat truly requires it.";
 
 const oneLine = (t?: string | null) => (t ?? "").replace(/\s+/g, " ").trim();
 
@@ -406,9 +411,10 @@ export function buildNegatives(isNarration: boolean): string {
 export function characterAnchorUrl(c: ScenePromptCharacterLink): string {
   return isStyledAsset(c.imageFull) ? c.imageFull! : c.imageFront!;
 }
-/** Identity note attached to every character reference. */
+/** Identity note attached to every character reference. Stage 116 — the note makes explicit that the
+ *  frontal reference photo fixes LOOK only, never pose or camera orientation. */
 export function characterReferenceNote(name: string): string {
-  return `defines ${name}'s photorealistic appearance and identity; use the scene's staging and camera.`;
+  return `defines ${name}'s photorealistic appearance and identity ONLY (face, hair, skin, build, wardrobe) — NOT their pose or camera orientation. Take ${name}'s pose, body angle and gaze from THIS scene's action, not from the frontal reference photo; ${name} need not face the camera.`;
 }
 /** Note attached to every location angle reference. */
 export function locationReferenceNote(locationName: string, angle: string): string {
@@ -461,7 +467,28 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     ...locationAngles.map(a => ({ url: a.url, angle: a.angle as string })),
     ...(effectiveLocation ? locationExtras.map((url, i) => ({ url, angle: locationExtraLabel(i) })) : []),
   ].map(a => ({ url: a.url, kind: "location" as const, id: effectiveLocation!.id, note: locationReferenceNote(effectiveLocation!.name, a.angle) }));
-  const crowdRefs: Ref[] = crowds.map(c => ({ url: anchorUrl(c), kind: "crowd", id: c.characterId, note: `defines the look of the group "${c.name}" (extras): who they are and how they are dressed.` }));
+  // Stage 116 — in an ACTION scene a crowd that actually takes part in the fight (its name appears in the
+  // scene's action / prompt / dialogue) is an ACTIVE OPPONENT in contact with the hero, NOT background: its
+  // reference is promoted next to the leads (ahead of the location plates) and carries an opponent note, so the
+  // model animates the creature / pack fighting the hero rather than treating it as a backdrop of extras.
+  const isActionScene = !isNarration && scene.sceneKind === "action";
+  const combatMentionText = `${scene.videoPrompt ?? ""}\n${dialogue}\n${scene.action ?? ""}`.toLowerCase();
+  const isCombatCrowd = (c: ScenePromptCharacterLink) => {
+    const n = c.name.trim().toLowerCase();
+    return isActionScene && n.length > 0 && combatMentionText.includes(n);
+  };
+  const combatCrowds = crowds.filter(isCombatCrowd);
+  const backgroundCrowds = crowds.filter(c => !isCombatCrowd(c));
+  const crowdRefOf = (c: ScenePromptCharacterLink): Ref => ({
+    url: anchorUrl(c),
+    kind: "crowd",
+    id: c.characterId,
+    note: isCombatCrowd(c)
+      ? `defines the look of "${c.name}" — an ACTIVE OPPONENT in this fight, in direct physical contact with the hero (advancing, lunging, swiping, grabbing, surrounding), NOT background extras: stage them attacking and colliding with the hero in the same frame.`
+      : `defines the look of the group "${c.name}" (extras): who they are and how they are dressed.`,
+  });
+  const combatCrowdRefs: Ref[] = combatCrowds.map(crowdRefOf);
+  const backgroundCrowdRefs: Ref[] = backgroundCrowds.map(crowdRefOf);
   // Stage 44 — the BASE photographed angles vs the extra angles are separated so the Stage 62 last-frame
   // ref can be prioritized above the extras (and above crowds) but not above the base angles.
   const baseLocationRefs = locationRefs.slice(0, locationAngles.length);
@@ -470,7 +497,9 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const reangleUrl = (input.reangleUrl ?? "").trim();
   if (reangleUrl && forbidden.has(reangleUrl)) throw new Error("The raw last frame cannot be a video reference.");
   const openingRefs: Ref[] = reangleUrl ? [{ url: reangleUrl, kind: "reangle", id: scene.id, note: REANGLE_REFERENCE_NOTE }] : [];
-  const ordered = [...openingRefs, ...characterRefs, ...baseLocationRefs, ...crowdRefs].filter(r => !forbidden.has(r.url));
+  // Stage 116 — combat crowds sit right after the leads (ahead of the location plates) so they are treated as
+  // fighters and are never the first refs dropped at the cap; passive background crowds stay last as extras.
+  const ordered = [...openingRefs, ...characterRefs, ...combatCrowdRefs, ...baseLocationRefs, ...backgroundCrowdRefs].filter(r => !forbidden.has(r.url));
   if (ordered.length > REFERENCE_IMAGE_CAP) throw new Error("Too many required video references. Reduce the scene cast.");
   const fallbackRefs: SceneReference[] = ordered.map(({ url, kind, note }) => ({ url, kind, note }));
 
@@ -514,6 +543,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     endState ? `${END_STATE_PREFIX}${endState}` : "",
     SPEECH_BEFORE_CUT_LINE,
     NO_FROZEN_PADDING_LINE,
+    REFERENCE_APPEARANCE_ONLY_LINE,
   ].filter(Boolean);
   // Stage 54 — the deterministic structure block (reference map + people counter + clothing&props)
   // sits AFTER the state blocks and BEFORE the reused 9-tag body, so the prompt still opens with the
