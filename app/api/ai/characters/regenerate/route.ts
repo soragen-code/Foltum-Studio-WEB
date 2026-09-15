@@ -9,7 +9,7 @@ import { chatJSON } from "@/lib/ai";
 import { generateImage } from "@/lib/providers/image-provider";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 
-import { characterImagePrompt, VISUAL_STYLE_ID } from "@/lib/visual-style";
+import { characterImagePrompt, VISUAL_STYLE_ID, REFERENCE_ASPECT_RATIO } from "@/lib/visual-style";
 // Stage 75: user-uploaded photo references — transport only (fed as image_input, existing chained path).
 import { parseUserRefs, mergeImageInput } from "@/lib/character-user-refs";
 
@@ -64,7 +64,8 @@ Generate a fresh, different take on this character's appearance and personality.
 
     // Generate 3 new images in parallel
     const shots = ["front", "profile", "full"] as const;
-    const aspectRatios = { front: "3:4", profile: "3:4", full: "9:16" };
+    // Stage 124 — every character reference shot is vertical 9:16.
+    const aspectRatios = { front: REFERENCE_ASPECT_RATIO, profile: REFERENCE_ASPECT_RATIO, full: REFERENCE_ASPECT_RATIO };
     const pid = existing.projectId;
 
     const userRefs = parseUserRefs(existing.userRefs); // Stage 75

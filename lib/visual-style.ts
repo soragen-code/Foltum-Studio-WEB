@@ -3,6 +3,16 @@ import { sanitizeVideoPrompt } from "@/lib/sanitize-prompt";
 /** Versioned asset paths identify newly generated, compatible references; legacy assets stay intact.
  * Bumping this id retires older-style frames from continuity chaining without deleting them. */
 export const VISUAL_STYLE_ID = "realistic-original-v2";
+
+/**
+ * Stage 124 — every reference image the project generates (character shots, location master/region
+ * plates, artifact/object frames) is produced in vertical 9:16, matching the 9:16 video the whole
+ * pipeline targets. This is the single source of truth for the reference aspect ratio; pass it as the
+ * `aspect_ratio` of every Seedream generate/edit call for a reference so no path can drift back to a
+ * square (1:1), landscape (16:9) or portrait-but-not-9:16 (3:4) default. seedreamImageSize("9:16")
+ * maps this to 1440×2560. Existing DB images are untouched — this only affects new/regenerated refs.
+ */
+export const REFERENCE_ASPECT_RATIO = "9:16";
 export const VISUAL_STYLE =
   "Photorealistic live-action cinematography, natural realistic human skin with pores and fine detail, " +
   "true-to-life materials and fabrics, physically accurate lighting and shadows, real depth of field, " +

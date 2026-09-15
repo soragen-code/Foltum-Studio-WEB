@@ -3,7 +3,7 @@ import { generateImage } from "@/lib/providers/image-provider";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 
-import { VISUAL_STYLE_ID, isChildAppearance, type CharacterRefKind } from "@/lib/visual-style";
+import { VISUAL_STYLE_ID, REFERENCE_ASPECT_RATIO, isChildAppearance, type CharacterRefKind } from "@/lib/visual-style";
 // Stage 46D: prompt wrappers that append the full-body proportion rule to every full-length frame.
 import { characterShotPrompt, clampPromptToLimit } from "@/lib/full-body-prompt";
 import { detectC2paFromUrl } from "@/lib/c2pa";
@@ -18,7 +18,8 @@ import { parseUserRefs, mergeImageInput } from "@/lib/character-user-refs";
 // lists all three slots so genBaseShot/SHOT_FIELDS stay reusable by that manual route's shared code.
 const BASE_SHOTS = ["front", "profile", "full"] as const;
 type BaseShot = (typeof BASE_SHOTS)[number];
-const ASPECT_RATIOS: Record<BaseShot, string> = { front: "3:4", profile: "3:4", full: "9:16" };
+// Stage 124 — every character reference shot (front / profile / full) is vertical 9:16.
+const ASPECT_RATIOS: Record<BaseShot, string> = { front: REFERENCE_ASPECT_RATIO, profile: REFERENCE_ASPECT_RATIO, full: REFERENCE_ASPECT_RATIO };
 const SHOT_LABELS: Record<BaseShot, string> = { front: "front portrait", profile: "side profile", full: "full-body shot" };
 const SHOT_FIELDS: Record<BaseShot, "imageFront" | "imageProfile" | "imageFull"> = {
   front: "imageFront",

@@ -11,7 +11,7 @@ import { runInBackground, completeJob, failJob } from "@/lib/jobs";
 import { generateImage } from "@/lib/providers/image-provider";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { generateFullBodyWithGuard } from "@/lib/workers/character-images-job";
-import { VISUAL_STYLE_ID, isChildAppearance, type CharacterRefKind } from "@/lib/visual-style";
+import { VISUAL_STYLE_ID, REFERENCE_ASPECT_RATIO, isChildAppearance, type CharacterRefKind } from "@/lib/visual-style";
 // Stage 46D: full-length frames (shot=full, full-body extras) carry the proportion rule; close-ups do not.
 import { characterShotPrompt, characterExtraShotPrompt } from "@/lib/full-body-prompt";
 import { parseImageArray } from "@/lib/reference-counts";
@@ -22,7 +22,8 @@ import { parseUserRefs, mergeImageInput } from "@/lib/character-user-refs";
 /** Job type of a single-shot regeneration — distinct from "characters" so the full-set polling ignores it. */
 export const CHARACTER_SHOT_JOB_TYPE = "character_shot";
 
-const ASPECT: Record<"front" | "profile" | "full", string> = { front: "3:4", profile: "3:4", full: "9:16" };
+// Stage 124 — every character reference shot (front / profile / full) is vertical 9:16.
+const ASPECT: Record<"front" | "profile" | "full", string> = { front: REFERENCE_ASPECT_RATIO, profile: REFERENCE_ASPECT_RATIO, full: REFERENCE_ASPECT_RATIO };
 const FIELD: Record<"front" | "profile" | "full", "imageFront" | "imageProfile" | "imageFull"> = {
   front: "imageFront",
   profile: "imageProfile",
@@ -121,7 +122,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           if (!ref) throw new Error("No base photo to chain the extra angle on");
           const refKind: CharacterRefKind = ref === full && full ? "full" : "face";
           remote = await generateImage(
-            { prompt: characterExtraShotPrompt(appearance, char.name, index!, refKind, char.promptOverride), aspect_ratio: isFullShot ? "9:16" : "3:4", image_input: mergeImageInput(userRefs, [ref], 10) },
+            { prompt: characterExtraShotPrompt(appearance, char.name, index!, refKind, char.promptOverride), aspect_ratio: REFERENCE_ASPECT_RATIO, image_input: mergeImageInput(userRefs, [ref], 10) },
             ctx
           );
           s3Key = `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/extra-${Date.now()}-${index}.png`;

@@ -3,7 +3,7 @@ import { generateImage } from "@/lib/providers/image-provider";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { chatJSON } from "@/lib/ai";
-import { artifactImagePrompt, VISUAL_STYLE_ID } from "@/lib/visual-style";
+import { artifactImagePrompt, VISUAL_STYLE_ID, REFERENCE_ASPECT_RATIO } from "@/lib/visual-style";
 import { detectC2paFromUrl } from "@/lib/c2pa";
 import { ARTIFACT_FRAME_COUNT, REF_BATCH_CONCURRENCY, runWithConcurrency, parseImageArray } from "@/lib/reference-counts";
 
@@ -115,7 +115,7 @@ export async function runArtifactImagesJob({ jobId, projectId, episodeId }: Arti
       if (await canceled()) return;
       try {
         const remote = await generateImage(
-          { prompt: artifactImagePrompt(art.visualPrompt ?? art.name, art.name, 0), aspect_ratio: "1:1" },
+          { prompt: artifactImagePrompt(art.visualPrompt ?? art.name, art.name, 0), aspect_ratio: REFERENCE_ASPECT_RATIO },
           { jobId}
         );
         const url = await uploadRemoteToS3(remote, `media/public/artifacts/${projectId}/${art.id}/${VISUAL_STYLE_ID}/frame0-${Date.now()}.png`, "image/png");
@@ -141,7 +141,7 @@ export async function runArtifactImagesJob({ jobId, projectId, episodeId }: Arti
           if (await canceled()) return;
           try {
             const remote = await generateImage(
-              { prompt: artifactImagePrompt(art.visualPrompt ?? art.name, art.name, frame), aspect_ratio: "1:1", image_input: [s.primary] },
+              { prompt: artifactImagePrompt(art.visualPrompt ?? art.name, art.name, frame), aspect_ratio: REFERENCE_ASPECT_RATIO, image_input: [s.primary] },
               { jobId}
             );
             const url = await uploadRemoteToS3(remote, `media/public/artifacts/${projectId}/${art.id}/${VISUAL_STYLE_ID}/frame${frame}-${Date.now()}.png`, "image/png");
