@@ -4,6 +4,9 @@ import { prisma } from "@/lib/db";
 // (WaveSpeed only since Stage 104). Prompt building, refs and chain logic are unchanged.
 import { startVideoGeneration, getVideoGenerationState, cancelVideoGeneration } from "@/lib/providers/video-provider";
 import { resolveVideoPredecessor, assertPredecessorReady, buildReangleRequest } from "@/lib/reangle";
+// Stage 122: lazily resolve/generate the scene's REGION PLATE (env plate of this part of the location),
+// reused across scenes in the same region via the Location.regionPlates cache; non-blocking (null on failure).
+import { ensureSceneRegionPlate } from "@/lib/workers/region-plate-job";
 import { ensureReangle } from "@/lib/reangle-store";
 import { finalVideoPrompt } from "@/lib/video-prompt-final";
 import { translateDialogue, detectSpokenLanguage } from "@/lib/voiceover";
@@ -180,7 +183,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       id: true,
       script: true, // Stage 54: source text the prop registry is extracted from
       propRegistry: true, // Stage 54: cached registry JSON ({hash, props}) reused across the episode's scenes
-      location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true, setInventory: true } },
+      location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true, setInventory: true, regionPlates: true } },
       season: { select: { project: { select: { isTest: true } } } },
     } });
     // Stage 73: per-project generation providers (transport only).
@@ -241,6 +244,11 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     const forbiddenReferenceUrls = [scene.keyframeUrl, previousRow?.lastFrameUrl, (previousRow as any)?.keyframeUrl].filter((u): u is string => !!u);
     const support = buildScenePrompt({ scene, characters, location: episodeLoc?.location ?? null, previous,
       forbiddenReferenceUrls }).retryRefs;
+    // Stage 122: resolve (or lazily generate once, reusing the Location.regionPlates cache) this scene's REGION
+    // PLATE — the authoritative environment reference for this part of the location. Non-blocking: null → the
+    // scene falls back to the Stage 121 master-plate + re-angle path. It is the PRIMARY geometry/background
+    // reference passed to both the re-angle and the scene prompt; the re-angle stays for people/motion continuity.
+    const regionPlateUrl = await ensureSceneRegionPlate({ sceneId, jobId, imageModel: undefined }).catch(() => null);
     let reangleUrl: string | null = null;
     let reangleInfo: VideoJobState["reangle"];
     let reangleRequest: ReturnType<typeof buildReangleRequest> | null = null;
@@ -249,14 +257,15 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
         throw new Error("Add the location's mandatory wide and layout views before generating this transition.");
       await updateJob(jobId, { progress: 8, message: "Re-angling the previous video's last frame (Seedream camera edit)..." });
       reangleRequest = buildReangleRequest({ sceneId, number: scene.number, startState: scene.startState,
-        videoPrompt: scene.videoPrompt, promptOverride: scene.promptOverride, previous: previousRow, refs: support, castState: characters });
+        videoPrompt: scene.videoPrompt, promptOverride: scene.promptOverride, previous: previousRow, refs: support, castState: characters,
+        regionPlateUrl });
       const edited = await ensureReangle(reangleRequest, { jobId, sceneId, projectId });
       reangleUrl = edited.url;
       reangleInfo = { cacheId: reangleRequest.cacheId, cacheHit: edited.cacheHit, sourceSceneId: previousRow.id, camera: reangleRequest.camera };
     }
     const built = buildScenePrompt({
       scene: lookScene,
-      reangleUrl, forbiddenReferenceUrls,
+      reangleUrl, regionPlateUrl, forbiddenReferenceUrls,
       characters: links.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront, imageProfile: l.character.imageProfile, imageFull: l.character.imageFull, imageExtra: l.character.imageExtra, appearance: l.character.appearance, age: l.character.age })),
       location: episodeLoc?.location ?? null,
       previous,
@@ -343,7 +352,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       previous: currentPrevious, forbiddenReferenceUrls }).retryRefs;
     if (reangleRequest && (!currentPrevious || buildReangleRequest({ sceneId, number: freshScene.number,
       startState: freshScene.startState, videoPrompt: freshScene.videoPrompt, promptOverride: freshScene.promptOverride,
-      previous: currentPrevious, refs: freshRefs, castState: freshCharacters }).hash !== reangleRequest.hash))
+      previous: currentPrevious, refs: freshRefs, castState: freshCharacters, regionPlateUrl }).hash !== reangleRequest.hash))
       throw new Error("The previous video, camera or references changed during preprocessing. Retry this scene to use the current inputs.");
     if (await isCancelRequested(jobId)) throw new Error("Video generation canceled before submission");
     if (referenceImages.some(u => forbiddenReferenceUrls.includes(u))) throw new Error("Forbidden source frame in video references");

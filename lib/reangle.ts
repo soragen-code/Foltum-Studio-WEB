@@ -33,6 +33,12 @@ export function assertPredecessorReady(previous: Predecessor | null) {
 export interface ReangleInput {
   sceneId: string; number: number; startState?: string | null; videoPrompt?: string | null; promptOverride?: string | null;
   previous: Predecessor; refs: SceneReference[]; castState?: unknown;
+  /**
+   * Stage 122 — the pre-generated REGION PLATE for this scene (environment plate of this part of the location).
+   * When present it is prepended to the supporting plates as the PRIMARY environment/geometry authority for the
+   * re-angle, ahead of the master wide/layout plates; Image1 still owns people/motion. Omitted → Stage 121 behavior.
+   */
+  regionPlateUrl?: string | null;
 }
 export function buildReangleRequest(input: ReangleInput) {
   assertPredecessorReady(input.previous);
@@ -42,7 +48,10 @@ export function buildReangleRequest(input: ReangleInput) {
     || openingAngleForScene(input.number);
   // Only the selected next-shot camera is used. No scripted world/action may replace the photographed instant.
   const supporting = input.refs.filter(r => ['character', 'crowd', 'location'].includes(r.kind));
-  if (supporting.length + 1 > WAVESPEED_IMAGE_MAX_REFS)
+  // Stage 122 — the region plate (when present) is one extra environment reference; account for it in the cap.
+  const regionPlate = (input.regionPlateUrl ?? '').trim();
+  const hasRegionPlate = !!regionPlate && regionPlate !== input.previous.lastFrameUrl;
+  if (supporting.length + 1 + (hasRegionPlate ? 1 : 0) > WAVESPEED_IMAGE_MAX_REFS)
     throw new Error('Camera re-angle needs more reference images than Seedream supports. Reduce the scene cast before retrying.');
   // Stage 121 — re-note the supporting location plates so their AUTHORITY is explicit: the elevated LAYOUT
   // plate is the floor-plan / placement authority for the room, the wide plate the second geometry reference.
@@ -51,8 +60,13 @@ export function buildReangleRequest(input: ReangleInput) {
         ? `${r.note} LAYOUT / floor-plan authority: the exact placement of the fixed furniture and architecture, including which objects sit flush against which walls.`
         : `${r.note} Wide environment-geometry reference for the room's layout.` }
     : r);
+  // Stage 122 — the region plate leads the environment references as the PRIMARY geometry authority (it already
+  // re-frames the master plates onto this scene's part of the room); the master wide/layout plates back it up.
+  const regionRef: SceneReference[] = hasRegionPlate
+    ? [{ url: regionPlate, kind: 'region', note: 'REGION PLATE — the PRIMARY environment / geometry authority for this scene\'s part of the location (a controlled re-frame of the master plates onto this region). Take the background, walls, floor, columns, fixtures and the fixed furniture placement from THIS plate first (same objects at the same places, wall-adjacent furniture flush against its wall, same architecture, materials, colours and light); the master wide/layout plates back it up. It fixes the ENVIRONMENT ONLY — it does NOT set any pose and is NOT the camera angle.' }]
+    : [];
   // Stage 121 — Image1 is the authority for PEOPLE and MOTION only, NOT for where fixed furniture/architecture sit.
-  const refs = [{ url: input.previous.lastFrameUrl!, kind: 'state_source', note: 'Actual final frame of the completed previous video — authority for the PEOPLE and MOTION only (identities and cast, poses, motion phase and direction, gaze targets, occupied/empty hands, held items, light and time of day); it is NOT the authority for the placement of the fixed furniture or the architecture.' }, ...noted];
+  const refs = [{ url: input.previous.lastFrameUrl!, kind: 'state_source', note: 'Actual final frame of the completed previous video — authority for the PEOPLE and MOTION only (identities and cast, poses, motion phase and direction, gaze targets, occupied/empty hands, held items, light and time of day); it is NOT the authority for the placement of the fixed furniture or the architecture.' }, ...regionRef, ...noted];
   const prompt = [
     'CAMERA-ONLY EDIT of Image1. Reconstruct the EXACT SAME INSTANT in 3D from a genuinely different camera. Move ONLY THE CAMERA, never the world or people. No time passes.',
     `NEXT SCENE CAMERA: ${camera}. Make the angle clearly different from Image1 (opposite side or at least 60 degrees around the subjects), with a distinct height or shot scale. If the requested camera duplicates Image1, move to the opposite side while retaining its requested lens/scale.`,
@@ -61,9 +75,11 @@ export function buildReangleRequest(input: ReangleInput) {
     'FIXED SET IS IMMUTABLE: the fixed furniture, seating/benches, fixtures, floor pattern, columns, walls and large props that appear in Image1 and in the wide/layout location plates MUST be reconstructed IDENTICALLY — same exact design, shape, material, colour and placement. NEVER substitute a different-looking equivalent (e.g. do not turn a solid cast bench into a perforated one), never restyle, resize, add, remove or rearrange them; only the CAMERA moves. Use the wide/layout location plates as the authoritative truth for the environment geometry when revealing previously occluded surfaces.',
     'FIXED BACKGROUND ARCHITECTURE: keep the walls, columns, doorways and openings exactly as in Image1 and the wide/layout plates. Where the plates show a solid wall it stays a solid wall — NEVER replace a wall with columns, pillars, a passage, an archway, an opening, a doorway, a window, an escalator or open space, and NEVER add columns, pillars, arches, openings or any structure that is not present in the location plates. When the new angle reveals a previously occluded surface, reconstruct it strictly from the wide/layout plates rather than inventing new architecture.',
     'ENVIRONMENT GEOMETRY FROM THE PLATES (do NOT inherit drift from Image1): the attached elevated LAYOUT plate is the FLOOR-PLAN AUTHORITY for this location — it fixes what stands where and which fixed objects sit flush against which walls; the wide plate is the second environment-geometry reference. Reconstruct the fixed set and the architecture to MATCH the layout/wide plates: the same objects at the same places against the same walls (for example, a bench keeps the back of its seat flush against the rear wall exactly as in the layout plate, never drifting away from the wall to leave a gap, columns or open space behind it). Take furniture and wall placement from the layout/wide plates, NOT from Image1; if the new camera reveals a surface not visible in Image1, reconstruct it strictly from the layout/wide plates rather than guessing from Image1.',
+    // Stage 122 — when a region plate is attached it is the PRIMARY environment authority for THIS part of the room.
+    hasRegionPlate ? 'REGION PLATE IS THE PRIMARY ENVIRONMENT AUTHORITY: a region plate (a controlled re-frame of the master plates onto THIS scene\'s part of the location) is attached — take the background, walls, floor, columns, fixtures and the fixed furniture placement from the region plate FIRST (the layout/wide master plates back it up), never from Image1. It fixes the ENVIRONMENT ONLY; it does not change the people, their poses or the requested new camera.' : '',
     ...refs.map((r, i) => `Image${i + 1}: ${r.note}`),
     'Photorealistic single vertical film frame, no captions, labels or montage.',
-  ].join('\n');
+  ].filter(Boolean).join('\n'); // Stage 122 — drop the empty region line so a no-region reangle prompt is byte-identical to Stage 121.
   const request = buildWaveSpeedImageRequest({ prompt, aspect_ratio: '9:16', image_input: refs.map(r => r.url) });
   const hash = createHash('sha256').update(JSON.stringify({ version: 112, sceneId: input.sceneId,
     previousId: input.previous.id, video: input.previous.videoUrl, frame: input.previous.lastFrameUrl,

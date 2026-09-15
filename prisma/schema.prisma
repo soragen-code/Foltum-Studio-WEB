@@ -203,6 +203,7 @@ model Location {
   visualPrompt String?  @db.Text // English visual prompt for the reference image (no people)
   visualPromptAuto String? @db.Text // stage 46E: the LLM-written visual prompt as first produced — «reset to auto» restores it; null for legacy rows
   setInventory     String? @db.Text // stage 113: full physical set inventory ("object — placement" per line) written at idea stage; null for legacy rows
+  regionPlates String?  @db.Text // stage 122: JSON cache { regionKey: plateUrl } — pre-generated region plates (Seedream edits of the master layout) reused across scenes in the same region of this location; null for legacy rows
   imageUrl     String?  // PNG reference — wide establishing angle
   imageReverse String?  // same place, reverse angle (generated from imageUrl as reference → identical light)
   imageDetail  String?  // same place, medium/detail angle
@@ -306,6 +307,13 @@ model Scene {
   keyframePrompt String? @db.Text // exact Seedream edit prompt used for the keyframe (shown in the Scene Script modal)
   keyframeStatus String?          // pending | running | done | error
   keyframeError  String? @db.Text // last keyframe error (also set when the video fell back to text-to-video)
+  // Stage 122: scene region plate — a pre-generated environment plate (Seedream edit of the master layout) of the
+  // exact part of the location this scene happens in, sent as the PRIMARY geometry/background reference into the
+  // scene's video clips. NOT a keyframe (no imposed start pose, never a first frame); the last-frame re-angle is
+  // kept only for people/motion continuity. Null for legacy scenes → they fall back to the master plates (no auto-migration).
+  regionKey      String?          // normalized cache key of the region (locationId + regionKey → shared plate)
+  regionDesc     String? @db.Text // English description of WHICH part / vantage of the location this scene occupies (drives the plate edit)
+  regionPlateUrl String?          // S3 URL of the pre-generated region plate for this scene
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

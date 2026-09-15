@@ -285,3 +285,14 @@ ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "keyframeError" TEXT;
 
 -- Stage 113: full physical set inventory per location (one "object — placement" entry per line), written at idea stage.
 ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "setInventory" TEXT;
+
+
+
+-- Stage 122: scene region plates — pre-generated environment plates (Seedream edits of the master layout) of the
+-- exact part of the location a scene happens in, sent as the PRIMARY geometry/background reference into the scene's
+-- video clips (the last-frame re-angle is kept only for people/motion). All additive & nullable; legacy rows fall
+-- back to the master plates (no auto-migration). Idempotent: ADD COLUMN IF NOT EXISTS only, never dropped.
+ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "regionPlates" TEXT;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "regionKey" TEXT;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "regionDesc" TEXT;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "regionPlateUrl" TEXT;

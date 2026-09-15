@@ -34,6 +34,11 @@ export const LOCATION_INSIDE_NOTE =
 export const MAX_REFERENCE_IMAGES = REFERENCE_IMAGE_CAP;
 /** Stage 112: only a camera edit of the ACTUAL predecessor frame can lead video references. */
 export const REANGLE_REFERENCE_NOTE = "the OPENING FRAME: the actual previous video's final instant already re-rendered from THIS shot's new camera. Match this camera/composition at frame 1; do not re-angle it again. Then immediately perform this scene's action and dialogue, without freezing.";
+/** Stage 122 — the note attached to the pre-generated REGION PLATE reference: the authoritative environment /
+ *  geometry for THIS scene's part of the location. It fixes background and layout ONLY (never poses or the shot's
+ *  camera), and the camera stays free. This is what removes the environment's dependence on the fragile re-angle. */
+export const REGION_PLATE_NOTE =
+  "REGION PLATE — the authoritative ENVIRONMENT and GEOMETRY for THIS scene's part of the location (a controlled re-frame of the master plates onto this region). Reproduce its walls, floor, columns, fixtures and the fixed furniture EXACTLY as shown, at the same places, with any wall-adjacent furniture kept flush against its wall; match its architecture, materials, colours and lighting. Do NOT add, remove or rearrange furniture and do NOT replace walls with columns, pillars, openings or open space. This plate defines the BACKGROUND and LAYOUT ONLY — it does NOT dictate any character's pose, and it is NOT the camera angle of this shot: the camera is free to move anywhere within this same environment.";
 
 export interface ScenePromptScene {
   id: string;
@@ -181,6 +186,12 @@ export const CAST_CONTINUITY_LINE =
 export const LOCATION_ANCHOR_LINE =
   "LOCATION IS CONSTANT (fixed environment): the attached wide and layout location plates define the FIXED environment of this place — treat them as the authoritative truth of the room. Across EVERY shot of this location the fixed objects are IDENTICAL: the SAME bench / seating, the SAME floor and its pattern, the SAME columns, walls, fixtures and large props, with the SAME design, materials, colours and placement as in the location plates and the previous shot. Do NOT swap furniture for a different model (e.g. do not turn a solid cast bench into a perforated one), do NOT restyle, resize, add or remove fixed set objects, and do NOT rearrange the layout between shots. Do NOT change or invent the background architecture: the walls, columns, doorways and openings match the wide/layout plates exactly in every shot — where the plates show a solid wall it stays a solid wall, NEVER replaced by columns, pillars, a passage, an archway, an opening, a doorway, a window, an escalator or open space, and NEVER add columns, pillars, arches, openings or any structure that is not present in the location plates. When a shot reveals a previously unseen surface, reconstruct it strictly from the plates instead of inventing new architecture. The attached elevated LAYOUT plate is the FLOOR-PLAN of this location: every fixed object stands in the SAME place and flush against the SAME wall as in the layout plate, and any furniture set against a wall keeps its back/rear side flush against that wall in EVERY shot — it never drifts off the wall to leave a gap, columns or open space behind it. The camera is free to move to any new angle, height or shot scale, but the room's LAYOUT (what sits where, and against which wall) stays exactly as in the layout plate. Only the camera angle and the characters' actions change; the room itself is constant.";
 
+/** Stage 122 — when this scene has a pre-generated REGION PLATE attached, it is the PRIMARY geometry/background
+ *  authority for the room, above the wide/layout masters and above the re-angle frame. The plate already frames
+ *  THIS part of the constant location; the clip reproduces that environment exactly while its camera stays free. */
+export const REGION_PLATE_ANCHOR_LINE =
+  "REGION PLATE IS THE ENVIRONMENT AUTHORITY (this part of the location): the attached region plate is a controlled re-frame of the master plates onto the exact part of the location where this scene happens — treat it as the PRIMARY, authoritative truth of the background and geometry for this shot, above every other reference. Reproduce its walls, floor, columns, fixtures and fixed furniture EXACTLY — same objects at the same places, wall-adjacent furniture flush against the same wall, same architecture, materials, colours and lighting. Do NOT add, remove, resize, restyle or rearrange fixed set objects and do NOT change or invent architecture: where the plate shows a solid wall it stays a solid wall, NEVER replaced by columns, pillars, a passage, an archway, an opening, a doorway, a window, an escalator or open space, and NEVER add any structure not present in the plate. The region plate fixes the ENVIRONMENT ONLY — it does NOT impose any character's pose, and it is NOT the camera angle of this shot: the camera is free to move to any angle, height or shot scale within this same environment, and the people's poses come from this scene's action. When a re-angle opening frame is also attached, take the PEOPLE and MOTION from it but take the BACKGROUND, LAYOUT and GEOMETRY from this region plate.";
+
 /** Stage 120 — eyelines connect in dialogue: a character who addresses another looks AT that listener,
  *  and the listener looks back, achieved by turning the head/eyes (natural three-quarter / profile / over-the-
  *  shoulder angles) — NEVER by squaring up frontally to the camera and NEVER as a static face-to-face line-up.
@@ -255,6 +266,14 @@ export interface BuildScenePromptInput {
    */
   chainMode?: "parallel" | "chain" | null;
   reangleUrl?: string | null;
+  /**
+   * Stage 122 — the pre-generated REGION PLATE for this scene: an environment plate (Seedream edit of the master
+   * layout) of the exact part of the location this scene happens in. When present it is sent as the PRIMARY
+   * geometry/background reference (a non-droppable anchor, ahead of the master plates) so the environment no longer
+   * depends on the fragile re-angle. It is NOT a keyframe and never a first frame; it imposes no pose and no camera.
+   * Omitted / null → the scene falls back to the master wide/layout plates exactly as before (no auto-migration).
+   */
+  regionPlateUrl?: string | null;
   /** URLs forbidden from video, even if accidentally assigned to cast/location. */
   forbiddenReferenceUrls?: string[];
 }
@@ -532,13 +551,23 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const reangleUrl = (input.reangleUrl ?? "").trim();
   if (reangleUrl && forbidden.has(reangleUrl)) throw new Error("The raw last frame cannot be a video reference.");
   const openingRefs: Ref[] = reangleUrl ? [{ url: reangleUrl, kind: "reangle", id: scene.id, note: REANGLE_REFERENCE_NOTE }] : [];
+  // Stage 122 — the pre-generated REGION PLATE (when present) leads the location-geometry tier as the PRIMARY,
+  // non-droppable environment/background authority for this scene's part of the room, ahead of the master plates.
+  // It is not forbidden, not a duplicate of the re-angle frame, and never the first frame; it imposes no pose/camera.
+  const regionPlateUrl = (input.regionPlateUrl ?? "").trim();
+  const hasRegionPlate = !!regionPlateUrl && !forbidden.has(regionPlateUrl) && regionPlateUrl !== reangleUrl;
+  const regionPlateRefs: Ref[] = hasRegionPlate && effectiveLocation
+    ? [{ url: regionPlateUrl, kind: "location", id: effectiveLocation.id, note: REGION_PLATE_NOTE }]
+    : [];
   // Stage 116 — combat crowds sit right after the leads (ahead of the location plates) so they are treated as
   // fighters and are never the first refs dropped at the cap; passive background crowds stay last as extras.
   // Stage 119 — reference priority tiers for the cap. The master location plates (wide + layout) join the
   // re-angle frame, the cast and the combat opponents as NON-DROPPABLE environment anchors, so every clip is
   // reconstructed from the SAME plates and the room never drifts. Only passive background-crowd extras (then
   // any extra location angles) are trimmed to fit REFERENCE_IMAGE_CAP — instead of failing the whole build.
-  const anchorRefs = [...openingRefs, ...characterRefs, ...combatCrowdRefs, ...baseLocationRefs].filter(r => !forbidden.has(r.url));
+  // Stage 122 — the region plate (if any) leads the location tier, ahead of the master wide/layout plates, and is
+  // itself non-droppable: it is the primary environment authority, the masters remain as backing geometry truth.
+  const anchorRefs = [...openingRefs, ...characterRefs, ...combatCrowdRefs, ...regionPlateRefs, ...baseLocationRefs].filter(r => !forbidden.has(r.url));
   const droppableRefs = [...backgroundCrowdRefs, ...extraLocationRefs].filter(r => !forbidden.has(r.url));
   if (anchorRefs.length > REFERENCE_IMAGE_CAP) throw new Error("Too many required video references. Reduce the scene cast.");
   const room = Math.max(0, REFERENCE_IMAGE_CAP - anchorRefs.length);
@@ -595,9 +624,12 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     // Stage 120 — in a dialogue shot, eyelines connect: the speaker looks at whoever they address (head/eyes
     // turned to the listener, natural angles, never to camera, never a static face-to-face stand-off).
     dialogue ? GAZE_AT_LISTENER_LINE : "",
-    // Stage 119 — whenever the shot has master location plates attached, anchor the environment so the
-    // fixed set objects (bench, floor, columns, fixtures, large props) stay identical across every clip.
-    locationAngles.length ? LOCATION_ANCHOR_LINE : "",
+    // Stage 119/122 — whenever the shot has master location plates attached, anchor the environment so the
+    // fixed set objects (bench, floor, columns, fixtures, large props) stay identical across every clip. When a
+    // pre-generated REGION PLATE is also attached, it becomes the PRIMARY environment authority for this part of
+    // the room (it already re-frames the master plates onto this region), so its stronger line REPLACES the master
+    // anchor line here — this keeps the prompt from carrying two overlapping environment blocks.
+    hasRegionPlate ? REGION_PLATE_ANCHOR_LINE : (locationAngles.length ? LOCATION_ANCHOR_LINE : ""),
   ].filter(Boolean);
   // Stage 54 — the deterministic structure block (reference map + people counter + clothing&props)
   // sits AFTER the state blocks and BEFORE the reused 9-tag body, so the prompt still opens with the

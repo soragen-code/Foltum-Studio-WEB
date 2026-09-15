@@ -61,6 +61,7 @@ import {
   matchLocation,
 } from "@/lib/season";
 import { anchorSceneLocation } from "@/lib/location-anchor";
+import { deriveRegionKey } from "@/lib/region-plate";
 import { translateDialogue } from "@/lib/voiceover";
 import { episodeCastFromScenes } from "@/lib/episode-cast";
 
@@ -291,6 +292,11 @@ export async function persistEpisodeScript(
           endStateActual: null,
           // Stage 104 — a freshly scripted scene has no keyframe yet.
           keyframeUrl: null, keyframePrompt: null, keyframeStatus: null, keyframeError: null,
+          // Stage 122 — the scripted region (which part of the constant location this scene occupies) and its
+          // normalized cache key. The region plate itself is pre-generated later; a freshly scripted scene has none yet.
+          regionDesc: (s.region ?? "").trim() || null,
+          regionKey: deriveRegionKey(s.region) || null,
+          regionPlateUrl: null,
           // Stage 12 (Commit D) — off-screen narration: `voiceover` = English narration voiced by the model,
           // `voiceoverLocal` = the same narration translated for the UI. `sceneKind` distinguishes narration from dialogue.
           sceneKind: s.sceneKind ?? "dialogue",
