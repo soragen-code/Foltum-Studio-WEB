@@ -22,6 +22,7 @@ import { PACE_DIRECTION, ACTION_PACE_DIRECTION, CONFRONTATION_STAGING_SENTENCE }
 import { styledVisualPrompt, isStyledAsset, locationAngleImages, parseLocationExtra, locationExtraLabel, locationLayoutNote } from "@/lib/visual-style";
 import { normalizeVideoModel, videoModelSlug, type VideoModelId } from "@/lib/ai-models";
 import { matchPropsInText, type PropRegistryEntry } from "@/lib/prop-registry";
+import { stagingContinuityBlock } from "@/lib/staging-map";
 
 /** Seedance limit. Stage 112 order: re-angle (if predecessor), cast, wide, layout, crowd. */
 export const REFERENCE_IMAGE_CAP = 30;
@@ -205,6 +206,13 @@ export const GAZE_AT_LISTENER_LINE =
  *  the transition stays a hard cut (117). Applied on continuing shots (continuous seam / re-angle). */
 export const ACTION_CONTINUES_ACROSS_CUT_LINE =
   "ACTION CONTINUES ACROSS THE CUT (no reset on the seam): the cut to the new camera is a HARD CUT with no fade, dissolve or crossfade, and it does NOT interrupt the action. Whatever movement was underway at the end of the previous shot continues from the SAME motion phase and in the SAME direction — a swing keeps swinging, a step keeps going, a fall keeps falling — with the same items in the same hands and the same momentum. Do NOT restart the action from its beginning, do NOT pause, freeze or reset to a neutral standing pose on frame 1, and do NOT skip past part of the action across the cut: the motion picks up exactly where it left off while only the camera jumps to a new angle. Dialogue may carry straight on through the cut; the transition itself is always a hard cut, never a fade.";
+
+/** Stage 126 — table/surface props are immutable set dressing: the small objects resting on tables, counters,
+ *  desks and shelves of this location stay the SAME items in the SAME spots across every shot, never
+ *  re-invented per scene, changing only when this scene's action moves them on screen. Fires whenever the
+ *  shot has a location anchor (master plates or a region plate), i.e. exactly when the environment is fixed. */
+export const SURFACE_PROPS_IMMUTABLE_LINE =
+  "TABLE/SURFACE PROPS ARE IMMUTABLE (same objects on every surface in every shot): the small objects resting on this location's tables, counters, desks and shelves are FIXED set dressing — the SAME items in the SAME spots in every shot here (a mug, glass, bottle, plate, bowl, book, stack of papers, phone, lamp or utensil stays put, same quantity, colour and shape). Do NOT add, remove, swap, restyle, resize, recolour or rearrange anything sitting on a surface between shots, and do NOT re-invent what is on a table from scratch each scene. A surface object changes ONLY when this scene's action shows it changing on screen (a character picks it up, sets it down or moves it). The camera is free to frame these surfaces from any new angle, height or distance; the objects on them do not change.";
 
 const oneLine = (t?: string | null) => (t ?? "").replace(/\s+/g, " ").trim();
 
@@ -618,6 +626,13 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     // Stage 120 — on a continuing shot the action is NOT reset on the seam: the motion carries on from the
     // same phase/direction through the hard cut (no fade), the dialogue may continue, only the camera jumps.
     continuousSeam || reangleUrl ? ACTION_CONTINUES_ACROSS_CUT_LINE : "",
+    // Stage 126 — on a continuing shot the characters KEEP their screen sides (line of action / 180-degree rule):
+    // the left/right arrangement is carried over from the previous shot's last frame (read from openingState),
+    // and the axis rule forbids the camera from crossing the line so people swap sides — WITHOUT locking the
+    // camera (any angle/height/scale stays allowed) and without breaking EYELINES CONNECT.
+    continuousSeam || reangleUrl
+      ? stagingContinuityBlock(openingState, characters.filter(c => c.tier !== "CROWD").map(c => c.name))
+      : "",
     SPEECH_BEFORE_CUT_LINE,
     NO_FROZEN_PADDING_LINE,
     REFERENCE_APPEARANCE_ONLY_LINE,
@@ -630,6 +645,11 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     // the room (it already re-frames the master plates onto this region), so its stronger line REPLACES the master
     // anchor line here — this keeps the prompt from carrying two overlapping environment blocks.
     hasRegionPlate ? REGION_PLATE_ANCHOR_LINE : (locationAngles.length ? LOCATION_ANCHOR_LINE : ""),
+    // Stage 126 — whenever the environment is anchored (region plate or master plates), the small props resting
+    // on tables/counters/desks/shelves are immutable set dressing: the same objects in the same spots in every
+    // shot, re-invented never, changing only when the on-screen action moves them. Carried between scenes of the
+    // same location because the location's fixed inventory is identical in every scene there.
+    hasRegionPlate || locationAngles.length ? SURFACE_PROPS_IMMUTABLE_LINE : "",
   ].filter(Boolean);
   // Stage 54 — the deterministic structure block (reference map + people counter + clothing&props)
   // sits AFTER the state blocks and BEFORE the reused 9-tag body, so the prompt still opens with the

@@ -125,7 +125,8 @@ const dCrowdRef = dlgBuilt.retryRefs[dCrowdIdx];
 ok(/extras/.test(dCrowdRef.note ?? '') && !/ACTIVE OPPONENT/.test(dCrowdRef.note ?? ''),
   'dialogue scene: crowd keeps the plain extras note (not an active opponent)');
 
-// prompt must stay far below the old 24k-char bloat bug
-ok(actionBuilt.prompt.length < 12000, `action prompt stays compact, not bloated (${actionBuilt.prompt.length} chars)`);
+// prompt must stay far below the old 24k-char bloat bug (Stage 126 added the immutable surface-props
+// directive on anchored shots, ~800 chars — still less than a third of the old 24k bloat).
+ok(actionBuilt.prompt.length < 13000, `action prompt stays compact, not bloated (${actionBuilt.prompt.length} chars)`);
 
 console.log(`Stage 116: PASS (${passed} checks)`);
