@@ -63,12 +63,13 @@ const has = (args: string[], ...seq: string[]) => {
 {
   const f = buildMusicMixFilter({ durationSec: 60 });
   ok(f.includes("volume=0.18"), "music volume 0.18 by default");
-  ok(f.includes("afade=t=in:st=0:d=2.00"), "2 s fade-in");
-  ok(f.includes("afade=t=out:st=57.000:d=3.00"), "3 s fade-out ends at the episode end");
+  ok(!f.includes("afade=t=in"), "no fade-in — the single continuous track starts hard (Stage 117)");
+  ok(f.includes("afade=t=out:st=58.500:d=1.50"), "1.5 s fade-out only at the episode finale (Stage 117)");
+  ok((f.match(/afade/g) || []).length === 1, "exactly one afade — finale fade-out only, no seam fades");
   ok(f.startsWith("[1:a]atrim=0:60.000"), "music trimmed to the episode length");
   ok(f.includes("[c][m]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]"), "clip audio primary (duration=first, no normalisation)");
   const short = buildMusicMixFilter({ durationSec: 3, volume: 0.15 });
-  ok(short.includes("volume=0.15") && short.includes("afade=t=in:st=0:d=1.50"), "fades clamp to half of a very short episode");
+  ok(short.includes("volume=0.15") && !short.includes("afade=t=in") && short.includes("afade=t=out:st=1.500:d=1.50"), "short episode: no fade-in, finale fade-out clamps to half the length");
 }
 
 /* ── 3. Mood schema ──────────────────────────────────────────────────────── */
@@ -87,7 +88,7 @@ const has = (args: string[], ...seq: string[]) => {
     const cfg = resolvePowerTier({ powerTier: tier });
     ok(cfg.resolution === "480p" && cfg.costPerScene === 1 && cfg.baseDuration === 5 && cfg.id === tier, `resolvePowerTier(${tier}) → 480p, cost 1 / 5 s, id kept`);
     ok(sceneClipCost(tier, 30) === 6 && sceneClipCost(tier, 5) === 1, `sceneClipCost(${tier}) = 480p price`);
-    ok(sceneClipSeconds(tier, 20) === 20 && sceneClipSeconds(tier, 8) === 15, `sceneClipSeconds(${tier}) unchanged (min 15, planned kept)`);
+    ok(sceneClipSeconds(tier, 20) === 20 && sceneClipSeconds(tier, 8) === 8 && sceneClipSeconds(tier, 2) === 5, `sceneClipSeconds(${tier}) keeps the planned length, clamped to the 5 s minimum (Stage 115)`);
   }
   ok(resolvePowerTier({ tier: "maximum" }).resolution === "480p", "legacy maximum → 480p");
   ok(sceneTierConfig(POWER_TIER_CONFIG.HIGH).label === "720p+", "label of the stored tier is kept");

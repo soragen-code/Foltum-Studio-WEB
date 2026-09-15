@@ -8,11 +8,11 @@
  * stream; the previous remote concatenation silently dropped it.
  *
  * Stage 43 — DEFAULT join mode is the «seamless hard cut» (`seamlessCutClips`): a plain
- * editorial cut with an invisible micro-blend on the seam itself (video xfade of
- * SEAMLESS_BLEND_SEC ≈ 2–3 frames, audio acrossfade of the same length so there is no click
- * and no gap). The visible-dissolve (`crossfadeClips`) path is kept but only used when
- * explicitly requested via `AssembleOptions.mode`. (Stage 104: the old FILM-bridge path and its
- * remote frame-interpolation dependency were removed — a seam is always a hard cut.)
+ * editorial cut. Stage 117: the seam is a FRAME-EXACT hard cut on both video and audio — the clips
+ * are joined with `concat=n=N:v=1:a=1`, no xfade, no acrossfade, no edge fades. The visible-dissolve
+ * (`crossfadeClips`) path is kept but only used when explicitly requested via `AssembleOptions.mode`.
+ * (Stage 104: the old FILM-bridge path and its remote frame-interpolation dependency were removed — a
+ * seam is always a hard cut.)
  */
 import { execFile, spawn } from "child_process";
 import { promises as fs } from "fs";
@@ -476,15 +476,15 @@ async function concatClips(clips: string[], workDir: string, outPath: string): P
 
 /** How consecutive scene clips are joined into an episode. */
 export type StitchMode = "seamless-cut" | "crossfade" | "concat";
-/** Default: a straight editorial cut with an invisible micro-blend on the seam. */
+/** Default: a straight editorial cut — a frame-exact hard cut on both video and audio (no blend). */
 export const DEFAULT_STITCH_MODE: StitchMode = "seamless-cut";
 
 /**
  * Length of the micro-blend on every seam, in seconds — Stage 43 constant kept for compatibility
  * (hard limits still enforced by scripts/test-stage43.ts). Stage 78 no longer blends the VIDEO at all:
  * the seam is a frame-exact hard cut (`concat`), because even a 2-frame xfade held the previous clip's
- * final frame over the seam and read as a freeze. The audio uses tiny edge afades instead of an overlap
- * so the audio and video timelines stay exactly the same length.
+ * final frame over the seam and read as a freeze. Stage 117: the audio is a hard cut too (no edge
+ * afades — see SEAM_AUDIO_FADE_SEC = 0), so the audio and video timelines stay exactly the same length.
  * HARD LIMIT: must stay ≤ 0.12s (video) and ≤ 0.08s (audio) — see scripts/test-stage43.ts.
  */
 export const SEAMLESS_BLEND_SEC = 0.08;
@@ -499,8 +499,13 @@ export const SEAMLESS_BLEND_MAX_AUDIO_SEC = 0.08;
 export const SEAM_TAIL_TRIM_SEC = 0.35;
 /** Stage 78 — minimum clip length that still gets a tail trim. */
 export const SEAM_TAIL_TRIM_MIN_CLIP_SEC = 1.0;
-/** Stage 78 — edge afade (s) applied at each clip's tail / next clip's head to kill the click (no overlap). */
-export const SEAM_AUDIO_FADE_SEC = 0.03;
+/**
+ * Stage 117 — the seam audio fade is REMOVED: every clip-to-clip transition is a frame-exact HARD
+ * cut on BOTH video and audio (no afade at the tails / heads). Kept as an exported constant (= 0) so
+ * the seam builder and its callers stay signature-compatible; a non-zero value would re-enable the
+ * old edge afades. (Stage 78 used 0.03 s; the user asked for hard cuts with no fades on transitions.)
+ */
+export const SEAM_AUDIO_FADE_SEC = 0;
 
 export interface SeamlessCutGraph {
   /** ffmpeg `-filter_complex` string; outputs are `[vout]` and `[aout]`. */
@@ -537,9 +542,9 @@ function seamClipDuration(i: MediaInfo): number {
 /**
  * Pure builder for the seamless-cut filtergraph (unit-testable, no ffmpeg run).
  * Stage 78: every input is normalized to the geometry / fps / timebase of the first clip; every clip
- * except the LAST is trimmed by `tailTrimSec` at the tail (only when the remainder stays ≥ 1.0 s), the
- * PTS are re-based, the audio gets a 0.03 s fade-out at each tail and fade-in at each head (except the
- * very first head / very last tail), and the streams are joined with `concat=n=N:v=1:a=1` — a hard cut,
+ * except the LAST is trimmed by `tailTrimSec` at the tail (only when the remainder stays ≥ 1.0 s) and
+ * the PTS are re-based. Stage 117: the audio is a HARD cut too — with SEAM_AUDIO_FADE_SEC = 0 no afade
+ * is emitted at any seam; the streams are joined with `concat=n=N:v=1:a=1` — a frame-exact hard cut,
  * no xfade, no acrossfade, so the audio and video are exactly the same length. The k-th seam sits at
  * `sum(clipDurations[0..k-1])` in the output. `blend` (video) is reported as 0.
  * Signature-compatible with Stage 43: `(infos, blend?, opts?)` — `blend` is accepted and ignored.
@@ -576,10 +581,12 @@ export function buildSeamlessCutGraph(
       `[${i}:v:0]scale=${w}:${h}:force_original_aspect_ratio=decrease,` +
         `pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps},${vTrim}setpts=PTS-STARTPTS,format=yuv420p,settb=AVTB[v${i}]`
     );
-    // Edge fades instead of an overlap: fade-in on every head but the first, fade-out on every tail
-    // but the last (the fade-out starts `fade` seconds before the trimmed end).
-    const fadeIn = i > 0 ? `afade=t=in:st=0:d=${fade.toFixed(3)},` : "";
-    const fadeOut = i < n - 1 && dur > fade
+    // Stage 117 — HARD cut on the audio too: with `fade === 0` no afade is emitted at any seam, so
+    // clips butt straight up against each other (same as the video). A non-zero SEAM_AUDIO_FADE_SEC
+    // would restore the old edge fades (fade-in on every head but the first, fade-out on every tail
+    // but the last, starting `fade` seconds before the trimmed end).
+    const fadeIn = fade > 0 && i > 0 ? `afade=t=in:st=0:d=${fade.toFixed(3)},` : "";
+    const fadeOut = fade > 0 && i < n - 1 && dur > fade
       ? `afade=t=out:st=${(dur - fade).toFixed(3)}:d=${fade.toFixed(3)},`
       : "";
     parts.push(
@@ -674,7 +681,7 @@ export async function stitchLocalClipsSeamless(
 
 export interface AssembleOptions {
   /**
-   * Join mode. Default "seamless-cut" (Stage 43): straight cut + invisible micro-blend, no AI
+   * Join mode. Default "seamless-cut" (Stage 43): a frame-exact hard cut on video and audio, no AI
    * bridges, no visible dissolves. "crossfade" = visible 0.2s dissolves, "concat" = raw hard cut.
    */
   mode?: StitchMode;
@@ -723,32 +730,44 @@ export type AssembleProgressEvent =
   | { stage: "join"; pct: number }
   | { stage: "render"; pct: number };
 
+/**
+ * Stage 117 — the single continuous track no longer fades IN (it starts hard together with the first
+ * cut); a short fade-out remains ONLY at the very END of the episode (the finale, not a scene seam) so
+ * the loop doesn't click off. This finale fade is a global start/end trim, never a clip-to-clip fade.
+ */
+export const MUSIC_FINAL_FADEOUT_SEC = 1.5;
+
 export interface MusicMixOptions {
   /** Episode length in seconds — music is trimmed to it. */
   durationSec: number;
   /** Music gain under the clip audio (0.15–0.2 recommended). Default 0.18. */
   volume?: number;
-  /** Seconds. Default 2. */
+  /** Seconds. Stage 117 default 0 (hard music start, no fade-in). */
   fadeIn?: number;
-  /** Seconds. Default 3. */
+  /** Seconds. Stage 117 default MUSIC_FINAL_FADEOUT_SEC (a minimal fade only at the episode finale). */
   fadeOut?: number;
 }
 
 /**
  * Pure: filtergraph mixing looped background music (input 1) under the clip audio (input 0).
- * Music: trimmed to the episode, gain `volume`, fade-in / fade-out; clip audio stays primary
- * (`duration=first`, no normalisation). Output label `[aout]`.
+ * Music: trimmed to the episode, gain `volume`; clip audio stays primary (`duration=first`, no
+ * normalisation). Output label `[aout]`. Stage 117: NO fade-in on the seams or the start — the one
+ * continuous track begins hard; a short fade-out is applied ONLY at the very finale (0-safe: afade is
+ * omitted entirely when a fade value is 0, so the music can also start/stop as a pure hard cut).
  */
 export function buildMusicMixFilter(opts: MusicMixOptions): string {
   const dur = Math.max(0.1, opts.durationSec);
   const volume = opts.volume ?? 0.18;
-  const fadeIn = Math.min(opts.fadeIn ?? 2, dur / 2);
-  const fadeOut = Math.min(opts.fadeOut ?? 3, dur / 2);
+  const fadeIn = Math.min(Math.max(0, opts.fadeIn ?? 0), dur / 2);
+  const fadeOut = Math.min(Math.max(0, opts.fadeOut ?? MUSIC_FINAL_FADEOUT_SEC), dur / 2);
   const fadeOutStart = Math.max(0, dur - fadeOut);
+  const fades =
+    (fadeIn > 0 ? `,afade=t=in:st=0:d=${fadeIn.toFixed(2)}` : "") +
+    (fadeOut > 0 ? `,afade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fadeOut.toFixed(2)}` : "");
   return (
     `[1:a]atrim=0:${dur.toFixed(3)},asetpts=PTS-STARTPTS,` +
     `aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,` +
-    `volume=${volume},afade=t=in:st=0:d=${fadeIn.toFixed(2)},afade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fadeOut.toFixed(2)}[m];` +
+    `volume=${volume}${fades}[m];` +
     `[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[c];` +
     `[c][m]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]`
   );
@@ -891,8 +910,8 @@ export function buildFinalRenderArgs(o: FinalRenderOptions): { args: string[]; r
 
 /**
  * Download all scene clips (+ voiceovers), give every clip a uniform audio track and join
- * them into one episode. Default mode (Stage 43) is the seamless hard cut — a straight cut
- * with an invisible ~0.08s video/audio micro-blend on the seam, no AI bridges. Legacy modes
+ * them into one episode. Default mode (Stage 43) is the seamless hard cut — a frame-exact hard
+ * cut on both video and audio at every seam (no blend, no edge fades), no AI bridges. Legacy modes
  * ("crossfade", "concat") are selectable via `opts.mode`.
  * Caller must `fs.rm(result.workDir, { recursive: true })`.
  */
@@ -959,8 +978,8 @@ export async function assembleEpisodeLocally(scenes: SceneClipInput[], opts: Ass
   if (normalized.length === 1) {
     await fs.copyFile(normalized[0], joinedPath);
   } else if (mode === "seamless-cut") {
-    // DEFAULT (Stage 43): straight cut with an invisible micro-blend on the seam. No FILM call,
-    // no visible dissolve. If the ultra-short xfade fails for any reason → frame-exact concat.
+    // DEFAULT (Stage 43): a frame-exact hard cut on both video and audio at the seam (no blend,
+    // no edge fades). No FILM call, no visible dissolve. If it fails for any reason → hard concat.
     try {
       const g = await seamlessCutClips(normalized, infos, joinedPath);
       seamOffsets = g.seamOffsets;

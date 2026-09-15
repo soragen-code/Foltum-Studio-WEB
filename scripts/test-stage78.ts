@@ -24,20 +24,19 @@ const info = (d: number): MediaInfo => ({ duration: d, videoDuration: d, hasVide
 
 // ── A. graph ──────────────────────────────────────────────────────────────────────────────────────
 {
-  ok(SEAM_TAIL_TRIM_SEC === 0.35 && SEAM_TAIL_TRIM_MIN_CLIP_SEC === 1.0 && SEAM_AUDIO_FADE_SEC === 0.03, "A: Stage 78 constants (0.35 trim / 1.0 min / 0.03 afade)");
+  ok(SEAM_TAIL_TRIM_SEC === 0.35 && SEAM_TAIL_TRIM_MIN_CLIP_SEC === 1.0 && SEAM_AUDIO_FADE_SEC === 0, "A: constants (0.35 trim / 1.0 min / 0 afade — Stage 117 hard audio cut)");
   ok(SEAMLESS_BLEND_MAX_VIDEO_SEC === 0.12 && SEAMLESS_BLEND_MAX_AUDIO_SEC === 0.08 && SEAMLESS_BLEND_SEC <= 0.08, "A: legacy SEAMLESS_BLEND_* constants unchanged");
   const g = buildSeamlessCutGraph([info(5), info(5), info(5)]);
   ok(g.clipDurations.length === 3 && near(g.clipDurations[0], 4.65) && near(g.clipDurations[1], 4.65) && near(g.clipDurations[2], 5.0), "A: clipDurations (4.65, 4.65, 5.0)");
   ok(near(g.expectedDuration, 14.3), "A: expectedDuration 14.3");
   ok(g.seamOffsets.length === 2 && near(g.seamOffsets[0], 4.65) && near(g.seamOffsets[1], 9.3), "A: seamOffsets [4.65, 9.3]");
-  ok(g.blend === 0 && near(g.audioFade, 0.03), "A: blend 0, audioFade 0.03");
+  ok(g.blend === 0 && g.audioFade === 0, "A: blend 0, audioFade 0 (hard cut on video + audio)");
   const trims = [...g.filter.matchAll(/\[(\d+):v:0\][^;]*,trim=0:([\d.]+)/g)];
   ok(trims.length === 2 && trims.map((m) => m[1]).join(",") === "0,1", "A: video trim= only on clips 0 and 1, not on the last");
   ok(!/\[2:v:0\][^;]*,trim=/.test(g.filter), "A: last clip has no trim");
   ok(g.filter.includes("concat=n=3:v=1:a=1"), "A: concat=n=3:v=1:a=1");
   ok(!g.filter.includes("xfade") && !g.filter.includes("acrossfade"), "A: no xfade / acrossfade");
-  ok(g.filter.includes("afade=t=in") && g.filter.includes("afade=t=out"), "A: audio edge fades present");
-  ok(!/\[0:a:0\][^;]*afade=t=in/.test(g.filter) && !/\[2:a:0\][^;]*afade=t=out/.test(g.filter), "A: no fade-in on first head, no fade-out on last tail");
+  ok(!g.filter.includes("afade"), "A: no afade anywhere — hard audio cut at every seam (Stage 117)");
   const short = buildSeamlessCutGraph([info(0.9), info(5)]);
   ok(near(short.clipDurations[0], 0.9) && near(short.expectedDuration, 5.9), "A: 0.9s clip is not trimmed (below 1.0s minimum)");
   assert.throws(() => buildSeamlessCutGraph([info(5)]), /at least 2 clips/);

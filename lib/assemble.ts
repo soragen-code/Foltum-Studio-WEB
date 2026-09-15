@@ -6,13 +6,15 @@
  *   2. the standalone POST /api/ai/assemble-episode route (kept for backward compat).
  *
  * It downloads every scene clip, muxes voiceovers, joins them with local ffmpeg using the
- * default seamless hard cut (Stage 43: a straight cut with an invisible ~0.08s video/audio
- * micro-blend on the seam — no AI bridges, no visible dissolves; nothing is charged for the
+ * default seamless hard cut (Stage 117: a frame-exact hard cut on both video and audio at every
+ * seam — no blend, no edge fades, no AI bridges, no visible dissolves; nothing is charged for the
  * join), uploads the result to S3 and stores `episode.videoUrl` + `status='assembled'`.
  *
  * Stage 46B: the FINAL file is rendered at the chosen production quality / fps (scenes are always
- * 480p), thematic background music is mixed in (mood via gpt-4o → MusicGen track cached per
- * project+mood), clips download in parallel and every real stage is reported through `onProgress`.
+ * 480p) and clips download in parallel, with every real stage reported through `onProgress`.
+ * Stage 117: ONE background-music mood is chosen for the WHOLE episode (mood via gpt-4o →
+ * MusicGen track cached per project+mood) and played as a single continuous looped track — a hard
+ * start and only a minimal fade-out at the very finale, no per-scene mood changes or seam fades.
  */
 import { promises as fs } from "fs";
 import path from "path";
@@ -27,18 +29,15 @@ import {
   type AssembleQuality,
 } from "@/lib/ffmpeg";
 import { uploadBufferToS3 } from "@/lib/s3-upload";
-import { getOrCreateMusicTrack, type Mood } from "@/lib/music";
-import {
-  buildMusicPlan,
-  mergeMoodSegments,
-  limitMoods,
-  coalesceMoodSegments,
-  toTimelineSegments,
-  summarizePlan,
-  countScenesWithoutMusic,
-  type SceneMoodInput,
-  type MoodSegment,
-} from "@/lib/music-plan";
+import { getOrCreateMusicTrack, pickMood, DEFAULT_MOOD, MOOD_LABELS, type Mood } from "@/lib/music";
+
+/** Stage 117: one music segment spanning the whole episode (shape kept for the resultData / UI). */
+interface EpisodeMoodSegment {
+  mood: Mood;
+  startSceneIndex: number;
+  endSceneIndex: number;
+  intensity: number;
+}
 
 const validUrl = (u?: string | null) => typeof u === "string" && u.startsWith("http") && u.length > 10;
 
@@ -58,9 +57,9 @@ export interface AssembleEpisodeResult {
   fps: AssembleFps;
   mood: Mood | null;
   musicApplied: boolean;
-  /** Stage 79: the per-moment plan actually used (segments + scenes left silent), or null. */
-  musicPlan: { segments: MoodSegment[]; scenesWithoutMusic: number } | null;
-  /** Stage 79: Russian summary of the plan ("tense → mysterious (2 segments …)") or null. */
+  /** Stage 117: one segment covering the whole episode (single continuous mood), or null. */
+  musicPlan: { segments: EpisodeMoodSegment[]; scenesWithoutMusic: number } | null;
+  /** Stage 117: human-readable label of the single chosen mood, or null. */
   musicSummary: string | null;
   /** Stage 79: Russian error when music could not be produced, or null. */
   musicError: string | null;
@@ -115,15 +114,13 @@ export async function assembleEpisodeVideo(episodeId: string, opts: AssembleEpis
     const projectId = episode.season?.projectId ?? "unknown";
     let mood: Mood | null = null;
     let musicFailed = false;
-    // Stage 79: per-moment thematic soundtrack — the plan (segments + silent scenes), its Russian
-    // summary and any error are captured inside the resolveMusicSegments callback for the resultData.
-    let planSegments: MoodSegment[] = [];
-    let scenesWithoutMusic = 0;
+    // Stage 117: ONE mood for the whole episode. The chosen mood, its label and any error are
+    // captured inside the resolveMusic callback (a single continuous looped track) for the resultData.
     let musicSummary: string | null = null;
     let musicError: string | null = null;
 
     // Mux voiceovers + join with local ffmpeg (audio-preserving, default seamless hard cut), then
-    // the final render at the chosen quality / fps with the per-moment thematic soundtrack (Stage 79).
+    // the final render at the chosen quality / fps with ONE continuous background-music track (Stage 117).
     const result = await assembleEpisodeLocally(
       scenes.map((s) => ({
         videoUrl: s.videoUrl as string,
@@ -133,54 +130,28 @@ export async function assembleEpisodeVideo(episodeId: string, opts: AssembleEpis
         quality,
         fps,
         onProgress: report,
-        resolveMusicSegments:
+        resolveMusic:
           opts.music === false
             ? undefined
-            : async (dir, seamOffsets, totalDuration) => {
+            : async (dir) => {
                 try {
-                  // 1. Per-scene mood plan (gpt-4o) → merged consecutive segments → cap at 3 moods.
-                  const sceneInputs: SceneMoodInput[] = scenes.map((s, i) => ({
-                    index: i,
-                    action: s.action ?? undefined,
-                    dialogue: s.dialogue ?? undefined,
-                    kind: s.sceneKind ?? undefined,
-                  }));
-                  const perScene = await buildMusicPlan(sceneInputs, {
+                  // 1. Pick ONE mood for the WHOLE episode (gpt-4o; falls back to DEFAULT_MOOD).
+                  mood = await pickMood({
                     title: episode.title,
                     logline: episode.logline,
                     synopsis: episode.season?.project?.synopsis,
                   });
-                  // Stage 89: coalesce adjacent same-mood segments (esp. after limitMoods recolors
-                  // neighbours to one mood) so one mood plays CONTINUOUSLY across all its scenes —
-                  // fades/track-restarts happen only at real mood changes, never at every scene seam.
-                  planSegments = coalesceMoodSegments(limitMoods(mergeMoodSegments(perScene), 3));
-                  scenesWithoutMusic = countScenesWithoutMusic(perScene);
-                  musicSummary = summarizePlan(planSegments, scenesWithoutMusic);
-                  mood = planSegments[0]?.mood ?? null;
-                  if (planSegments.length === 0) return null; // every scene is "none" — no music
-
+                  musicSummary = MOOD_LABELS[mood];
                   void opts.onProgress?.(30, `Selecting music: ${musicSummary}`);
-                  // 2. One cached track per UNIQUE mood (parallel; the S3 cache is reused).
-                  const uniqueMoods = [...new Set(planSegments.map((s) => s.mood))];
-                  const moodFiles = new Map<Mood, string>();
-                  await Promise.all(
-                    uniqueMoods.map(async (m) => {
-                      const url = await getOrCreateMusicTrack(projectId, m);
-                      const local = path.join(dir, `music_${m}.mp3`);
-                      await downloadToFile(url, local);
-                      moodFiles.set(m, local);
-                    })
-                  );
-                  // 3. Map segments onto the output timeline (seam offsets) → per-window inputs.
-                  const timeline = toTimelineSegments(planSegments, seamOffsets, totalDuration);
-                  return timeline.map((t) => ({
-                    path: moodFiles.get(t.mood) as string,
-                    startSec: t.startSec,
-                    endSec: t.endSec,
-                    intensity: t.intensity,
-                  }));
+                  // 2. One cached track for that mood (reused from the S3 cache across assemblies),
+                  //    played as a single continuous looped track over the entire episode.
+                  const url = await getOrCreateMusicTrack(projectId, mood);
+                  const local = path.join(dir, `music_${mood}.mp3`);
+                  await downloadToFile(url, local);
+                  return local;
                 } catch (err) {
                   console.warn(`[assemble] ${episodeId}: music unavailable —`, (err as Error).message);
+                  mood = mood ?? DEFAULT_MOOD;
                   musicFailed = true;
                   musicError = (err as Error).message;
                   return null;
@@ -214,7 +185,15 @@ export async function assembleEpisodeVideo(episodeId: string, opts: AssembleEpis
       fps,
       mood,
       musicApplied: result.musicApplied,
-      musicPlan: planSegments.length > 0 ? { segments: planSegments, scenesWithoutMusic } : null,
+      musicPlan:
+        result.musicApplied && mood
+          ? {
+              segments: [
+                { mood, startSceneIndex: 0, endSceneIndex: Math.max(0, scenes.length - 1), intensity: 1 },
+              ],
+              scenesWithoutMusic: 0,
+            }
+          : null,
       musicSummary,
       musicError: musicFailed ? musicError ?? "unknown error" : null,
       note: opts.music !== false && musicFailed ? "Music unavailable — assembled without music" : null,
