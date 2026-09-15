@@ -93,7 +93,7 @@ export type SeasonJobState = {
   skipFullStory?: boolean;
   /** Author-requested rewrite of specific (already written) episodes. */
   revise?: { episodeIds: string[]; instruction: string; force?: boolean };
-  /** Stage 45 — advisory notes shown with the final job message (e.g. an episode over the 1:00 budget). */
+  /** Stage 45 — advisory notes shown with the final job message (e.g. an episode over the 1:30 budget). */
   warnings?: string[];
   /** Stage 105 — why the previous attempt of the current step failed (appended to the retry prompt; cleared on success). */
   lastFailure?: string;

@@ -39,9 +39,9 @@ for (const [lang, epNo] of [["ru", 1], ["ru", 2], ["en", 3]] as const) {
   ok(!/NO character mouths moving/.test(sys) && !/NO talking heads/.test(sys), `ep${epNo}/${lang}: no mouths-closed / b-roll directive`);
   ok(/R2\. NO SILENT SCENES/.test(sys), `ep${epNo}/${lang}: R2 reworded — no silent scenes`);
   ok(/"dialogue" is STRICTLY in ENGLISH/.test(sys) && /ENGLISH character names/.test(sys), `ep${epNo}/${lang}: dialogue strictly English with English cast names`);
-  ok(/\[ACTION\]: DETAILED, TIMED choreography/.test(sys) && /0–10s … 10–20s … 20–30s/.test(sys), `ep${epNo}/${lang}: [ACTION] asks for timed 0–10/10–20/20–30 choreography`);
-  ok(/"action" \(4–6 sentences, DETAILED beat-by-beat choreography/.test(sys), `ep${epNo}/${lang}: S3 action field is detailed choreography`);
-  ok(/An action scene carries 3–4 SHORT English lines \(never "\[NO DIALOGUE\]"\)/.test(sys), `ep${epNo}/${lang}: action scenes still carry lines`);
+  ok(/\[ACTION\]: DETAILED choreography of the whole 10 s clip written as ONE continuous 0–10s beat/.test(sys), `ep${epNo}/${lang}: [ACTION] asks for one continuous 0–10s choreography beat`);
+  ok(/"action" \(2–3 sentences, DETAILED choreography of the full 10 s clip written as ONE continuous 0–10s beat/.test(sys), `ep${epNo}/${lang}: S3 action field is one 10 s choreography beat`);
+  ok(/An action scene carries 1–2 SHORT English lines \(never "\[NO DIALOGUE\]"\)/.test(sys), `ep${epNo}/${lang}: action scenes still carry lines`);
 }
 ok(/dialogueLocal/.test(episodeScriptSystemPrompt("ru", 1)) && !/dialogueLocal/.test(episodeScriptSystemPrompt("en", 1)), "dialogueLocal requested only for non-English stories");
 const seasonSrc = read("lib/season.ts");
@@ -76,8 +76,9 @@ const baseScene = {
 const mk = (over: Partial<typeof baseScene>[]): EpisodeScript =>
   normalizeEpisodeScript(episodeScriptSchema.parse({ visualIdentity: "photoreal cinematic", scenes: over.map((o, i) => ({ ...baseScene, ...o, number: i + 1 })) }));
 const cast = ["Mark Ellison", "Elena Voss"];
-const good = mk([{}, {}]);
-ok(hardProblems(validateEpisodeScript(good, { characterNames: cast })).length === 0, `a good 2-scene English script passes (${JSON.stringify(validateEpisodeScript(good, { characterNames: cast }))})`);
+const nScenes = (over: Partial<typeof baseScene> = {}) => Array.from({ length: 9 }, () => ({ ...over }));
+const good = mk(nScenes());
+ok(hardProblems(validateEpisodeScript(good, { characterNames: cast })).length === 0, `a good 9-scene English script passes (${JSON.stringify(validateEpisodeScript(good, { characterNames: cast }))})`);
 const silent = mk([{}, { dialogue: "[NO DIALOGUE]" }]);
 ok(hardProblems(validateEpisodeScript(silent, { characterNames: cast })).some((p) => /silent scene\(s\) 2/.test(p)), "a [NO DIALOGUE] scene is a HARD failure");
 const empty = mk([{ dialogue: "   " }, {}]);
@@ -90,11 +91,11 @@ ok(hardProblems(validateEpisodeScript(cyr, { characterNames: cast })).some((p) =
 ok(!hardProblems(validateEpisodeScript(cyr, { characterNames: cast, languageIsSoft: true })).some((p) => /not English/.test(p)) && validateEpisodeScript(cyr, { characterNames: cast, languageIsSoft: true }).some((p) => /^soft: scene 1: dialogue is not English/.test(p)), "…and only SOFT on the final attempt (job translates it)");
 const cyrName = mk([{ dialogue: 'МАРК (тихо): "You were at the pier."\nELENA: "Go home, Mark. Go home now and forget it."\nМАРК: "I cannot forget it, not this time."' }, {}]);
 ok(hardProblems(validateEpisodeScript(cyrName, { characterNames: cast })).some((p) => /speaker name\(s\) not from the cast: МАРК/.test(p)), "a Cyrillic speaker name is rejected");
-const wrongName = mk([{ dialogue: goodDialogue.replace(/MARK/g, "JOHN") }, {}]);
+const wrongName = mk(nScenes({ dialogue: goodDialogue.replace(/MARK/g, "JOHN") }));
 ok(hardProblems(validateEpisodeScript(wrongName, { characterNames: cast })).some((p) => /speaker name\(s\) not from the cast: JOHN/.test(p)), "an unknown English speaker name is rejected when the cast is given");
 ok(hardProblems(validateEpisodeScript(wrongName)).length === 0, "…but not when no cast is passed (legacy callers)");
 ok(dialogueSpeakers('DR. MARK (low): "a"\nElena Voss: "b"\nALL: "c"\nno colon line').join("|") === "DR. MARK|Elena Voss", "dialogueSpeakers extracts labels and skips generic ALL");
-ok(hardProblems(validateEpisodeScript(mk([{ dialogue: goodDialogue.replace(/MARK/g, "MARK ELLISON").replace(/ELENA/g, "Dr. Elena") }, {}]), { characterNames: cast })).length === 0, "full names / title prefixes still match the cast");
+ok(hardProblems(validateEpisodeScript(mk(nScenes({ dialogue: goodDialogue.replace(/MARK/g, "MARK ELLISON").replace(/ELENA/g, "Dr. Elena") })), { characterNames: cast })).length === 0, "full names / title prefixes still match the cast");
 
 /* ---------------------------------------------------------------- (d) UI */
 const view = read("app/project/[id]/episode/[episodeId]/episode-view.tsx");

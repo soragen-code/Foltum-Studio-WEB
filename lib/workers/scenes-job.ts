@@ -41,39 +41,39 @@ export const SCENES_JOB_TYPE = "scenes";
 /** Roughly how long the scene breakdown takes with gpt-6-astra — drives the smooth 0→100 % client bar. */
 export const SCENES_EXPECTED_SEC = 240;
 
-// Stage 103 — an episode is a FIXED number of shots (EPISODE_SCENE_COUNT = 2). Every shot is a
-// full SCENE_FIXED_SECONDS (30 s) clip, so the whole episode is EXACTLY EPISODE_MAX_TOTAL_SECONDS
-// (60 s = 1:00). The split is derived from sceneDurationsForCount: [30, 30] (the last shot is trimmed
+// Stage 114 — an episode is a FIXED number of shots (EPISODE_SCENE_COUNT = 9). Every shot is a
+// short SCENE_FIXED_SECONDS (10 s) clip, so the whole episode is EXACTLY EPISODE_MAX_TOTAL_SECONDS
+// (90 s = 1:30). The split is derived from sceneDurationsForCount: [10 × 9] (the last shot is trimmed
 // only if the split ever requires it). Every label below is DERIVED — nothing is hardcoded.
 const SCENES_PER_EPISODE = EPISODE_SCENE_COUNT;
 const SCENE_SECONDS = SCENE_FIXED_SECONDS;
-/** Per-scene durations, in order: [30, 30] for a 2-scene episode. */
+/** Per-scene durations, in order: [10 × 9] for a 9-scene episode. */
 const SCENE_DURATIONS = sceneDurationsForCount(SCENES_PER_EPISODE);
 const EPISODE_TOTAL_SECONDS = EPISODE_MAX_TOTAL_SECONDS;
-/** "1:00" — the whole-episode running time as m:ss (derived). */
+/** "1:30" — the whole-episode running time as m:ss (derived). */
 const TOTAL_LABEL = EPISODE_TOTAL_LABEL;
-/** Conditional "last shot" wording: with [30, 30] every shot is a full 30 s. */
+/** Conditional "last shot" wording: with [10 × 9] every shot is a full 10 s. */
 const LAST_SHOT_TEXT = SCENE_DURATIONS[SCENE_DURATIONS.length - 1] < SCENE_SECONDS
   ? `every shot is a full ${SCENE_SECONDS} s clip EXCEPT the LAST, trimmed to ${SCENE_DURATIONS[SCENE_DURATIONS.length - 1]} s so the split fits`
   : `every shot is a full ${SCENE_SECONDS} s clip (the last is trimmed only if the split requires it — here it does not)`;
 
 /** Minimum number of purely visual beats (no spoken lines) per episode. */
 const MIN_SILENT_SCENES = 0;
-/** Maximum silent shots — Stage 110: ZERO. Both shots carry on-camera dialogue (aligned with lib/season.ts). */
+/** Maximum silent shots — Stage 110: ZERO. Every shot carries on-camera dialogue (aligned with lib/season.ts). */
 const MAX_SILENT_SCENES = 0;
 
 /**
- * Stage 103 — the episode structure sentence shared by the SYSTEM prompt and the user message
- * (exported so tests can check the derived labels without a DB): 2 shots, 1:00, set-up → escalation.
+ * Stage 114 — the episode structure sentence shared by the SYSTEM prompt and the user message
+ * (exported so tests can check the derived labels without a DB): 9 shots, 1:30, set-up → escalation.
  */
 export const EPISODE_STRUCTURE_TEXT =
   `Every episode is EXACTLY ${SCENES_PER_EPISODE} shots and runs EXACTLY ${TOTAL_LABEL} (${EPISODE_TOTAL_SECONDS} s) of total screen time: ` +
   `${LAST_SHOT_TEXT}; the split is ${SCENE_DURATIONS.join(" + ")} = ${EPISODE_TOTAL_SECONDS} s. ` +
-  `Shot 1 = the SET-UP — it carries the episode's continuation straight out of the previous episode's cliffhanger (episode 1: the season opening) and states this episode's conflict; ` +
-  `shot 2 = the ESCALATION — the conflict sharpens and the shot ENDS on this episode's cliffhanger.`;
+  `The FIRST half of the shots = the SET-UP — they carry the episode's continuation straight out of the previous episode's cliffhanger (episode 1: the season opening) and state this episode's conflict; ` +
+  `the SECOND half = the ESCALATION — the conflict sharpens and the LAST shot ENDS on this episode's cliffhanger.`;
 
-/** Every scene is rendered as a full ~SCENE_FIXED_SECONDS (30 s) clip with Seedance native
- *  audio, so each talking scene must carry enough dialogue to fill the whole clip. */
+/** Every scene is rendered as a short ~SCENE_FIXED_SECONDS (10 s) clip with Seedance native
+ *  audio, so each talking scene must carry a short line or two that fills the whole clip. */
 const DIALOGUE_CLIP_SECONDS = SCENE_FIXED_SECONDS;
 
 const SYSTEM = `You are a film director + cinematographer + editor working on a short-form VERTICAL drama series (9:16, TikTok/Reels format). ${EPISODE_STRUCTURE_TEXT}
@@ -84,7 +84,7 @@ VISUAL TREATMENT FOR ALL NEW SHOTS: ${VISUAL_STYLE}
 Preserve each character's own identity and story; never imitate a studio or franchise. Use only dialogue and natural ambience, never music.
 
 THE CORE IDEA — SCENES ARE SHOTS, NOT MINI-STORIES:
-An episode is ONE continuous piece of cinema. The ${SCENES_PER_EPISODE} "scenes" you write are ${SCENES_PER_EPISODE} CAMERA SHOTS (cuts) — every shot a full ${SCENE_SECONDS} seconds except the LAST (a little shorter), together ${SCENE_DURATIONS.join(" + ")} = ${EPISODE_TOTAL_SECONDS} s — inside that single continuous sequence, exactly the way a film editor cuts between angles of the same unfolding action. Each shot is rendered as a separate ~${SCENE_SECONDS} s AI video clip WITH native speech and the clips are concatenated in order, so the viewer must experience them as ONE flowing film, never as unrelated clips glued together.
+An episode is ONE continuous piece of cinema. The ${SCENES_PER_EPISODE} "scenes" you write are ${SCENES_PER_EPISODE} CAMERA SHOTS (cuts) — every shot a short ${SCENE_SECONDS} seconds, together ${SCENE_DURATIONS.join(" + ")} = ${EPISODE_TOTAL_SECONDS} s — inside that single continuous sequence, exactly the way a film editor cuts between angles of the same unfolding action. Each shot is rendered as a separate ~${SCENE_SECONDS} s AI video clip WITH native speech and the clips are concatenated in order, so the viewer must experience them as ONE flowing film, never as unrelated clips glued together.
 
 Given the project synopsis, this episode's description, and the characters, return ONLY valid JSON in this exact shape:
 
@@ -96,7 +96,7 @@ Given the project synopsis, this episode's description, and the characters, retu
   "scenes": [
     {
       "number": 1,
-      "durationSec": 30,
+      "durationSec": 10,
       "shotType": "Wide establishing shot | Wide shot | Medium shot | Close-up | Extreme close-up | Over-the-shoulder | POV | Tracking shot | Reaction shot | Insert",
       "dialogue": "a back-and-forth EXCHANGE in ENGLISH with a delivery cue in parentheses on each line (never \"[NO DIALOGUE]\"):\\nCHARACTER_NAME (low, guarded): \\"Short line.\\"\\nCHARACTER2 (a tired sigh, barely a whisper): \\"Short reply.\\"\\nCHARACTER_NAME (leaning in): \\"One more beat.\\"",
       "locationDesc": "INT/EXT — Location — Time. Vivid, filmable description of the setting, HOW the light falls (source, direction, quality, shadows, colour temperature) and the atmosphere/ambience.",
@@ -107,7 +107,7 @@ Given the project synopsis, this episode's description, and the characters, retu
 
 ============ SHOT DESIGN RULES ============
 
-1. HARD RUNNING-TIME BUDGET (FIXED-LENGTH SHOTS). The episode is EXACTLY ${SCENES_PER_EPISODE} scenes; ${LAST_SHOT_TEXT}, so the whole episode runs EXACTLY ${TOTAL_LABEL} — set "durationSec" per scene to ${SCENE_DURATIONS.join(", ")} (in order; the exact split is ${SCENE_DURATIONS.join(" + ")} = ${EPISODE_TOTAL_SECONDS} s). NO scene may exceed ${SCENE_SECONDS} s. Because each clip is a long ${SCENE_SECONDS} s, WRITE ENOUGH DIALOGUE TO FILL IT (see rule 7). Scene 1 opens on a wide or aerial ESTABLISHING SHOT (EXT — Location — Time, or a wide interior) that grounds the viewer in place, time and mood and defines the episode's visual identity — but someone is ALREADY talking in it (dialogue over the establishing shot), unless scene 1 is the single allowed silent beat.
+1. HARD RUNNING-TIME BUDGET (FIXED-LENGTH SHOTS). The episode is EXACTLY ${SCENES_PER_EPISODE} scenes; ${LAST_SHOT_TEXT}, so the whole episode runs EXACTLY ${TOTAL_LABEL} — set "durationSec" per scene to ${SCENE_DURATIONS.join(", ")} (in order; the exact split is ${SCENE_DURATIONS.join(" + ")} = ${EPISODE_TOTAL_SECONDS} s). NO scene may exceed ${SCENE_SECONDS} s. Because each clip is only a short ${SCENE_SECONDS} s, WRITE A SHORT LINE OR TWO THAT FILLS IT (see rule 7). Scene 1 opens on a wide or aerial ESTABLISHING SHOT (EXT — Location — Time, or a wide interior) that grounds the viewer in place, time and mood and defines the episode's visual identity — but someone is ALREADY talking in it (dialogue over the establishing shot), unless scene 1 is the single allowed silent beat.
 
 2. SHOT PROGRESSION, NOT SCENE JUMPS. Think like a cinematographer covering one continuous action: wide → medium → close-up → reaction shot → back to medium → insert → ... Action, location and time flow CONTINUOUSLY from shot to shot: shot N+1 starts exactly where shot N ended (same room, same light, same positions, same props). A change of location/time is allowed ONLY when explicitly motivated and written into locationDesc as a transition ("CUT TO: 2 hours later —", "SMASH CUT TO: EXT —"). At most 1–2 such transitions per episode.
 
@@ -126,8 +126,8 @@ Given the project synopsis, this episode's description, and the characters, retu
 6. TRANSITIONS — EVERY SHOT HANDS OFF TO THE NEXT. The [TRANSITION] line describes how this shot connects to the following one: what the camera lands on, what the character turns toward, what sound/motion carries over. Examples: "camera slowly pans right and settles on the closed door — the next shot opens on that door", "holds on her face as her eyes drop to the phone in her hand — next shot is the phone screen", "match cut: the glass she sets down becomes the glass on the lab table". The last shot's transition sets up the cliffhanger / next episode.
 
 7. DIALOGUE — CHARACTERS TALK TO EACH OTHER. The audience bonds with the characters through what they say, so this is a DIALOGUE-DRIVEN series: NO scene is purely visual (max silent scenes = ${MAX_SILENT_SCENES}) — EVERY scene carries spoken English dialogue between the named characters on camera; never write "[NO DIALOGUE]".
-   • REQUIRED: A REAL BACK-AND-FORTH EXCHANGE, NOT A SINGLE LINE. Each talking scene MUST contain a short exchange between TWO characters — at least 2, ideally 3, lines that ANSWER each other (a line, a reply, and often a comeback), written as SEPARATE "SPEAKER: line" lines. A talking scene with only ONE isolated line is WRONG — the whole point is that the characters converse. Alternate the speakers (A, then B, then A).
-   • FILL THE FULL CLIP — each talking scene is rendered as a full ~${DIALOGUE_CLIP_SECONDS}-second clip, so it needs a SUBSTANTIAL, uninterrupted exchange of roughly 50–60 spoken words spread over several quick back-and-forth lines so speech runs across the WHOLE ${DIALOGUE_CLIP_SECONDS} s with no dead air. Natural, punchy lines that answer each other — no monologues, but enough dialogue to actually fill ${DIALOGUE_CLIP_SECONDS} seconds.
+   • REQUIRED: A REAL BACK-AND-FORTH EXCHANGE, NOT AN EMPTY LINE. Each talking scene MUST carry a short exchange between TWO characters — 1–2 lines that ANSWER each other (a line and a quick reply), written as SEPARATE "SPEAKER: line" lines. A talking scene with a weak throwaway line is WRONG — even a single line must carry a real story beat, and the whole point is that the characters converse. Alternate the speakers (A, then B).
+   • FILL THE SHORT CLIP — each talking scene is rendered as a short ~${DIALOGUE_CLIP_SECONDS}-second clip, so it needs a brief, punchy exchange of roughly 18–24 spoken words in 1–2 quick lines so speech runs across the WHOLE ${DIALOGUE_CLIP_SECONDS} s with no dead air. Natural, punchy lines that answer each other — never cram a long speech into the clip, but enough dialogue to actually fill ${DIALOGUE_CLIP_SECONDS} seconds.
    • A LONGER CONVERSATION SPANS SEVERAL SCENES, each still a full back-and-forth exchange. When a conversation runs long, keep it going across consecutive shots — but each of those shots still carries its OWN full exchange (never drop to a single line just because the talk continues next shot).
    • TONE OF VOICE ON EVERY LINE. Give each spoken line a brief delivery cue in parentheses right after the speaker name: HOW it is said — the tone, emotion and manner (e.g. "(low, guarded)", "(a shaky whisper, holding back tears)", "(mockingly, half-laughing)", "(a tired sigh, then flat)"). These cues are performance directions only; they are NEVER spoken aloud and NEVER shown as subtitles.
    Follow a film rhythm, e.g.: establishing (silent) → exchange → reaction (silent) → exchange continues → insert → exchange → ...
@@ -136,7 +136,7 @@ Given the project synopsis, this episode's description, and the characters, retu
      WREN (quiet, stepping closer): "Neither should you, after what happened."
      ANSEL (a bitter breath): "Say his name, then. Say it."
 
-8. STORY. Dramatize ONLY the events of THIS episode's description — when the brief gives HARD BEATS (SHOT 1 BEAT / SHOT 2 BEAT / FINAL FRAME), scene 1 IS the SHOT 1 beat, scene 2 IS the SHOT 2 beat and the last frame of scene 2 IS the FINAL FRAME image: do not invent events beyond those three lines, only add dialogue, blocking, camera and business — do NOT borrow, foreshadow in detail, or resolve events from the other episodes listed (they are told in their own episodes). Open by picking up naturally from the previous episode's cliffhanger (given below) and build steadily toward THIS episode's cliffhanger, landing on it in the final shot. Dialogue is natural, subtext-rich, screenplay format.
+8. STORY. Dramatize ONLY the events of THIS episode's description — when the brief gives HARD BEATS (BEAT 1 / BEAT 2 / FINAL FRAME), the FIRST half of the scenes expand BEAT 1, the SECOND half expand BEAT 2, and the last frame of the FINAL scene IS the FINAL FRAME image: do not invent events beyond those three lines, only add dialogue, blocking, camera and business — do NOT borrow, foreshadow in detail, or resolve events from the other episodes listed (they are told in their own episodes). Open by picking up naturally from the previous episode's cliffhanger (given below) and build steadily toward THIS episode's cliffhanger, landing on it in the final shot. Dialogue is natural, subtext-rich, screenplay format.
 
 ============ videoPrompt FORMAT (English, always, exactly these 9 lines, in this order) ============
 [SHOT TYPE]: <Wide establishing shot / Medium shot / Close-up / Over-the-shoulder / POV / Tracking shot / Reaction shot / Insert> + camera movement (static / slow dolly in / handheld / slow zoom / pan right ...), vertical 9:16 framing
@@ -173,16 +173,17 @@ export interface ScenesJobResult {
 }
 
 /**
- * Stage 105 — the episode brief inside the user message. When the description is 60-second footage
- * (SHOT 1 / SHOT 2 / CLIFFHANGER) the three lines are HARD BEATS: scene 1 = SHOT 1, scene 2 = SHOT 2,
- * the final frame of scene 2 = the CLIFFHANGER image. Otherwise (legacy prose) the whole description is used as before.
+ * Stage 114 — the episode brief inside the user message. When the description is episode footage
+ * (BEAT 1 / BEAT 2 / CLIFFHANGER) the three lines are HARD BEATS: the first half of the scenes expand
+ * BEAT 1, the second half expand BEAT 2, the final frame of the last scene = the CLIFFHANGER image.
+ * Otherwise (legacy prose) the whole description is used as before.
  */
 export function episodeBriefBlock(episode: { number: number; title: string; description: string | null; cliffhanger: string | null }): string {
   const head = `Episode ${episode.number}: "${episode.title}"`;
   const beats = episodeFootageGivens(episode.description);
   if (beats) {
     const f = parseEpisodeFootage(episode.description)!;
-    return `${head}${beats}\nThis episode's ending cliffhanger (the LAST FRAME of scene 2 IS this image): ${f.cliffhanger}${episode.cliffhanger && episode.cliffhanger.trim() !== f.cliffhanger ? ` (${episode.cliffhanger})` : ""}`;
+    return `${head}${beats}\nThis episode's ending cliffhanger (the LAST FRAME of the final scene IS this image): ${f.cliffhanger}${episode.cliffhanger && episode.cliffhanger.trim() !== f.cliffhanger ? ` (${episode.cliffhanger})` : ""}`;
   }
   return `${head}\nDescription: ${episode.description}\nThis episode's ending cliffhanger (build toward it): ${episode.cliffhanger ?? "N/A"}`;
 }
@@ -258,7 +259,7 @@ ${prevContext}
 >>> GENERATE SCENES ONLY FOR THIS EPISODE <<<
 ${episodeBriefBlock(episode)}
 
-Direct this episode as ONE continuous piece of film: first write "visualIdentity" and the "characterSheet", then exactly ${SCENES_PER_EPISODE} consecutive camera shots (shot 1 = set-up continuing the previous cliffhanger, shot 2 = escalation ending on this episode's cliffhanger). ${LAST_SHOT_TEXT} — set "durationSec" per shot to ${SCENE_DURATIONS.join(", ")} (in order) so the whole episode is ${SCENE_DURATIONS.join(" + ")} = ${EPISODE_TOTAL_SECONDS} s, exactly ${TOTAL_LABEL}. Scene 1 = wide establishing shot with someone ALREADY talking; NO shot marked [NO DIALOGUE] (max silent = ${MAX_SILENT_SCENES}), EVERY shot carrying a SUBSTANTIAL back-and-forth exchange of roughly 50–60 spoken words over several quick lines that fill the whole ${SCENE_SECONDS} s clip (the characters ANSWER each other — never a single isolated line), each spoken line on its own "SPEAKER (tone): line" row; a longer conversation spans several consecutive shots, each still a full exchange; every videoPrompt in the full 9-line format — [SHOT TYPE], [VISUAL STYLE] (identical every scene), [LIGHTING], [BLOCKING], [GAZE], [NON-VERBAL], [ACTION], [CHARACTER] (verbatim descriptions), [TRANSITION] handing off to the next shot) that dramatize ONLY this episode's description — from a natural continuation of the previous episode to this episode's cliffhanger.`;
+Direct this episode as ONE continuous piece of film: first write "visualIdentity" and the "characterSheet", then exactly ${SCENES_PER_EPISODE} consecutive camera shots (the first half = set-up continuing the previous cliffhanger, the second half = escalation ending on this episode's cliffhanger). ${LAST_SHOT_TEXT} — set "durationSec" per shot to ${SCENE_DURATIONS.join(", ")} (in order) so the whole episode is ${SCENE_DURATIONS.join(" + ")} = ${EPISODE_TOTAL_SECONDS} s, exactly ${TOTAL_LABEL}. Scene 1 = wide establishing shot with someone ALREADY talking; NO shot marked [NO DIALOGUE] (max silent = ${MAX_SILENT_SCENES}), EVERY shot carrying a brief, punchy back-and-forth exchange of roughly 18–24 spoken words in 1–2 quick lines that fill the whole ${SCENE_SECONDS} s clip (the characters ANSWER each other — never a weak throwaway line), each spoken line on its own "SPEAKER (tone): line" row; a longer conversation spans several consecutive shots, each still a full exchange; every videoPrompt in the full 9-line format — [SHOT TYPE], [VISUAL STYLE] (identical every scene), [LIGHTING], [BLOCKING], [GAZE], [NON-VERBAL], [ACTION], [CHARACTER] (verbatim descriptions), [TRANSITION] handing off to the next shot) that dramatize ONLY this episode's description — from a natural continuation of the previous episode to this episode's cliffhanger.`;
 
   return { userMsg };
 }
@@ -279,9 +280,9 @@ async function persistScenes(episodeId: string, data: { visualIdentity?: string;
   const characterSheet = data.characterSheet ?? {};
 
   const trimmed = rawScenes.slice(0, SCENES_PER_EPISODE);
-  // Stage 103 — fixed-length shots: every scene is SCENE_FIXED_SECONDS (30 s); the last is trimmed
-  // only if needed so the whole episode stays ≤ EPISODE_MAX_TOTAL_SECONDS (1:00). Ignore any
-  // durationSec the model emitted and force the canonical split (30 + 30 = 60).
+  // Stage 114 — fixed-length shots: every scene is SCENE_FIXED_SECONDS (10 s); the last is trimmed
+  // only if needed so the whole episode stays ≤ EPISODE_MAX_TOTAL_SECONDS (1:30). Ignore any
+  // durationSec the model emitted and force the canonical split (10 × 9 = 90).
   const durations = sceneDurationsForCount(trimmed.length);
   const scenesOut = trimmed.map((s, i) => {
     let videoPrompt = String(s?.videoPrompt ?? "").trim();

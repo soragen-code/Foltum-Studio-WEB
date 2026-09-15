@@ -1,11 +1,11 @@
 /**
  * Stage 103 checks (pure, static + a live import of lib/season.ts — no network / DB / render):
  *
- *  Episode structure changed from 4 scenes / 119 s ("under 1:59") to EXACTLY 2 scenes × 30 s =
- *  60 s ("1:00"). Shot 1 = the set-up continuing the previous episode's cliffhanger, shot 2 = the
- *  escalation that ENDS on this episode's cliffhanger. The CLIFFHANGER CHAIN / continuity rules
+ *  Episode structure (updated for Stage 114): EXACTLY 9 scenes × 10 s = 90 s ("1:30"). The first
+ *  half of the scenes are the set-up continuing the previous episode's cliffhanger, the second half
+ *  the escalation that ENDS on this episode's cliffhanger. The CLIFFHANGER CHAIN / continuity rules
  *  are unchanged. No prompt or UI copy in lib/ or app/ may still say "1:59" or "119".
- *  Legacy 4-scene episodes already in the DB must still parse (zod accepts up to 8 scenes) and
+ *  Legacy 2-/4-scene episodes already in the DB must still parse (zod accepts up to 9 scenes) and
  *  only produce SOFT validation problems.
  *
  * Run: npx tsx --tsconfig tsconfig.json scripts/test-stage103.ts
@@ -42,8 +42,8 @@ const episodeView = read("app/project/[id]/episode/[episodeId]/episode-view.tsx"
 
 // ── 1. Static: constants and helpers in lib/season.ts ──
 {
-  ok(/EPISODE_MAX_TOTAL_SECONDS\s*=\s*60\b/.test(season), "static: EPISODE_MAX_TOTAL_SECONDS = 60");
-  ok(/EPISODE_MAX_SCENES\s*=\s*2\b/.test(season), "static: EPISODE_MAX_SCENES = 2");
+  ok(/EPISODE_MAX_TOTAL_SECONDS\s*=\s*90\b/.test(season), "static: EPISODE_MAX_TOTAL_SECONDS = 90 (Stage 114)");
+  ok(/EPISODE_MAX_SCENES\s*=\s*9\b/.test(season), "static: EPISODE_MAX_SCENES = 9 (Stage 114)");
   ok(/export const EPISODE_TOTAL_LABEL/.test(season), "static: season.ts exports EPISODE_TOTAL_LABEL");
   ok(/export const LAST_SHOT_NOTE/.test(season), "static: season.ts exports LAST_SHOT_NOTE");
   ok(!/1:59/.test(season) && !/\b119\b/.test(season), "static: season.ts has no 1:59 / 119 left");
@@ -80,28 +80,28 @@ async function liveChecks() {
     episodeScriptSystemPrompt, seasonStructureSystemPrompt, episodeScriptSchema, validateEpisodeScript,
   } = mod;
 
-  ok(EPISODE_MAX_TOTAL_SECONDS === 60, `live: EPISODE_MAX_TOTAL_SECONDS === 60 (got ${EPISODE_MAX_TOTAL_SECONDS})`);
-  ok(EPISODE_MAX_SCENES === 2, `live: EPISODE_MAX_SCENES === 2 (got ${EPISODE_MAX_SCENES})`);
-  ok(EPISODE_MIN_SCENES === 2, `live: EPISODE_MIN_SCENES === 2 (got ${EPISODE_MIN_SCENES})`);
-  ok(EPISODE_SCENE_COUNT === 2, `live: EPISODE_SCENE_COUNT === 2 (got ${EPISODE_SCENE_COUNT})`);
-  ok(SCENE_FIXED_SECONDS === 30, `live: SCENE_FIXED_SECONDS === 30 (got ${SCENE_FIXED_SECONDS})`);
+  ok(EPISODE_MAX_TOTAL_SECONDS === 90, `live: EPISODE_MAX_TOTAL_SECONDS === 90 (got ${EPISODE_MAX_TOTAL_SECONDS})`);
+  ok(EPISODE_MAX_SCENES === 9, `live: EPISODE_MAX_SCENES === 9 (got ${EPISODE_MAX_SCENES})`);
+  ok(EPISODE_MIN_SCENES === 9, `live: EPISODE_MIN_SCENES === 9 (got ${EPISODE_MIN_SCENES})`);
+  ok(EPISODE_SCENE_COUNT === 9, `live: EPISODE_SCENE_COUNT === 9 (got ${EPISODE_SCENE_COUNT})`);
+  ok(SCENE_FIXED_SECONDS === 10, `live: SCENE_FIXED_SECONDS === 10 (got ${SCENE_FIXED_SECONDS})`);
   ok(MAX_SILENT_SCENES === 0, `live: MAX_SILENT_SCENES === 0 — Stage 110, dialogue in every scene (got ${MAX_SILENT_SCENES})`);
-  assert.deepStrictEqual(sceneDurationsForCount(2), [30, 30]);
-  ok(true, "live: sceneDurationsForCount(2) deep-equals [30, 30]");
-  ok(EPISODE_TOTAL_LABEL === "1:00", `live: EPISODE_TOTAL_LABEL === "1:00" (got ${EPISODE_TOTAL_LABEL})`);
+  assert.deepStrictEqual(sceneDurationsForCount(9), [10, 10, 10, 10, 10, 10, 10, 10, 10]);
+  ok(true, "live: sceneDurationsForCount(9) deep-equals [10 × 9]");
+  ok(EPISODE_TOTAL_LABEL === "1:30", `live: EPISODE_TOTAL_LABEL === "1:30" (got ${EPISODE_TOTAL_LABEL})`);
   ok(episodeTotalLabel(119) === "1:59" && episodeTotalTest(episodeTotalLabel), "live: episodeTotalLabel formats m:ss correctly");
-  ok(typeof LAST_SHOT_NOTE === "string" && !/except the LAST|shorter/.test(LAST_SHOT_NOTE), "live: LAST_SHOT_NOTE does not trim the last shot (2 × 30 needs no trim)");
+  ok(typeof LAST_SHOT_NOTE === "string" && !/except the LAST/.test(LAST_SHOT_NOTE), "live: LAST_SHOT_NOTE does not trim the last shot (9 × 10 needs no trim)");
 
   const ep = episodeScriptSystemPrompt("en", 2) as string;
-  ok(ep.includes("EXACTLY 2"), "live: episodeScriptSystemPrompt says EXACTLY 2 shots");
-  ok(ep.includes("1:00") && ep.includes("60 s"), "live: episodeScriptSystemPrompt says 1:00 / 60 s");
-  ok(ep.includes("30 + 30"), "live: episodeScriptSystemPrompt shows the 30 + 30 split");
+  ok(ep.includes("EXACTLY 9"), "live: episodeScriptSystemPrompt says EXACTLY 9 shots");
+  ok(ep.includes("1:30") && ep.includes("90 s"), "live: episodeScriptSystemPrompt says 1:30 / 90 s");
+  ok(ep.includes("9 × 10"), "live: episodeScriptSystemPrompt shows the 9 × 10 split");
   ok(!ep.includes("1:59") && !/\b119\b/.test(ep), "live: episodeScriptSystemPrompt has no 1:59 / 119");
-  ok(/shot 1 = the set-up/i.test(ep) && /shot 2 = the escalation/i.test(ep), "live: episodeScriptSystemPrompt describes shot 1 set-up / shot 2 escalation");
+  ok(/set-up/i.test(ep) && /escalat/i.test(ep), "live: episodeScriptSystemPrompt describes set-up / escalation");
   ok(/cliffhanger/i.test(ep), "live: episodeScriptSystemPrompt keeps the cliffhanger rule");
 
   const ss = seasonStructureSystemPrompt("en") as string;
-  ok(ss.includes("EPISODE SHAPE (2 shots, 1:00)"), "live: seasonStructureSystemPrompt has the EPISODE SHAPE (2 shots, 1:00) rule");
+  ok(ss.includes("EPISODE SHAPE (2 beats, 1:30)"), "live: seasonStructureSystemPrompt has the EPISODE SHAPE (2 beats, 1:30) rule");
   ok(/CLIFFHANGER CHAIN/.test(ss), "live: seasonStructureSystemPrompt keeps the CLIFFHANGER CHAIN rule");
   ok(!ss.includes("1:59") && !/\b119\b/.test(ss), "live: seasonStructureSystemPrompt has no 1:59 / 119");
 
@@ -116,8 +116,8 @@ async function liveChecks() {
     "SCENES_PER_EPISODE", "TOTAL_LABEL", "EPISODE_TOTAL_SECONDS", "LAST_SHOT_TEXT", "SCENE_DURATIONS", "SCENE_SECONDS", "SCENE_FIXED_SECONDS",
     `return ${expr};`
   )(EPISODE_SCENE_COUNT, EPISODE_TOTAL_LABEL, EPISODE_MAX_TOTAL_SECONDS, LAST_SHOT_TEXT, SCENE_DURATIONS, SCENE_FIXED_SECONDS, SCENE_FIXED_SECONDS) as string;
-  ok(rendered.includes("EXACTLY 2 shots") && rendered.includes("1:00") && rendered.includes("60 s"), "live: rendered EPISODE_STRUCTURE_TEXT says EXACTLY 2 shots, 1:00 and 60 s");
-  ok(rendered.includes("30 + 30 = 60 s"), "live: rendered EPISODE_STRUCTURE_TEXT shows 30 + 30 = 60 s");
+  ok(rendered.includes("EXACTLY 9 shots") && rendered.includes("1:30") && rendered.includes("90 s"), "live: rendered EPISODE_STRUCTURE_TEXT says EXACTLY 9 shots, 1:30 and 90 s");
+  ok(rendered.includes("10 + 10 + 10 + 10 + 10 + 10 + 10 + 10 + 10 = 90 s"), "live: rendered EPISODE_STRUCTURE_TEXT shows the 9 × 10 = 90 s split");
   ok(!rendered.includes("1:59") && !/\b119\b/.test(rendered), "live: rendered EPISODE_STRUCTURE_TEXT has no 1:59 / 119");
   ok(/SET-UP/i.test(rendered) && /ESCALATION/i.test(rendered), "live: rendered EPISODE_STRUCTURE_TEXT names SET-UP and ESCALATION");
 
