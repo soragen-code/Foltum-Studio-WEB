@@ -46,6 +46,25 @@ export function writingEpisodeNumber(episodes: { number: number; script?: string
   return next ? next.number : null
 }
 
+/**
+ * Stage 123 — percentage shown on the story-build progress bar.
+ *
+ * The server job progress is already monotonic within a run (structure 3% → episodes 5–95%
+ * via `episodeProgress` → done 100%), but the optimistic "Starting…" state and every
+ * auto-continue POST momentarily reset it to 1%. Deriving a floor from the written/total
+ * episode counts (which only ever grow across the whole build, even across job boundaries)
+ * keeps the displayed number from jumping backwards. The result is capped at 99 so a false
+ * 100% never appears mid-build — 100% is only reached once the job completes and the bar is
+ * replaced by the "all episodes written" state; a failure keeps its own status and never snaps
+ * to 100. Pure and side-effect free so it can be unit tested.
+ */
+export function seasonBuildPercent({ progress, done, total }: { progress?: number | null; done: number; total: number }): number {
+  const d = Math.max(0, Math.min(done, total))
+  const episodesPct = total > 0 ? 5 + Math.round((d / total) * 90) : 0
+  const serverPct = Math.max(0, Math.min(100, Math.round(progress ?? 0)))
+  return Math.min(99, Math.max(2, serverPct, episodesPct))
+}
+
 export function CharacterAvatars({ chars, size = 'h-8 w-8' }: { chars: EpChar[]; size?: string }) {
   return (
     <div className="flex -space-x-2">
@@ -370,6 +389,10 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
   const sortedEpisodes = [...(season?.episodes ?? [])].sort((a, b) => a.number - b.number)
   const firstEpisode = sortedEpisodes.find((e) => !!e.script) ?? null
   const seasonLocked = jobActive || starting || seasonBusy
+  // Stage 123 — percentage for the story-build progress bar. Fall back to just the spinner when
+  // there is no meaningful signal yet (legacy/edge jobs with no progress and no episodes).
+  const hasBuildPct = (job?.progress ?? 0) > 0 || total > 0
+  const buildPct = seasonBuildPercent({ progress: job?.progress, done, total })
 
   return (
     <div className="space-y-6" data-testid="season-stage">
@@ -476,10 +499,13 @@ export function SeasonStage({ project, onRefresh }: { project: any; onRefresh?: 
                 <span className="truncate">{writingNo ? `Writing episode ${writingNo} of ${total}` : (job?.message ?? 'Starting…')}</span>
                 {total > 0 && <span className="flex-shrink-0 text-muted-foreground">· done {done} of {total}</span>}
               </span>
-              {job?.id && !starting && <CancelButton onCancel={cancelSeason} testId="season-cancel" className="flex-shrink-0" />}
+              <span className="flex flex-shrink-0 items-center gap-2">
+                {hasBuildPct && <span className="tabular-nums font-medium text-muted-foreground" data-testid="season-progress-pct">{buildPct}%</span>}
+                {job?.id && !starting && <CancelButton onCancel={cancelSeason} testId="season-cancel" className="flex-shrink-0" />}
+              </span>
             </div>
             <div className="h-2 w-full overflow-hidden rounded bg-muted">
-              <div className="h-full rounded bg-primary transition-all duration-700" style={{ width: `${Math.max(2, job?.progress ?? 0)}%` }} />
+              <div className="h-full rounded bg-primary transition-all duration-700" style={{ width: `${buildPct}%` }} />
             </div>
           </div>
         )}
