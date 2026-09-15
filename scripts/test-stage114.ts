@@ -46,19 +46,20 @@ ok(EPISODE_TOTAL_LABEL === "1:30", `EPISODE_TOTAL_LABEL === "1:30" (got ${EPISOD
 /* ---------------------------------------------------------------- (b) duration split */
 const durs = sceneDurationsForCount(EPISODE_SCENE_COUNT);
 ok(durs.length === 9, `sceneDurationsForCount(9) has 9 entries (got ${durs.length})`);
-ok(durs.every((d) => d === 10), `every scene is a full 10 s clip — no trimmed last (${durs.join(", ")})`);
-ok(durs.reduce((a, b) => a + b, 0) === 90, `9 × 10 = 90 s total (got ${durs.reduce((a, b) => a + b, 0)})`);
-ok(estimateDurationSec("anything", "x") === 10 && estimateDurationSec("") === 10, "estimateDurationSec is the fixed 10 s clip (speech no longer changes it)");
+ok(durs.every((d) => d === 10), `sceneDurationsForCount still returns the legacy 10 s ceiling per scene (${durs.join(", ")})`);
+ok(durs.reduce((a, b) => a + b, 0) === 90, `9 × 10 = 90 s ceiling (got ${durs.reduce((a, b) => a + b, 0)})`);
+// Stage 115 — estimateDurationSec is a legacy helper now returning the default fallback (8 s); real clip length is content-driven.
+ok(estimateDurationSec("anything", "x") === 8 && estimateDurationSec("") === 8, "estimateDurationSec returns the default fallback (Stage 115: 8 s)");
 
 /* ---------------------------------------------------------------- (c) episode-script prompt */
 for (const [lang, epNo] of [["ru", 1], ["en", 3]] as const) {
   const sys = episodeScriptSystemPrompt(lang, epNo);
   ok(/EXACTLY 9 consecutive shots/.test(sys), `ep${epNo}/${lang}: "EXACTLY 9 consecutive shots"`);
-  ok(/9 × 10 s/.test(sys), `ep${epNo}/${lang}: "9 × 10 s" split stated`);
-  ok(/= 90 s/.test(sys), `ep${epNo}/${lang}: 90 s total stated`);
   ok(sys.includes("1:30"), `ep${epNo}/${lang}: 1:30 running-time label`);
-  ok(/short 10-second clip/.test(sys), `ep${epNo}/${lang}: scenes are short 10 s clips`);
-  ok(!/0–10s … 10–20s … 20–30s/.test(sys), `ep${epNo}/${lang}: no legacy 0–10/10–20/20–30 timed choreography`);
+  // Stage 115 — variable clip length: the prompt states a 5–10 s range and an "up to 90 s" ceiling, not a fixed 9 × 10 s = 90 s.
+  ok(/5–10 s/.test(sys), `ep${epNo}/${lang}: variable 5–10 s clip length stated`);
+  ok(!/9 × 10 s/.test(sys) && !/= 90 s/.test(sys), `ep${epNo}/${lang}: no leftover fixed 9 × 10 s = 90 s wording`);
+  ok(!/short 10-second clip/.test(sys), `ep${epNo}/${lang}: no leftover "short 10-second clip" wording`);
   ok(!/EXACTLY 2 /.test(sys) && !/2 × 30/.test(sys) && !/= 60 s/.test(sys), `ep${epNo}/${lang}: no leftover 2 × 30 / 60 s wording`);
 }
 
@@ -100,8 +101,9 @@ const cast = ["Mark Ellison", "Elena Voss"];
 
 const nine = mk(9);
 ok(nine.scenes.length === 9, `normalize keeps 9 scenes (got ${nine.scenes.length})`);
-ok(nine.scenes.every((s) => s.durationSec === 10), "normalize forces every scene to 10 s");
-ok(nine.scenes.reduce((a, s) => a + s.durationSec, 0) === 90, "normalized episode is exactly 90 s");
+// Stage 115 — clip length is preserved (clamped to 5–10 s), not forced; the baseScene's 10 s stays 10 s.
+ok(nine.scenes.every((s) => s.durationSec >= 5 && s.durationSec <= 10), "normalize keeps every scene within 5–10 s");
+ok(nine.scenes.reduce((a, s) => a + s.durationSec, 0) <= 90, "normalized episode stays at or under the 90 s ceiling");
 ok(hardProblems(validateEpisodeScript(nine, { characterNames: cast })).length === 0,
   `a valid 9-scene episode has no hard problems (${JSON.stringify(validateEpisodeScript(nine, { characterNames: cast }))})`);
 

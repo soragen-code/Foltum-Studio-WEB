@@ -39,8 +39,9 @@ for (const [lang, epNo] of [["ru", 1], ["ru", 2], ["en", 3]] as const) {
   ok(!/NO character mouths moving/.test(sys) && !/NO talking heads/.test(sys), `ep${epNo}/${lang}: no mouths-closed / b-roll directive`);
   ok(/R2\. NO SILENT SCENES/.test(sys), `ep${epNo}/${lang}: R2 reworded — no silent scenes`);
   ok(/"dialogue" is STRICTLY in ENGLISH/.test(sys) && /ENGLISH character names/.test(sys), `ep${epNo}/${lang}: dialogue strictly English with English cast names`);
-  ok(/\[ACTION\]: DETAILED choreography of the whole 10 s clip written as ONE continuous 0–10s beat/.test(sys), `ep${epNo}/${lang}: [ACTION] asks for one continuous 0–10s choreography beat`);
-  ok(/"action" \(2–3 sentences, DETAILED choreography of the full 10 s clip written as ONE continuous 0–10s beat/.test(sys), `ep${epNo}/${lang}: S3 action field is one 10 s choreography beat`);
+  // Stage 115 — [ACTION] / S3 now ask for ONE continuous variable-length (5–10 s) beat that runs until the cut (anti-freeze), not a fixed 0–10s beat.
+  ok(/\[ACTION\]: DETAILED choreography of the whole clip .*ONE continuous beat of unbroken motion that keeps going until the clip cuts/.test(sys), `ep${epNo}/${lang}: [ACTION] asks for one continuous beat that runs until the cut`);
+  ok(/"action" \(2–3 sentences, DETAILED choreography of the whole clip at its real length .*ONE continuous beat of unbroken motion that runs until the cut/.test(sys), `ep${epNo}/${lang}: S3 action field is one continuous beat until the cut`);
   ok(/An action scene carries 1–2 SHORT English lines \(never "\[NO DIALOGUE\]"\)/.test(sys), `ep${epNo}/${lang}: action scenes still carry lines`);
 }
 ok(/dialogueLocal/.test(episodeScriptSystemPrompt("ru", 1)) && !/dialogueLocal/.test(episodeScriptSystemPrompt("en", 1)), "dialogueLocal requested only for non-English stories");

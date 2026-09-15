@@ -10,7 +10,7 @@ import { prisma } from "@/lib/db";
 import { chatJSON, SCRIPT_MODEL } from "@/lib/ai";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { normalizeLanguage } from "@/lib/idea";
-import { sceneReviseSchema, sceneReviseSystemPrompt, renderScriptFromScenes, estimateDurationSec, ensureEnglishDialogue } from "@/lib/season";
+import { sceneReviseSchema, sceneReviseSystemPrompt, renderScriptFromScenes, clampSceneDuration, ensureEnglishDialogue } from "@/lib/season";
 
 /**
  * POST /api/ai/scenes/[id]/revise { instruction }
@@ -59,7 +59,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     // Speech is always English (`dialogueEn`); `dialogue` keeps the story-language text for the UI / subtitles.
     const parsed = {
       ...rest,
-      durationSec: estimateDurationSec(raw.dialogue, raw.action),
+      durationSec: clampSceneDuration(raw.durationSec),
       dialogue: (dialogueLocal ?? "").trim() || raw.dialogue,
       dialogueEn: raw.dialogue,
       language: "en",

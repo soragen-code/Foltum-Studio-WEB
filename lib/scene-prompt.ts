@@ -158,6 +158,9 @@ export const SPEECH_BEFORE_CUT_LINE =
   "All speech is finished before the final second of the clip — nobody is mid-word or mid-sentence at the cut; the last line lands, then the hard cut.";
 /** Stage 41 — prefix of the END STATE block inserted after OPENING STATE, before the 9-line visual prompt. */
 export const END_STATE_PREFIX = "END STATE (last frame — end exactly here): ";
+/** Stage 115 — anti-freeze: the clip runs on continuous motion and cuts the instant the action / line ends, never padding to length with a held pose or a stare into the camera. */
+export const NO_FROZEN_PADDING_LINE =
+  "NO FROZEN PADDING: the clip is filled edge to edge with continuous, natural motion and cuts the instant the shown action and lines finish — its length matches its content, so it may run short. Do NOT stretch it to a fixed length: nobody holds a static pose, freezes, or stares into the camera at the end waiting for the cut, and there is no still final beat — the last motion runs straight into the hard cut.";
 
 const oneLine = (t?: string | null) => (t ?? "").replace(/\s+/g, " ").trim();
 
@@ -510,6 +513,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     continuousSeam && !reangleUrl ? NEW_CAMERA_ON_CUT_LINE : "",
     endState ? `${END_STATE_PREFIX}${endState}` : "",
     SPEECH_BEFORE_CUT_LINE,
+    NO_FROZEN_PADDING_LINE,
   ].filter(Boolean);
   // Stage 54 — the deterministic structure block (reference map + people counter + clothing&props)
   // sits AFTER the state blocks and BEFORE the reused 9-tag body, so the prompt still opens with the

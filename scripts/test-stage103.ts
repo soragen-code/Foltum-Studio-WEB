@@ -95,7 +95,8 @@ async function liveChecks() {
   const ep = episodeScriptSystemPrompt("en", 2) as string;
   ok(ep.includes("EXACTLY 9"), "live: episodeScriptSystemPrompt says EXACTLY 9 shots");
   ok(ep.includes("1:30") && ep.includes("90 s"), "live: episodeScriptSystemPrompt says 1:30 / 90 s");
-  ok(ep.includes("9 × 10"), "live: episodeScriptSystemPrompt shows the 9 × 10 split");
+  // Stage 115 — clip length is variable (5–10 s) and the 90 s total is a ceiling; the fixed "9 × 10" split is gone.
+  ok(ep.includes("5–10 s") && !ep.includes("9 × 10"), "live: episodeScriptSystemPrompt states variable 5–10 s clips, no fixed 9 × 10 split");
   ok(!ep.includes("1:59") && !/\b119\b/.test(ep), "live: episodeScriptSystemPrompt has no 1:59 / 119");
   ok(/set-up/i.test(ep) && /escalat/i.test(ep), "live: episodeScriptSystemPrompt describes set-up / escalation");
   ok(/cliffhanger/i.test(ep), "live: episodeScriptSystemPrompt keeps the cliffhanger rule");
@@ -117,7 +118,8 @@ async function liveChecks() {
     `return ${expr};`
   )(EPISODE_SCENE_COUNT, EPISODE_TOTAL_LABEL, EPISODE_MAX_TOTAL_SECONDS, LAST_SHOT_TEXT, SCENE_DURATIONS, SCENE_FIXED_SECONDS, SCENE_FIXED_SECONDS) as string;
   ok(rendered.includes("EXACTLY 9 shots") && rendered.includes("1:30") && rendered.includes("90 s"), "live: rendered EPISODE_STRUCTURE_TEXT says EXACTLY 9 shots, 1:30 and 90 s");
-  ok(rendered.includes("10 + 10 + 10 + 10 + 10 + 10 + 10 + 10 + 10 = 90 s"), "live: rendered EPISODE_STRUCTURE_TEXT shows the 9 × 10 = 90 s split");
+  // Stage 115 — variable-length shots: the ceiling is stated as "UP TO … at or under 90 s"; the old fixed 9 × 10 = 90 s split is gone.
+  ok(rendered.includes("UP TO") && rendered.includes("at or under") && !rendered.includes("10 + 10 + 10"), "live: rendered EPISODE_STRUCTURE_TEXT states the 90 s total as a ceiling (no fixed 9 × 10 split)");
   ok(!rendered.includes("1:59") && !/\b119\b/.test(rendered), "live: rendered EPISODE_STRUCTURE_TEXT has no 1:59 / 119");
   ok(/SET-UP/i.test(rendered) && /ESCALATION/i.test(rendered), "live: rendered EPISODE_STRUCTURE_TEXT names SET-UP and ESCALATION");
 
