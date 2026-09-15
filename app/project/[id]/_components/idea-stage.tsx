@@ -45,6 +45,7 @@ const GENRE_OPTIONS: { id: string; label: string }[] = [
   { id: 'action', label: 'Action' },
   { id: 'historical', label: 'Historical drama' },
   { id: 'melodrama', label: 'Melodrama' },
+  { id: 'hiding_identity', label: 'Hiding identity' },
 ]
 
 /** Read-only character card with a pencil → prompt-based rewrite. */

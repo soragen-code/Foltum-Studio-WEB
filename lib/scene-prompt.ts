@@ -167,6 +167,13 @@ export const NO_FROZEN_PADDING_LINE =
 export const REFERENCE_APPEARANCE_ONLY_LINE =
   "REFERENCES DEFINE APPEARANCE ONLY, NOT POSE OR CAMERA ORIENTATION: the attached reference images fix each person's IDENTITY and LOOK only — face, hair, skin, build, wardrobe and colours. They do NOT dictate pose, body orientation or gaze. IGNORE the frontal, standing, camera-facing pose of the reference photos entirely. Every character's pose and which way they face come from THIS scene's action: they may be shown in three-quarter, in profile, from behind, at an angle, seated, bent over, crouched, mid-move, partly out of frame, or deep in the background, busy with what they are doing. Do NOT line the characters up frontally in a row facing the viewer, and do NOT have them all look at the camera — distribute them through the depth of the frame (foreground / mid-ground / background) with natural body angles driven by the action. A face turns toward the camera ONLY when the beat truly requires it.";
 
+/** Stage 118 — cast continuity across the cut: the group of people on screen never silently swaps.
+ *  Whoever is present at the END of the previous shot/scene is still present as the SAME identified
+ *  characters when this shot opens; anyone who leaves is SHOWN leaving and anyone who arrives is SHOWN
+ *  arriving — nobody vanishes or teleports between cuts. */
+export const CAST_CONTINUITY_LINE =
+  "CAST CONTINUITY ACROSS THE CUT: the people on screen carry over from the end of the previous shot — the SAME identified characters continue into this shot; do NOT swap the on-screen group for a different set of people between consecutive shots, and keep the same headcount and identities. If a character leaves, SHOW them leaving on screen (walking out of frame, stepping away, exiting the door); if a character enters, SHOW them entering. Nobody vanishes, is silently dropped, or is replaced between cuts unless this shot's action explicitly motivates them entering or leaving on screen. In a re-angled view the people from the source frame are all preserved in the new angle — same individuals, only the camera moves.";
+
 const oneLine = (t?: string | null) => (t ?? "").replace(/\s+/g, " ").trim();
 
 /**
@@ -541,6 +548,9 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     openingState ? `${OPENING_STATE_PREFIX}${openingState}` : "",
     continuousSeam && !reangleUrl ? NEW_CAMERA_ON_CUT_LINE : "",
     endState ? `${END_STATE_PREFIX}${endState}` : "",
+    // Stage 118 — enforce cast continuity whenever this shot continues from a previous one
+    // (continuous seam) or is a re-angle of an existing frame: the on-screen group never silently swaps.
+    continuousSeam || reangleUrl ? CAST_CONTINUITY_LINE : "",
     SPEECH_BEFORE_CUT_LINE,
     NO_FROZEN_PADDING_LINE,
     REFERENCE_APPEARANCE_ONLY_LINE,

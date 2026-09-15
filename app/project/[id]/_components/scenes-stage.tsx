@@ -39,6 +39,19 @@ export async function postJobStart(url: string, body: unknown, retries = 2): Pro
 }
 
 /**
+ * Stage 118 — a scene's video may only be generated once the PREVIOUS scene (in order) has been
+ * generated, so scenes are produced strictly front-to-back and each shot can continue from the one
+ * before it. The first scene (idx 0) is always allowed. A previous scene counts as ready once it has
+ * a rendered videoUrl or its status is 'generated' / 'accepted'.
+ */
+export function isPrevSceneReady(scenes: any[], idx: number): boolean {
+  if (idx <= 0) return true
+  const prev = (scenes ?? [])[idx - 1]
+  if (!prev) return true
+  return !!prev.videoUrl || prev.status === 'generated' || prev.status === 'accepted'
+}
+
+/**
  * Scene player: Seedance video with native audio (speech + ambience baked into the clip).
  * The audioUrl prop is kept for backward-compatibility with older scenes but is no longer generated.
  */
@@ -628,7 +641,7 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
 
               {error && <div className="rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
 
-              {(scenes ?? []).map((scene: any) => (
+              {(scenes ?? []).map((scene: any, idx: number) => (
                 <div
                   key={scene?.id}
                   className="rounded-xl border border-border bg-card p-4"
@@ -687,9 +700,13 @@ export function ScenesStage({ project, onRefresh }: { project: any; onRefresh: (
                     </button>
                     {scene?.status !== 'accepted' && (
                       <>
+                        {/* Stage 118: gate a scene's video on the previous scene being generated first,
+                            so shots are produced strictly front-to-back. Regenerate (scene already has
+                            a videoUrl) is never blocked by this rule. */}
                         <button
                           onClick={() => generateVideo(scene?.id ?? '')}
-                          disabled={isSceneBusy(scene?.id)}
+                          disabled={isSceneBusy(scene?.id) || (!scene?.videoUrl && !isPrevSceneReady(scenes ?? [], idx))}
+                          title={!scene?.videoUrl && !isPrevSceneReady(scenes ?? [], idx) ? 'Generate the previous scene first' : undefined}
                           className="flex items-center gap-1 rounded-lg bg-secondary px-3 py-1.5 text-xs font-medium text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
                         >
                           {isSceneBusy(scene?.id) ? (

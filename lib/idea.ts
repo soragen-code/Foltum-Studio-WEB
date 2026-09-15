@@ -424,6 +424,13 @@ export const GENRES = [
   { id: "action", label: "Action", en: "action" },
   { id: "historical", label: "Historical drama", en: "historical drama" },
   { id: "melodrama", label: "Melodrama", en: "melodrama / family saga" },
+  {
+    id: "hiding_identity",
+    label: "Hiding identity",
+    en: "hidden-master power fantasy",
+    premise:
+      "A 'hidden master' power-fantasy. Follow THIS specific arc, but invent fresh, concrete specifics for every beat so it never feels generic. THE ARC: the protagonist is secretly the strongest in the world at some discipline — pick ONE and commit to it (e.g. the strongest mage, boxer, spartan warrior, archer, marksman, swordsman, martial artist, driver, hacker, etc.). He hides this completely, disguised and living as a lowly, overlooked figure — pick ONE (e.g. a janitor, a homeless man, a lowly servant, a beggar, a delivery boy, a timid clerk). Everyone around him mocks, humiliates and underestimates him; he silently endures the contempt. Then a moment comes when he can no longer stand by, he snaps, and effortlessly beats the first arrogant enemy — shocking everyone. The enemies and onlookers scoff and rationalise it ('you just got lucky', 'that trick won't work twice', 'you caught him off guard'). One after another, stronger challengers step up to put him back in his place, and he defeats them one by one — each confrontation more epic than the last, each new enemy visibly stronger and higher in rank than the previous, escalating toward the true top. He proves, beyond any doubt, exactly who he really is. In the end the defeated grovel and beg him for mercy — but he ignores their pleas, turns his back on them, and walks off alone into the sunset. Keep the hidden-master reveal, the mockery-then-vindication rhythm, and the escalating one-by-one duels; make the world, the discipline, the disguise, the enemies and the setting original and specific.",
+  },
 ] as const;
 export type GenreId = (typeof GENRES)[number]["id"];
 export const GENRE_BY_ID: Record<string, (typeof GENRES)[number]> = Object.fromEntries(GENRES.map((g) => [g.id, g]));
@@ -471,7 +478,19 @@ export function ideaAutoUserPrompt(genres: string[], extras?: string): string {
   const gl = genresToEnglish(genres);
   const genreLine = gl.length ? gl.join(", ") : "director's choice — pick a compelling popular genre";
   const extra = extras?.trim();
-  return `GENRE(S) / DIRECTION: ${genreLine}\n\nADDITIONAL WISHES FROM THE PRODUCER: ${extra ? extra : "(none — you have full creative freedom within the genre)"}\n\nInvent the original season now.`;
+  // If any chosen genre carries a mandatory story template (a premise), the model MUST follow that arc.
+  const premises: string[] = [];
+  for (const g of genres) {
+    const found = GENRE_BY_ID[(g ?? "").trim().toLowerCase()];
+    const premise = (found as { premise?: string } | undefined)?.premise;
+    if (premise && premise.trim()) premises.push(premise.trim());
+  }
+  const templateBlock = premises.length
+    ? `\n\nSTORY TEMPLATE TO FOLLOW (mandatory arc):\n${premises.join(
+        "\n\n",
+      )}\nFollow this arc faithfully, but make all specifics fresh and original.`
+    : "";
+  return `GENRE(S) / DIRECTION: ${genreLine}${templateBlock}\n\nADDITIONAL WISHES FROM THE PRODUCER: ${extra ? extra : "(none — you have full creative freedom within the genre)"}\n\nInvent the original season now.`;
 }
 
 /**
