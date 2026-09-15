@@ -111,14 +111,17 @@ async function main() {
   for (const e of ['steel desk — center-left', 'rotary telephone — on the desk', 'small safe — under the desk', 'brass floor lamp — behind the armchair', 'metal door with frosted glass', 'wall of filing cabinets — back wall']) ok(setLine!.includes(e), `matched "${e}" with placement`);
   ok(!setLine!.includes('ceiling fan') && !setLine!.includes('vintage radio') && !setLine!.includes('coat rack'), 'unmentioned objects are NOT injected');
   ok(setLine!.split(';').length <= SET_OBJECTS_CAP && SET_OBJECTS_CAP === 8, `≤ ${SET_OBJECTS_CAP} objects`);
-  ok(setLine!.length < 600, `SET OBJECTS line compact (${setLine!.length} chars)`);
+  // Stage 121 — the SET OBJECTS line now also repeats the wall-anchored objects (WALL-ANCHORED PLACEMENT) to
+  // weld them to the architecture; still one compact line.
+  ok(setLine!.length < 1000, `SET OBJECTS line compact (${setLine!.length} chars)`);
   const all = matchSetInventoryInText(inventory, inventory.join(' '));
   ok(all.length === SET_OBJECTS_CAP, 'matcher hard-caps at 8 even when everything matches');
   ok(matchSetInventoryInText(text, '').length === 0 && matchSetInventoryInText(null, 'steel desk').length === 0 && buildSetObjectsSection([]) === '', 'no text / no inventory → nothing');
   const legacyBuilt = buildScenePrompt({ scene, characters, location: { ...location, setInventory: null }, previous: null } as any);
   ok(!legacyBuilt.prompt.includes(SCENE_SECTION.set), 'legacy location → no SET OBJECTS line');
-  ok(built.prompt.length - legacyBuilt.prompt.length < 700, `inventory adds < 700 chars to the video prompt (+${built.prompt.length - legacyBuilt.prompt.length})`);
-  ok(built.prompt.length < 8000, `video prompt stays far below the 24k bug (${built.prompt.length})`);
+  // Stage 121 — inventory now also carries the WALL-ANCHORED PLACEMENT repeat; still a bounded addition.
+  ok(built.prompt.length - legacyBuilt.prompt.length < 1100, `inventory adds a bounded amount to the video prompt (+${built.prompt.length - legacyBuilt.prompt.length})`);
+  ok(built.prompt.length < 13000, `video prompt stays far below the 24k bug (${built.prompt.length})`);
 
   console.log(`test-stage113: OK (${checks} checks)`);
 }

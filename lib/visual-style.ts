@@ -198,7 +198,7 @@ export const LOCATION_ANGLES = [
 export const LOCATION_REQUIRED_ANGLES: readonly LocationAngle[] = ["wide", "layout"];
 /** Stage 111 — the note attached to the layout frame wherever it is sent as a reference. */
 export function locationLayoutNote(locationName: string): string {
-  return `the location "${locationName}" — elevated LAYOUT view (camera raised, looking slightly down over the whole space). Use it ONLY to place objects, furniture, doorways and characters correctly relative to each other; it is NOT the camera angle of this shot.`;
+  return `the location "${locationName}" — elevated LAYOUT view (camera raised, looking slightly down over the whole space). It is the FLOOR-PLAN AUTHORITY for this place: the exact placement of every fixed object and structure, and which objects sit flush against which walls. Use it ONLY to place objects, furniture, doorways and characters correctly relative to each other and against the walls; it is NOT the camera angle of this shot.`;
 }
 /** Stage 111 — true when the location carries both mandatory frames (wide + layout). */
 export function locationBaseReady(loc: { imageUrl?: string | null; imageReverse?: string | null }): boolean {
@@ -244,12 +244,12 @@ export function locationAnglePrompt(visualPrompt: string, name = "", angle: Loca
   const inventory = formatSetInventoryBlock(setInventory);
   if (angle === "wide")
     return `${VISUAL_STYLE}\nLocation establishing shot: ${place}. ` +
-      (inventory ? `${inventory} A highly DETAILED frame: every listed object is present, clearly recognizable and placed exactly where listed, sharp and readable at its real scale. ` : "") +
+      (inventory ? `${inventory} A highly DETAILED frame: every listed object is present, clearly recognizable and placed exactly where listed, sharp and readable at its real scale. Any object whose placement names a wall or corner sits FLUSH against that exact wall or corner, welded to the architecture with no gap, columns or open space behind it. ` : "") +
       `Wide vertical composition, eye-level camera, ${noPeople} ${LIGHT_LOCK}`;
   if (angle === "layout")
     return `${VISUAL_STYLE}\nThe reference image IS this location, already photographed — do not invent new architecture, materials or layout; this is the same photographed place seen from a SLIGHTLY ELEVATED position: camera raised to about 2.5–3 m at a corner of the space and tilted down ~30–40° (a high angle, NOT top-down and NOT a bird's-eye view — walls and depth stay visible), ` +
       `so the WHOLE LAYOUT is readable at once: where every zone, piece of furniture, prop, doorway and passage sits relative to the others, and how far the place extends: ${place}. ` +
-      (inventory ? `${inventory} This layout frame MUST show ALL listed items at once and make their relative placement unmistakable — each object stays exactly where it is in the reference image (same geometry), nothing added, nothing removed. ` : "") +
+      (inventory ? `${inventory} This layout frame MUST show ALL listed items at once and make their relative placement unmistakable — each object stays exactly where it is in the reference image (same geometry), nothing added, nothing removed. Any object whose placement names a wall or corner sits FLUSH against that exact wall or corner, with no gap, columns or open space behind it — this layout is the FLOOR-PLAN authority for which object sits against which wall. ` : "") +
       `Same architecture, materials, props, time of day, weather and light direction as the reference — only the camera height, tilt and position changed. Wide framing, vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;
   return `${VISUAL_STYLE}\nThe reference image IS this location, already photographed — do not invent new architecture, materials or layout; this is the same photographed place as a medium shot 45° from the side, the action zone where characters would talk: ${place}. ` +
     `Same materials, props, time of day, weather and light direction as the reference — only the framing is closer. Vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;
