@@ -122,7 +122,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           if (!ref) throw new Error("No base photo to chain the extra angle on");
           const refKind: CharacterRefKind = ref === full && full ? "full" : "face";
           remote = await generateImage(
-            { prompt: characterExtraShotPrompt(appearance, char.name, index!, refKind, char.promptOverride), aspect_ratio: REFERENCE_ASPECT_RATIO, image_input: mergeImageInput(userRefs, [ref], 10) },
+            { prompt: characterExtraShotPrompt(appearance, char.name, index!, refKind, char.promptOverride, char.age, (char as any).gender ?? null, char.role), aspect_ratio: REFERENCE_ASPECT_RATIO, image_input: mergeImageInput(userRefs, [ref], 10) },
             ctx
           );
           s3Key = `media/public/characters/${projectId}/${char.id}/${VISUAL_STYLE_ID}/extra-${Date.now()}-${index}.png`;
@@ -137,7 +137,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
           // Stage 75: user photos first, then the generated anchor; any refs → the existing chained (identity-lock) path.
           const imageInput = mergeImageInput(userRefs, ref ? [ref] : [], 10);
           const chained = imageInput.length > 0;
-          const basePrompt = characterShotPrompt(appearance, shot, char.name, char.tier, char.groupSize, chained, refKind, char.promptOverride);
+          // Stage 125: force the character's sex/age from Character.gender (heuristic fallback from role) so the
+          // regenerated reference matches the role — the "Regenerate" path for a female role never renders a man.
+          const basePrompt = characterShotPrompt(appearance, shot, char.name, char.tier, char.groupSize, chained, refKind, char.promptOverride, char.age, (char as any).gender ?? null, char.role);
           const gen = (prompt: string) => generateImage({ prompt, aspect_ratio: ASPECT[shot], ...(chained ? { image_input: imageInput } : {}) }, ctx);
           if (shot === "full" && char.tier !== "CROWD") {
             // Framing + Stage 46D proportion guard (one vision call per attempt, bounded retries); the best

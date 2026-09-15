@@ -296,3 +296,11 @@ ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "regionPlates" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "regionKey" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "regionDesc" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "regionPlateUrl" TEXT;
+
+
+-- Stage 125: character sex as a single source of truth. "gender" ("male" | "female") is set by the idea
+-- LLM per character (consistent with role/kinship — a "мать" is female, an "отец" is male) and forced into
+-- the character reference prompt so the image model can never render the wrong sex (the "мать Николя"
+-- rendered as a man bug). Additive & nullable; legacy rows stay null and fall back to a heuristic derived
+-- from role/appearance at reference-generation time (no auto-migration of existing images). Idempotent.
+ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "gender" TEXT;

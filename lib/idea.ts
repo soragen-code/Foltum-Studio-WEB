@@ -69,9 +69,23 @@ export function normalizeTier(v: unknown): CharacterTier {
   return (CHARACTER_TIERS as readonly string[]).includes(t) ? (t as CharacterTier) : "MAIN";
 }
 
+/** Character sex (Stage 125). Single source of truth for the scenario and the reference generation. */
+export const CHARACTER_GENDERS = ["male", "female"] as const;
+export type CharacterGender = (typeof CHARACTER_GENDERS)[number];
+/** Normalize any LLM / user gender value to "male" | "female", or null when unknown/ambiguous. */
+export function normalizeGender(v: unknown): CharacterGender | null {
+  const g = typeof v === "string" ? v.trim().toLowerCase() : typeof v === "number" ? String(v) : "";
+  if (/^(female|woman|women|girl|lady|f|ж|жен|женск|женщина)/.test(g)) return "female";
+  if (/^(male|man|men|boy|guy|m|м|муж|мужск|мужчина)/.test(g)) return "male";
+  return null;
+}
+
 export const characterCardSchema = z.object({
   name: str(120),
   age: z.union([z.string(), z.number()]).transform((v) => String(v).trim()).pipe(z.string().min(1).max(40)),
+  // Stage 125: character sex, normalized to "male" | "female" (null when the LLM omits/garbles it — a
+  // heuristic fills it in at reference-generation time). Optional so legacy payloads keep validating.
+  gender: z.union([z.string(), z.number(), z.null()]).optional().transform((v) => normalizeGender(v)),
   role: str(200),
   appearance: str(2500),
   personality: str(2000),
@@ -250,6 +264,7 @@ const ORIGINALITY_RULES = `ORIGINALITY (strict):
 const CHARACTER_FIELD_RULES = `Character card fields (all REQUIRED, non-empty):
 - "name": full Western name in Latin letters (first name + surname), see ORIGINALITY
 - "age": age as text (e.g. "34" or "late 40s"), in the story language
+- "gender": the character's sex, EXACTLY one of "male" | "female" (lowercase English). REQUIRED for every character. It MUST agree with the role/kinship and the name: a mother/wife/sister/daughter/actress/queen → "female"; a father/husband/brother/son/king → "male". This field is the single source of truth for the character's sex and drives the reference image, so it must never contradict "role" or "appearance". For a CROWD group, set the group's predominant sex ("female", "male"), or "female" for a mixed group led by women / "male" for a mixed group led by men.
 - "role": role in the story (protagonist, antagonist, ally, mentor, etc.), in the story language
 - "appearance": ALWAYS in ENGLISH, 2-3 sentences, concrete and photoreal. It MUST BEGIN with an explicit, unambiguous SEX/GENDER token as the very FIRST words — "A woman ..." / "A man ..." (for a CROWD group: "A group of women ..." / "A group of men ..." / "A mixed group of women and men ..."). After that opening, describe: age, ethnicity/skin tone, build, face, hair, eyes, clothing style, distinguishing features — and make the gendered features UNMISTAKABLE for that sex so the image model can never drift to the wrong sex: for a WOMAN state clearly feminine features (feminine facial features, softer jaw, clearly feminine / styled hair, feminine build, women's clothing); for a MAN state clearly masculine features (masculine facial features, stronger jaw, masculine build, men's clothing). Used verbatim as a prompt for AI image generation.
 - "personality": 2-3 sentences in the story language — traits, motivation, inner conflict
@@ -281,7 +296,7 @@ From the user's idea produce a season synopsis and the main characters. Return O
   "language": "<ISO 639-1 code of the language the idea is written in, e.g. \\"ru\\" or \\"en\\">",
   "title": "<short catchy series title, 1-4 words, in the story language, no quotes>",
   "synopsis": "<plain text, 3-6 short paragraphs separated by blank lines>",
-  "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
+  "characters": [ { "name": "...", "age": "...", "gender": "male|female", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
   "locations": [ { "name": "...", "description": "...", "visualPrompt": "...", "setInventory": ["object — placement", "..."] } ]
 }
 Both arrays are REQUIRED ("locations" must contain 8-14 items).
@@ -311,7 +326,7 @@ export function castExpansionSystemPrompt(language: IdeaLanguage, opts?: { hint?
   return `You are a head writer / casting director for a short-form vertical drama series.
 
 ${what}
-Return ONLY valid JSON: { "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "...", "tier": "SUPPORTING" | "MINOR" | "CROWD" | "MAIN", "groupSize": <int or null> } ] }
+Return ONLY valid JSON: { "characters": [ { "name": "...", "age": "...", "gender": "male|female", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "...", "tier": "SUPPORTING" | "MINOR" | "CROWD" | "MAIN", "groupSize": <int or null> } ] }
 
 RULES:
 - Do NOT repeat or rename existing characters; every new character must have a unique name and be visually distinct.
@@ -373,7 +388,7 @@ export function seasonCastSystemPrompt(language: IdeaLanguage): string {
 
 From the season SYNOPSIS below produce the COMPLETE cast and the season's locations in ONE pass. Return ONLY valid JSON:
 {
-  "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "...", "tier": "MAIN" | "SUPPORTING" | "MINOR" | "CROWD", "groupSize": <int or null> } ],
+  "characters": [ { "name": "...", "age": "...", "gender": "male|female", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "...", "tier": "MAIN" | "SUPPORTING" | "MINOR" | "CROWD", "groupSize": <int or null> } ],
   "locations": [ { "name": "...", "description": "...", "visualPrompt": "...", "setInventory": ["object — placement", "..."] } ]
 }
 Both arrays are REQUIRED ("locations" must contain 8-14 items).
@@ -454,7 +469,7 @@ export function ideaAutoSystemPrompt(language: IdeaLanguage): string {
   "language": "${language}",
   "title": "<short catchy series title, 1-4 words, in the story language, no quotes>",
   "synopsis": "<plain text, 3-6 short paragraphs separated by blank lines>",
-  "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
+  "characters": [ { "name": "...", "age": "...", "gender": "male|female", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
   "locations": [ { "name": "...", "description": "...", "visualPrompt": "...", "setInventory": ["object — placement", "..."] } ]
 }
 Both arrays are REQUIRED ("locations" must contain 8-14 items).
@@ -506,7 +521,7 @@ export function ideaFromStorySystemPrompt(language: IdeaLanguage): string {
   "language": "${language}",
   "title": "<short catchy series title, 1-4 words, in the story language, no quotes>",
   "synopsis": "<plain text, 3-6 short paragraphs separated by blank lines>",
-  "characters": [ { "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
+  "characters": [ { "name": "...", "age": "...", "gender": "male|female", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
   "locations": [ { "name": "...", "description": "...", "visualPrompt": "...", "setInventory": ["object — placement", "..."] } ]
 }
 Both arrays are REQUIRED ("locations" must contain 8-14 items).
@@ -560,7 +575,7 @@ export function reviseCharacterSystemPrompt(language: IdeaLanguage): string {
   return `You are a character designer for a short-form vertical drama series. Rewrite ONE character card according to the producer's instruction.
 
 Return ONLY valid JSON with ALL fields:
-{ "name": "...", "age": "...", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "...", "tier": "...", "groupSize": <int or null> }
+{ "name": "...", "age": "...", "gender": "male|female", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "...", "tier": "...", "groupSize": <int or null> }
 
 RULES:
 - name, age, role, personality, firstAppearance in ${lang}; "appearance" ALWAYS in English. Keep "tier" unless the instruction changes the character's importance.
@@ -594,6 +609,7 @@ export function reviseAppearanceUserPrompt(card: { name: string; appearance: str
 export function toCharacterCard(c: {
   name: string;
   age?: string | null;
+  gender?: string | null;
   role?: string | null;
   appearance?: string | null;
   personality?: string | null;
@@ -605,6 +621,7 @@ export function toCharacterCard(c: {
   return {
     name: c.name,
     age: c.age?.trim() || "—",
+    gender: normalizeGender(c.gender),
     role: c.role?.trim() || "—",
     appearance: c.appearance?.trim() || "—",
     personality: c.personality?.trim() || c.description?.trim() || "—",
@@ -619,6 +636,7 @@ export function characterCardToData(c: CharacterCard) {
   return {
     name: c.name,
     age: c.age,
+    gender: c.gender ?? null, // Stage 125: persist the LLM-declared sex (null when unknown)
     role: c.role,
     appearance: c.appearance,
     personality: c.personality,

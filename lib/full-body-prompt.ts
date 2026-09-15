@@ -52,9 +52,10 @@ function parseAgeNumber(age?: string | null): number | null {
  * wording is kept) or a stated minor age; otherwise an explicit adult phrase using the card age (and the
  * gender inferred from the appearance) or a safe "late 20s" default when the age is missing/unparseable.
  */
-export function adultAgeClause(age: string | null | undefined, appearance = ""): string | null {
+export function adultAgeClause(age: string | null | undefined, appearance = "", genderNoun?: "woman" | "man" | null): string | null {
   if (isChildAppearance(appearance)) return null; // a real child keeps child proportions/wording
-  const noun = detectGenderNoun(appearance);
+  // Stage 125: an explicit gender noun (from Character.gender / the resolver) overrides the text heuristic.
+  const noun = genderNoun ?? detectGenderNoun(appearance);
   const n = parseAgeNumber(age);
   if (n !== null && n < 18) return null; // an explicitly stated minor — never fabricate an adult age
   // Stage 49: emphasise mature, fully-grown adult facial features so the close-up face portrait does not
@@ -65,10 +66,57 @@ export function adultAgeClause(age: string | null | undefined, appearance = ""):
 }
 
 /** Prepend the adult-age clause (capitalised, as its own sentence) to the character description. */
-export function withAdultAge(who: string, age: string | null | undefined, appearance: string): string {
-  const clause = adultAgeClause(age, appearance);
+export function withAdultAge(who: string, age: string | null | undefined, appearance: string, genderNoun?: "woman" | "man" | null): string {
+  const clause = adultAgeClause(age, appearance, genderNoun);
   if (!clause) return who;
   return `${clause.charAt(0).toUpperCase()}${clause.slice(1)}. ${who}`;
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Stage 125 — the character's SEX is forced into every reference prompt.
+//
+// The bug: a female role ("мать Николя") whose stored appearance did not clearly open with "A woman"
+// let Seedream pick the sex freely and it rendered a man. The fix threads the character's sex — the
+// explicit Character.gender field as the single source of truth, with a heuristic fallback over the
+// role/appearance/name for legacy rows — into the subject description so the prompt LEADS with the sex
+// ("A fully grown adult woman, …") and repeats an emphatic sex lock. Seedream has no negative-prompt
+// field, so the exclusion of the opposite sex is stated positively in the prompt text.
+// ---------------------------------------------------------------------------------------------------
+
+/** Map an explicit Character.gender field value ("male"/"female"/…) to the prompt noun. */
+export function genderNounFromField(gender?: string | null): "woman" | "man" | null {
+  const g = (gender ?? "").trim().toLowerCase();
+  if (/^(female|woman|women|girl|lady|f|ж|жен|женщ)/.test(g)) return "woman";
+  if (/^(male|man|men|boy|guy|m|м|муж)/.test(g)) return "man";
+  return null;
+}
+
+/**
+ * Single source of truth for the character's sex noun in the reference prompt: the explicit
+ * Character.gender field wins; when it is null (legacy rows written before Stage 125) fall back to the
+ * text heuristic over the role / appearance / name so even an un-migrated character resolves correctly.
+ */
+export function resolveGenderNoun(gender: string | null | undefined, ...texts: (string | null | undefined)[]): "woman" | "man" | null {
+  return genderNounFromField(gender) ?? detectGenderNoun(texts.filter(Boolean).join(" "));
+}
+
+/** Emphatic in-prompt sex lock (Seedream has no negative field): states the sex and excludes the opposite. */
+export function genderLockClause(noun: "woman" | "man"): string {
+  const sex = noun === "woman" ? "female" : "male";
+  const opposite = noun === "woman" ? "man" : "woman";
+  return `This person is unmistakably a ${noun}, clearly ${sex}; do NOT render as a ${opposite}.`;
+}
+
+/**
+ * Build the subject description with the sex forced to the front (and an emphatic exclusion of the
+ * opposite sex). `gender` is the explicit Character.gender ("male"/"female"/null); `role` (and the
+ * appearance/name) feed the fallback heuristic. Returns the plain adult-age behaviour when the sex
+ * can't be resolved. CROWD groups are handled by the caller (their group wording is kept as-is).
+ */
+export function withForcedGender(who0: string, age: string | null | undefined, appearance: string, gender: string | null | undefined, role?: string | null, name?: string | null): string {
+  const noun = resolveGenderNoun(gender, role, appearance, name);
+  const who = withAdultAge(who0, age ?? null, appearance, noun); // leads with "A fully grown adult woman/man …" (or a child clause=none)
+  return noun ? `${who} ${genderLockClause(noun)}` : who;
 }
 
 // Stage 58: the full-length proportion "rule" is now the SAME text as the inline adult proportions block
@@ -141,12 +189,21 @@ export function characterShotPrompt(
   chained = false,
   refKind: CharacterRefKind = "face",
   baseOverride?: string | null,
-  age?: string | null
+  age?: string | null,
+  gender?: string | null,
+  role?: string | null
 ): string {
   const who0 = resolveCharacterBase(appearance, baseOverride);
   // Stage 49: the caller opts in by passing `age` (even null); the adult clause is skipped for crowds and
   // when `age` is undefined (keeps every legacy call — and its tests — byte-identical to the old prompt).
-  const who = age !== undefined && tier !== "CROWD" ? withAdultAge(who0, age, appearance) : who0;
+  // Stage 125: when the caller passes `gender` (even null), the SEX is forced (explicit field first, then a
+  // heuristic over role/appearance/name for legacy rows). CROWD keeps its group wording untouched.
+  const who =
+    gender !== undefined && tier !== "CROWD"
+      ? withForcedGender(who0, age, appearance, gender, role, name)
+      : age !== undefined && tier !== "CROWD"
+        ? withAdultAge(who0, age, appearance)
+        : who0;
   const base = characterImagePrompt(who, shot, name, tier, groupSize, chained, refKind);
   // Stage 58: clamp only the full-length prompt (the one that carries the long proportion block); a normal-length
   // prompt is returned unchanged, so close-ups, crowds and typical full-body prompts stay byte-identical.
@@ -154,9 +211,10 @@ export function characterShotPrompt(
 }
 
 /** Extra-angle prompt with the proportion rule on the full-length slots only (right profile stays as is). */
-export function characterExtraShotPrompt(appearance: string, name = "", index = 0, refKind: CharacterRefKind = "face", baseOverride?: string | null, age?: string | null): string {
+export function characterExtraShotPrompt(appearance: string, name = "", index = 0, refKind: CharacterRefKind = "face", baseOverride?: string | null, age?: string | null, gender?: string | null, role?: string | null): string {
   const who0 = resolveCharacterBase(appearance, baseOverride);
-  const who = age !== undefined ? withAdultAge(who0, age, appearance) : who0;
+  // Stage 125: force the sex when the caller passes `gender` (explicit field first, heuristic fallback).
+  const who = gender !== undefined ? withForcedGender(who0, age, appearance, gender, role, name) : age !== undefined ? withAdultAge(who0, age, appearance) : who0;
   const base = characterExtraAnglePrompt(who, name, index, refKind);
   return isFullBodyExtraIndex(index) ? clampPromptToLimit(withFullBodyProportionsRule(base)) : base;
 }

@@ -112,6 +112,7 @@ model Character {
   appearance  String?  @db.Text
   promptOverride String? @db.Text // stage 46E: manual character prompt — when non-empty it replaces the appearance base for ALL reference shots; null = auto
   age         String?  // free-form ("34", "около 40")
+  gender      String?  // Stage 125: "male" | "female" — single source of truth for the character's sex (scenario + reference generation); forces sex/age in the reference prompt so a role like "мать" never renders as a man. null = unknown (fallback heuristic from role/appearance)
   firstAppearance String? @db.Text // where/how the character first appears in the season
   status      String   @default("draft") // draft, approved, references_ready
   imageFront  String?  // cloud_storage_path or placeholder url

@@ -126,7 +126,9 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
       const chained = imageInput.length > 0;
       if (userRefs.length) userRefUse.push({ characterId: char.id, shot, userRefCount: userRefs.length });
       try {
-        const basePrompt = characterShotPrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize, chained, refKind, char.promptOverride, char.age);
+        // Stage 125: pass the character's sex (explicit Character.gender, heuristic fallback from role) so the
+        // reference prompt leads with the correct sex and never drifts (the "мать rendered as a man" bug).
+        const basePrompt = characterShotPrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize, chained, refKind, char.promptOverride, char.age, (char as any).gender ?? null, char.role);
         // Stage 58: clamp the FINAL prompt (including any corrective retry suffix appended by the guard) so it
         // never exceeds the image provider's 4000-char hard limit (Seedream returns HTTP 422 otherwise, which
         // previously nulled the full-body photo). A prompt already within the limit is passed through unchanged.
