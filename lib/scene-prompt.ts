@@ -179,7 +179,21 @@ export const CAST_CONTINUITY_LINE =
  *  bench/seating, same floor, same columns/walls, fixtures and large props, same design, materials, colours and
  *  placement as the plates and the previous shot. Only the camera angle and the characters' actions change. */
 export const LOCATION_ANCHOR_LINE =
-  "LOCATION IS CONSTANT (fixed environment): the attached wide and layout location plates define the FIXED environment of this place — treat them as the authoritative truth of the room. Across EVERY shot of this location the fixed objects are IDENTICAL: the SAME bench / seating, the SAME floor and its pattern, the SAME columns, walls, fixtures and large props, with the SAME design, materials, colours and placement as in the location plates and the previous shot. Do NOT swap furniture for a different model (e.g. do not turn a solid cast bench into a perforated one), do NOT restyle, resize, add or remove fixed set objects, and do NOT rearrange the layout between shots. Only the camera angle and the characters' actions change; the room itself is constant.";
+  "LOCATION IS CONSTANT (fixed environment): the attached wide and layout location plates define the FIXED environment of this place — treat them as the authoritative truth of the room. Across EVERY shot of this location the fixed objects are IDENTICAL: the SAME bench / seating, the SAME floor and its pattern, the SAME columns, walls, fixtures and large props, with the SAME design, materials, colours and placement as in the location plates and the previous shot. Do NOT swap furniture for a different model (e.g. do not turn a solid cast bench into a perforated one), do NOT restyle, resize, add or remove fixed set objects, and do NOT rearrange the layout between shots. Do NOT change or invent the background architecture: the walls, columns, doorways and openings match the wide/layout plates exactly in every shot — where the plates show a solid wall it stays a solid wall, NEVER replaced by columns, pillars, a passage, an archway, an opening, a doorway, a window, an escalator or open space, and NEVER add columns, pillars, arches, openings or any structure that is not present in the location plates. When a shot reveals a previously unseen surface, reconstruct it strictly from the plates instead of inventing new architecture. Only the camera angle and the characters' actions change; the room itself is constant.";
+
+/** Stage 120 — eyelines connect in dialogue: a character who addresses another looks AT that listener,
+ *  and the listener looks back, achieved by turning the head/eyes (natural three-quarter / profile / over-the-
+ *  shoulder angles) — NEVER by squaring up frontally to the camera and NEVER as a static face-to-face line-up.
+ *  Complements Stage 116 (references fix appearance, not pose/orientation; nobody stares at the viewer). */
+export const GAZE_AT_LISTENER_LINE =
+  "EYELINES CONNECT (look at whoever is addressed): when a character speaks to another character, their head and eyes are turned toward that listener — the speaker looks AT the person they address, and the listener, reacting, looks back at the speaker, unless the beat gives a clear reason to look elsewhere (checking a threat, glancing away, deliberately not meeting the other's eyes). Achieve this by turning the head and eyes toward the other person, NOT by squaring up frontally to the camera: keep natural three-quarter, profile or over-the-shoulder angles, and NEVER have anyone turn to face the viewer to do it. Do NOT pose the pair in a static, symmetrical face-to-face stand-off either — they keep moving, shifting weight and acting while their gaze stays connected to whoever they are talking to.";
+
+/** Stage 120 — the action is not reset on the seam: through the HARD CUT (no fade/dissolve) the motion that
+ *  was underway keeps going from the same phase and direction, same items in the same hands, without pausing,
+ *  freezing, restarting from the beginning or skipping part of the action. Dialogue may carry on (114/115);
+ *  the transition stays a hard cut (117). Applied on continuing shots (continuous seam / re-angle). */
+export const ACTION_CONTINUES_ACROSS_CUT_LINE =
+  "ACTION CONTINUES ACROSS THE CUT (no reset on the seam): the cut to the new camera is a HARD CUT with no fade, dissolve or crossfade, and it does NOT interrupt the action. Whatever movement was underway at the end of the previous shot continues from the SAME motion phase and in the SAME direction — a swing keeps swinging, a step keeps going, a fall keeps falling — with the same items in the same hands and the same momentum. Do NOT restart the action from its beginning, do NOT pause, freeze or reset to a neutral standing pose on frame 1, and do NOT skip past part of the action across the cut: the motion picks up exactly where it left off while only the camera jumps to a new angle. Dialogue may carry straight on through the cut; the transition itself is always a hard cut, never a fade.";
 
 const oneLine = (t?: string | null) => (t ?? "").replace(/\s+/g, " ").trim();
 
@@ -565,9 +579,15 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     // Stage 118 — enforce cast continuity whenever this shot continues from a previous one
     // (continuous seam) or is a re-angle of an existing frame: the on-screen group never silently swaps.
     continuousSeam || reangleUrl ? CAST_CONTINUITY_LINE : "",
+    // Stage 120 — on a continuing shot the action is NOT reset on the seam: the motion carries on from the
+    // same phase/direction through the hard cut (no fade), the dialogue may continue, only the camera jumps.
+    continuousSeam || reangleUrl ? ACTION_CONTINUES_ACROSS_CUT_LINE : "",
     SPEECH_BEFORE_CUT_LINE,
     NO_FROZEN_PADDING_LINE,
     REFERENCE_APPEARANCE_ONLY_LINE,
+    // Stage 120 — in a dialogue shot, eyelines connect: the speaker looks at whoever they address (head/eyes
+    // turned to the listener, natural angles, never to camera, never a static face-to-face stand-off).
+    dialogue ? GAZE_AT_LISTENER_LINE : "",
     // Stage 119 — whenever the shot has master location plates attached, anchor the environment so the
     // fixed set objects (bench, floor, columns, fixtures, large props) stay identical across every clip.
     locationAngles.length ? LOCATION_ANCHOR_LINE : "",

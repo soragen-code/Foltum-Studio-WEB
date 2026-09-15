@@ -1366,20 +1366,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                     </div>
                   ) : validUrl(scene.videoUrl) ? (
                     <>
+                      {/* Stage 120 — the last-frame zoom button is removed from the UI. The real last frame is
+                          still extracted and used internally as the reangle / continuity source (unchanged). */}
                       <SceneVideoPlayer videoUrl={scene.videoUrl as string} poster={scene.lastFrameUrl} className="h-full w-full object-contain" />
-                      {/* Stage 109 — the real last frame opens in the same lightbox. */}
-                      {validUrl(scene.lastFrameUrl) && (
-                        <button
-                          type="button"
-                          onClick={() => openLightbox([scene.lastFrameUrl], 0, `Scene ${scene.number} — last frame`)}
-                          className="absolute bottom-2 right-2 z-10 inline-flex cursor-zoom-in items-center gap-1 rounded bg-black/60 px-1.5 py-1 text-[10px] font-medium text-white hover:bg-black/80"
-                          aria-label="Open last frame"
-                          title="Open the last frame at full size"
-                          data-testid="scene-lastframe-open"
-                        >
-                          <Maximize2 className="h-3 w-3" /> Last frame
-                        </button>
-                      )}
                     </>
                   ) : (
                     <div className="flex h-full items-center justify-center text-xs text-muted-foreground">The video has not been generated yet</div>
