@@ -174,6 +174,13 @@ export const REFERENCE_APPEARANCE_ONLY_LINE =
 export const CAST_CONTINUITY_LINE =
   "CAST CONTINUITY ACROSS THE CUT: the people on screen carry over from the end of the previous shot — the SAME identified characters continue into this shot; do NOT swap the on-screen group for a different set of people between consecutive shots, and keep the same headcount and identities. If a character leaves, SHOW them leaving on screen (walking out of frame, stepping away, exiting the door); if a character enters, SHOW them entering. Nobody vanishes, is silently dropped, or is replaced between cuts unless this shot's action explicitly motivates them entering or leaving on screen. In a re-angled view the people from the source frame are all preserved in the new angle — same individuals, only the camera moves.";
 
+/** Stage 119 — location continuity anchor: the attached wide + layout master plates are the FIXED, authoritative
+ *  truth of this environment. Across every shot of the location the fixed set objects stay identical — same
+ *  bench/seating, same floor, same columns/walls, fixtures and large props, same design, materials, colours and
+ *  placement as the plates and the previous shot. Only the camera angle and the characters' actions change. */
+export const LOCATION_ANCHOR_LINE =
+  "LOCATION IS CONSTANT (fixed environment): the attached wide and layout location plates define the FIXED environment of this place — treat them as the authoritative truth of the room. Across EVERY shot of this location the fixed objects are IDENTICAL: the SAME bench / seating, the SAME floor and its pattern, the SAME columns, walls, fixtures and large props, with the SAME design, materials, colours and placement as in the location plates and the previous shot. Do NOT swap furniture for a different model (e.g. do not turn a solid cast bench into a perforated one), do NOT restyle, resize, add or remove fixed set objects, and do NOT rearrange the layout between shots. Only the camera angle and the characters' actions change; the room itself is constant.";
+
 const oneLine = (t?: string | null) => (t ?? "").replace(/\s+/g, " ").trim();
 
 /**
@@ -342,7 +349,7 @@ export function matchSetInventoryInText(setInventory: string | string[] | null |
 /** Stage 113 — one compact line with the matched set objects and their fixed placement; "" when nothing matched. */
 export function buildSetObjectsSection(matched: readonly string[]): string {
   if (!matched.length) return "";
-  return `${SCENE_SECTION.set} (already in this location at these fixed positions — use them, do not invent other furniture or props): ${matched.join("; ")}.`;
+  return `${SCENE_SECTION.set} (these are FIXED objects of the location, already in place at these exact positions — keep each one IDENTICAL in design, material, colour and placement across all shots, do not swap, restyle, resize, add, remove or rearrange them, and do not invent other furniture or props): ${matched.join("; ")}.`;
 }
 
 /**
@@ -506,8 +513,15 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const openingRefs: Ref[] = reangleUrl ? [{ url: reangleUrl, kind: "reangle", id: scene.id, note: REANGLE_REFERENCE_NOTE }] : [];
   // Stage 116 — combat crowds sit right after the leads (ahead of the location plates) so they are treated as
   // fighters and are never the first refs dropped at the cap; passive background crowds stay last as extras.
-  const ordered = [...openingRefs, ...characterRefs, ...combatCrowdRefs, ...baseLocationRefs, ...backgroundCrowdRefs].filter(r => !forbidden.has(r.url));
-  if (ordered.length > REFERENCE_IMAGE_CAP) throw new Error("Too many required video references. Reduce the scene cast.");
+  // Stage 119 — reference priority tiers for the cap. The master location plates (wide + layout) join the
+  // re-angle frame, the cast and the combat opponents as NON-DROPPABLE environment anchors, so every clip is
+  // reconstructed from the SAME plates and the room never drifts. Only passive background-crowd extras (then
+  // any extra location angles) are trimmed to fit REFERENCE_IMAGE_CAP — instead of failing the whole build.
+  const anchorRefs = [...openingRefs, ...characterRefs, ...combatCrowdRefs, ...baseLocationRefs].filter(r => !forbidden.has(r.url));
+  const droppableRefs = [...backgroundCrowdRefs, ...extraLocationRefs].filter(r => !forbidden.has(r.url));
+  if (anchorRefs.length > REFERENCE_IMAGE_CAP) throw new Error("Too many required video references. Reduce the scene cast.");
+  const room = Math.max(0, REFERENCE_IMAGE_CAP - anchorRefs.length);
+  const ordered = [...anchorRefs, ...droppableRefs.slice(0, room)];
   const fallbackRefs: SceneReference[] = ordered.map(({ url, kind, note }) => ({ url, kind, note }));
 
   // Stage 54 — deterministic sectioned signals injected into the auto prompt (see helpers above):
@@ -554,6 +568,9 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     SPEECH_BEFORE_CUT_LINE,
     NO_FROZEN_PADDING_LINE,
     REFERENCE_APPEARANCE_ONLY_LINE,
+    // Stage 119 — whenever the shot has master location plates attached, anchor the environment so the
+    // fixed set objects (bench, floor, columns, fixtures, large props) stay identical across every clip.
+    locationAngles.length ? LOCATION_ANCHOR_LINE : "",
   ].filter(Boolean);
   // Stage 54 — the deterministic structure block (reference map + people counter + clothing&props)
   // sits AFTER the state blocks and BEFORE the reused 9-tag body, so the prompt still opens with the
