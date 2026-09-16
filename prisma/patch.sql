@@ -346,3 +346,6 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "region"    TEXT;
 ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "regionKey" TEXT;
 ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "plateUrl"  TEXT;
+
+-- Stage 132: Storyboard-only direction data; additive, legacy boards remain NULL.
+ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "directionJson" TEXT;

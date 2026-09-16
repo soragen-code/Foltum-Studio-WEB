@@ -17,6 +17,8 @@
  */
 import { VISUAL_STYLE, REFERENCE_ASPECT_RATIO, styledVisualPrompt } from "@/lib/visual-style";
 import { REFERENCE_APPEARANCE_ONLY_LINE, GAZE_AT_LISTENER_LINE } from "@/lib/scene-prompt";
+import { buildStoryboardAnimationPrompt, type AnimationBoard } from "@/lib/storyboard-animation";
+import { boardShotContext, readBoardDirection } from "@/lib/storyboard-direction";
 import { withForcedGender } from "@/lib/full-body-prompt";
 
 /**
@@ -49,7 +51,7 @@ export interface BoardCharacterLink {
 }
 
 export interface BuildBoardFramePromptInput {
-  board: { index: number; actionOrDialogue: string; motion?: string | null };
+  board: { index: number; actionOrDialogue: string; motion?: string | null; directionJson?: string | null };
   characters: BoardCharacterLink[];
   locationName?: string | null;
   locationDesc?: string | null;
@@ -86,13 +88,8 @@ function characterFrameLine(c: BoardCharacterLink): string {
  * during the 3–6s animation whose START frame is this board's still. Falls back to the board's action
  * text when the split model gave no explicit motion.
  */
-export function buildBoardMotionPrompt(board: { actionOrDialogue: string; motion?: string | null }): string {
-  const motion = (board.motion ?? "").trim();
-  const body = motion || board.actionOrDialogue.trim();
-  return styledVisualPrompt(
-    `Animate this still into a continuous 3-6 second live-action shot. ${body} ` +
-      "Natural, physically believable motion of the subject and a subtle, motivated camera move (no teleporting, no morphing, no frozen padding). Keep every character's identity, wardrobe and the location exactly as in the start frame.",
-  );
+export function buildBoardMotionPrompt(board: AnimationBoard): string {
+  return buildStoryboardAnimationPrompt(board);
 }
 
 /**
@@ -100,7 +97,8 @@ export function buildBoardMotionPrompt(board: { actionOrDialogue: string; motion
  */
 export function buildBoardFramePrompt(input: BuildBoardFramePromptInput): BuildBoardFramePromptResult {
   const { board, characters } = input;
-  const dialogue = isDialogueBoard(board.actionOrDialogue);
+  const direction = readBoardDirection(board.directionJson);
+  const dialogue = direction ? direction.speech.length > 0 : isDialogueBoard(board.actionOrDialogue);
   const locationLine = [input.locationName, input.locationDesc].map((s) => (s ?? "").trim()).filter(Boolean).join(" — ");
   const castLines = characters.map(characterFrameLine).filter(Boolean);
 
@@ -114,11 +112,12 @@ export function buildBoardFramePrompt(input: BuildBoardFramePromptInput): BuildB
   const body = [
     `KEYFRAME STILL — a single cinematic vertical ${REFERENCE_ASPECT_RATIO} frame: the OPENING frame of a 3-6 second shot (it will be animated into a moving clip).`,
     `BOARD ${board.index + 1} — ${dialogue ? "DIALOGUE beat" : "ACTION beat"}: ${board.actionOrDialogue.trim()}`,
-    castLines.length ? `CHARACTERS IN FRAME:\n${castLines.join("\n")}` : "",
+    castLines.length ? `${direction ? "SCENE CAST IDENTITY (off-screen partners stay in the location)" : "CHARACTERS IN FRAME"}:\n${castLines.join("\n")}` : "",
     locationLine ? `LOCATION: ${locationLine}` : "",
     geometryAuthorityLine,
     REFERENCE_APPEARANCE_ONLY_LINE,
     dialogue ? GAZE_AT_LISTENER_LINE : "",
+    direction ? boardShotContext(direction) : (dialogue ? "DIALOGUE COVERAGE: choose one medium, close-up or over-the-shoulder speaker / reverse-shot listener plan. Maintain connected eyelines, screen sides and the 180-degree axis. Off-screen partners remain in the location. Shot changes only BETWEEN boards by hard cut." : ""),
     "CAMERA: free — pick the angle, height, distance and lens that best frame THIS beat; the camera is NOT locked to any previous shot and there is no fixed camera. Compose a real, deep environment (foreground / mid-ground / background), never a flat frontal line-up.",
     `Vertical ${REFERENCE_ASPECT_RATIO} composition, photoreal, no on-screen text, no captions, no watermark.`,
   ].filter(Boolean).join("\n");

@@ -218,6 +218,7 @@ model Board {
   region           String?  @db.Text // project-language zone/corner of the location this board plays in (reuse identical wording for the same corner)
   regionKey        String?  // normalized cache key of `region` (deriveRegionKey) — resolves a cached region plate when one exists
   plateUrl         String?  // the geometry-authority plate actually attached to this board's frame (region plate, else location master)
+  directionJson    String?  @db.Text // Stage 132: validated Storyboard-only speech ledger, camera mode and dialogue shot plan; null for legacy boards
   imagePrompt      String?  @db.Text // English Seedream FRAME prompt used to render the board still (9:16)
   imageUrl         String?  // S3 URL of the rendered board frame (9:16) — the clip's START frame
   videoUrl         String?  // S3 URL of the animated 3-6s clip (image-to-video)

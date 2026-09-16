@@ -21,17 +21,14 @@ import { VISUAL_STYLE_ID, REFERENCE_ASPECT_RATIO } from "@/lib/visual-style";
 import { DEFAULT_ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY } from "@/lib/assemble-options";
 import {
   detailedEpisodeStory,
-  normalizeBoards,
-  validateBoards,
   storyboardBoardsSystemPrompt,
   storyboardBoardsUserPrompt,
-  STORYBOARD_MIN_BOARDS,
-  STORYBOARD_MIN_BOARD_SEC,
-  STORYBOARD_MAX_BOARD_SEC,
-  type RawBoard,
 } from "@/lib/storyboard";
-import { buildBoardFramePrompt, buildBoardMotionPrompt, type BoardCharacterLink } from "@/lib/storyboard-prompt";
+import { buildBoardFramePrompt, type BoardCharacterLink } from "@/lib/storyboard-prompt";
 import { pickBoardGeometryAuthority } from "@/lib/board-plate";
+import { storyboardSource } from "@/lib/storyboard-dialogue";
+import { finalizeDirectedBoards, type RawDirectedBoard } from "@/lib/storyboard-direction";
+import { buildStoryboardVideoRequest, storyboardCameraMode } from "@/lib/storyboard-animation";
 
 export const STORYBOARD_BOARDS_JOB_TYPE = "storyboard_boards";
 export const BOARD_IMAGE_JOB_TYPE = "board_image";
@@ -46,6 +43,7 @@ async function loadEpisodeCharacters(episodeId: string): Promise<{ links: BoardC
   const rows = await prisma.episodeCharacter.findMany({
     where: { episodeId },
     include: { character: true },
+    orderBy: { createdAt: "asc" },
   });
   const links: BoardCharacterLink[] = [];
   const refImages: string[] = [];
@@ -81,34 +79,41 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
     const characters = links.map((l) => l.name);
     const location = episode.locationName ?? null;
 
+    // Read original-language source dialogue; do not feed translated dialogueEn to Storyboard.
+    const scenes = await prisma.scene.findMany({
+      where: { episodeId }, orderBy: { number: "asc" },
+      select: { number: true, action: true, dialogue: true },
+    });
+    const source = storyboardSource(episode, scenes, characters);
     await updateJob(jobId, { progress: 35, message: "Splitting the story into boards..." });
-    let raw: RawBoard[] = [];
-    for (let attempt = 0; attempt < 2 && raw.length < STORYBOARD_MIN_BOARDS; attempt++) {
+    let boards: ReturnType<typeof finalizeDirectedBoards> | null = null;
+    let conflict = "";
+    for (let attempt = 0; attempt < 2 && !boards; attempt++) {
       const user = storyboardBoardsUserPrompt(story, { characters, location }) +
-        (attempt > 0 ? `\n\nYour previous answer had too few boards — return at least ${STORYBOARD_MIN_BOARDS} boards.` : "");
-      const res = await chatJSON<{ boards?: RawBoard[] }>(storyboardBoardsSystemPrompt(), user, { maxTokens: 4000, temperature: 0.7 });
-      raw = Array.isArray(res?.boards) ? res.boards : [];
+        `\n\nSOURCE SCRIPT (original language; authoritative action and speech):\n${source.source}` +
+        `\n\nSOURCE ACTION (literal travel evidence only):\n${source.actionSource}` +
+        `\n\nIMMUTABLE SOURCE SPEECH SEGMENTS (use IDs, preserve order):\n${JSON.stringify(source.segments)}` +
+        (conflict ? `\n\nPLANNING CONFLICT: ${conflict}. Fix the allocation without changing source speech or the 12–15 / 4–6s limits.` : "");
+      const res = await chatJSON<{ boards?: RawDirectedBoard[] }>(storyboardBoardsSystemPrompt(), user, { maxTokens: 6000, temperature: 0.7 });
+      try {
+        boards = finalizeDirectedBoards(res?.boards ?? [], source.segments, characters, source.actionSource);
+      } catch (err) { conflict = err instanceof Error ? err.message : "Invalid board plan"; }
     }
-
-    const boards = normalizeBoards(raw);
-    const problems = validateBoards(boards);
-    if (problems.length) { await failJob(jobId, `Storyboard split failed: ${problems.join("; ")}`); return; }
+    if (!boards) { await failJob(jobId, `Storyboard planning conflict: ${conflict}`); return; }
+    if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
 
     await updateJob(jobId, { progress: 80, message: "Saving boards..." });
-    // Replace any previous boards for this episode (idempotent re-split).
-    await prisma.board.deleteMany({ where: { episodeId } });
-    await prisma.board.createMany({
-      data: boards.map((b) => ({
-        episodeId,
-        index: b.index,
-        actionOrDialogue: b.actionOrDialogue,
-        motionEn: b.motion,
-        durationSec: b.durationSec,
-        // Stage 131 — bind each board to a zone of the one location so all boards of a corner share a plate.
-        region: b.region,
-        regionKey: b.regionKey,
-        status: "pending",
-      })),
+    // Validate BEFORE replacing old boards; failed allocation leaves them intact. Replacement is atomic.
+    await prisma.$transaction(async tx => {
+      await tx.board.deleteMany({ where: { episodeId } });
+      await tx.board.createMany({
+        data: boards!.map((b) => ({
+          episodeId, index: b.index, actionOrDialogue: b.actionOrDialogue,
+          motionEn: b.motion, durationSec: b.durationSec,
+          region: b.region, regionKey: b.regionKey,
+          directionJson: b.directionJson, status: "pending",
+        })),
+      });
     });
 
     await completeJob(jobId, { episodeId, boardCount: boards.length, totalSec: boards.reduce((s, b) => s + b.durationSec, 0) }, `Storyboard ready — ${boards.length} boards`);
@@ -146,7 +151,7 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
     }
 
     const { prompt } = buildBoardFramePrompt({
-      board: { index: board.index, actionOrDialogue: board.actionOrDialogue, motion: board.motionEn },
+      board: { index: board.index, actionOrDialogue: board.actionOrDialogue, motion: board.motionEn, directionJson: board.directionJson },
       characters: links,
       locationName: board.episode.locationName,
       locationDesc: board.episode.locationDesc,
@@ -191,15 +196,16 @@ export async function runBoardVideoJob(jobId: string, projectId: string, boardId
     await prisma.board.update({ where: { id: boardId }, data: { status: "animating", error: null } });
 
     // The board still is the START frame of the image-to-video clip (keyframe ban lifted for STORYBOARD).
-    const duration = Math.max(STORYBOARD_MIN_BOARD_SEC, Math.min(STORYBOARD_MAX_BOARD_SEC, board.durationSec ?? STORYBOARD_MAX_BOARD_SEC));
-    const motion = buildBoardMotionPrompt({ actionOrDialogue: board.actionOrDialogue, motion: board.motionEn });
-    predictionId = await startImageToVideoGeneration({
-      prompt: motion,
-      image: board.imageUrl as string,
-      resolution: "720p",
-      duration,
-      generate_audio: true,
-    });
+    const { links } = await loadEpisodeCharacters(board.episodeId);
+    const animationBoard = {
+      actionOrDialogue: board.actionOrDialogue, motion: board.motionEn,
+      directionJson: board.directionJson, characters: links.map(c => c.name),
+      durationSec: board.durationSec ?? 6, imageUrl: board.imageUrl as string,
+    };
+    const request = buildStoryboardVideoRequest(animationBoard);
+    // No URLs, names, speech text or secrets in diagnostics. Extra identity refs are unsupported by this i2v API.
+    console.info("[storyboard-animation]", { cameraMode: storyboardCameraMode(animationBoard), extraCharacterRefs: "unsupported", resolution: request.resolution, duration: request.duration });
+    predictionId = await startImageToVideoGeneration(request);
 
     // Poll until the clip is ready (best-effort cancel on user stop).
     const startedAt = Date.now();
