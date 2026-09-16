@@ -13,7 +13,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { Loader2, Film, Wand2, ImageIcon, Play, Download } from 'lucide-react'
-import { JobProgressBar, useJobPolling, type JobInfo } from '../../_components/use-job-polling'
+import { JobProgressBar, SmoothProgress, useJobPolling } from '../../_components/use-job-polling'
 
 type Board = {
   id: string
@@ -43,8 +43,6 @@ function BoardCard({ board, onChanged }: { board: Board; onChanged: () => void }
     onFinish: (res) => { setBusy(false); if (res.job.status === 'failed') setErr(res.job.error ?? 'Animation failed'); onChanged() },
   })
 
-  const activeJob: JobInfo | null = framePoll.job ?? animatePoll.job
-
   const run = useCallback(async (kind: 'frame' | 'animate') => {
     setBusy(true); setErr(null)
     try {
@@ -64,18 +62,24 @@ function BoardCard({ board, onChanged }: { board: Board; onChanged: () => void }
         <span className="text-xs font-semibold text-muted-foreground">Кадр {board.index + 1}{board.durationSec ? ` · ${board.durationSec}s` : ''}</span>
         <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{board.status}</span>
       </div>
-      <div className="aspect-[9/16] w-full overflow-hidden rounded-lg bg-black/40">
+      {/* 9:16 portrait viewer: object-contain + letterbox so the still/clip is never cropped or stretched. */}
+      <div className="flex aspect-[9/16] w-full items-center justify-center overflow-hidden rounded-lg bg-black">
         {validUrl(board.videoUrl) ? (
-          <video src={board.videoUrl} controls playsInline className="h-full w-full object-cover" />
+          <video src={board.videoUrl} controls playsInline className="h-full w-full object-contain" />
         ) : validUrl(board.imageUrl) ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={board.imageUrl} alt={`Board ${board.index + 1}`} className="h-full w-full object-cover" />
+          <img src={board.imageUrl} alt={`Board ${board.index + 1}`} className="h-full w-full object-contain" />
         ) : (
           <div className="flex h-full w-full items-center justify-center text-muted-foreground"><ImageIcon className="h-8 w-8 opacity-40" /></div>
         )}
       </div>
       <p className="mt-2 line-clamp-4 text-sm">{board.actionOrDialogue}</p>
-      {activeJob && busy && <div className="mt-2"><JobProgressBar job={activeJob} expectedTotalSec={90} /></div>}
+      {/* Frame generation keeps the raw job progress bar. */}
+      {framePoll.isActive && framePoll.job && <div className="mt-2"><JobProgressBar job={framePoll.job} expectedTotalSec={90} /></div>}
+      {/* Feature: image-to-video (i2v) animation shows a monotonic 0–100% bar with an elapsed counter.
+          Seedance emits no per-frame percent, so SmoothProgress eases the coarse time-based server
+          checkpoints upward and always displays a rising numeric percentage while the clip renders. */}
+      {animatePoll.isActive && animatePoll.job && <div className="mt-2"><SmoothProgress job={animatePoll.job} expectedTotalSec={60} /></div>}
       {err && <p className="mt-1 text-xs text-destructive">{err}</p>}
       <div className="mt-2 flex flex-wrap gap-2">
         <button onClick={() => run('frame')} disabled={busy} className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium disabled:opacity-50" data-testid={`board-frame-${board.index}`}>
@@ -177,7 +181,11 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
       {validUrl(videoUrl) && (
         <div className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="storyboard-video">
           <h2 className="mb-2 inline-flex items-center gap-1 font-semibold"><Film className="h-4 w-4" /> Собранный ролик</h2>
-          <video src={videoUrl} controls playsInline className="mx-auto max-h-[70vh] w-full max-w-sm rounded-lg bg-black" />
+          {/* Vertical 9:16 player: fixed portrait aspect, object-contain (never stretched/cropped or
+              auto-fullscreen), height bounded by the viewport, centered with black letterbox on the sides. */}
+          <div className="mx-auto flex aspect-[9/16] max-h-[80vh] w-full max-w-sm items-center justify-center overflow-hidden rounded-lg bg-black">
+            <video src={videoUrl} controls playsInline className="h-full w-full object-contain" />
+          </div>
           <div className="mt-2"><a href={videoUrl} download className="inline-flex items-center gap-1 text-sm text-primary"><Download className="h-4 w-4" /> Скачать mp4</a></div>
         </div>
       )}

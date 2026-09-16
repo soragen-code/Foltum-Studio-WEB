@@ -33,6 +33,7 @@ import { pickBoardGeometryAuthority } from "@/lib/board-plate";
 import { storyboardSourceResilient, type DialogueRepairFn } from "@/lib/storyboard-dialogue";
 import { balanceBoardCount, finalizeDirectedBoards, type RawDirectedBoard } from "@/lib/storyboard-direction";
 import { buildStoryboardVideoRequest, storyboardCameraMode } from "@/lib/storyboard-animation";
+import { detectSpokenLanguage, translateDialogue } from "@/lib/voiceover";
 
 export const STORYBOARD_BOARDS_JOB_TYPE = "storyboard_boards";
 export const BOARD_IMAGE_JOB_TYPE = "board_image";
@@ -83,11 +84,29 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
     const characters = links.map((l) => l.name);
     const location = episode.locationName ?? null;
 
-    // Read original-language source dialogue; do not feed translated dialogueEn to Storyboard.
-    const scenes = await prisma.scene.findMany({
+    // Stage 141 — all Storyboard dialogue is voiced in ENGLISH. Read the source lines and translate any
+    // non-English dialogue to English BEFORE building the immutable speech ledger, so the verbatim per-line
+    // text restored into every board (and fed to the i2v payload / voicing / board display) is English.
+    // This overrides the earlier "verbatim in the source/original language" rule. Attribution, source order
+    // and the exact-once ledger integrity are unchanged — only the LANGUAGE of the spoken words is normalized.
+    const rawScenes = await prisma.scene.findMany({
       where: { episodeId }, orderBy: { number: "asc" },
-      select: { number: true, action: true, dialogue: true },
+      select: { number: true, action: true, dialogue: true, dialogueEn: true },
     });
+    const scenes = await Promise.all(
+      rawScenes.map(async (s) => {
+        // Prefer an already-English translated line (dialogueEn); otherwise translate the source dialogue.
+        let english = (s.dialogueEn ?? "").trim();
+        if (!english || detectSpokenLanguage(english) !== "English") {
+          const src = (s.dialogue ?? "").trim();
+          english =
+            src && detectSpokenLanguage(src) !== "English"
+              ? await translateDialogue(src, "English")
+              : src || english;
+        }
+        return { number: s.number, action: s.action, dialogue: english };
+      }),
+    );
     // Attribution honours gender-lock (a pronoun reporter resolves to the sole cast member of that sex).
     const attributionCast = links.map((l) => ({ name: l.name, gender: l.gender ?? null }));
     // Stage 135 — RESOLVING attribution: when the deterministic parser cannot attribute a quoted line, make

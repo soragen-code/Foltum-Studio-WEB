@@ -1,4 +1,6 @@
-/** Stage 132 — original-language speech ledger. Storyboard only; no translation or network.
+/** Stage 132 — speech ledger. Storyboard only; no translation or network in THIS module (pure parsing).
+ * Stage 141: the worker translates every source line to ENGLISH before building the ledger, so the text
+ * parsed and restored here is English; this module never translates and preserves the text verbatim.
  * Parsing is deliberately fail-closed: unattributed quoted speech must not become silent animation.
  * Duration is a conservative planning ESTIMATE, not a speech synthesis measurement.
  */
@@ -254,7 +256,8 @@ export function segmentSpeech(lines: SpokenLine[]): SpeechSegment[] {
 
 export interface StoryboardScriptScene { number: number; action: string | null; dialogue: string | null }
 export function storyboardSource(episode: { script?: string | null; description?: string | null }, scenes: StoryboardScriptScene[], cast: CastInput[]) {
-  // Scene.dialogue is the original/story-language script; NEVER substitute dialogueEn or translate it.
+  // Stage 141 — the worker passes ENGLISH dialogue text in this `dialogue` field (translated upstream);
+  // this builder preserves it verbatim and never translates, so the ledger text stays exactly as supplied.
   const ordered = [...scenes].sort((a, b) => a.number - b.number);
   const source = ordered.length
     ? ordered.map(s => `ACTION: ${s.action ?? ""}\n${s.dialogue ?? ""}`).join("\n\n")
