@@ -84,7 +84,9 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
       where: { episodeId }, orderBy: { number: "asc" },
       select: { number: true, action: true, dialogue: true },
     });
-    const source = storyboardSource(episode, scenes, characters);
+    // Attribution honours gender-lock (a pronoun reporter resolves to the sole cast member of that sex).
+    const attributionCast = links.map((l) => ({ name: l.name, gender: l.gender ?? null }));
+    const source = storyboardSource(episode, scenes, attributionCast);
     await updateJob(jobId, { progress: 35, message: "Splitting the story into boards..." });
     let boards: ReturnType<typeof finalizeDirectedBoards> | null = null;
     let conflict = "";
