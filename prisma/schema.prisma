@@ -183,6 +183,12 @@ model Episode {
   chainRunActive Boolean @default(false) // stage 40: a «Сгенерировать все» chain run is in progress — the worker starts the next pending scene after each finished one
   chainRunNote  String?  @db.Text // stage 40: why the last chain run stopped («Цепочка остановлена на сцене N: …»), null while running / after a clean finish
   propRegistry  String?  @db.Text // stage 54: cached JSON snapshot of the episode PROP REGISTRY ({hash, props:[{id,name,description}]}) — auto-extracted from the script, re-built when the hash changes, substituted VERBATIM into each scene's CLOTHING & PROPS section. DATA cache, not a behaviour toggle.
+  // Stage 127: production mode chosen AFTER the story is built.
+  //   null / "SCENES"  = classic 9-scene pipeline (reangle/region-plate continuity, text-to-video, keyframe/i2v BAN in force).
+  //   "STORYBOARD"     = 12-15 keyframe boards; each board frame is a 9:16 still animated into a 3-6s clip via image-to-video,
+  //                      clips stitched into one ~90s cut. The keyframe/i2v ban is LIFTED only for this mode.
+  // Legacy rows have null → treated as SCENES (fallback), so existing episodes are unaffected.
+  mode          String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -191,8 +197,34 @@ model Episode {
   scenes        Scene[]
   characters    EpisodeCharacter[]
   artifacts     EpisodeArtifact[]
+  boards        Board[]
 
   @@index([seasonId])
+}
+
+/// Stage 127: a single keyframe board of a STORYBOARD-mode episode. Each board is ONE shot change —
+/// one action beat OR one pair of dialogue lines. Its frame is a 9:16 reference still (Seedream) that is
+/// animated into a 3-6s clip via image-to-video (the board frame is the clip START frame). 12-15 boards
+/// per episode, stitched into one ~90s cut. Only used when Episode.mode = "STORYBOARD".
+model Board {
+  id               String   @id @default(cuid())
+  episodeId        String
+  index            Int      // 0-based board order within the episode
+  actionOrDialogue String   @db.Text // the single action beat OR the dialogue pair this board depicts (story language)
+  motionEn         String?  @db.Text // English image-to-video MOTION prompt (what moves during the 3-6s animation)
+  imagePrompt      String?  @db.Text // English Seedream FRAME prompt used to render the board still (9:16)
+  imageUrl         String?  // S3 URL of the rendered board frame (9:16) — the clip's START frame
+  videoUrl         String?  // S3 URL of the animated 3-6s clip (image-to-video)
+  durationSec      Int?     // planned clip length in seconds (clamped to the i2v-supported 4-6s window)
+  status           String   @default("pending") // pending | frame_generating | frame_ready | animating | done | error
+  error            String?  @db.Text // last frame/animation error
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  episode          Episode  @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+
+  @@unique([episodeId, index])
+  @@index([episodeId])
 }
 
 /// Stage 3: key locations of a project — photoreal reference images used by Seedance alongside characters.

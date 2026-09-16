@@ -157,6 +157,34 @@ export const assembleEpisodeSchema = z.object({
 });
 
 /* ------------------------------------------------------------------ */
+/*  Stage 127 — STORYBOARD production mode                              */
+/* ------------------------------------------------------------------ */
+
+/** Choose the episode's production mode AFTER the story is built. */
+export const episodeModeSchema = z.object({
+  episodeId: cuidSchema,
+  mode: z.enum(["SCENES", "STORYBOARD"]),
+});
+
+/** Generate / re-generate the 12–15 boards of a STORYBOARD episode. */
+export const storyboardBoardsSchema = z.object({
+  projectId: cuidSchema.optional().nullable(),
+  episodeId: cuidSchema,
+});
+
+/** Assemble a STORYBOARD episode's board clips into one cut. */
+export const storyboardAssembleSchema = z.object({
+  episodeId: cuidSchema,
+  quality: z.enum(["480p", "720p", "1080p"]).optional(),
+  fps: z.union([z.literal(30), z.literal(60)]).optional(),
+});
+
+/** Render a board frame / animate a board (the board id is in the route path). */
+export const boardActionSchema = z.object({
+  projectId: cuidSchema.optional().nullable(),
+});
+
+/* ------------------------------------------------------------------ */
 /*  Projects                                                           */
 /* ------------------------------------------------------------------ */
 

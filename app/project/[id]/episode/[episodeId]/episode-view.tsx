@@ -22,6 +22,7 @@ import { CHARACTER_PHOTO_COUNT } from '@/lib/reference-counts'
 import { CHARACTER_REFERENCE_COST, LOCATION_SET_COST, POWER_TIERS, POWER_TIER_CONFIG, DEFAULT_POWER_TIER, legacyTierToPower, isPowerTier, type PowerTier } from '@/lib/power-tier'
 import { IMAGE_MODELS, DEFAULT_IMAGE_MODEL, VIDEO_MODEL_LABEL, type ImageModelId } from '@/lib/ai-models'
 import { EpisodeNavGrid } from './episode-nav-grid'
+import { StoryboardPanel } from './storyboard-panel'
 import { locationExtraLabel } from '@/lib/visual-style'
 import { episodeTotalSeconds, EPISODE_MAX_TOTAL_SECONDS, EPISODE_TOTAL_LABEL } from '@/lib/season'
 import { ASSEMBLE_QUALITIES, ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY, DEFAULT_ASSEMBLE_FPS, type AssembleQuality, type AssembleFps } from '@/lib/assemble-options'
@@ -222,6 +223,22 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     return anyScene || validUrl(initial.videoUrl) ? 'scenes' : 'script'
   })
   const goPhase = (p: EpisodePhase) => { setPhase(p); if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' }) }
+
+  // Stage 127 — production mode chosen AFTER the story is built. `null` (legacy) behaves as SCENES.
+  // Only STORYBOARD swaps the Scenes UI for the storyboard panel and lifts the keyframe/i2v ban.
+  const [mode, setMode] = useState<'SCENES' | 'STORYBOARD' | null>((initial.mode as any) ?? null)
+  const [modeSaving, setModeSaving] = useState(false)
+  const chooseMode = async (m: 'SCENES' | 'STORYBOARD') => {
+    if (m === mode || modeSaving) return
+    setModeSaving(true); setError(null)
+    try {
+      const res = await fetch('/api/ai/storyboard/mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ episodeId: episode.id, mode: m }) })
+      const data = await res.json()
+      if (!res.ok) { setError(data?.error ?? "Couldn't switch mode"); return }
+      setMode(m); setEpisode((p: any) => ({ ...p, mode: m }))
+    } catch (e: any) { setError(e?.message ?? 'Request failed') }
+    finally { setModeSaving(false) }
+  }
 
   const patchScene = (sceneId: string, patch: Partial<Scene>) => setScenes((prev) => prev.map((s) => (s.id === sceneId ? { ...s, ...patch } : s)))
   const stopPolling = (sceneId: string) => { const t = pollTimers.current[sceneId]; if (t) clearTimeout(t); delete pollTimers.current[sceneId] }
@@ -1253,6 +1270,33 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         {/* Step 3 — scenes: per-scene generation + «Generate all scenes" (parallel, Stage 39) + assemble */}
         {phase === 'scenes' && (
         <>
+        {/* Stage 127 — production mode selector, shown after the story is built. Choosing Storyboard
+            swaps the Scenes UI below for the storyboard panel; Scenes (or legacy null) keeps the
+            classic flow untouched. */}
+        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4" data-testid="mode-selector">
+          <span className="text-sm font-medium">Режим сборки эпизода:</span>
+          <div className="inline-flex overflow-hidden rounded-lg border border-border text-sm" role="group" aria-label="Режим сборки">
+            {([['SCENES', 'Сцены'], ['STORYBOARD', 'Сториборд']] as const).map(([val, label]) => {
+              const active = (mode ?? 'SCENES') === val
+              return (
+                <button key={val} type="button" onClick={() => chooseMode(val)} disabled={modeSaving} aria-pressed={active}
+                  className={`px-4 py-1.5 font-medium transition disabled:opacity-50 ${active ? 'bg-primary text-primary-foreground' : 'bg-card hover:bg-muted'}`}
+                  data-testid={`mode-${val.toLowerCase()}`}>
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+          {modeSaving && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+          <p className="w-full text-xs text-muted-foreground">
+            <b>Сцены</b> — классический режим: 9 сцен со сменой ракурса, без стартового кадра (text-to-video). <b>Сториборд</b> — история делится на 12–15 кадров, каждый кадр-изображение оживляется в клип через image-to-video и склеивается в ролик ~90с.
+          </p>
+        </div>
+
+        {mode === 'STORYBOARD' ? (
+          <StoryboardPanel projectId={project.id} episodeId={episode.id} initialVideoUrl={episode.videoUrl} />
+        ) : (
+        <>
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
           {/* Stage 59 navigation — Scenes is step 3: back to references. */}
           <button onClick={() => goPhase('references')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted" data-testid="back-to-references">
@@ -1468,6 +1512,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             )
           })}
         </div>
+        </>
+        )}
         </>
         )}
       </main>

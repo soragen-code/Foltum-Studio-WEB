@@ -304,3 +304,37 @@ ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "regionPlateUrl" TEXT;
 -- rendered as a man bug). Additive & nullable; legacy rows stay null and fall back to a heuristic derived
 -- from role/appearance at reference-generation time (no auto-migration of existing images). Idempotent.
 ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "gender" TEXT;
+
+
+
+-- Stage 127: STORYBOARD production mode (alternative to SCENES, chosen AFTER the story is built).
+-- Episode.mode: null / "SCENES" = classic 9-scene pipeline (keyframe/i2v ban in force); "STORYBOARD" = 12-15
+-- keyframe boards animated via image-to-video into a ~90s cut (keyframe/i2v ban lifted only for this mode).
+-- Board holds each keyframe board (frame still + animated clip). All additive & nullable / IF NOT EXISTS;
+-- legacy episodes keep mode = null → treated as SCENES. Idempotent.
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "mode" TEXT;
+
+CREATE TABLE IF NOT EXISTS "Board" (
+  "id"               TEXT NOT NULL,
+  "episodeId"        TEXT NOT NULL,
+  "index"            INTEGER NOT NULL,
+  "actionOrDialogue" TEXT NOT NULL,
+  "motionEn"         TEXT,
+  "imagePrompt"      TEXT,
+  "imageUrl"         TEXT,
+  "videoUrl"         TEXT,
+  "durationSec"      INTEGER,
+  "status"           TEXT NOT NULL DEFAULT 'pending',
+  "error"            TEXT,
+  "createdAt"        TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt"        TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "Board_pkey" PRIMARY KEY ("id")
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "Board_episodeId_index_key" ON "Board"("episodeId", "index");
+CREATE INDEX IF NOT EXISTS "Board_episodeId_idx" ON "Board"("episodeId");
+
+DO $$ BEGIN
+  ALTER TABLE "Board" ADD CONSTRAINT "Board_episodeId_fkey"
+    FOREIGN KEY ("episodeId") REFERENCES "Episode"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;

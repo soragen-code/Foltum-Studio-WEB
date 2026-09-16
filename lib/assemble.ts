@@ -202,3 +202,112 @@ export async function assembleEpisodeVideo(episodeId: string, opts: AssembleEpis
     if (workDir) await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
   }
 }
+
+/**
+ * Stage 127 — stitch a STORYBOARD-mode episode into one ~90s mp4.
+ *
+ * Parallel to assembleEpisodeVideo but clip-source = the episode's BOARD rows (each an animated 3–6s
+ * image-to-video clip) instead of scenes. The stitcher (assembleEpisodeLocally), the seamless hard-cut
+ * join (Stage 117) and the single continuous background-music track are the SAME code path, so a
+ * storyboard cut looks and sounds consistent with a scenes episode. Requires every board to have an
+ * animated videoUrl. Persists episode.videoUrl + status='assembled'.
+ */
+export async function assembleStoryboardVideo(episodeId: string, opts: AssembleEpisodeOptions = {}): Promise<AssembleEpisodeResult> {
+  let workDir: string | null = null;
+  const quality = opts.quality ?? DEFAULT_ASSEMBLE_QUALITY;
+  const fps = opts.fps ?? DEFAULT_ASSEMBLE_FPS;
+  const report = (ev: AssembleProgressEvent) => {
+    const { progress, message } = assembleStageProgress(ev);
+    void opts.onProgress?.(progress, message);
+  };
+  try {
+    const episode = await prisma.episode.findUnique({
+      where: { id: episodeId },
+      include: { season: { select: { projectId: true, project: { select: { synopsis: true } } } } },
+    });
+    if (!episode) throw new Error("Episode not found");
+
+    const boards = await prisma.board.findMany({
+      where: { episodeId },
+      orderBy: { index: "asc" },
+    });
+    if (boards.length === 0) throw new Error("There are no boards in the episode");
+    if (boards.some((b) => !validUrl(b.videoUrl)))
+      throw new Error("Not all boards have an animated clip");
+
+    const projectId = episode.season?.projectId ?? "unknown";
+    let mood: Mood | null = null;
+    let musicFailed = false;
+    let musicSummary: string | null = null;
+    let musicError: string | null = null;
+
+    const result = await assembleEpisodeLocally(
+      // Boards carry Seedance native audio inside the clip; no separate audio track.
+      boards.map((b) => ({ videoUrl: b.videoUrl as string, audioUrl: null })),
+      {
+        quality,
+        fps,
+        onProgress: report,
+        resolveMusic:
+          opts.music === false
+            ? undefined
+            : async (dir) => {
+                try {
+                  mood = await pickMood({
+                    title: episode.title,
+                    logline: episode.logline,
+                    synopsis: episode.season?.project?.synopsis,
+                  });
+                  musicSummary = MOOD_LABELS[mood];
+                  void opts.onProgress?.(30, `Selecting music: ${musicSummary}`);
+                  const url = await getOrCreateMusicTrack(projectId, mood);
+                  const local = path.join(dir, `music_${mood}.mp3`);
+                  await downloadToFile(url, local);
+                  return local;
+                } catch (err) {
+                  console.warn(`[assemble-storyboard] ${episodeId}: music unavailable —`, (err as Error).message);
+                  mood = mood ?? DEFAULT_MOOD;
+                  musicFailed = true;
+                  musicError = (err as Error).message;
+                  return null;
+                }
+              },
+      }
+    );
+    workDir = result.workDir;
+    if (Boolean(mood) && !result.musicApplied) musicFailed = true;
+    console.log(
+      `[assemble-storyboard] ${episodeId}: ${boards.length} boards, ` +
+        `duration=${result.info.duration.toFixed(1)}s, hasAudio=${result.info.hasAudio}, ${quality}/${fps}fps, ` +
+        `music=${result.musicApplied ? musicSummary : "none"}`
+    );
+
+    void opts.onProgress?.(ASSEMBLE_UPLOAD_PROGRESS, "Loading");
+    const s3Key = `media/public/episodes/${projectId}/${episodeId}/storyboard_${Date.now()}.mp4`;
+    const buffer = await fs.readFile(result.outputPath);
+    const videoUrl = await uploadBufferToS3(buffer, s3Key, "video/mp4");
+
+    await prisma.episode.update({
+      where: { id: episodeId },
+      data: { videoUrl, status: "assembled", assembleQuality: quality, assembleFps: fps },
+    });
+
+    return {
+      videoUrl,
+      sceneCount: boards.length,
+      quality,
+      fps,
+      mood,
+      musicApplied: result.musicApplied,
+      musicPlan:
+        result.musicApplied && mood
+          ? { segments: [{ mood, startSceneIndex: 0, endSceneIndex: Math.max(0, boards.length - 1), intensity: 1 }], scenesWithoutMusic: 0 }
+          : null,
+      musicSummary,
+      musicError: musicFailed ? musicError ?? "unknown error" : null,
+      note: opts.music !== false && musicFailed ? "Music unavailable — assembled without music" : null,
+    };
+  } finally {
+    if (workDir) await fs.rm(workDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
