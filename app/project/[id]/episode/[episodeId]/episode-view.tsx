@@ -23,6 +23,7 @@ import { CHARACTER_REFERENCE_COST, LOCATION_SET_COST, POWER_TIERS, POWER_TIER_CO
 import { IMAGE_MODELS, DEFAULT_IMAGE_MODEL, VIDEO_MODEL_LABEL, type ImageModelId } from '@/lib/ai-models'
 import { EpisodeNavGrid } from './episode-nav-grid'
 import { StoryboardPanel } from './storyboard-panel'
+import { canChooseMode, canEnterProduction, productionSurface, type ProductionMode } from '@/lib/production-mode'
 import { locationExtraLabel } from '@/lib/visual-style'
 import { episodeTotalSeconds, EPISODE_MAX_TOTAL_SECONDS, EPISODE_TOTAL_LABEL } from '@/lib/season'
 import { ASSEMBLE_QUALITIES, ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY, DEFAULT_ASSEMBLE_FPS, type AssembleQuality, type AssembleFps } from '@/lib/assemble-options'
@@ -224,11 +225,13 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   })
   const goPhase = (p: EpisodePhase) => { setPhase(p); if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' }) }
 
-  // Stage 127 — production mode chosen AFTER the story is built. `null` (legacy) behaves as SCENES.
-  // Only STORYBOARD swaps the Scenes UI for the storyboard panel and lifts the keyframe/i2v ban.
-  const [mode, setMode] = useState<'SCENES' | 'STORYBOARD' | null>((initial.mode as any) ?? null)
+  // Stage 127 — production mode: SCENES (classic 9-scene) or STORYBOARD (12–15 i2v boards). Only STORYBOARD
+  // swaps the Scenes UI for the storyboard panel and lifts the keyframe/i2v ban; `null` (legacy) → SCENES.
+  // Stage 129 — the fork is offered ONLY after references are ready (see the References step), and production
+  // stays locked until a mode is chosen (canChooseMode / canEnterProduction).
+  const [mode, setMode] = useState<ProductionMode | null>((initial.mode as any) ?? null)
   const [modeSaving, setModeSaving] = useState(false)
-  const chooseMode = async (m: 'SCENES' | 'STORYBOARD') => {
+  const chooseMode = async (m: ProductionMode) => {
     if (m === mode || modeSaving) return
     setModeSaving(true); setError(null)
     try {
@@ -982,7 +985,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         <div className="mt-4 flex flex-wrap items-center gap-2 text-xs" data-testid="phase-steps">
           {(([['script', '1 · Script'], ['references', '2 · References'], ['scenes', '3 · Scenes']]) as [EpisodePhase, string][]).map(([key, label]) => {
             // Stage 107 — References and Scenes are locked until the episode has a script.
-            const reached = key === 'script' || (hasScript && (key === 'references' || refsReady || scenes.some((s) => validUrl(s.videoUrl))))
+            // Stage 129 — the Scenes step is also locked until references are ready AND a production mode is
+            // chosen (canEnterProduction); legacy episodes that already have generated scenes stay reachable.
+            const reached = key === 'script'
+              || (hasScript && key === 'references')
+              || (hasScript && key === 'scenes' && (canEnterProduction(refsReady, mode) || scenes.some((s) => validUrl(s.videoUrl))))
             const active = phase === key
             return (
               <button
@@ -1254,14 +1261,39 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             {refChars.length === 0 && <p className="text-sm text-muted-foreground">No characters are linked to this episode.</p>}
           </div>
 
+          {/* Stage 129 — production mode is chosen HERE, right after the episode's references are ready
+              (moved from the Scenes step). Until every reference is generated the fork is hidden; once it
+              is shown, production stays locked until a mode is picked (canChooseMode / canEnterProduction). */}
+          {canChooseMode(refsReady) && (
+            <div className="mt-5 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-background p-4" data-testid="mode-selector">
+              <span className="text-sm font-medium">Режим сборки эпизода:</span>
+              <div className="inline-flex overflow-hidden rounded-lg border border-border text-sm" role="group" aria-label="Режим сборки">
+                {([['SCENES', 'Сцены'], ['STORYBOARD', 'Сториборд']] as const).map(([val, label]) => {
+                  const active = mode === val
+                  return (
+                    <button key={val} type="button" onClick={() => chooseMode(val)} disabled={modeSaving} aria-pressed={active}
+                      className={`px-4 py-1.5 font-medium transition disabled:opacity-50 ${active ? 'bg-primary text-primary-foreground' : 'bg-card hover:bg-muted'}`}
+                      data-testid={`mode-${val.toLowerCase()}`}>
+                      {label}
+                    </button>
+                  )
+                })}
+              </div>
+              {modeSaving && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+              <p className="w-full text-xs text-muted-foreground">
+                <b>Сцены</b> — классический режим: 9 сцен со сменой ракурса, без стартового кадра (text-to-video). <b>Сториборд</b> — история делится на 12–15 кадров, каждый кадр-изображение оживляется в клип через image-to-video и склеивается в ролик ~90с. Выберите режим, чтобы продолжить.
+              </p>
+            </div>
+          )}
+
           {/* Stage 59 navigation — References is step 2: back to script · forward to scenes.
-              The forward button is enabled once all references (characters + locations) are ready. */}
+              Stage 129 — the forward button unlocks only once references are ready AND a mode is chosen. */}
           <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
             <button onClick={() => goPhase('script')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="refs-to-script">
               <ArrowLeft className="h-4 w-4" /> Script
             </button>
-            <button onClick={() => goPhase('scenes')} disabled={!refsReady} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="refs-to-scenes" title={refsReady ? '' : 'Generate all episode references first'}>
-              To scenes <ArrowRight className="h-4 w-4" />
+            <button onClick={() => goPhase('scenes')} disabled={!canEnterProduction(refsReady, mode)} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="refs-to-scenes" title={!refsReady ? 'Generate all episode references first' : !mode ? 'Choose a production mode to continue' : ''}>
+              To production <ArrowRight className="h-4 w-4" />
             </button>
           </div>
         </section>
@@ -1270,30 +1302,20 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         {/* Step 3 — scenes: per-scene generation + «Generate all scenes" (parallel, Stage 39) + assemble */}
         {phase === 'scenes' && (
         <>
-        {/* Stage 127 — production mode selector, shown after the story is built. Choosing Storyboard
-            swaps the Scenes UI below for the storyboard panel; Scenes (or legacy null) keeps the
-            classic flow untouched. */}
-        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4" data-testid="mode-selector">
+        {/* Stage 129 — the production mode is now CHOSEN in the References step (above), not here. This is a
+            read-only reminder of the active mode with a link back to the References step to change it. Storyboard
+            swaps the Scenes UI below for the storyboard panel; Scenes (or legacy null) keeps the classic flow. */}
+        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4" data-testid="mode-indicator">
           <span className="text-sm font-medium">Режим сборки эпизода:</span>
-          <div className="inline-flex overflow-hidden rounded-lg border border-border text-sm" role="group" aria-label="Режим сборки">
-            {([['SCENES', 'Сцены'], ['STORYBOARD', 'Сториборд']] as const).map(([val, label]) => {
-              const active = (mode ?? 'SCENES') === val
-              return (
-                <button key={val} type="button" onClick={() => chooseMode(val)} disabled={modeSaving} aria-pressed={active}
-                  className={`px-4 py-1.5 font-medium transition disabled:opacity-50 ${active ? 'bg-primary text-primary-foreground' : 'bg-card hover:bg-muted'}`}
-                  data-testid={`mode-${val.toLowerCase()}`}>
-                  {label}
-                </button>
-              )
-            })}
-          </div>
-          {modeSaving && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-          <p className="w-full text-xs text-muted-foreground">
-            <b>Сцены</b> — классический режим: 9 сцен со сменой ракурса, без стартового кадра (text-to-video). <b>Сториборд</b> — история делится на 12–15 кадров, каждый кадр-изображение оживляется в клип через image-to-video и склеивается в ролик ~90с.
-          </p>
+          <span className="rounded-md bg-primary/10 px-3 py-1 text-sm font-semibold text-primary" data-testid="mode-current">
+            {productionSurface(mode) === 'storyboard' ? 'Сториборд' : 'Сцены'}
+          </span>
+          <button type="button" onClick={() => goPhase('references')} className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground" data-testid="mode-change">
+            Изменить в шаге «Референсы»
+          </button>
         </div>
 
-        {mode === 'STORYBOARD' ? (
+        {productionSurface(mode) === 'storyboard' ? (
           <StoryboardPanel projectId={project.id} episodeId={episode.id} initialVideoUrl={episode.videoUrl} />
         ) : (
         <>
