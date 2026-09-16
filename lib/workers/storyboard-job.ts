@@ -29,7 +29,7 @@ import {
 import { buildBoardFramePrompt, type BoardCharacterLink } from "@/lib/storyboard-prompt";
 import { pickBoardGeometryAuthority } from "@/lib/board-plate";
 import { storyboardSourceResilient, type DialogueRepairFn } from "@/lib/storyboard-dialogue";
-import { finalizeDirectedBoards, type RawDirectedBoard } from "@/lib/storyboard-direction";
+import { balanceBoardCount, finalizeDirectedBoards, type RawDirectedBoard } from "@/lib/storyboard-direction";
 import { buildStoryboardVideoRequest, storyboardCameraMode } from "@/lib/storyboard-animation";
 
 export const STORYBOARD_BOARDS_JOB_TYPE = "storyboard_boards";
@@ -111,7 +111,9 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
         (conflict ? `\n\nPLANNING CONFLICT: ${conflict}. Fix the allocation without changing source speech or the 12–15 / 4–6s limits.` : "");
       const res = await chatJSON<{ boards?: RawDirectedBoard[] }>(storyboardBoardsSystemPrompt(), user, { maxTokens: 6000, temperature: 0.7 });
       try {
-        boards = finalizeDirectedBoards(res?.boards ?? [], source.segments, characters, source.actionSource);
+        // Stage 136 — converge on 12–15 boards (merge/split) before finalizing, never truncating speech.
+        const balanced = balanceBoardCount(res?.boards ?? [], source.segments);
+        boards = finalizeDirectedBoards(balanced, source.segments, characters, source.actionSource);
       } catch (err) { conflict = err instanceof Error ? err.message : "Invalid board plan"; }
     }
     if (!boards) { await failJob(jobId, `Storyboard planning conflict: ${conflict}`); return; }

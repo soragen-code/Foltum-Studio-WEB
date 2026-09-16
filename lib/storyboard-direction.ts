@@ -1,6 +1,11 @@
 /** Stage 132 — validated shot/speech/camera data, confined to Storyboard. */
 import { z } from "zod";
-import { normalizeBoards, validateBoards, type RawBoard } from "@/lib/storyboard";
+import {
+  normalizeBoards, validateBoards,
+  STORYBOARD_MIN_BOARDS, STORYBOARD_MAX_BOARDS,
+  STORYBOARD_MIN_BOARD_SEC, STORYBOARD_MAX_BOARD_SEC, STORYBOARD_TARGET_TOTAL_SEC,
+  type RawBoard,
+} from "@/lib/storyboard";
 import { estimatedSpeechSeconds, hasActorTravel, type SpeechSegment } from "@/lib/storyboard-dialogue";
 
 const speechSchema = z.object({ id: z.string(), sourceId: z.string(), speaker: z.string(), text: z.string(), delivery: z.string(), estimatedSec: z.number(), addressee: z.string().optional() });
@@ -38,10 +43,126 @@ export function readBoardDirection(json?: string | null): BoardDirection | null 
   return plan;
 }
 
+/**
+ * Stage 136 — deterministic board-count balancing so planning CONVERGES on the hard 12–15 window
+ * instead of hard-failing. The LLM split can naively yield a count outside 12–15 when the dialogue /
+ * action volume is unusually high or low. We redistribute WITHOUT ever truncating, omitting, re-ordering
+ * or speeding up speech:
+ *   - too many boards (> MAX): merge adjacent short/static boards — pack up to two short spoken lines
+ *     into one board while staying inside the 4–6s window; every speech ID is preserved, in source order,
+ *     with its NAME (delivery): "line" attribution. Boards with real scripted travel are never merged.
+ *   - too few boards (< MIN): split a two-line dialogue board into one line each (a shot change at the
+ *     cut), or split the longest static action board into two, adding boards without inventing speech.
+ * Durations are re-fit into [4,6]s summing toward ~90s. Only genuinely unfittable material (far more
+ * two-line boards than MAX can hold) throws an informative conflict describing how much speech there is.
+ *
+ * Runs BEFORE finalizeDirectedBoards so the ledger's exact-once speech-ID check still sees every segment.
+ */
+export function balanceBoardCount(raw: RawDirectedBoard[], segments: SpeechSegment[]): RawDirectedBoard[] {
+  if (!Array.isArray(raw)) return raw;
+  // Clone boards (and their speechIds arrays) so the caller's plan is never mutated in place.
+  const boards: RawDirectedBoard[] = raw.map(b => ({ ...b, speechIds: [...(b.speechIds ?? [])] }));
+  if (boards.length >= STORYBOARD_MIN_BOARDS && boards.length <= STORYBOARD_MAX_BOARDS)
+    return boards; // already in range — leave the model's plan untouched.
+
+  const ledger = new Map(segments.map(s => [s.id, s]));
+  const segSec = (id: string) => { const s = ledger.get(id); return s ? estimatedSpeechSeconds(s) : 0; };
+  const speechSec = (b: RawDirectedBoard) => (b.speechIds ?? []).reduce((sum, id) => sum + segSec(id), 0);
+  const travels = (b: RawDirectedBoard) => hasActorTravel(b.travelEvidence ?? "");
+  const hasSpeech = (b: RawDirectedBoard) => (b.speechIds ?? []).length > 0;
+  const joinAction = (a?: string, c?: string) => {
+    const parts = [a?.trim(), c?.trim()].filter(Boolean) as string[];
+    return parts.filter((p, i) => parts.indexOf(p) === i).join(". ") || undefined;
+  };
+
+  // ── MERGE: too many boards ──────────────────────────────────────────────────
+  // Pick the adjacent pair that fits inside ONE board (≤2 spoken lines, ≤ MAX_BOARD_SEC of speech,
+  // neither travelling) with the smallest combined speech time, and fold them together.
+  let guard = boards.length * 4;
+  while (boards.length > STORYBOARD_MAX_BOARDS && guard-- > 0) {
+    let best = -1, bestSec = Infinity;
+    for (let i = 0; i < boards.length - 1; i++) {
+      const a = boards[i], b = boards[i + 1];
+      if (travels(a) || travels(b)) continue;
+      if ((a.speechIds?.length ?? 0) + (b.speechIds?.length ?? 0) > 2) continue;
+      const combined = speechSec(a) + speechSec(b);
+      if (combined > STORYBOARD_MAX_BOARD_SEC) continue;
+      if (combined < bestSec) { bestSec = combined; best = i; }
+    }
+    if (best < 0) break; // nothing further mergeable without truncation
+    const a = boards[best], b = boards[best + 1];
+    const bSpeaks = hasSpeech(b); // the active (later) speaker drives the reverse-shot / eyeline
+    const merged: RawDirectedBoard = {
+      ...a,
+      speechIds: [...(a.speechIds ?? []), ...(b.speechIds ?? [])],
+      actionOrDialogue: [a.actionOrDialogue, b.actionOrDialogue].map(t => (t ?? "").trim()).filter(Boolean).join("\n"),
+      actionEnglish: joinAction(a.actionEnglish, b.actionEnglish),
+      travelEvidence: "",
+      shot: (bSpeaks ? b.shot : a.shot) ?? a.shot ?? b.shot,
+      listener: (bSpeaks ? b.listener : a.listener) || a.listener || b.listener,
+      durationSec: null,
+    };
+    boards.splice(best, 2, merged);
+  }
+
+  // ── SPLIT: too few boards ───────────────────────────────────────────────────
+  guard = STORYBOARD_MAX_BOARDS * 4;
+  while (boards.length < STORYBOARD_MIN_BOARDS && guard-- > 0) {
+    // Prefer splitting a two-line dialogue board into one line each — a genuine shot change at the cut.
+    const twoLine = boards.findIndex(b => (b.speechIds?.length ?? 0) === 2 && !travels(b));
+    if (twoLine >= 0) {
+      const b = boards[twoLine];
+      const [id1, id2] = b.speechIds!;
+      const seg2 = ledger.get(id2);
+      const first: RawDirectedBoard = { ...b, speechIds: [id1], durationSec: null };
+      const second: RawDirectedBoard = {
+        ...b, speechIds: [id2], durationSec: null,
+        shot: seg2?.addressee ? "listener_reverse" : (b.shot ?? "over_shoulder"),
+        listener: seg2?.addressee || b.listener,
+      };
+      boards.splice(twoLine, 1, first, second);
+      continue;
+    }
+    // Otherwise split the longest static (no-speech, no-travel) action board into two identical halves.
+    let longest = -1, longestLen = -1;
+    for (let i = 0; i < boards.length; i++) {
+      const b = boards[i];
+      if ((b.speechIds?.length ?? 0) !== 0 || travels(b)) continue;
+      const len = (b.actionOrDialogue ?? "").length;
+      if (len > longestLen) { longestLen = len; longest = i; }
+    }
+    if (longest >= 0) {
+      const b = boards[longest];
+      boards.splice(longest, 1, { ...b, durationSec: null }, { ...b, durationSec: null });
+      continue;
+    }
+    break; // nothing splittable without inventing speech
+  }
+
+  // ── Still outside the window → genuinely unfittable material. ────────────────
+  if (boards.length < STORYBOARD_MIN_BOARDS || boards.length > STORYBOARD_MAX_BOARDS) {
+    const totalSpeechSec = segments.reduce((sum, s) => sum + estimatedSpeechSeconds(s), 0);
+    throw new Error(
+      `after balancing, ${boards.length} boards remain, outside the required ${STORYBOARD_MIN_BOARDS}–${STORYBOARD_MAX_BOARDS}. ` +
+      `This episode carries ~${Math.round(totalSpeechSec)}s of dialogue across ${segments.length} speech segments, which cannot ` +
+      `be packed into ${STORYBOARD_MAX_BOARDS} boards of ${STORYBOARD_MIN_BOARD_SEC}–${STORYBOARD_MAX_BOARD_SEC}s without ` +
+      `truncating speech. Shorten or split the script, or approve a longer board budget. No boards or dialogue were truncated.`,
+    );
+  }
+
+  // ── Re-fit durations into [4,6]s, summing toward ~90s (each segment is ≤6s by construction). ──
+  const dur = boards.map(b => Math.min(STORYBOARD_MAX_BOARD_SEC, Math.max(STORYBOARD_MIN_BOARD_SEC, Math.ceil(speechSec(b)))));
+  let total = dur.reduce((s, d) => s + d, 0);
+  for (let i = 0; i < dur.length && total < STORYBOARD_TARGET_TOTAL_SEC; i++) {
+    while (dur[i] < STORYBOARD_MAX_BOARD_SEC && total < STORYBOARD_TARGET_TOTAL_SEC) { dur[i]++; total++; }
+  }
+  return boards.map((b, i) => ({ ...b, durationSec: dur[i] }));
+}
+
 /** Preserve the ledger exactly: model references immutable IDs, never rewrites spoken text. */
 export function finalizeDirectedBoards(raw: RawDirectedBoard[], segments: SpeechSegment[], cast: string[], actionSource: string) {
-  if (!Array.isArray(raw) || raw.length < 12 || raw.length > 15)
-    throw new Error("Storyboard planning conflict: exactly 12–15 boards required. No boards or dialogue were truncated.");
+  if (!Array.isArray(raw) || raw.length < STORYBOARD_MIN_BOARDS || raw.length > STORYBOARD_MAX_BOARDS)
+    throw new Error(`Storyboard planning conflict: exactly ${STORYBOARD_MIN_BOARDS}–${STORYBOARD_MAX_BOARDS} boards required. No boards or dialogue were truncated.`);
   const ledger = new Map(segments.map(s => [s.id, s]));
   const used: string[] = [];
   const directions = raw.map((b, index): BoardDirection => {
