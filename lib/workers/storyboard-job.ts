@@ -30,6 +30,8 @@ import { buildBoardFramePrompt, type BoardCharacterLink } from "@/lib/storyboard
 import { deriveSetAnchors } from "@/lib/set-anchors";
 import { readBoardDirection } from "@/lib/storyboard-direction";
 import { pickBoardGeometryAuthority } from "@/lib/board-plate";
+import { boardSceneKey, pickSceneAnchor, renderingLowerSiblings, composeBoardImageInput } from "@/lib/board-anchor";
+import { WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
 import { storyboardSourceResilient, type DialogueRepairFn } from "@/lib/storyboard-dialogue";
 import { balanceBoardCount, finalizeDirectedBoards, type RawDirectedBoard } from "@/lib/storyboard-direction";
 import { buildStoryboardVideoRequest, storyboardCameraMode } from "@/lib/storyboard-animation";
@@ -42,6 +44,13 @@ export const STORYBOARD_ASSEMBLE_JOB_TYPE = "storyboard_assemble";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const validUrl = (u?: string | null) => typeof u === "string" && u.startsWith("http") && u.length > 10;
+
+/** Stage 142 — sequential render inside a scene: poll interval / max wait for a lower-index sibling still rendering. */
+const ANCHOR_WAIT_POLL_MS = Number(process.env.BOARD_ANCHOR_WAIT_POLL_MS ?? 4000);
+const ANCHOR_WAIT_MAX_POLLS = Number(process.env.BOARD_ANCHOR_WAIT_MAX_POLLS ?? 90); // ~6 min at 4s
+
+/** Minimal sibling projection shared by the Stage 140 set-anchors and the Stage 142 scene anchor. */
+const SIBLING_SELECT = { id: true, index: true, imageUrl: true, status: true, directionJson: true, motionEn: true, actionOrDialogue: true } as const;
 
 /** Load the episode's cast (identity + sex source of truth) for a board frame prompt. */
 async function loadEpisodeCharacters(episodeId: string): Promise<{ links: BoardCharacterLink[]; refImages: string[] }> {
@@ -191,28 +200,56 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
     // Stage 140 — derive the location's PERSISTENT SET PIECES (large furniture + its contents) from the
     // episode locationDesc plus EVERY board's action text, so the same set objects are pinned into every
     // board's prompt and cannot vanish between adjacent boards / on a reverse angle. Deterministic, no LLM.
-    const siblingBoards = await prisma.board.findMany({
-      where: { episodeId: board.episodeId },
-      select: { directionJson: true, motionEn: true, actionOrDialogue: true },
-    });
+    const loadSiblings = () => prisma.board.findMany({ where: { episodeId: board.episodeId }, select: SIBLING_SELECT });
+    let siblingBoards = await loadSiblings();
     const boardActions = siblingBoards
       .map((b) => readBoardDirection(b.directionJson)?.actionEnglish || b.motionEn || b.actionOrDialogue || "")
       .filter((s) => s.trim().length > 0);
     const setAnchors = deriveSetAnchors(board.episode.locationDesc ?? "", boardActions);
+
+    // Stage 142 — SCENE ANCHOR FRAME. Boards of one scene (episode × location) render strictly IN ORDER: while a
+    // lower-index sibling of the same scene is still rendering, wait for it (bounded), so the earliest successful
+    // board becomes this board's anchor. A failed/never-rendered lower sibling is not waited for — the next
+    // successful board takes over as anchor. The first board of a scene has no anchor and BECOMES the anchor.
+    const sceneKey = boardSceneKey({ episodeId: board.episodeId, locationId: board.episode.locationId });
+    const self = { id: board.id, index: board.index, sceneKey };
+    const toSiblings = (rows: typeof siblingBoards) =>
+      rows.map((b) => ({ id: b.id, index: b.index, imageUrl: b.imageUrl, status: b.status, sceneKey }));
+    for (let poll = 0; poll < ANCHOR_WAIT_MAX_POLLS; poll++) {
+      const rendering = renderingLowerSiblings(self, toSiblings(siblingBoards));
+      if (rendering.length === 0) break;
+      if (await canceled()) throw new GenerationCanceledError();
+      const waitingFor = Math.min(...rendering.map((r) => r.index)) + 1;
+      await updateJob(jobId, { progress: 20, message: `Board ${board.index + 1}: waiting for board ${waitingFor} (scene anchor)...` });
+      await sleep(ANCHOR_WAIT_POLL_MS);
+      siblingBoards = await loadSiblings();
+    }
+    const anchor = pickSceneAnchor(self, toSiblings(siblingBoards));
+
+    // Character reference images first (identity), then the SCENE ANCHOR FRAME, then the environment plate(s) as
+    // geometry authority. Capped at WAVESPEED_IMAGE_MAX_REFS: plates are cut first, the anchor and characters never.
+    const composed = composeBoardImageInput({
+      characterRefs: refImages,
+      anchorUrl: anchor?.anchorUrl ?? null,
+      plateUrls: authority.plateUrls,
+      hasRegionPlate: authority.hasRegionPlate,
+      maxRefs: WAVESPEED_IMAGE_MAX_REFS,
+    });
+    const imageInput = composed.imageInput;
+    console.info(
+      `[board-image] board ${board.index + 1}: anchor=${anchor ? `board ${anchor.anchorIndex + 1} (ref #${composed.anchorRefIndex})` : "none (becomes anchor)"}, chars=${refImages.length}, plates=${composed.platesAttached.length}/${authority.plateUrls.length}, refs=${imageInput.length}`,
+    );
 
     const { prompt } = buildBoardFramePrompt({
       board: { index: board.index, actionOrDialogue: board.actionOrDialogue, motion: board.motionEn, directionJson: board.directionJson },
       characters: links,
       locationName: board.episode.locationName,
       locationDesc: board.episode.locationDesc,
-      hasPlate: authority.hasPlate,
-      hasRegionPlate: authority.hasRegionPlate,
+      hasPlate: composed.platesAttached.length > 0,
+      hasRegionPlate: composed.regionPlateAttached,
       setAnchors,
+      anchorRefIndex: composed.anchorRefIndex,
     });
-
-    // Character reference images first (identity), then the environment plate(s) as geometry authority. The
-    // provider caps the total at WAVESPEED_IMAGE_MAX_REFS; dedupe so a plate never repeats a character ref.
-    const imageInput = Array.from(new Set([...refImages, ...authority.plateUrls]));
 
     await updateJob(jobId, { progress: 45, message: `Board ${board.index + 1}: rendering frame...` });
     const remote = await generateImage(
@@ -222,7 +259,7 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
     if (await canceled()) throw new GenerationCanceledError();
 
     const imageUrl = await uploadRemoteToS3(remote, `media/public/boards/${projectId}/${boardId}/${VISUAL_STYLE_ID}/frame-${Date.now()}.png`, "image/png");
-    await prisma.board.update({ where: { id: boardId }, data: { imageUrl, imagePrompt: prompt, plateUrl: authority.primaryUrl, status: "frame_ready", error: null } });
+    await prisma.board.update({ where: { id: boardId }, data: { imageUrl, imagePrompt: prompt, plateUrl: authority.primaryUrl, anchorUrl: anchor?.anchorUrl ?? null, anchorBoardId: anchor?.anchorBoardId ?? null, status: "frame_ready", error: null } });
     await completeJob(jobId, { boardId, imageUrl }, `Board ${board.index + 1} frame ready`);
   } catch (err: any) {
     if (err instanceof GenerationCanceledError) { await markCanceled(jobId); return; }

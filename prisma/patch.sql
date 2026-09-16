@@ -349,3 +349,7 @@ ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "plateUrl"  TEXT;
 
 -- Stage 132: Storyboard-only direction data; additive, legacy boards remain NULL.
 ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "directionJson" TEXT;
+
+-- Stage 142: SCENE ANCHOR FRAME per storyboard scene (additive, idempotent)
+ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "anchorUrl" TEXT;
+ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "anchorBoardId" TEXT;

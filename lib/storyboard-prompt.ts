@@ -21,6 +21,7 @@ import { buildStoryboardAnimationPrompt, type AnimationBoard } from "@/lib/story
 import { boardShotContext, readBoardDirection } from "@/lib/storyboard-direction";
 import { withForcedGender } from "@/lib/full-body-prompt";
 import { buildSetAnchorsLine } from "@/lib/set-anchors";
+import { buildSceneAnchorLine, BOARD_BODY_FURNITURE_LINE } from "@/lib/board-anchor";
 
 /**
  * Stage 131 — the GEOMETRY AUTHORITY block for a board frame when the episode Location's master plate(s) are
@@ -70,6 +71,12 @@ export interface BuildBoardFramePromptInput {
    * desk on a reverse shot). Empty/omitted → the prompt is byte-identical to the Stage 131 behaviour.
    */
   setAnchors?: string[];
+  /**
+   * Stage 142 — 1-based position of the SCENE ANCHOR FRAME (the scene's first rendered board still) inside the
+   * image_input the worker attaches. When set, a "SCENE ANCHOR FRAME (reference image N)" block is added that
+   * demands the identical set from that frame. Null/omitted (first board of a scene) → no anchor block.
+   */
+  anchorRefIndex?: number | null;
 }
 
 export interface BuildBoardFramePromptResult {
@@ -123,7 +130,11 @@ export function buildBoardFramePrompt(input: BuildBoardFramePromptInput): BuildB
     castLines.length ? `${direction ? "SCENE CAST IDENTITY (off-screen partners stay in the location)" : "CHARACTERS IN FRAME"}:\n${castLines.join("\n")}` : "",
     locationLine ? `LOCATION: ${locationLine}` : "",
     geometryAuthorityLine,
+    // Stage 142 — the scene's first rendered board still is attached as an IMAGE reference; name its index.
+    input.anchorRefIndex ? buildSceneAnchorLine(input.anchorRefIndex) : "",
     buildSetAnchorsLine(input.setAnchors ?? []),
+    // Stage 142 — bodies never fuse into desks/tables (every board, anchor or not).
+    BOARD_BODY_FURNITURE_LINE,
     REFERENCE_APPEARANCE_ONLY_LINE,
     dialogue ? GAZE_AT_LISTENER_LINE : "",
     direction ? boardShotContext(direction) : (dialogue ? "DIALOGUE COVERAGE: choose one medium, close-up or over-the-shoulder speaker / reverse-shot listener plan. Maintain connected eyelines, screen sides and the 180-degree axis. Off-screen partners remain in the location. Shot changes only BETWEEN boards by hard cut." : ""),
