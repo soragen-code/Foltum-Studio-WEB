@@ -23,10 +23,12 @@ import {
   detailedEpisodeStory,
   storyboardBoardsSystemPrompt,
   storyboardBoardsUserPrompt,
+  dialogueRepairSystemPrompt,
+  dialogueRepairUserPrompt,
 } from "@/lib/storyboard";
 import { buildBoardFramePrompt, type BoardCharacterLink } from "@/lib/storyboard-prompt";
 import { pickBoardGeometryAuthority } from "@/lib/board-plate";
-import { storyboardSource } from "@/lib/storyboard-dialogue";
+import { storyboardSourceResilient, type DialogueRepairFn } from "@/lib/storyboard-dialogue";
 import { finalizeDirectedBoards, type RawDirectedBoard } from "@/lib/storyboard-direction";
 import { buildStoryboardVideoRequest, storyboardCameraMode } from "@/lib/storyboard-animation";
 
@@ -86,7 +88,18 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
     });
     // Attribution honours gender-lock (a pronoun reporter resolves to the sole cast member of that sex).
     const attributionCast = links.map((l) => ({ name: l.name, gender: l.gender ?? null }));
-    const source = storyboardSource(episode, scenes, attributionCast);
+    // Stage 135 — RESOLVING attribution: when the deterministic parser cannot attribute a quoted line, make
+    // ONE LLM repair round that forces an explicit canonical speaker (+delivery/addressee) so boards rebuild
+    // in the required NAME (delivery): "line" format instead of hard-blocking. Same model as the board split.
+    const dialogueRepair: DialogueRepairFn = async ({ cast, lines }) => {
+      const res = await chatJSON<{ assignments?: Array<{ id: number; speaker: string; delivery?: string; addressee?: string }> }>(
+        dialogueRepairSystemPrompt(),
+        dialogueRepairUserPrompt(cast, lines),
+        { maxTokens: 2000, temperature: 0 },
+      );
+      return res?.assignments ?? [];
+    };
+    const source = await storyboardSourceResilient(episode, scenes, attributionCast, { repair: dialogueRepair });
     await updateJob(jobId, { progress: 35, message: "Splitting the story into boards..." });
     let boards: ReturnType<typeof finalizeDirectedBoards> | null = null;
     let conflict = "";

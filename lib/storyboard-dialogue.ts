@@ -101,8 +101,9 @@ function resolveSpeakers(events: SpeechEvent[], cast: CastNorm[]): void {
   }
 }
 
-export function extractSpokenLines(source: string, cast: CastInput[] = []): SpokenLine[] {
-  const castNorm = normalizeCast(cast);
+/** Parse the raw quote + line-oriented speech events out of a source block, in source order.
+ * Attribution from the immediately-preceding prose is applied, but nothing is resolved or rejected yet. */
+function buildSpeechEvents(source: string, castNorm: CastNorm[]): SpeechEvent[] {
   const events: SpeechEvent[] = [];
   const quotes = [...source.matchAll(QUOTES)];
   let lastEnd = 0;
@@ -124,12 +125,14 @@ export function extractSpokenLines(source: string, cast: CastInput[] = []): Spok
     if (canon) events.push({ text: m[3], delivery: m[2] ?? "", position: offset, speaker: canon.name });
   }
   events.sort((a, b) => a.position - b.position);
-  // Deterministic resolution runs in source order so alternation / turn-taking see prior speakers.
-  resolveSpeakers(events, castNorm);
-  // Eyeline/reverse-shot addressee pass (staging only — does NOT influence speaker resolution above, so
-  // it can never mask a speaker conflict). Priority: explicit addressee from prose → the single partner
-  // in a two-hander → in a 3+ scene, the person just speaking (natural reply target). First line with no
-  // prior speaker and no explicit addressee stays undefined = addressed to the group.
+  return events;
+}
+
+/** Eyeline/reverse-shot addressee pass (staging only — does NOT influence speaker resolution, so it can
+ * never mask a speaker conflict). Priority: explicit addressee from prose → the single partner in a
+ * two-hander → in a 3+ scene, the person just speaking (natural reply target). A line with no prior
+ * speaker and no explicit addressee stays undefined = addressed to the group. */
+function applyAddresseePass(events: SpeechEvent[], castNorm: CastNorm[]): void {
   const names = castNorm.map(c => c.name);
   let prevSpeaker: string | undefined;
   for (const e of events) {
@@ -140,10 +143,86 @@ export function extractSpokenLines(source: string, cast: CastInput[] = []): Spok
     if (e.addressee && (!names.includes(e.addressee) || e.addressee === e.speaker)) e.addressee = undefined;
     if (e.speaker) prevSpeaker = e.speaker;
   }
+}
+
+/** Resolve `name` (canonical OR alias, case-insensitive) to the canonical cast NAME, else undefined. */
+function canonicalName(name: string | undefined, castNorm: CastNorm[]): string | undefined {
+  const n = (name ?? "").trim().toLowerCase();
+  if (!n) return undefined;
+  return castNorm.find(c => c.forms.some(f => f.toLowerCase() === n))?.name;
+}
+
+/** The exact legacy conflict message. Kept verbatim so the fail-closed contract is unchanged. */
+const ATTRIBUTION_CONFLICT =
+  "Dialogue attribution conflict: quoted speech has no unambiguous cast speaker. Rebuild boards with explicit NAME (delivery): quoted line.";
+
+/** Fail-closed extractor (Stage 132/133/134 behaviour): every quoted line must resolve deterministically
+ * to a unique cast speaker, otherwise it THROWS. Used by pure callers and by every synchronous test. */
+export function extractSpokenLines(source: string, cast: CastInput[] = []): SpokenLine[] {
+  const castNorm = normalizeCast(cast);
+  const events = buildSpeechEvents(source, castNorm);
+  // Deterministic resolution runs in source order so alternation / turn-taking see prior speakers.
+  resolveSpeakers(events, castNorm);
+  applyAddresseePass(events, castNorm);
   return events.map(e => {
-    if (!e.speaker) throw new Error("Dialogue attribution conflict: quoted speech has no unambiguous cast speaker. Rebuild boards with explicit NAME (delivery): quoted line.");
+    if (!e.speaker) throw new Error(ATTRIBUTION_CONFLICT);
     return { speaker: e.speaker, text: e.text, delivery: cleanDelivery(e.delivery, castNorm), addressee: e.addressee };
   });
+}
+
+/** One repair round for lines the deterministic pass could not attribute. Given the cast and the exact
+ * unresolved quoted lines (with preceding context), it returns an explicit speaker (and optional delivery
+ * / addressee) per line id. It NEVER rewrites the spoken text — only who says it. */
+export type DialogueRepairFn = (input: {
+  cast: string[];
+  lines: { id: number; text: string; contextBefore: string }[];
+}) => Promise<Array<{ id: number; speaker: string; delivery?: string; addressee?: string }>>;
+
+/** Stage 135 — RESOLVING extractor. Runs the same deterministic attribution first; when quoted lines are
+ * still unattributed it makes ONE optional repair round (deterministic context is exhausted, so the caller
+ * supplies an LLM disambiguator) that forces an explicit speaker per line, then re-resolves. A hard,
+ * INFORMATIVE conflict is thrown ONLY when even the repair cannot attribute a line — the normal path
+ * succeeds and boards rebuild. The spoken text/order is never changed; only the speaker is filled in. */
+export async function extractSpokenLinesResilient(
+  source: string, cast: CastInput[] = [], opts: { repair?: DialogueRepairFn } = {},
+): Promise<SpokenLine[]> {
+  const castNorm = normalizeCast(cast);
+  const names = castNorm.map(c => c.name);
+  const events = buildSpeechEvents(source, castNorm);
+  resolveSpeakers(events, castNorm);
+  const unresolved = events.filter(e => !e.speaker);
+  if (unresolved.length && opts.repair) {
+    const lines = unresolved.map((e, i) => ({
+      id: i,
+      text: e.text,
+      contextBefore: source.slice(0, e.position).slice(-200).replace(/\s+/g, " ").trim(),
+    }));
+    const fixes = await opts.repair({ cast: names, lines });
+    const byId = new Map((fixes ?? []).map(f => [f.id, f]));
+    unresolved.forEach((e, i) => {
+      const fix = byId.get(i);
+      if (!fix) return;
+      const speaker = canonicalName(fix.speaker, castNorm);
+      if (!speaker) return; // ignore an out-of-cast guess; the hard-fail below reports it precisely
+      e.speaker = speaker;
+      if (fix.delivery && !e.delivery.trim()) e.delivery = fix.delivery;
+      const addressee = canonicalName(fix.addressee, castNorm);
+      if (addressee && addressee !== speaker) e.addressee = addressee;
+    });
+    // A newly-fixed speaker can let two-hander alternation resolve its neighbours — re-run resolution once.
+    resolveSpeakers(events, castNorm);
+  }
+  applyAddresseePass(events, castNorm);
+  const stillUnresolved = events.filter(e => !e.speaker);
+  if (stillUnresolved.length) {
+    const first = stillUnresolved[0];
+    throw new Error(
+      `Dialogue attribution conflict: could not assign a unique speaker to ${JSON.stringify(first.text)}` +
+      ` (${stillUnresolved.length} line(s) unresolved). Candidates: ${names.join(", ") || "none"}.` +
+      ` Rebuild boards with explicit NAME (delivery): "quoted line".`,
+    );
+  }
+  return events.map(e => ({ speaker: e.speaker!, text: e.text, delivery: cleanDelivery(e.delivery, castNorm), addressee: e.addressee }));
 }
 
 export function estimatedSpeechSeconds(line: SpokenLine): number {
@@ -189,6 +268,39 @@ export function storyboardSource(episode: { script?: string | null; description?
       return found;
     })
     : extractSpokenLines(source, cast);
+  const segments = segmentSpeech(speech);
+  if (segments.reduce((sum, s) => sum + s.estimatedSec, 0) > 90)
+    throw new Error("Dialogue duration conflict: original speech exceeds the 15 × 6s planning budget. No lines were omitted; approve a script/budget change separately.");
+  return { source, segments, actionSource: ordered.length ? ordered.map(s => s.action ?? "").join("\n") : source };
+}
+
+/** Stage 135 — RESOLVING source builder. Mirrors {@link storyboardSource} but attributes speech through
+ * {@link extractSpokenLinesResilient}, so ambiguous quoted speech is repaired to an explicit speaker and
+ * boards rebuild instead of hard-failing. The spoken text/order is preserved verbatim; only who says each
+ * line is filled in. A hard conflict is thrown only when even the repair round cannot attribute a line. */
+export async function storyboardSourceResilient(
+  episode: { script?: string | null; description?: string | null },
+  scenes: StoryboardScriptScene[],
+  cast: CastInput[],
+  opts: { repair?: DialogueRepairFn } = {},
+) {
+  const ordered = [...scenes].sort((a, b) => a.number - b.number);
+  const source = ordered.length
+    ? ordered.map(s => `ACTION: ${s.action ?? ""}\n${s.dialogue ?? ""}`).join("\n\n")
+    : (episode.script?.trim() || episode.description?.trim() || "");
+  let speech: SpokenLine[];
+  if (ordered.length) {
+    speech = [];
+    for (const s of ordered) {
+      const text = s.dialogue?.trim() ?? "";
+      const found = await extractSpokenLinesResilient(text, cast, opts);
+      if (text && !found.length && !/^\[?(?:NO DIALOGUE|SILENCE|NON-VERBAL|БЕЗ ДИАЛОГА)\]?$/iu.test(text))
+        throw new Error(`Source dialogue format conflict in scene ${s.number}: preserve explicit speaker attribution before splitting.`);
+      speech.push(...found);
+    }
+  } else {
+    speech = await extractSpokenLinesResilient(source, cast, opts);
+  }
   const segments = segmentSpeech(speech);
   if (segments.reduce((sum, s) => sum + s.estimatedSec, 0) > 90)
     throw new Error("Dialogue duration conflict: original speech exceeds the 15 × 6s planning budget. No lines were omitted; approve a script/budget change separately.");
