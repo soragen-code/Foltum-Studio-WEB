@@ -181,6 +181,7 @@ async function workerFlowCheck() {
     board: {
       deleteMany: async () => { saved = []; },
       createMany: async ({ data }: any) => { saved = data.map((b: any, i: number) => ({ ...b, id: `board-${i}` })); },
+      findMany: async () => saved,
       findUnique: async ({ where }: any) => { const b = saved.find(s => s.id === where.id) ?? saved[0]; return { ...b, episode }; },
       update: async ({ where, data }: any) => { const b = saved.find(s => s.id === where.id) ?? saved[0]; Object.assign(b, data); return b; },
     },

@@ -20,6 +20,7 @@ import { REFERENCE_APPEARANCE_ONLY_LINE, GAZE_AT_LISTENER_LINE } from "@/lib/sce
 import { buildStoryboardAnimationPrompt, type AnimationBoard } from "@/lib/storyboard-animation";
 import { boardShotContext, readBoardDirection } from "@/lib/storyboard-direction";
 import { withForcedGender } from "@/lib/full-body-prompt";
+import { buildSetAnchorsLine } from "@/lib/set-anchors";
 
 /**
  * Stage 131 — the GEOMETRY AUTHORITY block for a board frame when the episode Location's master plate(s) are
@@ -62,6 +63,13 @@ export interface BuildBoardFramePromptInput {
    */
   hasPlate?: boolean;
   hasRegionPlate?: boolean;
+  /**
+   * Stage 140 — the location's persistent large set pieces (derived by `deriveSetAnchors` from the episode
+   * locationDesc + all boards' action text). When non-empty, an emphatic PERSISTENT SET PIECES line is added
+   * so the same furniture/props stay present across every board and every camera angle (no more vanishing
+   * desk on a reverse shot). Empty/omitted → the prompt is byte-identical to the Stage 131 behaviour.
+   */
+  setAnchors?: string[];
 }
 
 export interface BuildBoardFramePromptResult {
@@ -115,6 +123,7 @@ export function buildBoardFramePrompt(input: BuildBoardFramePromptInput): BuildB
     castLines.length ? `${direction ? "SCENE CAST IDENTITY (off-screen partners stay in the location)" : "CHARACTERS IN FRAME"}:\n${castLines.join("\n")}` : "",
     locationLine ? `LOCATION: ${locationLine}` : "",
     geometryAuthorityLine,
+    buildSetAnchorsLine(input.setAnchors ?? []),
     REFERENCE_APPEARANCE_ONLY_LINE,
     dialogue ? GAZE_AT_LISTENER_LINE : "",
     direction ? boardShotContext(direction) : (dialogue ? "DIALOGUE COVERAGE: choose one medium, close-up or over-the-shoulder speaker / reverse-shot listener plan. Maintain connected eyelines, screen sides and the 180-degree axis. Off-screen partners remain in the location. Shot changes only BETWEEN boards by hard cut." : ""),

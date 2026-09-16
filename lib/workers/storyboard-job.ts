@@ -27,6 +27,8 @@ import {
   dialogueRepairUserPrompt,
 } from "@/lib/storyboard";
 import { buildBoardFramePrompt, type BoardCharacterLink } from "@/lib/storyboard-prompt";
+import { deriveSetAnchors } from "@/lib/set-anchors";
+import { readBoardDirection } from "@/lib/storyboard-direction";
 import { pickBoardGeometryAuthority } from "@/lib/board-plate";
 import { storyboardSourceResilient, type DialogueRepairFn } from "@/lib/storyboard-dialogue";
 import { balanceBoardCount, finalizeDirectedBoards, type RawDirectedBoard } from "@/lib/storyboard-direction";
@@ -167,6 +169,18 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
       authority = pickBoardGeometryAuthority(location, board.region);
     }
 
+    // Stage 140 — derive the location's PERSISTENT SET PIECES (large furniture + its contents) from the
+    // episode locationDesc plus EVERY board's action text, so the same set objects are pinned into every
+    // board's prompt and cannot vanish between adjacent boards / on a reverse angle. Deterministic, no LLM.
+    const siblingBoards = await prisma.board.findMany({
+      where: { episodeId: board.episodeId },
+      select: { directionJson: true, motionEn: true, actionOrDialogue: true },
+    });
+    const boardActions = siblingBoards
+      .map((b) => readBoardDirection(b.directionJson)?.actionEnglish || b.motionEn || b.actionOrDialogue || "")
+      .filter((s) => s.trim().length > 0);
+    const setAnchors = deriveSetAnchors(board.episode.locationDesc ?? "", boardActions);
+
     const { prompt } = buildBoardFramePrompt({
       board: { index: board.index, actionOrDialogue: board.actionOrDialogue, motion: board.motionEn, directionJson: board.directionJson },
       characters: links,
@@ -174,6 +188,7 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
       locationDesc: board.episode.locationDesc,
       hasPlate: authority.hasPlate,
       hasRegionPlate: authority.hasRegionPlate,
+      setAnchors,
     });
 
     // Character reference images first (identity), then the environment plate(s) as geometry authority. The
