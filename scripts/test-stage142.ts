@@ -90,9 +90,9 @@ ok(first.prompt.includes(BOARD_BODY_FURNITURE_LINE), 'prompt(first board): body/
 const later = buildBoardFramePrompt({ ...base, hasPlate: true, anchorRefIndex: 3 });
 ok(later.prompt.includes(buildSceneAnchorLine(3)), 'prompt(later board): SCENE ANCHOR FRAME block with the correct ref index (3)');
 ok(later.prompt.includes(BOARD_BODY_FURNITURE_LINE), 'prompt(later board): body/furniture block present');
-ok(later.prompt.indexOf('GEOMETRY AUTHORITY') < later.prompt.indexOf('SCENE ANCHOR FRAME') && later.prompt.indexOf('SCENE ANCHOR FRAME') < later.prompt.indexOf('CAMERA: free'), 'prompt: anchor block sits after geometry authority and before the camera line');
+ok(later.prompt.indexOf('GEOMETRY AUTHORITY') < later.prompt.indexOf('SCENE ANCHOR FRAME') && later.prompt.indexOf('SCENE ANCHOR FRAME') < later.prompt.indexOf('CAMERA:'), 'prompt: anchor block sits after geometry authority and before the camera line');
 ok(/camera is NOT locked/.test(later.prompt) && /9:16/.test(later.prompt) && /clearly female/i.test(later.prompt) && /never a flat frontal line-up/.test(later.prompt), 'prompt: S124/S125/S116 invariants preserved');
-ok(later.prompt.length - first.prompt.length < 600, 'prompt: anchor block adds < 600 chars (no bloat)');
+ok(later.prompt.length - first.prompt.length < 900, 'prompt: anchor block adds < 900 chars (no bloat; Stage 143 people caveat included)');
 
 /* ─────────── (D) SCENES / shared adapters byte-identical ─────────── */
 for (const file of ['lib/workers/video-job.ts', 'lib/scene-prompt.ts', 'lib/region-plate.ts', 'lib/assemble.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {

@@ -22,6 +22,7 @@ import { boardShotContext, readBoardDirection } from "@/lib/storyboard-direction
 import { withForcedGender } from "@/lib/full-body-prompt";
 import { buildSetAnchorsLine } from "@/lib/set-anchors";
 import { buildSceneAnchorLine, BOARD_BODY_FURNITURE_LINE } from "@/lib/board-anchor";
+import { resolveVisibleCast, buildShotSizeLine, buildOffScreenLine, type BoardCoverage } from "@/lib/board-coverage";
 
 /**
  * Stage 131 — the GEOMETRY AUTHORITY block for a board frame when the episode Location's master plate(s) are
@@ -77,6 +78,11 @@ export interface BuildBoardFramePromptInput {
    * demands the identical set from that frame. Null/omitted (first board of a scene) → no anchor block.
    */
   anchorRefIndex?: number | null;
+  /**
+   * Stage 143 — the board's resolved VISIBLE CAST + SHOT SIZE (the worker computes it once and filters the
+   * identity references by it). Omitted → resolved here from the direction / board position / action text.
+   */
+  coverage?: BoardCoverage;
 }
 
 export interface BuildBoardFramePromptResult {
@@ -115,7 +121,11 @@ export function buildBoardFramePrompt(input: BuildBoardFramePromptInput): BuildB
   const direction = readBoardDirection(board.directionJson);
   const dialogue = direction ? direction.speech.length > 0 : isDialogueBoard(board.actionOrDialogue);
   const locationLine = [input.locationName, input.locationDesc].map((s) => (s ?? "").trim()).filter(Boolean).join(" — ");
-  const castLines = characters.map(characterFrameLine).filter(Boolean);
+  // Stage 143 — EXACTLY who is in frame. Only the visible characters get an identity line; everyone else is
+  // named once as OFF-SCREEN (they stay in the location, they are NOT drawn).
+  const coverage = input.coverage ?? resolveVisibleCast(direction, board.index, characters.map((c) => c.name), board.actionOrDialogue);
+  const visibleCharacters = characters.filter((c) => coverage.visible.includes(c.name));
+  const castLines = (visibleCharacters.length ? visibleCharacters : characters).map(characterFrameLine).filter(Boolean);
 
   // Stage 131 — when the episode Location's plate(s) are attached (hasPlate), add the GEOMETRY AUTHORITY block so
   // the location stays IDENTICAL across boards (a region plate, if present, leads over the masters). When no plate
@@ -127,7 +137,7 @@ export function buildBoardFramePrompt(input: BuildBoardFramePromptInput): BuildB
   const body = [
     `KEYFRAME STILL — a single cinematic vertical ${REFERENCE_ASPECT_RATIO} frame: the OPENING frame of a 3-6 second shot (it will be animated into a moving clip).`,
     `BOARD ${board.index + 1} — ${dialogue ? "DIALOGUE beat" : "ACTION beat"}: ${board.actionOrDialogue.trim()}`,
-    castLines.length ? `${direction ? "SCENE CAST IDENTITY (off-screen partners stay in the location)" : "CHARACTERS IN FRAME"}:\n${castLines.join("\n")}` : "",
+    castLines.length ? `CHARACTERS IN FRAME (EXACTLY these ${castLines.length} — nobody else):\n${castLines.join("\n")}` : "",
     locationLine ? `LOCATION: ${locationLine}` : "",
     geometryAuthorityLine,
     // Stage 142 — the scene's first rendered board still is attached as an IMAGE reference; name its index.
@@ -137,8 +147,10 @@ export function buildBoardFramePrompt(input: BuildBoardFramePromptInput): BuildB
     BOARD_BODY_FURNITURE_LINE,
     REFERENCE_APPEARANCE_ONLY_LINE,
     dialogue ? GAZE_AT_LISTENER_LINE : "",
-    direction ? boardShotContext(direction) : (dialogue ? "DIALOGUE COVERAGE: choose one medium, close-up or over-the-shoulder speaker / reverse-shot listener plan. Maintain connected eyelines, screen sides and the 180-degree axis. Off-screen partners remain in the location. Shot changes only BETWEEN boards by hard cut." : ""),
-    "CAMERA: free — pick the angle, height, distance and lens that best frame THIS beat; the camera is NOT locked to any previous shot and there is no fixed camera. Compose a real, deep environment (foreground / mid-ground / background), never a flat frontal line-up.",
+    direction
+      ? boardShotContext(direction, board.index, coverage)
+      : [buildShotSizeLine(coverage), buildOffScreenLine(coverage), dialogue ? "DIALOGUE COVERAGE: the shot size and the exact cast in frame are fixed by the SHOT SIZE line above. Maintain connected eyelines, screen sides and the 180-degree axis. Off-screen partners remain in the location. Shot changes only BETWEEN boards by hard cut." : ""].filter(Boolean).join("\n"),
+    "CAMERA: angle, height and lens are free (the camera is NOT locked to any previous shot; there is no fixed camera), but the SHOT SIZE and the exact cast in frame are FIXED by the SHOT SIZE line — never widen the frame to include anyone else. Compose a real, deep environment (foreground / mid-ground / background), never a flat frontal line-up.",
     `Vertical ${REFERENCE_ASPECT_RATIO} composition, photoreal, no on-screen text, no captions, no watermark.`,
   ].filter(Boolean).join("\n");
 

@@ -10,6 +10,7 @@
 import type { SeedanceImageToVideoInput } from "@/lib/wavespeed";
 import { styledVisualPrompt } from "@/lib/visual-style";
 import { boardShotContext, readBoardDirection, type BoardDirection } from "@/lib/storyboard-direction";
+import { resolveVisibleCast } from "@/lib/board-coverage";
 import { estimatedSpeechSeconds, extractSpokenLines, hasActorTravel, type SpokenLine } from "@/lib/storyboard-dialogue";
 
 export const STORYBOARD_I2V_EXTRA_REFS_SUPPORTED = false;
@@ -22,6 +23,8 @@ export interface AnimationBoard {
   directionJson?: string | null;
   characters?: string[];
   durationSec?: number | null;
+  /** Stage 143 — 0-based board position (= position in the scene); drives the visible-cast / shot-size block. */
+  boardIndex?: number;
 }
 
 function legacyAction(text: string, cast: string[]): string {
@@ -54,7 +57,7 @@ export function buildStoryboardAnimationPrompt(board: AnimationBoard): string {
     tracking ? TRACKING_BOARD_CAMERA : LOCKED_BOARD_CAMERA,
     "No internal cuts, transitions, montage or shot/reverse-shot within this clip. Hard cuts and freely selected new angles occur BETWEEN boards only.",
     `ACTOR ACTION ONLY: ${action || "Natural breathing and motivated reactions from the opening pose."}`,
-    plan ? boardShotContext(plan) : `SCENE CAST CONTEXT: ${(board.characters ?? []).join(", ")}. Every named character remains present even outside the crop; stable screen sides and a coherent 180-degree layout for the whole group, each speaker's eyeline on the person they address (not always the same partner), never at camera.`,
+    plan ? boardShotContext(plan, board.boardIndex ?? 1) : `SCENE CAST CONTEXT — IN FRAME: ${resolveVisibleCast(null, board.boardIndex ?? 1, board.characters ?? [], board.actionOrDialogue).visible.join(", ")}; nobody else appears in the frame. Every other named character remains present in the location, outside the crop; stable screen sides and a coherent 180-degree layout for the whole group, each speaker's eyeline on the person they address (not always the same partner), never at camera.`,
     "Keep every character's identity, wardrobe and the location exactly as in the start frame. Preserve the same walls, geometry, materials, lighting and furniture; bench back stays flush against its wall. No teleporting, morphing or frozen padding.",
     lines.length ? "AUDIO: audible ENGLISH on-scene dialogue below, in this exact order and with the indicated delivery. Lip sync ONLY the named speaker to their own line when visible, with their eyeline on that line's addressee; every other present character listens/reacts and NEVER mouths or speaks that line. An off-screen speaker still speaks from their established position (not a narrator). Speak the lines EXACTLY as written in English — no re-translation, paraphrase, additional lines, voice-over narrator or sped-up speech. Finish each phrase naturally within the clip. No background music; preserve natural ambience." : "AUDIO: natural scene ambience, no invented speech or narrator, no background music.",
   ].join("\n"), plan?.cast ?? board.characters ?? []);

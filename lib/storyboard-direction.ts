@@ -7,6 +7,7 @@ import {
   type RawBoard,
 } from "@/lib/storyboard";
 import { estimatedSpeechSeconds, hasActorTravel, type SpeechSegment } from "@/lib/storyboard-dialogue";
+import { planSceneCoverage, resolveVisibleCast, buildShotSizeLine, buildOffScreenLine, type BoardCoverage } from "@/lib/board-coverage";
 
 const speechSchema = z.object({ id: z.string(), sourceId: z.string(), speaker: z.string(), text: z.string(), delivery: z.string(), estimatedSec: z.number(), addressee: z.string().optional() });
 const directionSchema = z.object({
@@ -257,7 +258,7 @@ export function finalizeDirectedBoards(raw: RawDirectedBoard[], segments: Speech
     throw new Error(`Storyboard planning conflict: exactly ${STORYBOARD_MIN_BOARDS}–${STORYBOARD_MAX_BOARDS} boards required. No boards or dialogue were truncated.`);
   const ledger = new Map(segments.map(s => [s.id, s]));
   const used: string[] = [];
-  const directions = raw.map((b, index): BoardDirection => {
+  const plannedDirections = raw.map((b, index): BoardDirection => {
     const speech = (b.speechIds ?? []).map(id => {
       const segment = ledger.get(id);
       if (!segment) throw new Error(`Unknown source speech ID at board ${index + 1}`);
@@ -319,6 +320,9 @@ export function finalizeDirectedBoards(raw: RawDirectedBoard[], segments: Speech
       listener, addressee, cast: [...cast], speech, cameraDegradedReason,
     });
   });
+  // Stage 143 — deterministic scene coverage: board 1 is a WIDE ESTABLISHING of the whole cast; later boards go
+  // single / OTS / reverse on the speech, with a wide at most once per WIDE_MIN_GAP boards. Only shot/focus change.
+  const directions = planSceneCoverage(plannedDirections, raw.map(b => b.actionOrDialogue));
   if (JSON.stringify(used) !== JSON.stringify(segments.map(s => s.id)))
     throw new Error("Dialogue integrity conflict: source lines must appear exactly once, in source order, without omissions or paraphrases.");
   // Parts of a long utterance must occupy consecutive boards, not separated by silent inserts.
@@ -343,7 +347,12 @@ export function finalizeDirectedBoards(raw: RawDirectedBoard[], segments: Speech
   return boards.map((b, i) => ({ ...b, directionJson: JSON.stringify(directions[i]) }));
 }
 
-export function boardShotContext(plan: BoardDirection): string {
+/**
+ * Stage 143 — shot context with a HARD visible cast. `boardPosInScene` (0-based board index) lets board 1 resolve
+ * as the wide establishing shot; `coverage` may be passed pre-computed by the worker (same resolver).
+ */
+export function boardShotContext(plan: BoardDirection, boardPosInScene = 1, coverage?: BoardCoverage): string {
+  const cov = coverage ?? resolveVisibleCast(plan, boardPosInScene, plan.cast, "");
   // Stable screen sides for any number of characters (spatial coherence across boards). Positions 1/2 are
   // the classic 180-degree pair; a third sits center mid-ground; anyone beyond keeps their established side.
   const seat = (i: number) =>
@@ -351,18 +360,22 @@ export function boardShotContext(plan: BoardDirection): string {
     i === 1 ? "screen-right, looking toward screen-left" :
     i === 2 ? "center mid-ground between them, turning toward whoever is addressed" :
     "retain the established background position on their established side";
-  const cast = plan.cast.map((name, i) => `${name}: staging position ${i + 1}, ${seat(i)}`).join("; ");
+  // Staging positions are listed for the VISIBLE cast only (positions are indexed by the full-cast order so the
+  // established sides stay stable across boards); the rest are named once as OFF-SCREEN.
+  const cast = plan.cast.map((name, i) => cov.visible.includes(name) ? `${name}: staging position ${i + 1}, ${seat(i)}` : "").filter(Boolean).join("; ");
   const speakers = new Set(plan.speech.map(s => s.speaker));
-  const reacting = plan.cast.filter(n => !speakers.has(n));
+  const reacting = plan.cast.filter(n => !speakers.has(n) && cov.visible.includes(n));
   // Per-line eyeline: each speaker looks at the real person that line is spoken to (their reverse target).
   const eyelines = plan.speech
     .map(s => `${s.speaker} → ${s.addressee || plan.listener || "the group"} (eyeline to ${s.addressee || plan.listener || "the addressed partner"}'s established side)`)
     .join("; ");
   return [
     `OPENING ACTOR BLOCKING: ${plan.actionEnglish} Start from the beginning of this scripted action, not its end; preserve the preceding board's action continuity.`,
-    `SCENE CAST CONTEXT (not everyone must be visible): ${cast}. All remain in the location unless a scripted exit is shown; off-screen is NOT disappearance.`,
+    buildShotSizeLine(cov),
+    `VISIBLE CAST STAGING: ${cast}. All cast remain in the location unless a scripted exit is shown; off-screen is NOT disappearance, but off-screen characters are NOT drawn.`,
+    buildOffScreenLine(cov),
     "AXIS: maintain a coherent 180-degree layout for the whole group; every character keeps the SAME relative screen position and side established by the seating/standing arrangement across every board. When the shot reverses to a different addressee, change only the framing and eyeline to that person's established side — never swap anyone's established side and never teleport a character; nobody turns toward the screen or looks into the lens. Preserve action and location geometry continuity.",
-    plan.speech.length ? `DIALOGUE SHOT: ${plan.shot.replace(/_/g, " ")}; focus ${plan.focus}; listener ${plan.listener || "the established partner"}. EYELINES: ${eyelines}. ${reacting.length ? `PRESENT AND REACTING (silent, must not speak another's line): ${reacting.join(", ")}. ` : ""}Cover with a medium / close-up / over-the-shoulder speaker, a reverse-shot to the addressed listener, or a group / two-shot / three-shot when several share the frame. Every named character remains in the scene even when off-screen. Choose ONE framing for this board, no internal shot changes.` : "",
-    "Different angles and shot sizes are freely chosen BETWEEN boards by hard cut, never inside the animation. Keep the same master/region-plate geometry authority, walls (never columns instead), and bench back flush against its wall.",
+    plan.speech.length ? `DIALOGUE SHOT: ${plan.shot.replace(/_/g, " ")}; focus ${plan.focus}; listener ${plan.listener || "the established partner"}. EYELINES: ${eyelines}. ${reacting.length ? `PRESENT AND REACTING (silent, must not speak another's line): ${reacting.join(", ")}. ` : ""}The framing of this board is FIXED by the SHOT SIZE line above (its shot size and its exact cast); no internal shot changes. Every named character remains in the scene even when off-screen.` : "",
+    "Different angles and shot sizes change only BETWEEN boards by hard cut, never inside the animation. Keep the same master/region-plate geometry authority, walls (never columns instead), and bench back flush against its wall.",
   ].filter(Boolean).join("\n");
 }

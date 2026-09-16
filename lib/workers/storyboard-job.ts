@@ -29,6 +29,7 @@ import {
 import { buildBoardFramePrompt, type BoardCharacterLink } from "@/lib/storyboard-prompt";
 import { deriveSetAnchors } from "@/lib/set-anchors";
 import { readBoardDirection } from "@/lib/storyboard-direction";
+import { resolveVisibleCast } from "@/lib/board-coverage";
 import { pickBoardGeometryAuthority } from "@/lib/board-plate";
 import { boardSceneKey, pickSceneAnchor, renderingLowerSiblings, composeBoardImageInput } from "@/lib/board-anchor";
 import { WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
@@ -52,15 +53,19 @@ const ANCHOR_WAIT_MAX_POLLS = Number(process.env.BOARD_ANCHOR_WAIT_MAX_POLLS ?? 
 /** Minimal sibling projection shared by the Stage 140 set-anchors and the Stage 142 scene anchor. */
 const SIBLING_SELECT = { id: true, index: true, imageUrl: true, status: true, directionJson: true, motionEn: true, actionOrDialogue: true } as const;
 
-/** Load the episode's cast (identity + sex source of truth) for a board frame prompt. */
-async function loadEpisodeCharacters(episodeId: string): Promise<{ links: BoardCharacterLink[]; refImages: string[] }> {
+/**
+ * Load the episode's cast (identity + sex source of truth) for a board frame prompt.
+ * Stage 143 — `refs` is ALIGNED with `links` (null when a character has no usable reference image) so the
+ * board_image job can keep only the references of the characters that are actually IN FRAME.
+ */
+async function loadEpisodeCharacters(episodeId: string): Promise<{ links: BoardCharacterLink[]; refs: (string | null)[] }> {
   const rows = await prisma.episodeCharacter.findMany({
     where: { episodeId },
     include: { character: true },
     orderBy: { createdAt: "asc" },
   });
   const links: BoardCharacterLink[] = [];
-  const refImages: string[] = [];
+  const refs: (string | null)[] = [];
   for (const { character: c } of rows) {
     links.push({
       name: c.name,
@@ -71,9 +76,9 @@ async function loadEpisodeCharacters(episodeId: string): Promise<{ links: BoardC
       tier: c.tier,
     });
     const ref = c.imageFull || c.imageFront;
-    if (validUrl(ref)) refImages.push(ref as string);
+    refs.push(validUrl(ref) ? (ref as string) : null);
   }
-  return { links, refImages };
+  return { links, refs };
 }
 
 /* ───────────── 1) storyboard_boards — split the story into 12–15 boards ───────────── */
@@ -182,7 +187,14 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
     await updateJob(jobId, { status: "processing", progress: 15, message: `Board ${board.index + 1}: composing frame...` });
     await prisma.board.update({ where: { id: boardId }, data: { status: "frame_generating", error: null } });
 
-    const { links, refImages } = await loadEpisodeCharacters(board.episodeId);
+    const { links, refs } = await loadEpisodeCharacters(board.episodeId);
+    // Stage 143 — EXACTLY who is in frame for THIS board (deterministic: direction + position in scene + action
+    // text). Only the visible characters' identity references are attached; off-screen cast is only NAMED in the
+    // prompt, so the model can no longer copy the whole cast into every board.
+    const direction = readBoardDirection(board.directionJson);
+    const coverage = resolveVisibleCast(direction, board.index, links.map((l) => l.name), board.actionOrDialogue);
+    const visibleLinks = links.filter((l) => coverage.visible.includes(l.name));
+    const refImages = links.flatMap((l, i) => (coverage.visible.includes(l.name) && refs[i] ? [refs[i] as string] : []));
 
     // Stage 131 — resolve the board's GEOMETRY AUTHORITY from the episode's bound Location. The whole episode
     // plays in ONE location; every board of the same zone shares the same plate (region plate when a cached one
@@ -237,12 +249,13 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
     });
     const imageInput = composed.imageInput;
     console.info(
-      `[board-image] board ${board.index + 1}: anchor=${anchor ? `board ${anchor.anchorIndex + 1} (ref #${composed.anchorRefIndex})` : "none (becomes anchor)"}, chars=${refImages.length}, plates=${composed.platesAttached.length}/${authority.plateUrls.length}, refs=${imageInput.length}`,
+      `[board-image] board ${board.index + 1}: anchor=${anchor ? `board ${anchor.anchorIndex + 1} (ref #${composed.anchorRefIndex})` : "none (becomes anchor)"}, shot=${coverage.shotSize}, visible=[${coverage.visible.join(", ")}], offScreen=[${coverage.offScreen.join(", ")}], charRefs=${refImages.length}/${links.length}, plates=${composed.platesAttached.length}/${authority.plateUrls.length}, refs=${imageInput.length}`,
     );
 
     const { prompt } = buildBoardFramePrompt({
       board: { index: board.index, actionOrDialogue: board.actionOrDialogue, motion: board.motionEn, directionJson: board.directionJson },
-      characters: links,
+      characters: visibleLinks.length ? visibleLinks : links,
+      coverage,
       locationName: board.episode.locationName,
       locationDesc: board.episode.locationDesc,
       hasPlate: composed.platesAttached.length > 0,
@@ -287,7 +300,7 @@ export async function runBoardVideoJob(jobId: string, projectId: string, boardId
     const { links } = await loadEpisodeCharacters(board.episodeId);
     const animationBoard = {
       actionOrDialogue: board.actionOrDialogue, motion: board.motionEn,
-      directionJson: board.directionJson, characters: links.map(c => c.name),
+      directionJson: board.directionJson, characters: links.map(c => c.name), boardIndex: board.index,
       durationSec: board.durationSec ?? 6, imageUrl: board.imageUrl as string,
     };
     const request = buildStoryboardVideoRequest(animationBoard);

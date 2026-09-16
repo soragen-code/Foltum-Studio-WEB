@@ -112,7 +112,7 @@ export function composeBoardImageInput(input: {
 
 /** Prompt block naming the attached anchor frame by its reference index (English, for Seedream). */
 export function buildSceneAnchorLine(refIndex: number): string {
-  return `SCENE ANCHOR FRAME (reference image ${refIndex}): this is the same set moments earlier. Reproduce the EXACT same furniture and props — identical desk shape, size, position, orientation and the objects on it — the same floor pattern, walls and windows. Only the camera angle/framing changes as directed below; nothing in the set is added, removed, moved or resized. Where the anchor frame and a location plate differ, the anchor frame wins.`;
+  return `SCENE ANCHOR FRAME (reference image ${refIndex}): this is the same set moments earlier. Reproduce the EXACT same furniture and props — identical desk shape, size, position, orientation and the objects on it — the same floor pattern, walls and windows. Only the camera angle/framing changes as directed below; nothing in the set is added, removed, moved or resized. Where the anchor frame and a location plate differ, the anchor frame wins. The PEOPLE in the anchor frame are NOT a framing or cast reference: reproduce only the set, furniture, props, floor, walls and light; frame ONLY the characters listed in SHOT SIZE at the stated shot size.`;
 }
 
 /** Bodies never merge into furniture (English, for Seedream) — added to EVERY board frame. */

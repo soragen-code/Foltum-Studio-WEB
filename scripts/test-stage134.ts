@@ -69,7 +69,8 @@ const ctx2 = boardShotContext(p2);
 ok(ctx1.includes('Anna') && ctx1.includes('Boris') && ctx1.includes('Clara'), 'all three cast members remain listed in the scene context — none disappears');
 ok(ctx1.includes('screen-left') && ctx1.includes('screen-right'), 'stable screen sides retained (Stage 132 axis wording)');
 ok(ctx1.includes('EYELINES: Boris → Anna'), 'board 2 eyeline points Boris at Anna (his real addressee)');
-ok(ctx1.includes('PRESENT AND REACTING') && ctx1.includes('Anna, Clara'), 'the non-speaking cast is explicitly listed as present and reacting');
+// Stage 143 adaptation: an over-the-shoulder board frames ONLY speaker + addressee; the third person is named OFF-SCREEN.
+ok(ctx1.includes('PRESENT AND REACTING') && ctx1.includes('Anna') && /OFF-SCREEN[^\n]*Clara/.test(ctx1), 'the non-speaking cast is explicitly listed as present (in-frame reacting or off-screen)');
 ok(ctx2.includes('Clara → Boris') && !ctx2.includes('Clara → Anna'), 'when the addressee changes the eyeline moves to the new addressee, not the old partner');
 ok(ctx0.includes('Anna → the group'), 'a group-addressed opener is staged toward the whole group');
 ok(ctx1.includes('NOT disappearance') && ctx1.includes('180-degree'), 'off-screen ≠ disappearance and 180-degree axis wording retained');
@@ -86,10 +87,11 @@ const raw4: RawDirectedBoard[] = Array.from({ length: 13 }, (_, i) => ({
 }));
 const boards4 = finalizeDirectedBoards(raw4, src4.segments, cast4, src4.actionSource);
 const q3 = readBoardDirection(boards4[3].directionJson)!;
-ok(q3.speech[0].speaker === 'Dmitri' && q3.addressee === 'Clara' && q3.focus === 'Dmitri' && q3.shot === 'group', 'Dmitri addresses Clara on a group board; focus on the active speaker');
+// Stage 143 adaptation: board 1 is the scene's wide, so a second wide only 3 boards later degrades to an over-the-shoulder on the speaker.
+ok(q3.speech[0].speaker === 'Dmitri' && q3.addressee === 'Clara' && q3.focus === 'Dmitri' && q3.shot === 'over_shoulder', 'Dmitri addresses Clara; a too-early second wide degrades to OTS, focus on the active speaker');
 const ctxq3 = boardShotContext(q3);
 ok(ctxq3.includes('Anna') && ctxq3.includes('Boris') && ctxq3.includes('Clara') && ctxq3.includes('Dmitri'), 'all four remain present in the four-speaker board context');
-ok(ctxq3.includes('PRESENT AND REACTING') && ctxq3.includes('Anna, Boris, Clara'), 'the three non-speakers are staged as reacting, none removed');
+ok(ctxq3.includes('PRESENT AND REACTING') && ctxq3.includes('Clara') && /OFF-SCREEN[^\n]*Anna, Boris/.test(ctxq3), 'the addressee reacts in frame, the other two are named off-screen, none removed');
 ok(ctxq3.includes('Dmitri → Clara'), 'four-speaker eyeline points the active speaker at his real addressee');
 
 /* ─────────── 5) Group line addressed to everyone → empty addressee + group framing ─────────── */
