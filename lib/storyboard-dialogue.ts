@@ -2,7 +2,10 @@
  * Parsing is deliberately fail-closed: unattributed quoted speech must not become silent animation.
  * Duration is a conservative planning ESTIMATE, not a speech synthesis measurement.
  */
-export interface SpokenLine { speaker: string; text: string; delivery: string }
+/** `addressee` is the cast member THIS line is spoken to (its eyeline / reverse-shot target). It is
+ * OPTIONAL and used only for staging/eyeline — it never influences who the speaker is, so a wrong or
+ * missing addressee can never silently reassign a line. Undefined = spoken to the group / unknown. */
+export interface SpokenLine { speaker: string; text: string; delivery: string; addressee?: string }
 export interface SpeechSegment extends SpokenLine { id: string; sourceId: string; estimatedSec: number }
 /** A cast member for attribution: canonical NAME plus optional gender-lock and aliases/diminutives.
  * Plain strings stay supported (name only). The canonical `name` is ALWAYS what is returned as the
@@ -123,9 +126,23 @@ export function extractSpokenLines(source: string, cast: CastInput[] = []): Spok
   events.sort((a, b) => a.position - b.position);
   // Deterministic resolution runs in source order so alternation / turn-taking see prior speakers.
   resolveSpeakers(events, castNorm);
+  // Eyeline/reverse-shot addressee pass (staging only — does NOT influence speaker resolution above, so
+  // it can never mask a speaker conflict). Priority: explicit addressee from prose → the single partner
+  // in a two-hander → in a 3+ scene, the person just speaking (natural reply target). First line with no
+  // prior speaker and no explicit addressee stays undefined = addressed to the group.
+  const names = castNorm.map(c => c.name);
+  let prevSpeaker: string | undefined;
+  for (const e of events) {
+    if (!e.addressee) {
+      if (names.length === 2 && e.speaker) e.addressee = names.find(n => n !== e.speaker);
+      else if (prevSpeaker && prevSpeaker !== e.speaker) e.addressee = prevSpeaker;
+    }
+    if (e.addressee && (!names.includes(e.addressee) || e.addressee === e.speaker)) e.addressee = undefined;
+    if (e.speaker) prevSpeaker = e.speaker;
+  }
   return events.map(e => {
     if (!e.speaker) throw new Error("Dialogue attribution conflict: quoted speech has no unambiguous cast speaker. Rebuild boards with explicit NAME (delivery): quoted line.");
-    return { speaker: e.speaker, text: e.text, delivery: cleanDelivery(e.delivery, castNorm) };
+    return { speaker: e.speaker, text: e.text, delivery: cleanDelivery(e.delivery, castNorm), addressee: e.addressee };
   });
 }
 

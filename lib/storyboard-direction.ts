@@ -3,14 +3,20 @@ import { z } from "zod";
 import { normalizeBoards, validateBoards, type RawBoard } from "@/lib/storyboard";
 import { estimatedSpeechSeconds, hasActorTravel, type SpeechSegment } from "@/lib/storyboard-dialogue";
 
-const speechSchema = z.object({ id: z.string(), sourceId: z.string(), speaker: z.string(), text: z.string(), delivery: z.string(), estimatedSec: z.number() });
+const speechSchema = z.object({ id: z.string(), sourceId: z.string(), speaker: z.string(), text: z.string(), delivery: z.string(), estimatedSec: z.number(), addressee: z.string().optional() });
 const directionSchema = z.object({
-  version: z.literal(132),
+  // 132 = original two-hander plan; 134 adds N>=3 multi-speaker addressee/eyeline data. Both parse so
+  // boards persisted before Stage 134 still read back (they simply carry no per-line addressee).
+  version: z.union([z.literal(132), z.literal(134)]),
   cameraMode: z.enum(["LOCKED_OFF", "TRACKING"]),
   travelEvidence: z.string(),
   actionEnglish: z.string(),
-  shot: z.enum(["action", "medium", "close_up", "over_shoulder", "listener_reverse"]),
+  // Stage 134 adds group / two_shot / three_shot coverage for scenes with three or more speakers.
+  shot: z.enum(["action", "medium", "close_up", "over_shoulder", "listener_reverse", "two_shot", "three_shot", "group"]),
   focus: z.string(), listener: z.string(),
+  /** Stage 134 — the cast member the active (last) speaker addresses in this board = reverse-shot / eyeline
+   * target. Optional (default "") so older 132 boards without it still parse. */
+  addressee: z.string().optional().default(""),
   cast: z.array(z.string()),
   speech: z.array(speechSchema),
 });
@@ -63,14 +69,23 @@ export function finalizeDirectedBoards(raw: RawDirectedBoard[], segments: Speech
     if (/["«“]/u.test(action)) throw new Error(`Board ${index + 1}: put speech in source IDs, not actionEnglish.`);
     const firstSpeaker = speech[0]?.speaker ?? "";
     if (speech.some(s => !cast.includes(s.speaker))) throw new Error("Source speaker does not match the episode cast.");
-    const listener = b.listener || speech.find(s => s.speaker !== firstSpeaker)?.speaker || cast.find(c => c !== firstSpeaker) || "";
-    if (listener && (!cast.includes(listener) || listener === firstSpeaker)) throw new Error("Invalid dialogue listener mapping.");
+    // Every per-line addressee (eyeline target) must be a real, DIFFERENT cast member — no self-address.
+    for (const s of speech)
+      if (s.addressee && (!cast.includes(s.addressee) || s.addressee === s.speaker))
+        throw new Error(`Board ${index + 1}: invalid dialogue addressee (must be another cast member).`);
+    // The ACTIVE (last) line drives the reverse-shot / eyeline. Supports 3+ speakers: the reverse target is
+    // the person that line is spoken to, not a fixed single partner. Falls back to the model's listener, then
+    // (only in a two-hander) the other cast member. In a 3+ scene with no cue it stays empty (group framing).
+    const activeSpeaker = speech.at(-1)?.speaker ?? firstSpeaker;
+    const addressee = speech.at(-1)?.addressee || b.listener || (cast.length === 2 ? cast.find(c => c !== activeSpeaker) : "") || "";
+    const listener = addressee;
+    if (listener && (!cast.includes(listener) || listener === activeSpeaker)) throw new Error("Invalid dialogue listener mapping.");
     const shot = speech.length ? (b.shot && b.shot !== "action" ? b.shot : "over_shoulder") : "action";
     return directionSchema.parse({
-      version: 132, cameraMode: hasActorTravel(evidence) ? "TRACKING" : "LOCKED_OFF",
+      version: 134, cameraMode: hasActorTravel(evidence) ? "TRACKING" : "LOCKED_OFF",
       travelEvidence: evidence, actionEnglish: action, shot,
-      focus: shot === "listener_reverse" ? listener : firstSpeaker,
-      listener, cast: [...cast], speech,
+      focus: shot === "listener_reverse" ? listener : activeSpeaker,
+      listener, addressee, cast: [...cast], speech,
     });
   });
   if (JSON.stringify(used) !== JSON.stringify(segments.map(s => s.id)))
@@ -98,12 +113,25 @@ export function finalizeDirectedBoards(raw: RawDirectedBoard[], segments: Speech
 }
 
 export function boardShotContext(plan: BoardDirection): string {
-  const cast = plan.cast.map((name, i) => `${name}: staging position ${i + 1}${i === 0 ? ", screen-left looking right" : i === 1 ? ", screen-right looking left" : ", retain established background position"}`).join("; ");
+  // Stable screen sides for any number of characters (spatial coherence across boards). Positions 1/2 are
+  // the classic 180-degree pair; a third sits center mid-ground; anyone beyond keeps their established side.
+  const seat = (i: number) =>
+    i === 0 ? "screen-left, looking toward screen-right" :
+    i === 1 ? "screen-right, looking toward screen-left" :
+    i === 2 ? "center mid-ground between them, turning toward whoever is addressed" :
+    "retain the established background position on their established side";
+  const cast = plan.cast.map((name, i) => `${name}: staging position ${i + 1}, ${seat(i)}`).join("; ");
+  const speakers = new Set(plan.speech.map(s => s.speaker));
+  const reacting = plan.cast.filter(n => !speakers.has(n));
+  // Per-line eyeline: each speaker looks at the real person that line is spoken to (their reverse target).
+  const eyelines = plan.speech
+    .map(s => `${s.speaker} → ${s.addressee || plan.listener || "the group"} (eyeline to ${s.addressee || plan.listener || "the addressed partner"}'s established side)`)
+    .join("; ");
   return [
     `OPENING ACTOR BLOCKING: ${plan.actionEnglish} Start from the beginning of this scripted action, not its end; preserve the preceding board's action continuity.`,
     `SCENE CAST CONTEXT (not everyone must be visible): ${cast}. All remain in the location unless a scripted exit is shown; off-screen is NOT disappearance.`,
-    "AXIS: maintain the same side of the 180-degree dialogue axis, stable screen sides, connected partner eyelines; nobody turns toward the screen or looks into the lens. Preserve action and location geometry continuity.",
-    plan.speech.length ? `DIALOGUE SHOT: ${plan.shot.replace(/_/g, " ")}; focus ${plan.focus}; listener ${plan.listener || "the established partner"}. Medium / close-up / over-the-shoulder speaker or reverse-shot listener coverage. The speaking character remains in scene even when off-screen. Choose ONE framing for this board, no internal shot changes.` : "",
+    "AXIS: maintain a coherent 180-degree layout for the whole group; every character keeps the SAME relative screen position and side established by the seating/standing arrangement across every board. When the shot reverses to a different addressee, change only the framing and eyeline to that person's established side — never swap anyone's established side and never teleport a character; nobody turns toward the screen or looks into the lens. Preserve action and location geometry continuity.",
+    plan.speech.length ? `DIALOGUE SHOT: ${plan.shot.replace(/_/g, " ")}; focus ${plan.focus}; listener ${plan.listener || "the established partner"}. EYELINES: ${eyelines}. ${reacting.length ? `PRESENT AND REACTING (silent, must not speak another's line): ${reacting.join(", ")}. ` : ""}Cover with a medium / close-up / over-the-shoulder speaker, a reverse-shot to the addressed listener, or a group / two-shot / three-shot when several share the frame. Every named character remains in the scene even when off-screen. Choose ONE framing for this board, no internal shot changes.` : "",
     "Different angles and shot sizes are freely chosen BETWEEN boards by hard cut, never inside the animation. Keep the same master/region-plate geometry authority, walls (never columns instead), and bench back flush against its wall.",
   ].filter(Boolean).join("\n");
 }
