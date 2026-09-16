@@ -338,3 +338,11 @@ DO $$ BEGIN
   ALTER TABLE "Board" ADD CONSTRAINT "Board_episodeId_fkey"
     FOREIGN KEY ("episodeId") REFERENCES "Episode"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+
+-- Stage 131: bind Storyboard boards to their location zone so all boards of a location share one geometry
+-- authority (master/region plate), the same stabilization SCENES uses (Stage 122). Additive & idempotent;
+-- legacy boards keep NULL and fall back to the episode Location master plate. STORYBOARD only.
+ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "region"    TEXT;
+ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "regionKey" TEXT;
+ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "plateUrl"  TEXT;

@@ -17,6 +17,7 @@
  * continuous story seed here; it never rewrites the stored episode description.
  */
 import { parseEpisodeFootage } from "@/lib/season";
+import { deriveRegionKey } from "@/lib/region-plate";
 
 /* ───────────── board-count & duration budget ───────────── */
 
@@ -43,6 +44,12 @@ export interface RawBoard {
   motion?: string | null;
   /** Suggested clip length in seconds (clamped to [4,6]); optional — filled by distribution when absent. */
   durationSec?: number | null;
+  /**
+   * Stage 131 — the ZONE/corner of the single episode LOCATION this board plays in (story language),
+   * e.g. "by the window", "at the kitchen counter". Optional. Boards in the same corner MUST reuse the
+   * identical wording so they resolve to the same region-plate geometry authority (like SCENES).
+   */
+  region?: string | null;
 }
 
 /** A normalized board ready to persist (index assigned, duration clamped). */
@@ -51,6 +58,10 @@ export interface NormalizedBoard {
   actionOrDialogue: string;
   motion: string | null;
   durationSec: number;
+  /** Stage 131 — zone/corner of the location (story language), or null when the model didn't name one. */
+  region: string | null;
+  /** Stage 131 — normalized region key (deriveRegionKey) used to resolve/share a region plate. */
+  regionKey: string | null;
 }
 
 function clampInt(n: number, lo: number, hi: number): number {
@@ -83,11 +94,17 @@ export function distributeBoardDurations(count: number, total = STORYBOARD_TARGE
  */
 export function normalizeBoards(raw: RawBoard[]): NormalizedBoard[] {
   const cleaned = (raw ?? [])
-    .map((b) => ({
-      actionOrDialogue: (b?.actionOrDialogue ?? "").trim(),
-      motion: (b?.motion ?? "").trim() || null,
-      durationSec: b?.durationSec ?? null,
-    }))
+    .map((b) => {
+      const region = (b?.region ?? "").trim() || null;
+      return {
+        actionOrDialogue: (b?.actionOrDialogue ?? "").trim(),
+        motion: (b?.motion ?? "").trim() || null,
+        durationSec: b?.durationSec ?? null,
+        region,
+        // Stage 131 — normalize the corner so identical wording maps to one shared region-plate key.
+        regionKey: region ? (deriveRegionKey(region) || null) : null,
+      };
+    })
     .filter((b) => b.actionOrDialogue.length > 0);
   // Enforce the 12–15 window: never keep more than the max (extra boards are dropped from the end).
   const kept = cleaned.slice(0, STORYBOARD_MAX_BOARDS);
@@ -100,6 +117,8 @@ export function normalizeBoards(raw: RawBoard[]): NormalizedBoard[] {
       b.durationSec != null && Number.isFinite(b.durationSec)
         ? clampInt(b.durationSec, STORYBOARD_MIN_BOARD_SEC, STORYBOARD_MAX_BOARD_SEC)
         : fallback[i],
+    region: b.region,
+    regionKey: b.regionKey,
   }));
 }
 
@@ -160,7 +179,7 @@ export function hasSplitMarkers(text: string | null | undefined): boolean {
 
 /** JSON shape the split model must return. */
 export const STORYBOARD_BOARDS_JSON_HINT =
-  `Return JSON: { "boards": [ { "actionOrDialogue": "<one action beat OR one pair of dialogue lines, story language>", "motion": "<English: what visibly MOVES during the 3-6s animation — subject action + camera move>", "durationSec": <integer 4..6> }, ... ] }`;
+  `Return JSON: { "boards": [ { "actionOrDialogue": "<one action beat OR one pair of dialogue lines, story language>", "motion": "<English: what visibly MOVES during the 3-6s animation — subject action + camera move>", "durationSec": <integer 4..6>, "region": "<the ZONE/corner of the single location this board plays in, story language, e.g. by the window / at the counter; reuse the IDENTICAL wording for boards in the same corner; omit or empty if the whole location is one space>" }, ... ] }`;
 
 export function storyboardBoardsSystemPrompt(): string {
   return [
@@ -174,6 +193,7 @@ export function storyboardBoardsSystemPrompt(): string {
     "- Each board's frame is a single still that becomes the START frame of a 3-6s image-to-video clip, so also describe the MOTION: what the subject does and how the camera moves during those seconds.",
     `- The clips are stitched into one continuous cut of about ${STORYBOARD_TARGET_TOTAL_SEC} seconds; give each board a durationSec between ${STORYBOARD_MIN_BOARD_SEC} and ${STORYBOARD_MAX_BOARD_SEC}.`,
     "- Keep the same characters and locations throughout; do not invent new events beyond the story.",
+    "- The whole episode plays in ONE location. For each board, name the ZONE/corner of that location where it happens (region), and REUSE the identical wording whenever consecutive boards stay in the same corner — this keeps the furniture, walls, materials and lighting of that corner constant across boards.",
     STORYBOARD_BOARDS_JSON_HINT,
   ].join("\n");
 }

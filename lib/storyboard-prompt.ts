@@ -19,6 +19,24 @@ import { VISUAL_STYLE, REFERENCE_ASPECT_RATIO, styledVisualPrompt } from "@/lib/
 import { REFERENCE_APPEARANCE_ONLY_LINE, GAZE_AT_LISTENER_LINE } from "@/lib/scene-prompt";
 import { withForcedGender } from "@/lib/full-body-prompt";
 
+/**
+ * Stage 131 — the GEOMETRY AUTHORITY block for a board frame when the episode Location's master plate(s) are
+ * attached as reference. It ports the SCENES location-stability grammar (Stage 119/122) to STORYBOARD: the
+ * attached plate(s) are the ABSOLUTE authority for the location's fixed furniture, architecture, materials and
+ * lighting, which stay IDENTICAL across every board of this location — only the characters' action/pose and the
+ * camera angle change. Wall-adjacency is enforced (a wall is never replaced by columns; wall-set seating keeps its
+ * back flush against its wall at every angle) and the camera stays FREE (any angle/height/scale, never locked).
+ */
+export const BOARD_GEOMETRY_AUTHORITY_LINE =
+  "GEOMETRY AUTHORITY (location is constant across boards): the attached location master plate(s) are the ABSOLUTE, authoritative truth of this place. Across EVERY board of this location the fixed elements are IDENTICAL — the SAME walls, floor and its pattern, the SAME columns, doorways and openings, the SAME large/fixed furniture and fixtures, with the SAME architecture, materials, colours, placement and lighting as in the plate(s) and the previous board of this location. Only the characters' action/pose and the camera angle change between boards; the room itself never changes. Do NOT swap furniture for a different model, do NOT restyle, resize, add, remove or rearrange fixed set objects, and do NOT change or invent architecture: where a plate shows a solid wall it stays a solid wall, NEVER replaced by columns, pillars, a passage, an archway, an opening, a doorway, a window or open space, and NEVER add any structure not present in the plate(s). Any furniture set against a wall (a bench, a couch, a cabinet) keeps its back/rear side FLUSH against that same wall in every board and at every camera angle — it never drifts off the wall to leave a gap, columns or open space behind it.";
+
+/**
+ * Stage 131 — when a per-zone REGION PLATE (a controlled re-frame of the masters onto this board's part of the
+ * location) is the attached authority, it is the PRIMARY environment truth for this board, above the masters.
+ */
+export const BOARD_REGION_PLATE_AUTHORITY_LINE =
+  "REGION PLATE IS THE PRIMARY ENVIRONMENT AUTHORITY (this zone of the location): the attached region plate is a controlled re-frame of the master plates onto the exact part of the location where this board plays — treat it as the primary truth of the background and geometry, above every other reference. Reproduce its walls, floor, columns, fixtures and fixed furniture EXACTLY, at the same places, with wall-adjacent furniture flush against the same wall, and the same architecture, materials, colours and lighting. It fixes the ENVIRONMENT ONLY — it imposes no character pose and it is NOT the camera angle of this board.";
+
 /** A character appearing in a board frame (identity + sex source of truth). */
 export interface BoardCharacterLink {
   name: string;
@@ -35,6 +53,13 @@ export interface BuildBoardFramePromptInput {
   characters: BoardCharacterLink[];
   locationName?: string | null;
   locationDesc?: string | null;
+  /**
+   * Stage 131 — geometry-authority flags for the location plate(s) attached as image_input by the worker.
+   * `hasPlate` gates the whole GEOMETRY AUTHORITY block (when false the frame keeps the Stage 127 text-only
+   * behaviour, unchanged); `hasRegionPlate` promotes the region-plate wording when a per-zone plate leads.
+   */
+  hasPlate?: boolean;
+  hasRegionPlate?: boolean;
 }
 
 export interface BuildBoardFramePromptResult {
@@ -79,11 +104,19 @@ export function buildBoardFramePrompt(input: BuildBoardFramePromptInput): BuildB
   const locationLine = [input.locationName, input.locationDesc].map((s) => (s ?? "").trim()).filter(Boolean).join(" — ");
   const castLines = characters.map(characterFrameLine).filter(Boolean);
 
+  // Stage 131 — when the episode Location's plate(s) are attached (hasPlate), add the GEOMETRY AUTHORITY block so
+  // the location stays IDENTICAL across boards (a region plate, if present, leads over the masters). When no plate
+  // is bound the board keeps the Stage 127 text-only behaviour (unchanged).
+  const geometryAuthorityLine = input.hasPlate
+    ? (input.hasRegionPlate ? `${BOARD_REGION_PLATE_AUTHORITY_LINE}\n${BOARD_GEOMETRY_AUTHORITY_LINE}` : BOARD_GEOMETRY_AUTHORITY_LINE)
+    : "";
+
   const body = [
     `KEYFRAME STILL — a single cinematic vertical ${REFERENCE_ASPECT_RATIO} frame: the OPENING frame of a 3-6 second shot (it will be animated into a moving clip).`,
     `BOARD ${board.index + 1} — ${dialogue ? "DIALOGUE beat" : "ACTION beat"}: ${board.actionOrDialogue.trim()}`,
     castLines.length ? `CHARACTERS IN FRAME:\n${castLines.join("\n")}` : "",
     locationLine ? `LOCATION: ${locationLine}` : "",
+    geometryAuthorityLine,
     REFERENCE_APPEARANCE_ONLY_LINE,
     dialogue ? GAZE_AT_LISTENER_LINE : "",
     "CAMERA: free — pick the angle, height, distance and lens that best frame THIS beat; the camera is NOT locked to any previous shot and there is no fixed camera. Compose a real, deep environment (foreground / mid-ground / background), never a flat frontal line-up.",

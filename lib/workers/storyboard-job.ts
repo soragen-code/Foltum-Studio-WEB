@@ -31,6 +31,7 @@ import {
   type RawBoard,
 } from "@/lib/storyboard";
 import { buildBoardFramePrompt, buildBoardMotionPrompt, type BoardCharacterLink } from "@/lib/storyboard-prompt";
+import { pickBoardGeometryAuthority } from "@/lib/board-plate";
 
 export const STORYBOARD_BOARDS_JOB_TYPE = "storyboard_boards";
 export const BOARD_IMAGE_JOB_TYPE = "board_image";
@@ -103,6 +104,9 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
         actionOrDialogue: b.actionOrDialogue,
         motionEn: b.motion,
         durationSec: b.durationSec,
+        // Stage 131 — bind each board to a zone of the one location so all boards of a corner share a plate.
+        region: b.region,
+        regionKey: b.regionKey,
         status: "pending",
       })),
     });
@@ -127,22 +131,42 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
     await prisma.board.update({ where: { id: boardId }, data: { status: "frame_generating", error: null } });
 
     const { links, refImages } = await loadEpisodeCharacters(board.episodeId);
+
+    // Stage 131 — resolve the board's GEOMETRY AUTHORITY from the episode's bound Location. The whole episode
+    // plays in ONE location; every board of the same zone shares the same plate (region plate when a cached one
+    // exists for the board's zone, otherwise the location master plates), so the room stays identical across
+    // consecutive boards. Reuses only already-generated plates — never triggers a new plate generation here.
+    let authority = pickBoardGeometryAuthority(null, board.region);
+    if (board.episode.locationId) {
+      const location = await prisma.location.findUnique({
+        where: { id: board.episode.locationId },
+        select: { id: true, name: true, imageUrl: true, imageReverse: true, regionPlates: true },
+      });
+      authority = pickBoardGeometryAuthority(location, board.region);
+    }
+
     const { prompt } = buildBoardFramePrompt({
       board: { index: board.index, actionOrDialogue: board.actionOrDialogue, motion: board.motionEn },
       characters: links,
       locationName: board.episode.locationName,
       locationDesc: board.episode.locationDesc,
+      hasPlate: authority.hasPlate,
+      hasRegionPlate: authority.hasRegionPlate,
     });
+
+    // Character reference images first (identity), then the environment plate(s) as geometry authority. The
+    // provider caps the total at WAVESPEED_IMAGE_MAX_REFS; dedupe so a plate never repeats a character ref.
+    const imageInput = Array.from(new Set([...refImages, ...authority.plateUrls]));
 
     await updateJob(jobId, { progress: 45, message: `Board ${board.index + 1}: rendering frame...` });
     const remote = await generateImage(
-      { prompt, aspect_ratio: REFERENCE_ASPECT_RATIO, ...(refImages.length ? { image_input: refImages } : {}) },
+      { prompt, aspect_ratio: REFERENCE_ASPECT_RATIO, ...(imageInput.length ? { image_input: imageInput } : {}) },
       { jobId, shouldCancel: canceled },
     );
     if (await canceled()) throw new GenerationCanceledError();
 
     const imageUrl = await uploadRemoteToS3(remote, `media/public/boards/${projectId}/${boardId}/${VISUAL_STYLE_ID}/frame-${Date.now()}.png`, "image/png");
-    await prisma.board.update({ where: { id: boardId }, data: { imageUrl, imagePrompt: prompt, status: "frame_ready", error: null } });
+    await prisma.board.update({ where: { id: boardId }, data: { imageUrl, imagePrompt: prompt, plateUrl: authority.primaryUrl, status: "frame_ready", error: null } });
     await completeJob(jobId, { boardId, imageUrl }, `Board ${board.index + 1} frame ready`);
   } catch (err: any) {
     if (err instanceof GenerationCanceledError) { await markCanceled(jobId); return; }

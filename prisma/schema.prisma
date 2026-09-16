@@ -212,6 +212,12 @@ model Board {
   index            Int      // 0-based board order within the episode
   actionOrDialogue String   @db.Text // the single action beat OR the dialogue pair this board depicts (story language)
   motionEn         String?  @db.Text // English image-to-video MOTION prompt (what moves during the 3-6s animation)
+  // Stage 131: bind the board to its location ZONE so every board of a location shares one geometry authority
+  // (master/region plate), the same stabilization SCENES uses (Stage 122). All nullable / additive; legacy
+  // boards (null) fall back to the episode Location master plate. STORYBOARD only — SCENES is untouched.
+  region           String?  @db.Text // project-language zone/corner of the location this board plays in (reuse identical wording for the same corner)
+  regionKey        String?  // normalized cache key of `region` (deriveRegionKey) — resolves a cached region plate when one exists
+  plateUrl         String?  // the geometry-authority plate actually attached to this board's frame (region plate, else location master)
   imagePrompt      String?  @db.Text // English Seedream FRAME prompt used to render the board still (9:16)
   imageUrl         String?  // S3 URL of the rendered board frame (9:16) — the clip's START frame
   videoUrl         String?  // S3 URL of the animated 3-6s clip (image-to-video)
