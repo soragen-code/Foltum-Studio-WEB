@@ -44,17 +44,21 @@ export function readBoardDirection(json?: string | null): BoardDirection | null 
 }
 
 /**
- * Stage 136 — deterministic board-count balancing so planning CONVERGES on the hard 12–15 window
- * instead of hard-failing. The LLM split can naively yield a count outside 12–15 when the dialogue /
- * action volume is unusually high or low. We redistribute WITHOUT ever truncating, omitting, re-ordering
- * or speeding up speech:
- *   - too many boards (> MAX): merge adjacent short/static boards — pack up to two short spoken lines
- *     into one board while staying inside the 4–6s window; every speech ID is preserved, in source order,
+ * Stage 136 + 137 — deterministic board-count AND per-board-budget balancing so planning CONVERGES on the
+ * hard 12–15 window with every board inside 4–6s, instead of hard-failing. The LLM split can naively yield
+ * a count outside 12–15, OR pack a board with more spoken time than a single 4–6s clip can carry. We
+ * redistribute WITHOUT ever truncating, omitting, re-ordering or speeding up speech, in three phases:
+ *   - Phase 1 (Stage 137): distribute OVERFLOWING speech — any board whose lines exceed one board's 4–6s
+ *     budget (or the two-line cap) keeps a fitting prefix and pushes the remaining source IDs onto a new
+ *     board inserted right after; a long run of speech fans out across as many consecutive boards as needed.
+ *   - Phase 2 (Stage 136) too many boards (> MAX): merge adjacent short/static boards — pack up to two short
+ *     spoken lines into one board while staying inside 4–6s; every speech ID is preserved, in source order,
  *     with its NAME (delivery): "line" attribution. Boards with real scripted travel are never merged.
- *   - too few boards (< MIN): split a two-line dialogue board into one line each (a shot change at the
- *     cut), or split the longest static action board into two, adding boards without inventing speech.
- * Durations are re-fit into [4,6]s summing toward ~90s. Only genuinely unfittable material (far more
- * two-line boards than MAX can hold) throws an informative conflict describing how much speech there is.
+ *   - Phase 3 (Stage 136) too few boards (< MIN): split a two-line dialogue board into one line each (a shot
+ *     change at the cut), or split the longest static action board into two, without inventing speech.
+ * The phases run in sequence (split-up then merge-down then split-up), so they converge without oscillating.
+ * Durations are re-fit into [4,6]s summing toward ~90s. Only genuinely unfittable material (more speech than
+ * MAX boards × 6s can hold) throws an informative conflict describing how much speech there is.
  *
  * Runs BEFORE finalizeDirectedBoards so the ledger's exact-once speech-ID check still sees every segment.
  */
@@ -62,18 +66,52 @@ export function balanceBoardCount(raw: RawDirectedBoard[], segments: SpeechSegme
   if (!Array.isArray(raw)) return raw;
   // Clone boards (and their speechIds arrays) so the caller's plan is never mutated in place.
   const boards: RawDirectedBoard[] = raw.map(b => ({ ...b, speechIds: [...(b.speechIds ?? [])] }));
-  if (boards.length >= STORYBOARD_MIN_BOARDS && boards.length <= STORYBOARD_MAX_BOARDS)
-    return boards; // already in range — leave the model's plan untouched.
 
   const ledger = new Map(segments.map(s => [s.id, s]));
   const segSec = (id: string) => { const s = ledger.get(id); return s ? estimatedSpeechSeconds(s) : 0; };
   const speechSec = (b: RawDirectedBoard) => (b.speechIds ?? []).reduce((sum, id) => sum + segSec(id), 0);
   const travels = (b: RawDirectedBoard) => hasActorTravel(b.travelEvidence ?? "");
   const hasSpeech = (b: RawDirectedBoard) => (b.speechIds ?? []).length > 0;
+  // A board overflows when it holds more than two lines OR more spoken time than a single 4–6s board can carry.
+  const overflows = (b: RawDirectedBoard) => (b.speechIds?.length ?? 0) > 2 || speechSec(b) > STORYBOARD_MAX_BOARD_SEC;
   const joinAction = (a?: string, c?: string) => {
     const parts = [a?.trim(), c?.trim()].filter(Boolean) as string[];
     return parts.filter((p, i) => parts.indexOf(p) === i).join(". ") || undefined;
   };
+
+  // Fast path: already valid on EVERY axis (count in range AND no board overflows its budget) — leave the
+  // model's plan untouched, exactly as before. A count-valid plan with an over-budget board still balances.
+  if (boards.length >= STORYBOARD_MIN_BOARDS && boards.length <= STORYBOARD_MAX_BOARDS && !boards.some(overflows))
+    return boards;
+
+  // ── PHASE 1 (Stage 137): distribute overflowing speech onto FOLLOWING boards ──
+  // For any board whose lines exceed one board's 4–6s budget (or its two-line cap), keep the maximal
+  // fitting prefix and push the remaining source IDs onto a new board inserted right after — never
+  // speeding up, omitting or re-ordering a single word. The new board itself is re-examined next
+  // iteration, so a very long run of speech fans out across as many consecutive boards as it needs.
+  let g1 = segments.length * 4 + boards.length + 8;
+  for (let i = 0; i < boards.length && g1-- > 0; i++) {
+    const b = boards[i];
+    if (!overflows(b)) continue;
+    const ids = b.speechIds ?? [];
+    // Greedily keep at least one line, up to two, while the spoken time stays within a single board.
+    let keep = 0, sec = 0;
+    for (const id of ids) {
+      const s = segSec(id);
+      if (keep >= 1 && (keep >= 2 || sec + s > STORYBOARD_MAX_BOARD_SEC)) break;
+      sec += s; keep++;
+    }
+    const head = ids.slice(0, keep), tail = ids.slice(keep);
+    if (!tail.length) continue; // nothing to move (defensive; a single line is always ≤ MAX by construction)
+    const firstTail = ledger.get(tail[0]);
+    boards[i] = { ...b, speechIds: head, durationSec: null };
+    // The tail continues the SAME beat/action; its active speaker drives a fresh reverse-shot / eyeline.
+    boards.splice(i + 1, 0, {
+      ...b, speechIds: tail, durationSec: null,
+      shot: firstTail?.addressee ? "listener_reverse" : (b.shot ?? "over_shoulder"),
+      listener: firstTail?.addressee || b.listener,
+    });
+  }
 
   // ── MERGE: too many boards ──────────────────────────────────────────────────
   // Pick the adjacent pair that fits inside ONE board (≤2 spoken lines, ≤ MAX_BOARD_SEC of speech,
