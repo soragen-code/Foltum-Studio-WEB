@@ -48,6 +48,54 @@ export function readBoardDirection(json?: string | null): BoardDirection | null 
 }
 
 /**
+ * Stage 139 — deterministic speech-ID reconciliation. The LLM split (and, upstream, an LLM repair round)
+ * can omit, duplicate, re-order or invent speech IDs. The dialogue-integrity invariant — every source ID
+ * appears EXACTLY ONCE, in source order, without omissions or paraphrases — must therefore hold by
+ * CONSTRUCTION, not merely be caught by a hard-fail after the fact.
+ *
+ * We keep the model's per-board chunk SHAPE (how many spoken lines each board carries, and which boards are
+ * silent) as a pacing hint, and refill those slots with the AUTHORITATIVE source IDs strictly in source
+ * order. Because segments carry their own speaker/delivery/addressee, per-line attribution travels with the
+ * ID, and the verbatim text is always restored downstream from the ledger by ID (never from LLM prose).
+ *   - A plan that was already a valid in-order permutation reconciles to itself (no-op).
+ *   - A broken plan (dropped / duplicated / re-ordered / hallucinated IDs) is repaired losslessly.
+ *   - Lines the model never placed are appended to the last spoken board; balanceBoardCount then fans out
+ *     any overflow across consecutive boards, so nothing is truncated or sped up.
+ * The integrity check in finalizeDirectedBoards stays as the LAST line of defence for any caller that skips
+ * this reconciliation.
+ */
+export function reconcileSpeechIds(raw: RawDirectedBoard[], segments: SpeechSegment[]): RawDirectedBoard[] {
+  if (!Array.isArray(raw)) return raw;
+  const sourceOrder = segments.map(s => s.id);
+  const valid = new Set(sourceOrder);
+  const boards: RawDirectedBoard[] = raw.map(b => ({ ...b, speechIds: [...(b.speechIds ?? [])] }));
+  if (!boards.length) return boards; // no boards to attach speech to — the count check reports it later.
+  // 1) Per-board slot count = how many FIRST-occurrence valid IDs the model placed on that board. Duplicates,
+  //    out-of-cast/unknown IDs and repeats on later boards contribute nothing (each source ID counts once).
+  const consumed = new Set<string>();
+  const slots = boards.map(b => {
+    let n = 0;
+    for (const id of b.speechIds ?? []) if (valid.has(id) && !consumed.has(id)) { consumed.add(id); n++; }
+    return n;
+  });
+  // 2) Source IDs the model never placed are appended to the last spoken board (or board 0 if the model
+  //    produced no speech at all). Overflow this creates is redistributed by balanceBoardCount afterwards.
+  const missing = sourceOrder.length - slots.reduce((s, n) => s + n, 0);
+  if (missing > 0) {
+    let target = slots.length - 1;
+    while (target > 0 && slots[target] === 0) target--;
+    slots[target] += missing;
+  }
+  // 3) Refill every slot with source IDs strictly in source order — guarantees exact-once AND source order.
+  let cursor = 0;
+  for (let i = 0; i < boards.length; i++) {
+    boards[i].speechIds = sourceOrder.slice(cursor, cursor + slots[i]);
+    cursor += slots[i];
+  }
+  return boards;
+}
+
+/**
  * Stage 136 + 137 — deterministic board-count AND per-board-budget balancing so planning CONVERGES on the
  * hard 12–15 window with every board inside 4–6s, instead of hard-failing. The LLM split can naively yield
  * a count outside 12–15, OR pack a board with more spoken time than a single 4–6s clip can carry. We
@@ -68,8 +116,10 @@ export function readBoardDirection(json?: string | null): BoardDirection | null 
  */
 export function balanceBoardCount(raw: RawDirectedBoard[], segments: SpeechSegment[]): RawDirectedBoard[] {
   if (!Array.isArray(raw)) return raw;
-  // Clone boards (and their speechIds arrays) so the caller's plan is never mutated in place.
-  const boards: RawDirectedBoard[] = raw.map(b => ({ ...b, speechIds: [...(b.speechIds ?? [])] }));
+  // Stage 139 — reconcile the model's speech-ID allocation FIRST, so the dialogue-integrity invariant (every
+  // source ID exactly once, in source order) holds by construction before we balance count/budget. This also
+  // clones the boards (and their speechIds arrays), so the caller's plan is never mutated in place.
+  const boards: RawDirectedBoard[] = reconcileSpeechIds(raw, segments);
 
   const ledger = new Map(segments.map(s => [s.id, s]));
   const segSec = (id: string) => { const s = ledger.get(id); return s ? estimatedSpeechSeconds(s) : 0; };
