@@ -24,6 +24,10 @@ const directionSchema = z.object({
   addressee: z.string().optional().default(""),
   cast: z.array(z.string()),
   speech: z.array(speechSchema),
+  /** Stage 138 — set when a tracking/travelling camera was requested but could not be justified by literal
+   * source movement, so the board was deterministically degraded to a static locked-off camera instead of
+   * hard-failing. Empty means no degradation. Optional (default "") so older boards still parse. */
+  cameraDegradedReason: z.string().optional().default(""),
 });
 export type BoardDirection = z.infer<typeof directionSchema>;
 export interface RawDirectedBoard extends RawBoard {
@@ -221,11 +225,29 @@ export function finalizeDirectedBoards(raw: RawDirectedBoard[], segments: Speech
     const action = b.actionEnglish?.trim() || "Natural character reactions consistent with the opening frame.";
     if (/\b(?:camera|zoom|push.in|pull.out|pan|tilt|orbit|refram|dolly)\b/i.test(action))
       throw new Error(`Board ${index + 1}: actionEnglish must contain actor action only, not camera directions.`);
-    if (hasActorTravel(action) && !hasActorTravel(evidence))
-      throw new Error(`Board ${index + 1}: travelling action needs literal source movement evidence.`);
-    if (hasActorTravel(evidence) && !hasActorTravel(action))
-      throw new Error(`Board ${index + 1}: stationary reaction cannot inherit a tracking instruction from another beat.`);
     if (/["«“]/u.test(action)) throw new Error(`Board ${index + 1}: put speech in source IDs, not actionEnglish.`);
+    // Stage 138 — TRACKING is allowed ONLY when the board's action literally travels AND that locomotion is
+    // backed by a literal excerpt of the source action. When they disagree we DETERMINISTICALLY DEGRADE the
+    // board to a static locked-off camera and record why, instead of hard-failing planning. (A movement
+    // excerpt that is not present in the source at all is a genuine data conflict and still throws above.)
+    const actionTravels = hasActorTravel(action);
+    const evidenceTravels = hasActorTravel(evidence);
+    let cameraMode: BoardDirection["cameraMode"];
+    let travelEvidence = evidence;
+    let cameraDegradedReason = "";
+    if (actionTravels && evidenceTravels) {
+      cameraMode = "TRACKING"; // real, source-backed locomotion — the camera may follow the walking actors.
+    } else if (actionTravels && !evidenceTravels) {
+      // Travelling action with no literal source movement evidence → static, not a conflict.
+      cameraMode = "LOCKED_OFF";
+      cameraDegradedReason = "Travelling action has no literal source movement evidence; camera degraded to static locked-off.";
+    } else if (!actionTravels && evidenceTravels) {
+      // A stationary beat must not inherit a tracking cue from another board → drop the stale evidence, go static.
+      cameraMode = "LOCKED_OFF"; travelEvidence = "";
+      cameraDegradedReason = "Board action is stationary; inherited movement evidence dropped and camera degraded to static locked-off.";
+    } else {
+      cameraMode = "LOCKED_OFF"; // dialogue / freeze / gesture — always static.
+    }
     const firstSpeaker = speech[0]?.speaker ?? "";
     if (speech.some(s => !cast.includes(s.speaker))) throw new Error("Source speaker does not match the episode cast.");
     // Every per-line addressee (eyeline target) must be a real, DIFFERENT cast member — no self-address.
@@ -241,10 +263,10 @@ export function finalizeDirectedBoards(raw: RawDirectedBoard[], segments: Speech
     if (listener && (!cast.includes(listener) || listener === activeSpeaker)) throw new Error("Invalid dialogue listener mapping.");
     const shot = speech.length ? (b.shot && b.shot !== "action" ? b.shot : "over_shoulder") : "action";
     return directionSchema.parse({
-      version: 134, cameraMode: hasActorTravel(evidence) ? "TRACKING" : "LOCKED_OFF",
-      travelEvidence: evidence, actionEnglish: action, shot,
+      version: 134, cameraMode,
+      travelEvidence, actionEnglish: action, shot,
       focus: shot === "listener_reverse" ? listener : activeSpeaker,
-      listener, addressee, cast: [...cast], speech,
+      listener, addressee, cast: [...cast], speech, cameraDegradedReason,
     });
   });
   if (JSON.stringify(used) !== JSON.stringify(segments.map(s => s.id)))
