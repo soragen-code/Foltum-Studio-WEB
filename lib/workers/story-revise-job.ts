@@ -17,8 +17,8 @@ import { toCharacterCard, normalizeLanguage } from "@/lib/idea";
 import { runSeasonScriptJob, SEASON_JOB_TYPE, outlineFromEpisode } from "@/lib/workers/season-script-job";
 import {
   seasonStoryReviseSchema,
-  validateEpisodeDescriptions,
-  EPISODE_FOOTAGE_RETRY_NOTE,
+  validateEpisodeSynopses,
+  EPISODE_SYNOPSIS_RETRY_NOTE,
   seasonStoryReviseSystemPrompt,
   seasonStoryReviseUserPrompt,
   affectedEpisodes,
@@ -28,7 +28,7 @@ import {
   type SeasonStructure,
   buildFullStoryFromStructure,
 } from "@/lib/season";
-import { repairEpisodeDescriptions } from "../footage-repair";
+import { repairEpisodeSynopses } from "../footage-repair";
 
 /** GenerationJob.type value for the whole-season story rewrite. */
 export const STORY_REVISE_JOB_TYPE = "story_revise";
@@ -87,7 +87,7 @@ export async function runStoryReviseJob(jobId: string, projectId: string, params
         const parsed = seasonStoryReviseSchema.parse(raw);
         if (parsed.episodes.length < SEASON_MIN_EPISODES || parsed.episodes.length > SEASON_MAX_EPISODES) throw new Error(`LLM returned ${parsed.episodes.length} episodes (allowed ${SEASON_MIN_EPISODES}–${SEASON_MAX_EPISODES})`);
         const episodes = parsed.episodes.map((e, i) => ({ ...e, number: i + 1 }));
-        const problems = strict ? validateEpisodeDescriptions(episodes) : [];
+        const problems = strict ? validateEpisodeSynopses(episodes) : [];
         if (problems.length) throw new Error(`episode descriptions need repair: ${problems.slice(0, 4).join("; ")}`);
         return { title: parsed.title, logline: parsed.logline, episodes, fullStory: parsed.fullStory.trim() };
       };
@@ -97,11 +97,11 @@ export async function runStoryReviseJob(jobId: string, projectId: string, params
       } catch (first) {
         const why = first instanceof Error ? first.message : String(first);
         console.warn(`[story-revise] first attempt rejected (${why}) — retrying once with the format note`);
-        result = await attempt(`\n\n${EPISODE_FOOTAGE_RETRY_NOTE} Problems found: ${why}`, false);
+        result = await attempt(`\n\n${EPISODE_SYNOPSIS_RETRY_NOTE} Problems found: ${why}`, false);
       }
-      // Stage 107b — the retry's leftovers are repaired (targeted LLM passes) and finally clamped: never fail on caps.
-      const fixed = await repairEpisodeDescriptions(result.episodes, language, (sys, usr) => chatJSON(sys, usr, { temperature: 0.3, maxTokens: 6000 }));
-      if (fixed.repaired.length || fixed.clamped.length) console.warn(`[story-revise] footage repaired for episodes ${fixed.repaired.join(", ") || "-"}; clamped ${fixed.clamped.join(", ") || "-"}`);
+      // Stage 128 — the retry's leftovers are repaired (targeted LLM passes) and finally clamped: never fail on format.
+      const fixed = await repairEpisodeSynopses(result.episodes, language, (sys, usr) => chatJSON(sys, usr, { temperature: 0.3, maxTokens: 6000 }));
+      if (fixed.repaired.length || fixed.clamped.length) console.warn(`[story-revise] synopsis repaired for episodes ${fixed.repaired.join(", ") || "-"}; clamped ${fixed.clamped.join(", ") || "-"}`);
       after = { title: result.title, logline: result.logline, episodes: fixed.episodes };
       // Stage 106 — the model's "fullStory" is ignored: the season plot is rebuilt from the validated structure
       // so the text and the episodes can never diverge.

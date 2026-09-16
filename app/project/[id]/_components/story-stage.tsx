@@ -10,7 +10,7 @@ import { CancelButton } from './cancel-button'
 import { StickyReviseBar } from './sticky-revise-bar'
 import { type SeasonEpisode } from './season-stage'
 import { EpisodeFootage } from './episode-footage'
-import { parseEpisodeFootage } from '@/lib/season'
+
 
 // GenerationJob.type values (mirrored from the server workers — this is a client component, so we can't
 // import the worker modules, which pull in prisma/openai). The job's `type` field arrives as a string.
@@ -28,8 +28,9 @@ type Job = { id: string; status: string; progress: number; message?: string | nu
 
 /**
  * Render the season plot: the overview (text before the first ═══ marker) as paragraphs, then each episode block
- * with its ═══ header as a divider and — Stage 106 — its body as the three footage rows (Shot 1 / Shot 2 /
- * Cliffhanger) when it parses; legacy prose blocks keep the plain-paragraph rendering. ─── closings are hidden.
+ * with its ═══ header as a divider and — Stage 128 — its body as ONE continuous synopsis paragraph plus a
+ * highlighted Cliffhanger line (legacy episodes saved in the old 3-row footage format still render that way,
+ * handled inside EpisodeFootage). ─── closings are hidden.
  */
 function FullStoryView({ text }: { text: string }) {
   const lines = text.split(/\r?\n/)
@@ -49,7 +50,6 @@ function FullStoryView({ text }: { text: string }) {
     <div className="space-y-2" data-testid="full-story">
       {blocks.map((b) => {
         const bodyText = b.body.join('\n').trim()
-        const footage = b.header ? parseEpisodeFootage(bodyText) : null
         return (
           <div key={b.key}>
             {b.header && (
@@ -59,7 +59,10 @@ function FullStoryView({ text }: { text: string }) {
                 <span className="h-px flex-1 bg-primary/40" />
               </div>
             )}
-            {footage
+            {/* Stage 128 — every episode block renders through EpisodeFootage: it shows the new continuous
+               synopsis + cliffhanger, or the legacy 3-row footage for old saved episodes. The intro overview
+               block (no header) stays plain prose. */}
+            {b.header
               ? <EpisodeFootage description={bodyText} className="mt-3 [&>p]:text-sm [&>p]:leading-relaxed" />
               : renderPlain(b.body, b.key)}
           </div>
@@ -224,7 +227,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
           {episodeCount > 0 && <span className="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-sm" data-testid="episode-count"><BookOpen className="h-4 w-4" /> {episodeCount} episodes</span>}
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          The season, episode by episode: each episode is 60 seconds of footage — two 30-second shots and the final frame. Edit in the panel below; rewriting clears the generated scenes and videos of the affected episodes.
+          The season, episode by episode: each episode is a detailed continuous synopsis ending on its cliffhanger. Edit in the panel below; rewriting clears the generated scenes and videos of the affected episodes.
         </p>
         {season?.title && (
           <div className="mt-3">

@@ -30,10 +30,10 @@ function shortSynopsisOutline(stored: string | null | undefined): string | null 
 }
 import {
   seasonStructureSchema,
-  validateEpisodeDescriptions,
-  EPISODE_FOOTAGE_RETRY_NOTE,
+  validateEpisodeSynopses,
+  EPISODE_SYNOPSIS_RETRY_NOTE,
 } from "../season";
-import { repairEpisodeDescriptions } from "../footage-repair";
+import { repairEpisodeSynopses } from "../footage-repair";
 import {
   seasonFullStorySchema,
   buildFullStoryFromStructure,
@@ -196,11 +196,11 @@ export function validateStructure(raw: unknown, episodeCount: number, attempt = 
   // Stage 14 (B2): the producer sets the episode count — enforce it exactly (retry if the model drifts).
   if (parsed.episodes.length !== episodeCount) throw new Error(`structure returned ${parsed.episodes.length} episodes, expected exactly ${episodeCount}`);
   const structure = { ...parsed, episodes: parsed.episodes.map((e, i) => ({ ...e, number: i + 1 })) };
-  // Stage 105/107b — every description is 60-second footage (SHOT 1 / SHOT 2 / CLIFFHANGER, OPENS ON chain).
-  // Problems on the FIRST attempt → throw (one cheap retry with EPISODE_FOOTAGE_RETRY_NOTE); on the retry the
-  // caller repairs the failing episodes (repairEpisodeDescriptions) instead of failing the job.
+  // Stage 128 — every description is ONE detailed continuous synopsis + a closing CLIFFHANGER line (no shot split).
+  // Problems on the FIRST attempt → throw (one cheap retry with EPISODE_SYNOPSIS_RETRY_NOTE); on the retry the
+  // caller repairs the failing episodes (repairEpisodeSynopses) instead of failing the job.
   if (attempt === 0) {
-    const problems = validateEpisodeDescriptions(structure.episodes);
+    const problems = validateEpisodeSynopses(structure.episodes);
     if (problems.length) throw new Error(`episode descriptions need repair: ${problems.slice(0, 4).join("; ")}`);
   }
   return structure;
@@ -578,7 +578,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
   let progress: number;
   if (planned.step === "structure") {
     // Stage 105 — the single retry after a rejected structure gets an explicit format instruction (plus the exact problems).
-    const retryNote = state.attempt > 0 ? `\n\n${EPISODE_FOOTAGE_RETRY_NOTE}${state.lastFailure ? ` Problems found: ${state.lastFailure}` : ""}` : "";
+    const retryNote = state.attempt > 0 ? `\n\n${EPISODE_SYNOPSIS_RETRY_NOTE}${state.lastFailure ? ` Problems found: ${state.lastFailure}` : ""}` : "";
     responseId = await deps.start(seasonStructureSystemPrompt(language, state.episodeCount), seasonStructureUserPrompt(project.synopsis, cards, project.locations, shortSynopsisOutline(project.shortSynopsis)) + retryNote, { model: SCRIPT_MODEL, maxTokens: Math.min(64000, 4000 + 800 * state.episodeCount) });
     message = "Building the season structure..."; progress = 3;
   } else if (planned.step === "fullStory") {
@@ -629,9 +629,9 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
   const projectId = project.id;
   if (state.step === "structure") {
     const validated = validateStructure(raw, state.episodeCount, state.attempt);
-    // Stage 107b — never fail on footage caps: targeted repair passes + deterministic clamp (always valid).
-    const fixed = await repairEpisodeDescriptions(validated.episodes, language, (sys, usr) => deps.chatJSON(sys, usr, { temperature: 0.3, maxTokens: 6000 }));
-    if (fixed.repaired.length || fixed.clamped.length) console.warn(`[season-job] footage repaired for episodes ${fixed.repaired.join(", ") || "-"}; clamped ${fixed.clamped.join(", ") || "-"}`);
+    // Stage 128 — never fail on synopsis format: targeted repair passes + deterministic clamp (always valid).
+    const fixed = await repairEpisodeSynopses(validated.episodes, language, (sys, usr) => deps.chatJSON(sys, usr, { temperature: 0.3, maxTokens: 6000 }));
+    if (fixed.repaired.length || fixed.clamped.length) console.warn(`[season-job] synopsis repaired for episodes ${fixed.repaired.join(", ") || "-"}; clamped ${fixed.clamped.join(", ") || "-"}`);
     const structure: SeasonStructure = { ...validated, episodes: fixed.episodes };
     const byName = new Map(project.characters.map((c) => [c.name.toLowerCase(), c.id]));
     await prisma.$transaction(async (tx) => {

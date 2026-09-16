@@ -18,6 +18,12 @@ import {
   SHOT2_LABEL,
   CLIFFHANGER_LABEL,
   OPENS_ON_LABEL,
+  validateEpisodeSynopses,
+  parseEpisodeSynopsis,
+  stripShotSplitLabels,
+  EPISODE_SYNOPSIS_RULE,
+  EPISODE_SYNOPSIS_MAX_WORDS,
+  CLIFFHANGER_LINE_LABEL,
 } from "./season";
 import type { IdeaLanguage } from "./idea";
 
@@ -233,6 +239,146 @@ export async function repairEpisodeDescriptions<T extends RepairableEpisode>(
       problems = validateEpisodeDescriptions(episodes);
     }
     log(`[footage-repair] clamped episodes ${[...clamped].sort((a, b) => a - b).join(", ")} deterministically${problems.length ? ` — STILL INVALID: ${problems.join("; ")}` : ""}`);
+  }
+
+  return { episodes, repaired: [...repaired].sort((a, b) => a - b), clamped: [...clamped].sort((a, b) => a - b) };
+}
+
+
+/* ───────────── Stage 128 — repair NEW-format episode synopses (single continuous description + cliffhanger) ─────────────
+ * The story build no longer uses the SHOT 1 / SHOT 2 / CLIFFHANGER footage split. An episode "description" is ONE
+ * detailed continuous synopsis followed by a single "CLIFFHANGER: …" line. This mirrors repairEpisodeDescriptions:
+ * targeted LLM passes on the failing episodes, then a deterministic clamp that always yields a description passing
+ * validateEpisodeSynopses (strip any shot/beat/timing split, ensure a CLIFFHANGER line, cap the length).
+ */
+
+/** Any leftover shot/beat/timing MARKER text (not just labels) — removed deterministically so no split survives. */
+const TIMING_MARKER_RE = /\b(?:shots?\s*[12]|beat\s*[12]|first\s+30|last\s+30|30\s*s(?:ec)?(?:onds?)?|60-?seconds?)\b/gi;
+
+export function synopsisRepairSystemPrompt(language: IdeaLanguage): string {
+  return `You fix episode "description" fields that failed a strict format check. Rewrite ONLY the episodes you are given, keep their story events and the same characters — do NOT invent new events. Write in the story language (${language}).
+${EPISODE_SYNOPSIS_RULE}
+For every episode after the first, the synopsis MUST open by picking up directly from the given previous episode's cliffhanger (same moment, same place), then move forward.
+Return ONLY JSON: {"episodes":[{"number":<int>,"description":"<one continuous synopsis paragraph>\\n${CLIFFHANGER_LINE_LABEL} <one final image>","cliffhanger":"<the CLIFFHANGER line text>"}]}.`;
+}
+
+export function synopsisRepairUserPrompt(items: { number: number; title?: string; description: string; previousCliffhanger: string | null; problems: string[] }[]): string {
+  return items.map((it) => [
+    `EPISODE ${it.number}${it.title ? ` "${it.title}"` : ""}`,
+    it.previousCliffhanger ? `Previous episode's CLIFFHANGER (open the synopsis on it): ${it.previousCliffhanger}` : `(first episode — opens the season)`,
+    `Current description:\n${it.description}`,
+    `Problems: ${it.problems.join("; ")}`,
+  ].join("\n")).join("\n\n");
+}
+
+/** Cut a synopsis to ≤ maxWords, keeping whole sentences (then a hard word cut). Never empty when the input isn't. */
+function clampSynopsisText(text: string, maxWords: number): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (!clean) return "";
+  if (countWords(clean) <= maxWords) return endWithPeriod(clean);
+  const sentences = splitSentences(clean);
+  const kept: string[] = [];
+  for (const s of sentences) {
+    if (kept.length && countWords([...kept, s].join(" ")) > maxWords) break;
+    kept.push(s);
+    if (countWords(kept.join(" ")) >= maxWords) break;
+  }
+  const joined = kept.join(" ");
+  if (joined && countWords(joined) <= maxWords) return endWithPeriod(joined);
+  return endWithPeriod((joined || clean).split(/\s+/).slice(0, maxWords).join(" "));
+}
+
+/**
+ * Deterministic clamp of ONE new-format description so it passes validateEpisodeSynopses: strip every shot/beat/
+ * timing marker, split off the closing cliffhanger (parsed, else the cliffhanger field, else the last sentence),
+ * cap the synopsis length, and reassemble as `<synopsis>\nCLIFFHANGER: <hook>`.
+ */
+export function clampSynopsis(description: string, cliffhangerField: string | null | undefined): string {
+  const { synopsis, cliffhanger } = parseEpisodeSynopsis(description);
+  // Strip shot/beat labels and any leftover timing words from the prose.
+  let prose = stripShotSplitLabels(synopsis).replace(TIMING_MARKER_RE, " ").replace(/\s+/g, " ").trim();
+  let hook = (cliffhanger ?? cliffhangerField ?? "").replace(TIMING_MARKER_RE, " ").replace(/\s+/g, " ").trim();
+  if (!hook) {
+    // No cliffhanger anywhere → promote the last sentence of the prose to the hook.
+    const sentences = splitSentences(prose);
+    if (sentences.length > 1) { hook = sentences[sentences.length - 1]; prose = sentences.slice(0, -1).join(" ").trim(); }
+    else hook = prose || "The frame freezes on the final image.";
+  }
+  if (!prose) prose = hook;
+  prose = clampSynopsisText(prose, EPISODE_SYNOPSIS_MAX_WORDS) || "The scene continues.";
+  hook = clampSynopsisText(hook, EPISODE_SYNOPSIS_MAX_WORDS) || "The frame freezes on the final image.";
+  return `${prose}\n${CLIFFHANGER_LINE_LABEL} ${hook}`;
+}
+
+/** After descriptions changed: the `cliffhanger` field mirrors each episode's parsed CLIFFHANGER line. */
+function syncSynopsisChain<T extends RepairableEpisode>(episodes: T[]): T[] {
+  return [...episodes].sort((a, b) => a.number - b.number).map((e) => {
+    const cliff = parseEpisodeSynopsis(e.description).cliffhanger;
+    return { ...e, ...(cliff && e.cliffhanger !== undefined ? { cliffhanger: cliff } : {}) };
+  });
+}
+
+/**
+ * Validate → up to REPAIR_MAX_PASSES targeted LLM passes on the failing episodes only → deterministic clamp.
+ * NEVER throws on validation problems; the returned episodes always pass validateEpisodeSynopses.
+ */
+export async function repairEpisodeSynopses<T extends RepairableEpisode>(
+  input: T[],
+  language: IdeaLanguage,
+  llm: RepairLLM,
+  opts?: { maxPasses?: number; log?: (msg: string) => void },
+): Promise<RepairResult<T>> {
+  const log = opts?.log ?? ((m: string) => console.warn(m));
+  const maxPasses = opts?.maxPasses ?? REPAIR_MAX_PASSES;
+  let episodes = [...input].sort((a, b) => a.number - b.number);
+  const repaired = new Set<number>();
+  const clamped = new Set<number>();
+
+  let problems = validateEpisodeSynopses(episodes);
+  if (!problems.length) return { episodes, repaired: [], clamped: [] };
+
+  for (let pass = 0; pass < maxPasses && problems.length; pass++) {
+    const grouped = groupProblems(problems);
+    const items = [...grouped.entries()].map(([n, probs]) => {
+      const e = episodes.find((x) => x.number === n)!;
+      const prev = episodes.find((x) => x.number === n - 1);
+      return { number: n, title: e.title, description: e.description ?? "", previousCliffhanger: prev ? parseEpisodeSynopsis(prev.description).cliffhanger ?? prev.cliffhanger ?? null : null, problems: probs };
+    });
+    log(`[synopsis-repair] pass ${pass + 1}: repairing episodes ${items.map((i) => i.number).join(", ")}`);
+    let fixes: { number: number; description: string; cliffhanger?: string }[] = [];
+    try {
+      const raw = (await llm(synopsisRepairSystemPrompt(language), synopsisRepairUserPrompt(items))) as { episodes?: unknown };
+      fixes = Array.isArray(raw?.episodes)
+        ? (raw.episodes as unknown[]).filter((x): x is { number: number; description: string } => !!x && typeof (x as any).number === "number" && typeof (x as any).description === "string" && (x as any).description.trim().length > 0)
+        : [];
+    } catch (err) {
+      log(`[synopsis-repair] pass ${pass + 1} LLM call failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const failing = new Set(items.map((i) => i.number));
+    episodes = episodes.map((e) => {
+      const fix = fixes.find((f) => f.number === e.number);
+      if (!fix || !failing.has(e.number)) return e;
+      repaired.add(e.number);
+      return { ...e, description: fix.description.replace(/\*\*/g, "").trim() };
+    });
+    episodes = syncSynopsisChain(episodes);
+    problems = validateEpisodeSynopses(episodes);
+  }
+
+  if (problems.length) {
+    // Deterministic clamp — always converges: every problem validateEpisodeSynopses reports is clamp-fixable.
+    let guard = 0;
+    while (problems.length && guard++ < episodes.length + 2) {
+      for (const n of groupProblems(problems).keys()) {
+        const idx = episodes.findIndex((e) => e.number === n);
+        if (idx < 0) continue;
+        episodes[idx] = { ...episodes[idx], description: clampSynopsis(episodes[idx].description ?? "", episodes[idx].cliffhanger) };
+        clamped.add(n);
+      }
+      episodes = syncSynopsisChain(episodes);
+      problems = validateEpisodeSynopses(episodes);
+    }
+    log(`[synopsis-repair] clamped episodes ${[...clamped].sort((a, b) => a - b).join(", ")} deterministically${problems.length ? ` — STILL INVALID: ${problems.join("; ")}` : ""}`);
   }
 
   return { episodes, repaired: [...repaired].sort((a, b) => a - b), clamped: [...clamped].sort((a, b) => a - b) };

@@ -35,6 +35,7 @@ import {
   applyFixedSceneDurations,
   episodeFootageGivens,
   parseEpisodeFootage,
+  parseEpisodeSynopsis,
 } from "@/lib/season";
 
 /** GenerationJob.type value for the episode scene-breakdown job. */
@@ -172,10 +173,9 @@ export interface ScenesJobResult {
 }
 
 /**
- * Stage 114 — the episode brief inside the user message. When the description is episode footage
- * (BEAT 1 / BEAT 2 / CLIFFHANGER) the three lines are HARD BEATS: the first half of the scenes expand
- * BEAT 1, the second half expand BEAT 2, the final frame of the last scene = the CLIFFHANGER image.
- * Otherwise (legacy prose) the whole description is used as before.
+ * Stage 128 — the episode brief inside the user message. New format: the description is ONE detailed continuous
+ * synopsis; the scenes expand it in order and the LAST FRAME of the final scene = the cliffhanger image. Legacy
+ * episodes still saved as episode footage (BEAT 1 / BEAT 2 / CLIFFHANGER) keep the old HARD BEATS brief.
  */
 export function episodeBriefBlock(episode: { number: number; title: string; description: string | null; cliffhanger: string | null }): string {
   const head = `Episode ${episode.number}: "${episode.title}"`;
@@ -184,7 +184,10 @@ export function episodeBriefBlock(episode: { number: number; title: string; desc
     const f = parseEpisodeFootage(episode.description)!;
     return `${head}${beats}\nThis episode's ending cliffhanger (the LAST FRAME of the final scene IS this image): ${f.cliffhanger}${episode.cliffhanger && episode.cliffhanger.trim() !== f.cliffhanger ? ` (${episode.cliffhanger})` : ""}`;
   }
-  return `${head}\nDescription: ${episode.description}\nThis episode's ending cliffhanger (build toward it): ${episode.cliffhanger ?? "N/A"}`;
+  // New format (or plain prose): use the continuous synopsis as the brief; the cliffhanger is the last-frame target.
+  const { synopsis, cliffhanger } = parseEpisodeSynopsis(episode.description);
+  const cliff = (episode.cliffhanger?.trim() || cliffhanger || "").trim();
+  return `${head}\nDescription (a continuous synopsis — break it into the scenes in order, do NOT invent events beyond it): ${synopsis || episode.description || ""}\nThis episode's ending cliffhanger (the LAST FRAME of the final scene builds toward this image): ${cliff || "N/A"}`;
 }
 
 /**
