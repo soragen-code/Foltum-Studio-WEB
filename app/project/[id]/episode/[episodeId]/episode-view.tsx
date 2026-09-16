@@ -1302,17 +1302,29 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         {/* Step 3 — scenes: per-scene generation + «Generate all scenes" (parallel, Stage 39) + assemble */}
         {phase === 'scenes' && (
         <>
-        {/* Stage 129 — the production mode is now CHOSEN in the References step (above), not here. This is a
-            read-only reminder of the active mode with a link back to the References step to change it. Storyboard
-            swaps the Scenes UI below for the storyboard panel; Scenes (or legacy null) keeps the classic flow. */}
+        {/* Stage 129 — the production mode is first CHOSEN in the References step (that is where the gate lives).
+            Stage 130 — the author asked to keep the choice EDITABLE here too, so this is a live selector (not a
+            read-only badge): switching persists via chooseMode → /api/ai/storyboard/mode, exactly like the
+            References selector. Storyboard swaps the Scenes UI below for the storyboard panel; Scenes (or a
+            legacy null mode) keeps the classic flow. */}
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4" data-testid="mode-indicator">
           <span className="text-sm font-medium">Режим сборки эпизода:</span>
-          <span className="rounded-md bg-primary/10 px-3 py-1 text-sm font-semibold text-primary" data-testid="mode-current">
-            {productionSurface(mode) === 'storyboard' ? 'Сториборд' : 'Сцены'}
+          <div className="inline-flex overflow-hidden rounded-lg border border-border text-sm" role="group" aria-label="Режим сборки">
+            {([['SCENES', 'Сцены'], ['STORYBOARD', 'Сториборд']] as const).map(([val, label]) => {
+              const active = productionSurface(mode) === productionSurface(val)
+              return (
+                <button key={val} type="button" onClick={() => chooseMode(val)} disabled={modeSaving} aria-pressed={active}
+                  className={`px-4 py-1.5 font-medium transition disabled:opacity-50 ${active ? 'bg-primary text-primary-foreground' : 'bg-card hover:bg-muted'}`}
+                  data-testid={`scene-mode-${val.toLowerCase()}`}>
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+          {modeSaving && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+          <span className="text-xs text-muted-foreground" data-testid="mode-current" data-mode={productionSurface(mode)}>
+            Текущий режим: <b>{productionSurface(mode) === 'storyboard' ? 'Сториборд' : 'Сцены'}</b>. Выбор сохраняется автоматически.
           </span>
-          <button type="button" onClick={() => goPhase('references')} className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground" data-testid="mode-change">
-            Изменить в шаге «Референсы»
-          </button>
         </div>
 
         {productionSurface(mode) === 'storyboard' ? (

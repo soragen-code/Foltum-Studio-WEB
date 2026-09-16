@@ -89,7 +89,7 @@ const idxIndicator = view.indexOf('data-testid="mode-indicator"');
 ok(idxSelector > -1 && idxRefsForward > -1 && idxSelector < idxRefsForward,
   'episode-view: selector is inside the References step (before the "To production" forward button)');
 ok(idxIndicator > -1 && idxSelector < idxIndicator,
-  'episode-view: the Scenes step now carries a read-only mode indicator AFTER the References selector');
+  'episode-view: the Scenes step carries a mode indicator AFTER the References selector');
 
 // The forward step into production is gated.
 ok(view.includes('disabled={!canEnterProduction(refsReady, mode)}'), 'episode-view: forward-to-production button gated by canEnterProduction');
@@ -97,8 +97,16 @@ ok(view.includes('disabled={!canEnterProduction(refsReady, mode)}'), 'episode-vi
 // The scenes-tab reachability uses canEnterProduction (with a legacy-video fallback).
 ok(/canEnterProduction\(refsReady, mode\) \|\| scenes\.some/.test(view), 'episode-view: scenes tab reachable via canEnterProduction (+ legacy-video fallback)');
 
-// The Scenes step head is a read-only indicator, not the old top-of-scenes selector defaulting to SCENES.
-ok(view.includes('data-testid="mode-current"'), 'episode-view: read-only current-mode badge present in the Scenes step');
+// Stage 130 — the Scenes step keeps an EDITABLE mode selector (author request), persisting via chooseMode.
+ok(view.includes('data-testid="scene-mode-scenes"') || view.includes('data-testid={`scene-mode-'),
+  'episode-view: Scenes step has an editable mode selector (scene-mode-* buttons)');
+ok(view.includes('data-testid="mode-current"'), 'episode-view: current-mode label present in the Scenes step');
+{
+  // Inside the Scenes-step indicator block the buttons must call chooseMode (persist the choice).
+  const idxScenesButtons = view.indexOf('data-testid={`scene-mode-');
+  const around = idxScenesButtons > -1 ? view.slice(idxScenesButtons - 400, idxScenesButtons + 100) : '';
+  ok(/chooseMode\(val\)/.test(around), 'episode-view: Scenes-step selector persists via chooseMode');
+}
 ok(!/mode \?\? 'SCENES'/.test(view), 'episode-view: the old "mode ?? \'SCENES\'" default (no real gate) is gone');
 
 // The STORYBOARD render branch is preserved via productionSurface.
