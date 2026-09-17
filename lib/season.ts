@@ -1321,7 +1321,7 @@ export function episodeScriptUserPrompt(input: {
   // dialogue line EXACTLY as written, and synthesize ONLY the technical fields. It wins over plotSource + outline.
   const userScript = (input.userScript ?? "").trim();
   const userScriptBlock = userScript
-    ? `\n\nAUTHOR-PROVIDED FULL EPISODE SCRIPT (AUTHORITATIVE — this is the finished script for THIS episode ${input.episode.number}, written by the author). Your job is ONLY to STRUCTURE it into the required shooting-script JSON: keep the author's scenes, their order, their on-screen action and EVERY line of dialogue EXACTLY as written (do NOT rewrite, add, remove, shorten, translate away or invent any dialogue or plot beat). Split the author's script into the required consecutive shots and, for each shot, synthesize ONLY the technical fields the JSON needs (shotType, camera, videoPrompt, startState, endState, durationSec, continuity metadata) so the clips can be generated — never change WHAT happens or WHAT is said. Where this author script differs from the outline/synopsis/season plot above, THIS SCRIPT WINS.\n${userScript}`
+    ? `\n\nAUTHOR-PROVIDED FULL EPISODE SCRIPT (AUTHORITATIVE — this is the finished script for THIS episode ${input.episode.number}, written by the author). Your job is ONLY to STRUCTURE it into the required shooting-script JSON: keep the author's scenes, their order, their on-screen action and EVERY line of dialogue EXACTLY as written (do NOT rewrite, add, remove, shorten, translate away or invent any dialogue or plot beat). Split the author's script into the required consecutive shots and, for each shot, synthesize ONLY the technical fields the JSON needs (shotType, camera, videoPrompt, startState, endState, durationSec, continuity metadata) so the clips can be generated — never change WHAT happens or WHAT is said. Where this author script differs from the outline/synopsis/season plot above, THIS SCRIPT WINS. PRESERVE THE AUTHOR'S LOCATIONS: use the location the author gives each scene — set each scene's "locationDesc" to that scene's own place ("INT/EXT — place — time"), and DO NOT collapse every scene into a single location. When a scene's location differs from the previous scene's, set its "continuesFrom" to "location-change". Keep the author's scene order and their location headings.\n${userScript}`
     : "";
   return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}${plotBlock}${userScriptBlock}\n\nPREVIOUS EPISODES:\n${prev}${prevEndingBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}${locationInventoryBlock(input.locationInventory)}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
 }
@@ -1346,14 +1346,69 @@ export function renderStateLines(scene: { startState?: string | null; endState?:
   return renderStartStateLine(scene.startState) + renderEndStateLine(scene.endState);
 }
 
+// Stage 160 — an INT/EXT/ИНТ/НАТ opener or a "day/night/…"-style time-of-day tail (English + Russian).
+const SCENE_LOC_INT_EXT_RE = /^(int|ext|int\.?\/ext\.?|i\/e|инт|нат)\.?$/i;
+const SCENE_LOC_TIME_RE = /^(day|night|dawn|dusk|evening|morning|afternoon|noon|midnight|continuous|later|moments? later|sunset|sunrise|день|ночь|утро|вечер|рассвет|закат|сумерки|полдень|полночь|позже|продолжение)\.?$/i;
+
+/**
+ * Stage 160 — extract a clean PLACE NAME from an "INT/EXT — place — time"-style scene descriptor so a
+ * MANUAL (author-provided) script can show the author's OWN per-scene location. Examples:
+ *   "INT — Security office — day" → "Security office"; "Open-plan office floor" → "Open-plan office floor";
+ *   "" → "". Splits only on space-surrounded em/en/hyphen separators, so hyphenated words ("Open-plan")
+ *   are never split. 3+ parts: drop a leading INT/EXT token and a trailing time-of-day token, the place is
+ *   what remains; 2 parts with an INT/EXT opener: the place is the second part; otherwise the first part.
+ */
+export function sceneLocationName(locationDesc?: string | null): string {
+  const t = (locationDesc ?? "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  const parts = t.split(/\s+[—–-]\s+/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length <= 1) return t; // no separators — the whole text is the place name
+  if (parts.length >= 3) {
+    let start = 0;
+    let end = parts.length;
+    if (SCENE_LOC_INT_EXT_RE.test(parts[start])) start++;
+    if (SCENE_LOC_TIME_RE.test(parts[end - 1])) end--;
+    const middle = parts.slice(start, end).filter(Boolean);
+    return middle.length ? middle.join(" — ") : parts[0];
+  }
+  // exactly 2 parts
+  return SCENE_LOC_INT_EXT_RE.test(parts[0]) ? parts[1] : parts[0];
+}
+
+/** Stage 160 — distinct per-scene location NAMES in scene order (deduped, case-insensitive). */
+function distinctSceneLocationNames(scenes: { locationDesc?: string | null }[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const s of scenes) {
+    const n = sceneLocationName(s.locationDesc);
+    if (n && !seen.has(n.toLowerCase())) { seen.add(n.toLowerCase()); out.push(n); }
+  }
+  return out;
+}
+
+/**
+ * Stage 160 — true when the episode's scenes span 2+ distinct locations (a MANUAL author script that keeps
+ * the author's own per-scene places). An auto (LLM) episode is anchored to ONE location, so this is false
+ * for it and the single-location rendering (Stage 157) is used unchanged.
+ */
+export function episodeHasMultipleLocations(scenes: { locationDesc?: string | null }[]): boolean {
+  return distinctSceneLocationNames(scenes).length >= 2;
+}
+
 /** Readable script text stored in Episode.script. */
 export function renderEpisodeScriptText(ep: EpisodeOutline, script: EpisodeScript): string {
-  const head = `ЭПИЗОД ${ep.number}. ${ep.title}\n${ep.logline}\nЛокация: ${ep.locationName}\nПерсонажи: ${ep.characters.join(", ")}\n`;
+  // Stage 160 — a manual author script may keep MULTIPLE per-scene locations; when it does, show each
+  // scene's own place (and list them in the head) instead of collapsing to the one episode location.
+  const multiLoc = episodeHasMultipleLocations(script.scenes);
+  const headLoc = multiLoc ? distinctSceneLocationNames(script.scenes).join(", ") : ep.locationName;
+  const head = `ЭПИЗОД ${ep.number}. ${ep.title}\n${ep.logline}\nЛокация: ${headLoc}\nПерсонажи: ${ep.characters.join(", ")}\n`;
   const body = script.scenes
     .map((s) => {
       // Stage 157 — the reader sees the episode's LOCATION NAME per scene, not the per-scene
       // "INT/EXT — place — time" descriptor (locationDesc stays for image/video generation).
-      const head2 = `\nСЦЕНА ${s.number}${s.sceneKind === "narration" ? " · ЗАКАДРОВЫЙ ГОЛОС" : isActionKind(s.sceneKind) ? " · ЭКШЕН" : ""} · ${s.shotType} · ~${s.durationSec}с\n${ep.locationName || s.locationDesc}\n${s.action}${(s.set ?? "").trim() ? `\n${/^SET:/i.test(s.set!.trim()) ? "" : "SET: "}${s.set!.replace(/\s+/g, " ").trim()}` : ""}`;
+      // Stage 160 — for a multi-location manual script show THIS scene's own place instead.
+      const sceneLoc = multiLoc ? (sceneLocationName(s.locationDesc) || ep.locationName || s.locationDesc) : (ep.locationName || s.locationDesc);
+      const head2 = `\nСЦЕНА ${s.number}${s.sceneKind === "narration" ? " · ЗАКАДРОВЫЙ ГОЛОС" : isActionKind(s.sceneKind) ? " · ЭКШЕН" : ""} · ${s.shotType} · ~${s.durationSec}с\n${sceneLoc}\n${s.action}${(s.set ?? "").trim() ? `\n${/^SET:/i.test(s.set!.trim()) ? "" : "SET: "}${s.set!.replace(/\s+/g, " ").trim()}` : ""}`;
       const tail = renderStateLines(s);
       if (s.sceneKind === "narration" && (s.voiceover ?? "").trim()) {
         const local = (s.voiceoverLocal ?? "").trim();
@@ -1395,10 +1450,15 @@ export function renderScriptFromScenes(
   characterNames: string[],
   scenes: { number: number; sceneKind?: string | null; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; startState?: string | null; endState?: string | null }[]
 ): string {
-  const head = `ЭПИЗОД ${ep.number}. ${ep.title}\n${ep.logline ?? ""}\nЛокация: ${ep.locationName ?? ""}\nПерсонажи: ${characterNames.join(", ")}\n`;
+  // Stage 160 — a manual author script may keep MULTIPLE per-scene locations (stored on the Scene rows);
+  // when it does, show each scene's own place (and list them in the head) instead of the one episode location.
+  const multiLoc = episodeHasMultipleLocations(scenes);
+  const headLoc = multiLoc ? distinctSceneLocationNames(scenes).join(", ") : (ep.locationName ?? "");
+  const head = `ЭПИЗОД ${ep.number}. ${ep.title}\n${ep.logline ?? ""}\nЛокация: ${headLoc}\nПерсонажи: ${characterNames.join(", ")}\n`;
   const body = scenes
     // Stage 157 — show the episode's LOCATION NAME per scene, not the per-scene locationDesc descriptor.
-    .map((s) => `\nСЦЕНА ${s.number}${s.sceneKind === "narration" ? " · ЗАКАДРОВЫЙ ГОЛОС" : isActionKind(s.sceneKind) ? " · ЭКШЕН" : ""} · ${s.shotType ?? ""} · ~${s.durationSec ?? SCENE_MAX_SECONDS}с\n${ep.locationName || (s.locationDesc ?? "")}\n${s.action ?? ""}\n${s.dialogue ?? "[NO DIALOGUE]"}${renderStateLines(s)}`)
+    // Stage 160 — for a multi-location manual script show THIS scene's own place instead.
+    .map((s) => `\nСЦЕНА ${s.number}${s.sceneKind === "narration" ? " · ЗАКАДРОВЫЙ ГОЛОС" : isActionKind(s.sceneKind) ? " · ЭКШЕН" : ""} · ${s.shotType ?? ""} · ~${s.durationSec ?? SCENE_MAX_SECONDS}с\n${multiLoc ? (sceneLocationName(s.locationDesc) || ep.locationName || (s.locationDesc ?? "")) : (ep.locationName || (s.locationDesc ?? ""))}\n${s.action ?? ""}\n${s.dialogue ?? "[NO DIALOGUE]"}${renderStateLines(s)}`)
     .join("\n");
   return `${head}${body}\n\nКЛИФФХЭНГЕР: ${ep.cliffhanger ?? ""}\n`;
 }

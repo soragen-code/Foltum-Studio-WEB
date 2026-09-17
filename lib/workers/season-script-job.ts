@@ -265,7 +265,10 @@ export async function persistEpisodeScript(
   outline: EpisodeOutline,
   script: EpisodeScript,
   characters: { id: string; name: string }[],
-  language: string
+  language: string,
+  // Stage 160 — for a MANUAL (author-provided) script keep the author's OWN per-scene location instead of
+  // anchoring every scene to the episode's single canonical location (auto scripts stay anchored as before).
+  opts: { preserveSceneLocations?: boolean } = {}
 ) {
   const idOf = (n: string) => matchCharacter(characters, n)?.id;
   const text = renderEpisodeScriptText(outline, script);
@@ -284,7 +287,10 @@ export async function persistEpisodeScript(
           dialogueEn: s.dialogue,
           // Stage 20 (A2): lock every non-location-change scene to the episode's single canonical location
           // (Episode.locationDesc) so the place never drifts scene-to-scene and frame-chaining stays reliable.
-          locationDesc: anchorSceneLocation(s.locationDesc, outline.locationDesc, s.continuesFrom),
+          // Stage 160: a MANUAL author script keeps the author's own per-scene location (anchor only when empty).
+          locationDesc: opts.preserveSceneLocations
+            ? ((s.locationDesc ?? "").trim() || anchorSceneLocation(s.locationDesc, outline.locationDesc, s.continuesFrom))
+            : anchorSceneLocation(s.locationDesc, outline.locationDesc, s.continuesFrom),
           videoPrompt: s.videoPrompt,
           shotType: s.shotType,
           action: s.action,
@@ -707,7 +713,7 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
     const epLoc = ep.locationId ? project.locations.find((l) => l.id === ep.locationId) : matchLocation(project.locations, ep.locationName ?? "");
     const invWarnings = checkSceneSetInventory(script.scenes, epLoc?.setInventory);
     if (invWarnings.length) console.warn(`[season-job] episode ${ep.number} set inventory: ${invWarnings.join(" | ")}`);
-    await persistEpisodeScript(ep.id, outline, script, project.characters.map((c) => ({ id: c.id, name: c.name })), language);
+    await persistEpisodeScript(ep.id, outline, script, project.characters.map((c) => ({ id: c.id, name: c.name })), language, { preserveSceneLocations: manual });
     return loadSeason(projectId);
   }
   return season;
