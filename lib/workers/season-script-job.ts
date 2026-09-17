@@ -61,6 +61,7 @@ import {
   matchLocation,
 } from "@/lib/season";
 import { anchorSceneLocation } from "@/lib/location-anchor";
+import { selectPlotSource } from "@/lib/plot-import";
 import { deriveRegionKey } from "@/lib/region-plate";
 import { translateDialogue } from "@/lib/voiceover";
 import { episodeCastFromScenes } from "@/lib/episode-cast";
@@ -603,6 +604,10 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
         previous: season!.episodes.filter((p) => p.number < ep.number).map((p) => ({ number: p.number, title: p.title, logline: p.logline ?? "", cliffhanger: p.cliffhanger ?? "" })),
         previousEnding,
         locationInventory,
+        // Stage 155 — when the author uploaded their own plot file, it is stored in Season.fullStory and
+        // becomes the AUTHORITATIVE source for the script (selectPlotSource: uploaded plot wins, else none →
+        // the outline is used as before). This also carries through the per-episode script reset (Stage 151).
+        plotSource: season!.userPlotUploaded ? selectPlotSource({ uploadedPlot: season!.fullStory, autoStory: null }) : null,
         ...(planned.instruction ? { instruction: reviseInstruction(planned.instruction, next) } : {}),
       }) + episodeRetryNote(state),
       // Stage 108 — the episode script is written by gpt-4o (EPISODE_SCRIPT_MODEL): non-reasoning →

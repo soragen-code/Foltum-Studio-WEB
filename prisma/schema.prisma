@@ -146,6 +146,7 @@ model Season {
   title       String?
   logline     String?  @db.Text // stage 2: season arc summary
   fullStory   String?  @db.Text // stage 12: whole detailed season story with explicit episode markers (canon for the whole season)
+  userPlotUploaded Boolean @default(false) // stage 155: fullStory holds an author-uploaded plot file (drives episode scripts) rather than the auto-built plot
   status      String   @default("draft") // draft, approved
   premise     String?  @db.Text // stage 46C: season synopsis / short-synopsis JSON for seasons > 1
   previousSeasonId String? // stage 46C: the season this one continues

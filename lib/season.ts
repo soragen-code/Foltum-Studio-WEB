@@ -1283,6 +1283,12 @@ export function episodeScriptUserPrompt(input: {
   instruction?: string;
   /** Stage 113 — the episode location's set inventory (DB text or entries); absent/empty → no inventory block. */
   locationInventory?: string[] | string | null;
+  /**
+   * Stage 155 — the AUTHOR-UPLOADED season plot ("bring your own plot file"). When present, the script for
+   * THIS episode must be written from this author-provided plot as the AUTHORITATIVE source (it wins over
+   * the auto-derived outline where they differ); absent/empty → written the usual way from the outline.
+   */
+  plotSource?: string | null;
 }): string {
   const prev = input.previous.length
     ? input.previous.map((p) => `Ep.${p.number} «${p.title}»: ${p.logline} Cliffhanger: ${p.cliffhanger}`).join("\n")
@@ -1295,7 +1301,14 @@ export function episodeScriptUserPrompt(input: {
     ? `\n\nHOW THE PREVIOUS EPISODE (Ep.${pe.number} «${pe.title}») ENDED — THIS EPISODE CONTINUES DIRECTLY FROM HERE:\nCliffhanger: ${pe.cliffhanger}${(pe.endState ?? "").trim() ? `\nFinal frame / world-state left behind: ${(pe.endState ?? "").trim()}` : ""}${(pe.tail ?? "").trim() ? `\nClosing beats:\n${(pe.tail ?? "").trim()}` : ""}\nWrite THIS episode as the direct next chapter: pick up the story, the world-state, the locations and the characters exactly where the previous episode left them (nobody teleports, resets or forgets what just happened), resolve or escalate that cliffhanger, and open scene 1 with the characters ALREADY talking on camera in the middle of that situation — no narrator, no recap, no "previously on" (never restart the story from scratch).`
     : "";
   const beats = episodeFootageGivens(input.episode.description);
-  return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}\n\nPREVIOUS EPISODES:\n${prev}${prevEndingBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}${locationInventoryBlock(input.locationInventory)}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
+  // Stage 155 — author-uploaded plot: the AUTHORITATIVE source for the script (its events, order and
+  // character actions take precedence over the auto-derived outline above). Keep to the part of the plot
+  // that belongs to THIS episode (${input.episode.number}); do not invent beats it does not contain.
+  const plot = (input.plotSource ?? "").trim();
+  const plotBlock = plot
+    ? `\n\nAUTHOR-PROVIDED SEASON PLOT (AUTHORITATIVE — write THIS episode's script from it; where it differs from the outline above, the plot wins; use the part covering episode ${input.episode.number}):\n${plot}`
+    : "";
+  return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}${plotBlock}\n\nPREVIOUS EPISODES:\n${prev}${prevEndingBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}${locationInventoryBlock(input.locationInventory)}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
 }
 
 /**

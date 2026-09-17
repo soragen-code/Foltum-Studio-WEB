@@ -353,3 +353,8 @@ ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "directionJson" TEXT;
 -- Stage 142: SCENE ANCHOR FRAME per storyboard scene (additive, idempotent)
 ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "anchorUrl" TEXT;
 ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "anchorBoardId" TEXT;
+
+
+-- Stage 155: mark a season whose fullStory is an author-uploaded plot file (drives the episode
+-- scripts as the authoritative source) rather than the deterministically built auto plot. Additive & idempotent.
+ALTER TABLE "Season" ADD COLUMN IF NOT EXISTS "userPlotUploaded" BOOLEAN NOT NULL DEFAULT false;

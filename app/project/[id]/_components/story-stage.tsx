@@ -10,6 +10,7 @@ import { CancelButton } from './cancel-button'
 import { StickyReviseBar } from './sticky-revise-bar'
 import { type SeasonEpisode } from './season-stage'
 import { EpisodeFootage } from './episode-footage'
+import { PLOT_ACCEPT } from '@/lib/plot-import'
 
 
 // GenerationJob.type values (mirrored from the server workers — this is a client component, so we can't
@@ -82,6 +83,12 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
   const [storyBusy, setStoryBusy] = useState(false)
   const [storyNotice, setStoryNotice] = useState('')
   const [openingEpisode, setOpeningEpisode] = useState<string | null>(null) // episodeId being navigated to
+  // Stage 155 — "bring your own plot file": before the plot exists the author chooses to auto-generate it
+  // or to upload their own plot file (.txt/.md/.docx/.pdf), which becomes the authoritative source for scripts.
+  const [plotMode, setPlotMode] = useState<'auto' | 'upload'>('auto')
+  const [plotFile, setPlotFile] = useState<File | null>(null)
+  const [uploadBusy, setUploadBusy] = useState(false)
+  const plotInputRef = useRef<HTMLInputElement | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -117,6 +124,23 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
       setJob({ id: data.jobId, status: 'processing', progress: 1, message: 'Starting...' })
     } catch (e: any) { setError(e?.message ?? 'Error') }
     finally { setStarting(false) }
+  }
+
+  // Stage 155 — upload the author's own plot file: extract text server-side, store it as the season plot
+  // (Season.fullStory + userPlotUploaded), and start the season job so the scripts are written from it.
+  const uploadPlot = async () => {
+    if (!plotFile) { setError('Выберите файл с сюжетом (.txt, .md, .docx или .pdf)'); return }
+    setUploadBusy(true); setError(null)
+    try {
+      const fd = new FormData()
+      fd.append('projectId', project.id)
+      fd.append('file', plotFile)
+      const res = await fetch('/api/ai/season/full-story/upload', { method: 'POST', body: fd })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error ?? 'Не удалось загрузить файл')
+      setJob({ id: data.jobId, status: 'processing', progress: 1, message: 'Starting...' })
+    } catch (e: any) { setError(e?.message ?? 'Ошибка') }
+    finally { setUploadBusy(false) }
   }
 
   const cancelSeason = async () => {
@@ -248,10 +272,58 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
         )}
 
         {!season && !jobActive && (
-          <button onClick={start} disabled={starting} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="season-generate">
-            {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-            Generate season
-          </button>
+          <div className="mt-4 space-y-4" data-testid="plot-source-choice">
+            <p className="text-sm font-medium">Как создать сюжет сезона?</p>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <button
+                type="button"
+                onClick={() => setPlotMode('auto')}
+                className={`flex-1 rounded-lg border px-4 py-3 text-left text-sm transition ${plotMode === 'auto' ? 'border-primary bg-primary/10' : 'border-border hover:border-primary/50'}`}
+                data-testid="plot-mode-auto"
+              >
+                <span className="font-semibold">Сгенерировать автоматически</span>
+                <span className="mt-1 block text-xs text-muted-foreground">Приложение само построит сюжет сезона по синопсису.</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPlotMode('upload')}
+                className={`flex-1 rounded-lg border px-4 py-3 text-left text-sm transition ${plotMode === 'upload' ? 'border-primary bg-primary/10' : 'border-border hover:border-primary/50'}`}
+                data-testid="plot-mode-upload"
+              >
+                <span className="font-semibold">Загрузить свой файл с сюжетом</span>
+                <span className="mt-1 block text-xs text-muted-foreground">Ваш готовый сюжет (.txt, .md, .docx, .pdf) станет основой для сценариев.</span>
+              </button>
+            </div>
+
+            {plotMode === 'auto' ? (
+              <button onClick={start} disabled={starting} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="season-generate">
+                {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+                Сгенерировать сезон
+              </button>
+            ) : (
+              <div className="space-y-3" data-testid="plot-upload-panel">
+                <input
+                  ref={plotInputRef}
+                  type="file"
+                  accept={PLOT_ACCEPT}
+                  onChange={(e) => { setPlotFile(e.target.files?.[0] ?? null); setError(null) }}
+                  className="block w-full text-sm text-muted-foreground file:mr-3 file:rounded-lg file:border-0 file:bg-primary/10 file:px-4 file:py-2 file:text-sm file:font-medium file:text-primary hover:file:bg-primary/20"
+                  data-testid="plot-file-input"
+                />
+                {plotFile && <p className="text-xs text-muted-foreground">Выбран файл: {plotFile.name}</p>}
+                <p className="text-xs text-muted-foreground">Поддерживаются .txt, .md, .docx и .pdf (до 8 МБ). Деление на серии сохраняется, если в файле есть заголовки «Серия N», «Эпизод N» или «Episode N».</p>
+                <button
+                  onClick={uploadPlot}
+                  disabled={uploadBusy || !plotFile}
+                  className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+                  data-testid="plot-upload-submit"
+                >
+                  {uploadBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+                  Загрузить и создать сезон
+                </button>
+              </div>
+            )}
+          </div>
         )}
         {(jobActive || starting) && !storyBusy && (
           <div className="mt-4 space-y-2" data-testid="season-progress">
