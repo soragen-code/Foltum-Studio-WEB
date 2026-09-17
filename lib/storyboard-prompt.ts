@@ -21,7 +21,7 @@ import { buildStoryboardAnimationPrompt, type AnimationBoard } from "@/lib/story
 import { boardShotContext, readBoardDirection } from "@/lib/storyboard-direction";
 import { withForcedGender } from "@/lib/full-body-prompt";
 import { buildSetAnchorsLine } from "@/lib/set-anchors";
-import { buildSceneAnchorLine, BOARD_BODY_FURNITURE_LINE } from "@/lib/board-anchor";
+import { buildSceneAnchorLine, buildContinuityLine, BOARD_BODY_FURNITURE_LINE } from "@/lib/board-anchor";
 import { resolveVisibleCast, buildShotSizeLine, buildOffScreenLine, type BoardCoverage } from "@/lib/board-coverage";
 
 /**
@@ -41,6 +41,13 @@ export const BOARD_GEOMETRY_AUTHORITY_LINE =
  */
 export const BOARD_REGION_PLATE_AUTHORITY_LINE =
   "REGION PLATE IS THE PRIMARY ENVIRONMENT AUTHORITY (this zone of the location): the attached region plate is a controlled re-frame of the master plates onto the exact part of the location where this board plays — treat it as the primary truth of the background and geometry, above every other reference. Reproduce its walls, floor, columns, fixtures and fixed furniture EXACTLY, at the same places, with wall-adjacent furniture flush against the same wall, and the same architecture, materials, colours and lighting. It fixes the ENVIRONMENT ONLY — it imposes no character pose and it is NOT the camera angle of this board.";
+
+/**
+ * Stage 144 — ACTION / POSE CONTINUITY between adjacent boards of one scene. Adjacent boards are the SAME
+ * ongoing moment seen from a different camera, so the physical action and body contact must carry over exactly.
+ */
+export const BOARD_ACTION_CONTINUITY_LINE =
+  "ACTION CONTINUITY: this board CONTINUES the exact same ongoing action from the previous shot — the moment picks up where the previous board left off, NOT restarted. If characters were embracing / holding hands / one hand on a shoulder / mid-gesture / holding a prop, they REMAIN in that exact physical state and contact; poses, body contact, who-touches-whom and props-in-hand carry over unchanged. ONLY the camera angle, height, lens and shot size change (a cut to another vantage of the same instant); do NOT reset to a neutral standing pose, do NOT break physical contact, do NOT start the action over.";
 
 /** A character appearing in a board frame (identity + sex source of truth). */
 export interface BoardCharacterLink {
@@ -83,6 +90,16 @@ export interface BuildBoardFramePromptInput {
    * identity references by it). Omitted → resolved here from the direction / board position / action text.
    */
   coverage?: BoardCoverage;
+  /**
+   * Stage 144 — ACTION / POSE INHERITANCE from the immediately previous board of the SAME scene. When present
+   * (every board except the first of a scene), the board CONTINUES the exact ongoing action: poses, body
+   * contact, who-touches-whom and props carry over; only the camera angle and shot size change. Omitted (first
+   * board of a scene, or a scene/region boundary) → no continuity block (the action is established here).
+   *   - `previousActionText` — the previous board's English action/motion (for the PREVIOUS SHOT ACTION line).
+   *   - `continuityRefIndex` — 1-based position of the previous board's still inside image_input (or null when
+   *      no continuity image survived the cap; the text continuity block still applies).
+   */
+  continuity?: { previousActionText: string; continuityRefIndex?: number | null };
 }
 
 export interface BuildBoardFramePromptResult {
@@ -134,12 +151,21 @@ export function buildBoardFramePrompt(input: BuildBoardFramePromptInput): BuildB
     ? (input.hasRegionPlate ? `${BOARD_REGION_PLATE_AUTHORITY_LINE}\n${BOARD_GEOMETRY_AUTHORITY_LINE}` : BOARD_GEOMETRY_AUTHORITY_LINE)
     : "";
 
+  // Stage 144 — action/pose inheritance from the immediately previous board of this scene (if any).
+  const continues = !!input.continuity;
+  const prevActionText = (input.continuity?.previousActionText ?? "").trim();
+  const continuityRefIndex = input.continuity?.continuityRefIndex ?? null;
+
   const body = [
     `KEYFRAME STILL — a single cinematic vertical ${REFERENCE_ASPECT_RATIO} frame: the OPENING frame of a 3-6 second shot (it will be animated into a moving clip).`,
     `BOARD ${board.index + 1} — ${dialogue ? "DIALOGUE beat" : "ACTION beat"}: ${board.actionOrDialogue.trim()}`,
     castLines.length ? `CHARACTERS IN FRAME (EXACTLY these ${castLines.length} — nobody else):\n${castLines.join("\n")}` : "",
     locationLine ? `LOCATION: ${locationLine}` : "",
     geometryAuthorityLine,
+    // Stage 144 — ACTION / POSE CONTINUITY: carry the previous board's ongoing action forward (text + ref frame).
+    continues ? BOARD_ACTION_CONTINUITY_LINE : "",
+    continues && prevActionText ? `PREVIOUS SHOT ACTION (continue this exact moment): ${prevActionText}` : "",
+    continues && continuityRefIndex ? buildContinuityLine(continuityRefIndex) : "",
     // Stage 142 — the scene's first rendered board still is attached as an IMAGE reference; name its index.
     input.anchorRefIndex ? buildSceneAnchorLine(input.anchorRefIndex) : "",
     buildSetAnchorsLine(input.setAnchors ?? []),
@@ -148,7 +174,7 @@ export function buildBoardFramePrompt(input: BuildBoardFramePromptInput): BuildB
     REFERENCE_APPEARANCE_ONLY_LINE,
     dialogue ? GAZE_AT_LISTENER_LINE : "",
     direction
-      ? boardShotContext(direction, board.index, coverage)
+      ? boardShotContext(direction, board.index, coverage, continues)
       : [buildShotSizeLine(coverage), buildOffScreenLine(coverage), dialogue ? "DIALOGUE COVERAGE: the shot size and the exact cast in frame are fixed by the SHOT SIZE line above. Maintain connected eyelines, screen sides and the 180-degree axis. Off-screen partners remain in the location. Shot changes only BETWEEN boards by hard cut." : ""].filter(Boolean).join("\n"),
     "CAMERA: angle, height and lens are free (the camera is NOT locked to any previous shot; there is no fixed camera), but the SHOT SIZE and the exact cast in frame are FIXED by the SHOT SIZE line — never widen the frame to include anyone else. Compose a real, deep environment (foreground / mid-ground / background), never a flat frontal line-up.",
     `Vertical ${REFERENCE_ASPECT_RATIO} composition, photoreal, no on-screen text, no captions, no watermark.`,

@@ -25,6 +25,12 @@ export interface AnimationBoard {
   durationSec?: number | null;
   /** Stage 143 — 0-based board position (= position in the scene); drives the visible-cast / shot-size block. */
   boardIndex?: number;
+  /**
+   * Stage 144 — the immediately previous board's English action/motion (same scene). When set, this clip's
+   * OPENING pose is the previous board's END state, so the motion must CONTINUE from that inherited state rather
+   * than start from a neutral pose. Omitted (first board of a scene / scene boundary) → no continuation note.
+   */
+  previousActionText?: string | null;
 }
 
 function legacyAction(text: string, cast: string[]): string {
@@ -52,12 +58,19 @@ export function buildStoryboardAnimationPrompt(board: AnimationBoard): string {
   if (!Number.isInteger(duration) || duration < 4 || duration > 6) throw new Error("Storyboard duration must stay 4–6s; rebuild conflicting boards.");
   if (lines.reduce((sum, line) => sum + estimatedSpeechSeconds(line), 0) > duration)
     throw new Error("Dialogue duration conflict: rebuild boards to distribute the original lines across consecutive 4–6s clips. No acceleration, truncation or omitted speech is allowed.");
+  // Stage 144 — this board's opening frame already IS the previous board's ongoing moment (continuity), so the
+  // motion continues from that inherited pose/contact rather than starting from a neutral stance.
+  const prevAction = (board.previousActionText ?? "").trim();
+  const continues = prevAction.length > 0;
+  const actionLine = continues
+    ? `ACTOR ACTION ONLY: The opening frame already shows the ongoing action continued from the previous shot (${prevAction}) — keep every pose, body contact and prop from the opening frame and CONTINUE the motion smoothly from it; do NOT reset to a neutral pose or restart the action. ${action || "Natural continuation with motivated reactions from the opening pose."}`
+    : `ACTOR ACTION ONLY: ${action || "Natural breathing and motivated reactions from the opening pose."}`;
   const instructions = styledVisualPrompt([
     `Animate the original board opening frame into ONE continuous 3-6 second live-action shot (this clip: ${duration}s).`,
     tracking ? TRACKING_BOARD_CAMERA : LOCKED_BOARD_CAMERA,
     "No internal cuts, transitions, montage or shot/reverse-shot within this clip. Hard cuts and freely selected new angles occur BETWEEN boards only.",
-    `ACTOR ACTION ONLY: ${action || "Natural breathing and motivated reactions from the opening pose."}`,
-    plan ? boardShotContext(plan, board.boardIndex ?? 1) : `SCENE CAST CONTEXT — IN FRAME: ${resolveVisibleCast(null, board.boardIndex ?? 1, board.characters ?? [], board.actionOrDialogue).visible.join(", ")}; nobody else appears in the frame. Every other named character remains present in the location, outside the crop; stable screen sides and a coherent 180-degree layout for the whole group, each speaker's eyeline on the person they address (not always the same partner), never at camera.`,
+    actionLine,
+    plan ? boardShotContext(plan, board.boardIndex ?? 1, undefined, continues) : `SCENE CAST CONTEXT — IN FRAME: ${resolveVisibleCast(null, board.boardIndex ?? 1, board.characters ?? [], board.actionOrDialogue).visible.join(", ")}; nobody else appears in the frame. Every other named character remains present in the location, outside the crop; stable screen sides and a coherent 180-degree layout for the whole group, each speaker's eyeline on the person they address (not always the same partner), never at camera.`,
     "Keep every character's identity, wardrobe and the location exactly as in the start frame. Preserve the same walls, geometry, materials, lighting and furniture; bench back stays flush against its wall. No teleporting, morphing or frozen padding.",
     lines.length ? "AUDIO: audible ENGLISH on-scene dialogue below, in this exact order and with the indicated delivery. Lip sync ONLY the named speaker to their own line when visible, with their eyeline on that line's addressee; every other present character listens/reacts and NEVER mouths or speaks that line. An off-screen speaker still speaks from their established position (not a narrator). Speak the lines EXACTLY as written in English — no re-translation, paraphrase, additional lines, voice-over narrator or sped-up speech. Finish each phrase naturally within the clip. No background music; preserve natural ambience." : "AUDIO: natural scene ambience, no invented speech or narrator, no background music.",
   ].join("\n"), plan?.cast ?? board.characters ?? []);

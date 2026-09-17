@@ -51,7 +51,7 @@ const ANCHOR_WAIT_POLL_MS = Number(process.env.BOARD_ANCHOR_WAIT_POLL_MS ?? 4000
 const ANCHOR_WAIT_MAX_POLLS = Number(process.env.BOARD_ANCHOR_WAIT_MAX_POLLS ?? 90); // ~6 min at 4s
 
 /** Minimal sibling projection shared by the Stage 140 set-anchors and the Stage 142 scene anchor. */
-const SIBLING_SELECT = { id: true, index: true, imageUrl: true, status: true, directionJson: true, motionEn: true, actionOrDialogue: true } as const;
+const SIBLING_SELECT = { id: true, index: true, imageUrl: true, status: true, directionJson: true, motionEn: true, actionOrDialogue: true, region: true } as const;
 
 /**
  * Load the episode's cast (identity + sex source of truth) for a board frame prompt.
@@ -238,10 +238,26 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
     }
     const anchor = pickSceneAnchor(self, toSiblings(siblingBoards));
 
-    // Character reference images first (identity), then the SCENE ANCHOR FRAME, then the environment plate(s) as
-    // geometry authority. Capped at WAVESPEED_IMAGE_MAX_REFS: plates are cut first, the anchor and characters never.
+    // Stage 144 — ACTION / POSE CONTINUITY. The immediately previous board of the SAME scene AND SAME region (a
+    // rendered frame with the highest index below this board) is the source of the ongoing action: its still is
+    // attached as the CONTINUITY reference and its action text is passed so this board CONTINUES the exact moment
+    // (poses / body contact / props carry over; only the camera changes). Inheritance resets at a region boundary
+    // (a different corner of the set) and at the first board of the scene, which establishes the action instead.
+    const prevRow = siblingBoards
+      .filter((b) => b.id !== board.id && b.index < board.index && (b.region ?? null) === (board.region ?? null) && validUrl(b.imageUrl))
+      .sort((a, b) => b.index - a.index)[0];
+    const continuityUrl = prevRow ? (prevRow.imageUrl as string) : null;
+    const previousActionText = prevRow
+      ? (readBoardDirection(prevRow.directionJson)?.actionEnglish || prevRow.motionEn || prevRow.actionOrDialogue || "").trim()
+      : "";
+
+    // Character reference images first (identity), then the CONTINUITY frame (previous board's poses/contact),
+    // then the SCENE ANCHOR FRAME (set), then the environment plate(s). Capped at WAVESPEED_IMAGE_MAX_REFS: plates
+    // are cut first; the continuity frame, the anchor and the characters are never dropped. When the previous board
+    // IS the scene anchor, the shared still is attached once and both roles point at it.
     const composed = composeBoardImageInput({
       characterRefs: refImages,
+      continuityUrl,
       anchorUrl: anchor?.anchorUrl ?? null,
       plateUrls: authority.plateUrls,
       hasRegionPlate: authority.hasRegionPlate,
@@ -249,7 +265,7 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
     });
     const imageInput = composed.imageInput;
     console.info(
-      `[board-image] board ${board.index + 1}: anchor=${anchor ? `board ${anchor.anchorIndex + 1} (ref #${composed.anchorRefIndex})` : "none (becomes anchor)"}, shot=${coverage.shotSize}, visible=[${coverage.visible.join(", ")}], offScreen=[${coverage.offScreen.join(", ")}], charRefs=${refImages.length}/${links.length}, plates=${composed.platesAttached.length}/${authority.plateUrls.length}, refs=${imageInput.length}`,
+      `[board-image] board ${board.index + 1}: anchor=${anchor ? `board ${anchor.anchorIndex + 1} (ref #${composed.anchorRefIndex})` : "none (becomes anchor)"}, continuity=${prevRow ? `board ${prevRow.index + 1} (ref #${composed.continuityRefIndex})` : "none (establishes action)"}, shot=${coverage.shotSize}, visible=[${coverage.visible.join(", ")}], offScreen=[${coverage.offScreen.join(", ")}], charRefs=${refImages.length}/${links.length}, plates=${composed.platesAttached.length}/${authority.plateUrls.length}, refs=${imageInput.length}`,
     );
 
     const { prompt } = buildBoardFramePrompt({
@@ -262,6 +278,7 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
       hasRegionPlate: composed.regionPlateAttached,
       setAnchors,
       anchorRefIndex: composed.anchorRefIndex,
+      ...(previousActionText ? { continuity: { previousActionText, continuityRefIndex: composed.continuityRefIndex } } : {}),
     });
 
     await updateJob(jobId, { progress: 45, message: `Board ${board.index + 1}: rendering frame...` });
@@ -298,10 +315,21 @@ export async function runBoardVideoJob(jobId: string, projectId: string, boardId
 
     // The board still is the START frame of the image-to-video clip (keyframe ban lifted for STORYBOARD).
     const { links } = await loadEpisodeCharacters(board.episodeId);
+    // Stage 144 — the board's opening frame already continues the previous board's ongoing action, so the motion
+    // must CONTINUE from that inherited pose rather than start neutral. Resolve the previous board of the same
+    // scene AND same region (highest index below, with a rendered frame); i2v still gets NO extra image refs.
+    const videoSiblings = await prisma.board.findMany({ where: { episodeId: board.episodeId }, select: SIBLING_SELECT });
+    const prevVideoRow = videoSiblings
+      .filter((b) => b.id !== board.id && b.index < board.index && (b.region ?? null) === (board.region ?? null) && validUrl(b.imageUrl))
+      .sort((a, b) => b.index - a.index)[0];
+    const previousActionText = prevVideoRow
+      ? (readBoardDirection(prevVideoRow.directionJson)?.actionEnglish || prevVideoRow.motionEn || prevVideoRow.actionOrDialogue || "").trim()
+      : "";
     const animationBoard = {
       actionOrDialogue: board.actionOrDialogue, motion: board.motionEn,
       directionJson: board.directionJson, characters: links.map(c => c.name), boardIndex: board.index,
       durationSec: board.durationSec ?? 6, imageUrl: board.imageUrl as string,
+      ...(previousActionText ? { previousActionText } : {}),
     };
     const request = buildStoryboardVideoRequest(animationBoard);
     // No URLs, names, speech text or secrets in diagnostics. Extra identity refs are unsupported by this i2v API.

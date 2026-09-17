@@ -351,7 +351,7 @@ export function finalizeDirectedBoards(raw: RawDirectedBoard[], segments: Speech
  * Stage 143 — shot context with a HARD visible cast. `boardPosInScene` (0-based board index) lets board 1 resolve
  * as the wide establishing shot; `coverage` may be passed pre-computed by the worker (same resolver).
  */
-export function boardShotContext(plan: BoardDirection, boardPosInScene = 1, coverage?: BoardCoverage): string {
+export function boardShotContext(plan: BoardDirection, boardPosInScene = 1, coverage?: BoardCoverage, continues = false): string {
   const cov = coverage ?? resolveVisibleCast(plan, boardPosInScene, plan.cast, "");
   // Stable screen sides for any number of characters (spatial coherence across boards). Positions 1/2 are
   // the classic 180-degree pair; a third sits center mid-ground; anyone beyond keeps their established side.
@@ -370,7 +370,9 @@ export function boardShotContext(plan: BoardDirection, boardPosInScene = 1, cove
     .map(s => `${s.speaker} → ${s.addressee || plan.listener || "the group"} (eyeline to ${s.addressee || plan.listener || "the addressed partner"}'s established side)`)
     .join("; ");
   return [
-    `OPENING ACTOR BLOCKING: ${plan.actionEnglish} Start from the beginning of this scripted action, not its end; preserve the preceding board's action continuity.`,
+    continues
+      ? `ACTOR BLOCKING: ${plan.actionEnglish} CONTINUE this action from the exact moment the immediately previous board left off — do NOT restart it from a neutral pose. Every pose, body contact, who-touches-whom and prop already established carries over unchanged; only the camera angle, height, lens and shot size change (a cut to another vantage of the same instant).`
+      : `OPENING ACTOR BLOCKING: ${plan.actionEnglish} Establish this action clearly; the boards that follow will CONTINUE it from where this one leaves off, so keep poses, body contact and props readable.`,
     buildShotSizeLine(cov),
     `VISIBLE CAST STAGING: ${cast}. All cast remain in the location unless a scripted exit is shown; off-screen is NOT disappearance, but off-screen characters are NOT drawn.`,
     buildOffScreenLine(cov),

@@ -166,9 +166,9 @@ async function workerFlowCheck() {
     const anchor1 = saved[0].imageUrl as string;
     ok(c0.image_input.join() === [...charRefs, u('wide'), u('layout')].join() && !/SCENE ANCHOR FRAME/.test(c0.prompt), 'worker: board 1 has NO anchor (chars → plates only, no anchor block)');
     ok(saved[0].anchorUrl === null && saved[0].anchorBoardId === null, 'worker: board 1 persists no anchor (it IS the anchor)');
-    ok(c1.image_input.join() === [...charRefs, anchor1, u('wide'), u('layout')].join(), 'worker: board 2 image_input = chars → board-1 frame → plates');
-    ok(c2.image_input.join() === [...charRefs, anchor1, u('wide'), u('layout')].join(), 'worker: board 3 image_input anchors on board 1 (not board 2)');
-    ok(/SCENE ANCHOR FRAME \(reference image 3\)/.test(c1.prompt) && /SCENE ANCHOR FRAME \(reference image 3\)/.test(c2.prompt), 'worker: boards 2–3 prompts name the anchor as reference image 3');
+    ok(c1.image_input.join() === [...charRefs, anchor1, u('wide'), u('layout')].join(), 'worker: board 2 image_input = chars → board-1 frame → plates (its continuity frame IS the anchor, deduped — S144)');
+    ok(c2.image_input.join() === [...charRefs, saved[1].imageUrl, anchor1, u('wide'), u('layout')].join(), 'worker: board 3 image_input = chars → board-2 continuity frame → board-1 anchor → plates (S144: previous board differs from anchor)');
+    ok(/SCENE ANCHOR FRAME \(reference image 3\)/.test(c1.prompt) && /SCENE ANCHOR FRAME \(reference image 4\)/.test(c2.prompt) && /CONTINUITY FRAME \(reference image 3\)/.test(c2.prompt), 'worker: board 2 names the anchor (=continuity) as reference image 3; board 3 has a distinct continuity ref (image 3) + anchor (image 4) (S144)');
     ok(calls.every(c => c.prompt.includes(BOARD_BODY_FURNITURE_LINE)), 'worker: BODY / FURNITURE SEPARATION in every board prompt');
     ok(saved[1].anchorUrl === anchor1 && saved[1].anchorBoardId === 'ep1-b0' && saved[2].anchorUrl === anchor1 && saved[2].anchorBoardId === 'ep1-b0', 'worker: anchorUrl/anchorBoardId persisted on boards 2–3');
     ok(calls.every(c => /PERSISTENT SET PIECES/.test(c.prompt) && /GEOMETRY AUTHORITY/.test(c.prompt)), 'worker: S140 set anchors + S131 geometry authority kept as complement');
@@ -183,7 +183,7 @@ async function workerFlowCheck() {
     // re-render of a later board uses the (refreshed) anchor
     calls.length = 0;
     await workers.runBoardImageJob('job-re2', 'project1', 'ep1-b2');
-    ok(calls[0].image_input[2] === saved[0].imageUrl && saved[2].anchorUrl === saved[0].imageUrl, 'worker: re-rendering board 3 uses the current board-1 frame as anchor');
+    ok(calls[0].image_input[3] === saved[0].imageUrl && calls[0].image_input[2] === saved[1].imageUrl && saved[2].anchorUrl === saved[0].imageUrl, 'worker: re-rendering board 3 uses board-2 as continuity and the current board-1 frame as anchor (S144)');
 
     // (E3) first board fails → board 2 becomes the anchor for board 3
     saved = [mk('ep1', 0), mk('ep1', 1), mk('ep1', 2)];
