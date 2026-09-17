@@ -8,6 +8,7 @@ import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, storyboardBoardsSchema } from "@/lib/validations";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runStoryboardBoardsJob, STORYBOARD_BOARDS_JOB_TYPE } from "@/lib/workers/storyboard-job";
+import { selectAuthoritativeBoardJob } from "@/lib/board-job-select";
 
 /**
  * Stage 127 — POST /api/ai/storyboard/boards  { projectId?, episodeId }  →  { jobId, resumed }
@@ -46,6 +47,14 @@ export async function POST(request: Request) {
     });
     if (active) return NextResponse.json({ jobId: active.id, resumed: true });
 
+    // Stage 154 — retire any prior FAILED board-planning jobs for this episode before starting a new
+    // one, so an obsolete failure (e.g. the pre-Stage-148 "outside the required 12–15" message) can
+    // never resurface in the UI once a fresh plan is under way.
+    await prisma.generationJob.updateMany({
+      where: { projectId: pid, type: STORYBOARD_BOARDS_JOB_TYPE, status: "failed", resultData: { contains: `"episodeId":"${episodeId}"` } },
+      data: { status: "superseded", message: "Superseded by a new board plan", error: null },
+    });
+
     const job = await prisma.generationJob.create({
       data: { type: STORYBOARD_BOARDS_JOB_TYPE, status: "pending", progress: 0, message: "Starting...", projectId: pid, resultData: JSON.stringify({ episodeId }) },
     });
@@ -74,10 +83,14 @@ export async function GET(request: Request) {
 
   const boards = await prisma.board.findMany({ where: { episodeId }, orderBy: { index: "asc" } });
   await failStaleJobs({ projectId, type: STORYBOARD_BOARDS_JOB_TYPE });
-  const job = await prisma.generationJob.findFirst({
+  // Stage 154 — do NOT blindly surface the newest job: a stale FAILED plan (e.g. the obsolete
+  // "outside the required 12–15" message) must not block/mislead the UI once boards exist or a newer
+  // non-failed job is present. selectAuthoritativeBoardJob keeps genuine current failures visible.
+  const jobs = await prisma.generationJob.findMany({
     where: { projectId, type: STORYBOARD_BOARDS_JOB_TYPE, resultData: { contains: `"episodeId":"${episodeId}"` } },
     orderBy: { createdAt: "desc" },
   });
+  const job = selectAuthoritativeBoardJob(jobs, boards.length > 0);
 
   return NextResponse.json(
     { mode: episode.mode, videoUrl: episode.videoUrl, boards, job },
