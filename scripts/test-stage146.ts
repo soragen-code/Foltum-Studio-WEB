@@ -100,7 +100,7 @@ ok(/character-forward framing/i.test(rev) && rev.includes(ACTION_STAGING_RULE),
 /* ─────────── (F) Storyboard planSceneCoverage — character-forward base, wide only justified ─────────── */
 // mid-scene group wide (any position > 0) degrades to character-forward
 const mid = planSceneCoverage(Array.from({ length: 6 }, (_, i) => dir({ shot: i === 5 ? 'group' : 'medium', speech: [sp('Anna', 'Boris')] })));
-ok(mid[0].shot === 'group', 'planSceneCoverage: board 1 kept as scene-opening establishing (group)');
+ok(mid[0].shot === 'close_up', 'planSceneCoverage (Stage 152): board 1 is the scene-opening CLOSE-UP of the first speaker');
 ok(mid[5].shot === 'over_shoulder', 'planSceneCoverage: a LATE mid-scene group wide degrades to OTS (no periodic wide as base)');
 ok(mid.slice(1).every(d => d.shot !== 'group'), 'planSceneCoverage: no mid-scene board stays a group wide');
 // without addressee/listener the degrade is a medium single on the speaker
@@ -117,9 +117,9 @@ const ots = resolveVisibleCast(dir({ shot: 'over_shoulder' }), 2, cast4, '');
 ok(ots.shotSize === 'OVER-THE-SHOULDER' && ots.visible.join() === 'Anna,Boris', 'resolveVisibleCast: mid-scene OTS → speaker + addressee only');
 const md = resolveVisibleCast(dir({ shot: 'medium' }), 2, cast4, '');
 ok(md.shotSize === 'MEDIUM' && md.visible.join() === 'Anna', 'resolveVisibleCast: mid-scene medium → speaker single');
-// board 1 (position 0) still a justified scene-opening establishing
+// board 1 (position 0) opening on dialogue is a CLOSE-UP of the first speaker (Stage 152)
 const b1 = resolveVisibleCast(dir({ shot: 'close_up' }), 0, cast4, '');
-ok(b1.shotSize === 'WIDE ESTABLISHING' && b1.visible.length === 4, 'resolveVisibleCast: board 1 still a scene-opening establishing (whole cast)');
+ok(b1.shotSize === 'CLOSE-UP' && b1.visible.join() === 'Anna', 'resolveVisibleCast (Stage 152): board 1 opening on dialogue → CLOSE-UP of the first speaker (Anna)');
 // group ACTION (3+ named participants) is still a justified wide
 const act = resolveVisibleCast(null, 3, cast4, 'Boris, Clara and Dmitri leave through the door.');
 ok(act.shotSize === 'WIDE ESTABLISHING' && act.visible.length === 3, 'resolveVisibleCast: group action (3 moving) still a justified wide');

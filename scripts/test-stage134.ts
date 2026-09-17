@@ -105,7 +105,7 @@ const rawG: RawDirectedBoard[] = Array.from({ length: 12 }, (_, i) => ({
 }));
 const boardsG = finalizeDirectedBoards(rawG, srcG.segments, cast3, srcG.actionSource);
 const pg0 = readBoardDirection(boardsG[0].directionJson)!;
-ok(pg0.shot === 'group' && pg0.addressee === '' && pg0.focus === 'Anna', 'group board keeps an empty addressee and focuses the speaker');
+ok(pg0.shot === 'close_up' && pg0.addressee === '' && pg0.focus === 'Anna', 'Stage 152: the scene-opening dialogue board is a close-up of the first speaker (Anna), with an empty addressee');
 ok(boardShotContext(pg0).includes('Anna → the group'), 'group eyeline is staged toward the whole group');
 
 /* ─────────── 6) The real i2v payload carries speaker + addressee + verbatim line for 3+ speakers ─────────── */

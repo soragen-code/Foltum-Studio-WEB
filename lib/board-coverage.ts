@@ -81,7 +81,16 @@ export function resolveVisibleCast(
     const vis = visible.length ? visible : fullCast;
     return { shotSize: visible.length ? shotSize : sizeByCount(vis.length), visible: vis, offScreen: fullCast.filter((c) => !vis.includes(c)), focus: vis.includes(focus) ? focus : "" };
   };
-  if (boardPosInScene <= 0 || fullCast.length === 0) return finish("WIDE ESTABLISHING", fullCast);
+  // Stage 152 — the FIRST board of a scene (boardPosInScene 0) that OPENS on dialogue is a CLOSE-UP of the first
+  // speaker (the character delivering the scene's first source line), not a whole-cast wide. An action-only /
+  // empty first board keeps the WIDE ESTABLISHING opener (nothing is being said, so there is no speaker to favour).
+  if (boardPosInScene <= 0 || fullCast.length === 0) {
+    const opening = direction?.speech ?? [];
+    const firstSpeaker = opening[0]?.speaker || direction?.focus || "";
+    if (opening.length && firstSpeaker && fullCast.includes(firstSpeaker))
+      return finish("CLOSE-UP", [firstSpeaker], firstSpeaker);
+    return finish("WIDE ESTABLISHING", fullCast);
+  }
 
   const speech = direction?.speech ?? [];
   if (!direction || speech.length === 0) {
@@ -94,7 +103,10 @@ export function resolveVisibleCast(
   const addressee = direction.addressee || direction.listener || (fullCast.length === 2 ? fullCast.find((c) => c !== speaker) ?? "" : "");
   const pair = addressee ? [speaker, addressee] : [speaker];
   switch (direction.shot) {
-    case "close_up": return finish("CLOSE-UP", [speaker], speaker);
+    // Stage 152 — a per-scene opener at board index > 0 is tagged shot=close_up with focus = the scene's FIRST
+    // speaker (planSceneCoverage). Honour that focus when it is a real speaker in this board; otherwise a normal
+    // mid-scene close_up favours the active (last) speaker exactly as before (finalize sets focus = last there).
+    case "close_up": { const f = direction.focus && speech.some((s) => s.speaker === direction.focus) ? direction.focus : speaker; return finish("CLOSE-UP", [f], f); }
     case "medium": return finish("MEDIUM", [speaker], speaker);
     case "over_shoulder": return finish(addressee ? "OVER-THE-SHOULDER" : "MEDIUM", pair, speaker);
     // Reverse: the frame favours the addressed listener (reaction), the speaker stays in the pair.
@@ -114,21 +126,31 @@ export function resolveVisibleCast(
 }
 
 /**
- * Stage 146 — CHARACTER-FORWARD scene coverage applied to the WHOLE scene at planning time (shots known before render):
- *   - board 1 → WIDE ESTABLISHING (dialogue board: shot "group") — a justified scene-opening establishing that
- *     shows where everyone is; an action board resolves wide by position / participant count.
+ * Stage 152 — CHARACTER-FORWARD scene coverage applied to the WHOLE scene at planning time (shots known before render):
+ *   - the FIRST dialogue board of EVERY scene → CLOSE-UP of that scene's FIRST speaker (the character who delivers
+ *     the scene's first source dialogue line = speech[0].speaker). Scene boundaries are detected from each line's
+ *     `scene` tag (threaded from the source builders): a board opens a scene when it is the very first board, or its
+ *     first line's scene number differs from the previous dialogue board's. This supersedes the Stage 146 rule that
+ *     made board 1 a WIDE ESTABLISHING group shot.
  *   - every LATER dialogue board stays built around the characters: a mid-scene "group" wide ALWAYS degrades to
- *     over_shoulder (when the line has an addressee / listener) or medium on the speaker — a wide is no longer the
- *     periodic base of a talking scene, it only returns when a shot genuinely needs it.
+ *     over_shoulder (when the line has an addressee / listener) or medium on the ACTIVE (last) speaker — a wide is no
+ *     longer the periodic base of a talking scene, it only returns when a shot genuinely needs it.
  *   - group ACTION (3+ named participants / whole cast moving) is still a justified wide (resolveVisibleCast by count).
+ *   - an action-only (speechless) board is never touched, so a scene that opens on action keeps its wide establishing.
  * Speech, cast, addressee, listener, camera data and the S139 ledger are never touched — only `shot` / `focus`.
+ * The 180° axis / established screen sides (S134) remain owned by boardShotContext, unchanged here.
  */
 export function planSceneCoverage(directions: BoardDirection[], _actionTexts: string[] = []): BoardDirection[] {
+  let prevScene: number | undefined;
   return directions.map((d, i) => {
     if (!d.speech.length) return d;
-    const speaker = d.speech[d.speech.length - 1]?.speaker || d.focus;
-    if (i === 0) return { ...d, shot: "group", focus: speaker };
-    if (d.shot === "group") return { ...d, shot: d.addressee || d.listener ? "over_shoulder" : "medium", focus: speaker };
+    const scene = d.speech[0]?.scene;
+    const isOpener = i === 0 || (scene != null && scene !== prevScene);
+    if (scene != null) prevScene = scene;
+    const firstSpeaker = d.speech[0]?.speaker || d.focus;
+    const activeSpeaker = d.speech[d.speech.length - 1]?.speaker || d.focus;
+    if (isOpener) return { ...d, shot: "close_up", focus: firstSpeaker };
+    if (d.shot === "group") return { ...d, shot: d.addressee || d.listener ? "over_shoulder" : "medium", focus: activeSpeaker };
     return d;
   });
 }

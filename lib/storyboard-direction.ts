@@ -8,7 +8,10 @@ import {
 import { estimatedSpeechSeconds, hasActorTravel, type SpeechSegment } from "@/lib/storyboard-dialogue";
 import { planSceneCoverage, resolveVisibleCast, buildShotSizeLine, buildOffScreenLine, type BoardCoverage } from "@/lib/board-coverage";
 
-const speechSchema = z.object({ id: z.string(), sourceId: z.string(), speaker: z.string(), text: z.string(), delivery: z.string(), estimatedSec: z.number(), addressee: z.string().optional() });
+// Stage 152 — `scene` (1-based source scene number) MUST be declared here or a non-strict zod parse would
+// strip it from persisted/parsed boards, and planSceneCoverage could no longer detect scene boundaries.
+// Optional so boards persisted before Stage 152 (and the no-scenes fallback path) still parse unchanged.
+const speechSchema = z.object({ id: z.string(), sourceId: z.string(), speaker: z.string(), text: z.string(), delivery: z.string(), estimatedSec: z.number(), addressee: z.string().optional(), scene: z.number().int().optional() });
 const directionSchema = z.object({
   // 132 = original two-hander plan; 134 adds N>=3 multi-speaker addressee/eyeline data. Both parse so
   // boards persisted before Stage 134 still read back (they simply carry no per-line addressee).
@@ -288,9 +291,11 @@ export function finalizeDirectedBoards(raw: RawDirectedBoard[], segments: Speech
       listener, addressee, cast: [...cast], speech, cameraDegradedReason,
     });
   });
-  // Stage 146 — deterministic CHARACTER-FORWARD scene coverage: board 1 is a WIDE ESTABLISHING of the whole cast
-  // (scene-opening establishing); every later dialogue board stays built around the characters — single / OTS /
-  // reverse on the speech, a mid-scene "group" wide always degrades to OTS / medium. Only shot/focus change.
+  // Stage 152 — deterministic CHARACTER-FORWARD scene coverage: the FIRST board of EVERY scene is a CLOSE-UP of
+  // that scene's first speaker (the character who delivers the scene's first source dialogue line); every later
+  // dialogue board stays built around the characters — a mid-scene "group" wide always degrades to OTS / medium.
+  // Scene boundaries are read from each line's `scene` tag (threaded from the source builders). Only shot/focus
+  // change. (This supersedes the Stage 146 first-board=WIDE-establishing rule.)
   const directions = planSceneCoverage(plannedDirections, raw.map(b => b.actionOrDialogue));
   if (JSON.stringify(used) !== JSON.stringify(segments.map(s => s.id)))
     throw new Error("Dialogue integrity conflict: source lines must appear exactly once, in source order, without omissions or paraphrases.");

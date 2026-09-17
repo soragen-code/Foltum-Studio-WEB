@@ -34,7 +34,7 @@ async function main() {
 
 /* ─────────── (A) resolveVisibleCast — pure ─────────── */
 const first = resolveVisibleCast(dir({ shot: 'close_up' }), 0, cast4, 'Anna speaks.');
-ok(first.shotSize === 'WIDE ESTABLISHING' && first.visible.join() === cast4.join() && first.offScreen.length === 0, 'board 1 of a scene: WIDE ESTABLISHING with the whole cast (4), whatever the shot says');
+ok(first.shotSize === 'CLOSE-UP' && first.visible.join() === 'Anna' && first.offScreen.join() === 'Boris,Clara,Dmitri' && first.focus === 'Anna', 'Stage 152: the scene opener (board 1) that starts on dialogue is a CLOSE-UP of the first speaker (Anna), the rest off-screen');
 const cu = resolveVisibleCast(dir({ shot: 'close_up' }), 2, cast4, '');
 ok(cu.shotSize === 'CLOSE-UP' && cu.visible.join() === 'Anna' && cu.offScreen.join() === 'Boris,Clara,Dmitri' && cu.focus === 'Anna', 'close_up → speaker only; the other three are off-screen');
 const md = resolveVisibleCast(dir({ shot: 'medium' }), 2, cast4, '');
@@ -75,7 +75,7 @@ ok(/No other people, faces, silhouettes or crowd visible anywhere in the frame, 
 ok(/back of Boris's shoulder/.test(otsLine) && /Anna in focus/.test(otsLine), 'SHOT SIZE line (OTS): foreground shoulder of the addressee, speaker in focus');
 ok(/EXACTLY 1 character in frame: Anna\./.test(buildShotSizeLine(cu)), 'SHOT SIZE line: singular for one character');
 ok(buildOffScreenLine(ots) === 'OFF-SCREEN (not visible in this frame, remain in the location): Clara, Dmitri.', 'OFF-SCREEN line names exactly the invisible cast');
-ok(buildOffScreenLine(first) === '', 'OFF-SCREEN line is empty when everybody is in frame');
+ok(buildOffScreenLine(grp) === '', 'OFF-SCREEN line is empty when everybody is in frame');
 const anchorLine = buildSceneAnchorLine(3);
 ok(/The PEOPLE in the anchor frame are NOT a framing or cast reference/.test(anchorLine) && /frame ONLY the characters listed in SHOT SIZE at the stated shot size/.test(anchorLine), 'anchor line: people in the anchor are NOT a framing/cast reference');
 ok(/EXACT same furniture and props/.test(anchorLine) && /anchor frame wins/.test(anchorLine), 'anchor line: S142 set-geometry mandate kept');
@@ -95,7 +95,7 @@ const raw: RawDirectedBoard[] = balanceBoardCount(Array.from({ length: 12 }, (_,
 const boards = finalizeDirectedBoards(raw, src.segments, cast4, src.actionSource);
 const plans = boards.map(b => readBoardDirection(b.directionJson)!);
 const covs = plans.map((p, i) => resolveVisibleCast(p, i, cast4, boards[i].actionOrDialogue));
-ok(plans[0].shot === 'group' && covs[0].shotSize === 'WIDE ESTABLISHING' && covs[0].visible.length === 4 && plans[0].focus === 'Anna', 'board 1 (dialogue, LLM said close_up): forced WIDE ESTABLISHING with the whole cast, focus on the speaker');
+ok(plans[0].shot === 'close_up' && covs[0].shotSize === 'CLOSE-UP' && covs[0].visible.join() === 'Anna' && plans[0].focus === 'Anna', 'Stage 152: board 1 (scene opener on dialogue) is a CLOSE-UP of the first speaker (Anna)');
 ok(plans[1].shot === 'over_shoulder' && covs[1].visible.join() === 'Anna,Boris' && plans[1].focus === 'Boris', 'board 2: a consecutive wide degrades to OTS on the speaker (Boris → Anna)');
 ok(covs[2].shotSize === 'OVER-THE-SHOULDER' && covs[2].visible.join() === 'Boris,Clara', 'board 3: Clara answers Boris → speaker + addressee only');
 ok(plans[3].shot === 'over_shoulder' && covs[3].visible.join() === 'Clara,Dmitri' && covs[3].shotSize !== 'WIDE ESTABLISHING', 'board 4: wide requested 3 boards after the last wide → degraded to OTS (Dmitri → Clara)');
@@ -107,7 +107,7 @@ const wideIdx = covs.map((c, i) => c.shotSize === 'WIDE ESTABLISHING' ? i : -1).
 ok(wideIdx.every((w, k) => k === 0 || w - wideIdx[k - 1] >= WIDE_MIN_GAP || plans[w].speech.length === 0), `dialogue wides at least ${WIDE_MIN_GAP} boards apart (wides at ${wideIdx.map(i => i + 1).join(',')})`);
 // Stage 146 — character-forward planSceneCoverage: a mid-scene group wide ALWAYS degrades (no periodic wide)
 const late = planSceneCoverage(Array.from({ length: 6 }, (_, i) => dir({ shot: i === 5 ? 'group' : 'medium', speech: [sp('Anna', 'Boris')] })));
-ok(late[5].shot === 'over_shoulder' && late[1].shot === 'medium' && late[0].shot === 'group', 'planSceneCoverage (Stage 146): a mid-scene group wide degrades to character-forward OTS even late in the scene; board 1 keeps the scene-opening establishing; singles untouched');
+ok(late[5].shot === 'over_shoulder' && late[1].shot === 'medium' && late[0].shot === 'close_up', 'planSceneCoverage (Stage 152): a mid-scene group wide degrades to character-forward OTS even late in the scene; board 1 is the scene-opening CLOSE-UP of the first speaker; singles untouched');
 const early = planSceneCoverage([dir({}), dir({ shot: 'group' }), dir({ shot: 'group', addressee: '', listener: '' })]);
 ok(early[1].shot === 'over_shoulder' && early[2].shot === 'medium', 'planSceneCoverage: too-early wides → OTS (with addressee) / medium (without)');
 // S139 integrity, S134 sides/axis
@@ -130,11 +130,13 @@ ok(!/Choose ONE framing/.test(fp3.prompt) && !/not everyone must be visible/i.te
 ok(/CAMERA: angle, height and lens are free/.test(fp3.prompt) && /FIXED by the SHOT SIZE line/.test(fp3.prompt) && /never widen the frame to include anyone else/.test(fp3.prompt) && /no fixed camera/.test(fp3.prompt), 'frame prompt: camera angle free, shot size + cast fixed');
 ok(fp3.prompt.includes(buildSceneAnchorLine(3)) && fp3.prompt.includes(BOARD_BODY_FURNITURE_LINE) && /GEOMETRY AUTHORITY/.test(fp3.prompt) && /9:16/.test(fp3.prompt), 'frame prompt: S142 anchor (with people caveat) + body/furniture, S131 geometry, 9:16 preserved');
 ok(/clearly female/i.test(fp3.prompt) && /clearly male/i.test(fp3.prompt), 'frame prompt: gender lock preserved for the visible pair');
-ok(/EXACTLY these 4 — nobody else/.test(fp0.prompt) && /SHOT SIZE: WIDE ESTABLISHING — EXACTLY 4 characters/.test(fp0.prompt) && !/OFF-SCREEN/.test(fp0.prompt), 'frame prompt (board 1): all four in frame, no OFF-SCREEN line');
+ok(/EXACTLY these 1 — nobody else/.test(fp0.prompt) && /SHOT SIZE: CLOSE-UP — EXACTLY 1 character in frame: Anna\./.test(fp0.prompt) && /OFF-SCREEN[^\n]*Boris, Clara, Dmitri/.test(fp0.prompt), 'Stage 152: frame prompt (board 1) is a CLOSE-UP of the first speaker (Anna), the rest named OFF-SCREEN');
 const legacy = buildBoardFramePrompt({ board: { index: 5, actionOrDialogue: 'Anna: "Ты готов?" Boris nods.' }, characters: links });
 ok(/SHOT SIZE: TWO-SHOT — EXACTLY 2 characters in frame: Anna, Boris\./.test(legacy.prompt) && /OFF-SCREEN[^\n]*Clara, Dmitri/.test(legacy.prompt) && /DIALOGUE COVERAGE: the shot size and the exact cast in frame are fixed/.test(legacy.prompt), 'frame prompt (legacy board without direction): named participants only, coverage fixed');
 // The total is dominated by the pre-existing S131/S140/S142 blocks; Stage 143 adds ~3 short lines and REMOVES the identity lines of the off-screen cast.
-ok(fp3.prompt.length < 9000 && fp3.prompt.length < fp0.prompt.length + 900, `frame prompt not bloated (${fp3.prompt.length} chars)`);
+// Stage 152 — board 0 is now a CLOSE-UP of the first speaker (a single identity line), so fp0 is smaller than the old whole-cast wide;
+// fp3 (a 2-character OTS with anchor + continuity refs) legitimately sits ~1.1k above it. Both are still well within the anti-bloat ceiling.
+ok(fp3.prompt.length < 9000 && fp3.prompt.length < fp0.prompt.length + 1300, `frame prompt not bloated (${fp3.prompt.length} chars)`);
 
 /* ─────────── (E) i2v motion prompt lists only the visible cast ─────────── */
 const mp = buildStoryboardAnimationPrompt({ actionOrDialogue: boards[3].actionOrDialogue, directionJson: boards[3].directionJson, characters: cast4, durationSec: 5, boardIndex: 3 });
@@ -197,7 +199,7 @@ async function workerFlowCheck(directionJsons: string[], actions: string[]) {
     for (const b of [...saved]) await workers.runBoardImageJob(`job-${b.id}`, 'project1', b.id);
     ok(failures.length === 0 && calls.length === 8, `worker: 8 boards rendered without failures (${failures.join(' | ') || 'none'})`);
     const anchor = saved[0].imageUrl as string;
-    ok(calls[0].image_input.join() === [ref.Anna, ref.Boris, ref.Clara, ref.Dmitri, u('wide'), u('layout')].join() && !/SCENE ANCHOR FRAME/.test(calls[0].prompt), 'worker board 1: all four refs → plates (wide establishing, becomes the anchor)');
+    ok(calls[0].image_input.join() === [ref.Anna, u('wide'), u('layout')].join() && !/SCENE ANCHOR FRAME/.test(calls[0].prompt), 'Stage 152: worker board 1 (scene opener close-up) → ONLY the first speaker Anna\'s ref + plates; becomes the anchor');
     ok(calls[1].image_input.join() === [ref.Anna, ref.Boris, anchor, u('wide'), u('layout')].join(), 'worker board 2 (OTS Boris→Anna): ONLY Anna + Boris refs → anchor → plates; Clara/Dmitri refs absent');
     ok(calls[3].image_input.join() === [ref.Clara, ref.Dmitri, u('frame-3'), anchor, u('wide'), u('layout')].join() && /SCENE ANCHOR FRAME \(reference image 4\)/.test(calls[3].prompt) && /CONTINUITY FRAME \(reference image 3\)/.test(calls[3].prompt), 'worker board 4: Clara + Dmitri refs, S144 continuity frame (board 3) as ref image 3, anchor now reference image 4');
     ok(calls[6].image_input.join() === [ref.Boris, u('frame-6'), anchor, u('wide'), u('layout')].join() && /SCENE ANCHOR FRAME \(reference image 3\)/.test(calls[6].prompt) && /CONTINUITY FRAME \(reference image 2\)/.test(calls[6].prompt), 'worker board 7 (action single): Boris ref, continuity (board 6) ref image 2, anchor now reference image 3 (S144)');

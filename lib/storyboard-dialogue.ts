@@ -7,7 +7,11 @@
 /** `addressee` is the cast member THIS line is spoken to (its eyeline / reverse-shot target). It is
  * OPTIONAL and used only for staging/eyeline — it never influences who the speaker is, so a wrong or
  * missing addressee can never silently reassign a line. Undefined = spoken to the group / unknown. */
-export interface SpokenLine { speaker: string; text: string; delivery: string; addressee?: string }
+/** Stage 152 — `scene` is the 1-based source scene number this line belongs to (set by the source builders
+ * from the ordered script scenes). It lets planSceneCoverage detect scene boundaries so the FIRST board of
+ * every scene opens on a close-up of that scene's first speaker. Optional (undefined for the no-scenes
+ * fallback path and for older persisted data), so nothing else changes when scene identity is unknown. */
+export interface SpokenLine { speaker: string; text: string; delivery: string; addressee?: string; scene?: number }
 export interface SpeechSegment extends SpokenLine { id: string; sourceId: string; estimatedSec: number }
 /** A cast member for attribution: canonical NAME plus optional gender-lock and aliases/diminutives.
  * Plain strings stay supported (name only). The canonical `name` is ALWAYS what is returned as the
@@ -268,7 +272,8 @@ export function storyboardSource(episode: { script?: string | null; description?
       const found = extractSpokenLines(text, cast);
       if (text && !found.length && !/^\[?(?:NO DIALOGUE|SILENCE|NON-VERBAL|БЕЗ ДИАЛОГА)\]?$/iu.test(text))
         throw new Error(`Source dialogue format conflict in scene ${s.number}: preserve explicit speaker attribution before splitting.`);
-      return found;
+      // Stage 152 — tag every line with its source scene number so scene openers are detectable downstream.
+      return found.map(l => ({ ...l, scene: s.number }));
     })
     : extractSpokenLines(source, cast);
   const segments = segmentSpeech(speech);
@@ -299,7 +304,8 @@ export async function storyboardSourceResilient(
       const found = await extractSpokenLinesResilient(text, cast, opts);
       if (text && !found.length && !/^\[?(?:NO DIALOGUE|SILENCE|NON-VERBAL|БЕЗ ДИАЛОГА)\]?$/iu.test(text))
         throw new Error(`Source dialogue format conflict in scene ${s.number}: preserve explicit speaker attribution before splitting.`);
-      speech.push(...found);
+      // Stage 152 — tag every line with its source scene number so scene openers are detectable downstream.
+      speech.push(...found.map(l => ({ ...l, scene: s.number })));
     }
   } else {
     speech = await extractSpokenLinesResilient(source, cast, opts);
