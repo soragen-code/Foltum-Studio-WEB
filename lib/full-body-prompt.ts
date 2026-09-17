@@ -73,6 +73,39 @@ export function withAdultAge(who: string, age: string | null | undefined, appear
 }
 
 // ---------------------------------------------------------------------------------------------------
+// Stage 151 — EXPLICIT age wording in EVERY person-bearing reference prompt (gender AND age must both be
+// stated). `adultAgeClause` deliberately returns null for a genuine child or a stated minor so we never
+// fabricate an adult age (that would break the child proportions / child-safety logic). But a reference
+// prompt must still state the subject's age explicitly. This age-appropriate clause fills exactly that
+// gap: for a child / stated minor it emits an explicit, NON-adult age descriptor (the real number when
+// known, e.g. "a child, 8 years old" / "a teenager, 15 years old", else "a young child") without any
+// "fully grown adult" wording. It returns null for adults / unknown so the adult clause owns that case.
+// ---------------------------------------------------------------------------------------------------
+export function childAgeClause(age: string | null | undefined, appearance = ""): string | null {
+  const n = parseAgeNumber(age);
+  const statedMinor = n !== null && n < 18;
+  if (!isChildAppearance(appearance) && !statedMinor) return null; // an adult / unknown — not this clause's job
+  if (n !== null) return `a ${n >= 13 ? "teenager" : "child"}, ${n} years old`;
+  return "a young child"; // a child appearance with no stated number — an explicit, age-appropriate descriptor
+}
+
+/**
+ * The age clause used by the reference-prompt builders: the adult clause when the subject is an adult
+ * (unchanged Stage 49 wording), otherwise the child/minor age-appropriate clause — so age is ALWAYS
+ * stated explicitly for a person, and never fabricated as adult for a minor.
+ */
+export function explicitAgeClause(age: string | null | undefined, appearance = "", genderNoun?: "woman" | "man" | null): string | null {
+  return adultAgeClause(age, appearance, genderNoun) ?? childAgeClause(age, appearance);
+}
+
+/** Prepend the EXPLICIT age clause (adult or child/minor) as its own capitalised sentence — age is never omitted for a person. */
+export function withExplicitAge(who: string, age: string | null | undefined, appearance: string, genderNoun?: "woman" | "man" | null): string {
+  const clause = explicitAgeClause(age, appearance, genderNoun);
+  if (!clause) return who;
+  return `${clause.charAt(0).toUpperCase()}${clause.slice(1)}. ${who}`;
+}
+
+// ---------------------------------------------------------------------------------------------------
 // Stage 125 — the character's SEX is forced into every reference prompt.
 //
 // The bug: a female role ("мать Николя") whose stored appearance did not clearly open with "A woman"
@@ -115,7 +148,10 @@ export function genderLockClause(noun: "woman" | "man"): string {
  */
 export function withForcedGender(who0: string, age: string | null | undefined, appearance: string, gender: string | null | undefined, role?: string | null, name?: string | null): string {
   const noun = resolveGenderNoun(gender, role, appearance, name);
-  const who = withAdultAge(who0, age ?? null, appearance, noun); // leads with "A fully grown adult woman/man …" (or a child clause=none)
+  // Stage 151: withExplicitAge always states the age — an adult clause ("A fully grown adult woman, 34
+  // years old …") for adults, or an age-appropriate child/minor clause ("A child, 8 years old. …") for
+  // minors — so every person-bearing reference prompt carries BOTH the sex (gender-lock below) and the age.
+  const who = withExplicitAge(who0, age ?? null, appearance, noun);
   return noun ? `${who} ${genderLockClause(noun)}` : who;
 }
 

@@ -7,6 +7,7 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runSeasonScriptJob, initialSeasonState, SEASON_JOB_TYPE } from "@/lib/workers/season-script-job";
+import { scriptResetDirective } from "@/lib/reset-to-auto";
 
 /**
  * Stage 107 — POST /api/ai/episodes/[id]/script → { jobId }
@@ -34,7 +35,11 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   const active = await prisma.generationJob.findFirst({ where: { projectId, type: SEASON_JOB_TYPE, status: { in: ["pending", "processing"] } }, select: { id: true } });
   if (active) return NextResponse.json({ error: "A script job is already running", jobId: active.id }, { status: 409 });
 
-  const state = initialSeasonState(episode.season.episodes.length, { episodeIds: [episode.id], instruction: "", force: true });
+  // Stage 151 — reset-to-auto: regenerate THIS episode's script from scratch via the LIVE season generator
+  // (empty instruction = write by the current rules from the current story, force = overwrite the existing
+  // possibly-manually-revised script; persistEpisodeScript drops the old scenes/keyframes/videos so any
+  // per-scene override/lookCache is cleared too). Never reuses a stored/cached script value.
+  const state = initialSeasonState(episode.season.episodes.length, scriptResetDirective(episode.id));
   const job = await prisma.generationJob.create({ data: { type: SEASON_JOB_TYPE, status: "pending", progress: 0, message: "Starting...", projectId, resultData: JSON.stringify(state) } });
   runInBackground(() => runSeasonScriptJob(job.id, projectId, episode.season.episodes.length));
   return NextResponse.json({ jobId: job.id });
