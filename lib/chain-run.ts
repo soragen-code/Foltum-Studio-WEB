@@ -51,6 +51,41 @@ export function nextChainScene<S extends ChainSceneLike>(scenes: readonly S[], a
   return null;
 }
 
+/**
+ * Stage 153 — a scene enriched with whether a video GenerationJob is currently in flight for it.
+ * Used by the server-side sweeper to decide, from a fresh DB snapshot, what a stalled chain should do.
+ */
+export interface ChainResumeSceneLike extends ChainSceneLike {
+  /** A video GenerationJob (pending/processing) already exists for this scene. */
+  hasActiveJob?: boolean | null;
+}
+
+/**
+ * Stage 153 — server-side sweeper decision (DB-free, unit-tested).
+ *
+ * Returns the SINGLE scene a stalled chain run should start now, or null when nothing should start.
+ * Preserves the strict sequential invariant ("never start N+1 until N is generated"):
+ *   • the only candidate is the LOWEST-numbered scene that still needs a video and has a prompt;
+ *   • it starts only when that scene is idle — not already `generating` and with no in-flight job;
+ *   • if that earliest ungenerated scene is still generating / has an active job, null is returned
+ *     (it is in progress or being recovered elsewhere) — so the sweeper never skips ahead and never
+ *     double-starts the same scene.
+ *
+ * When `chainRunActive` is false the chain is off and the sweeper never forces ordering (returns null).
+ */
+export function chainSceneToResume<S extends ChainResumeSceneLike>(
+  episode: { chainRunActive?: boolean | null; scenes: readonly S[] },
+): S | null {
+  if (!episode.chainRunActive) return null; // sequential mode OFF → never force ordering
+  const sorted = [...episode.scenes].sort((a, b) => a.number - b.number);
+  // Earliest scene that still needs a video AND has a prompt (unprompted scenes are not in the chain).
+  const target = sorted.find((s) => !s.videoUrl && (s.videoPrompt ?? "").trim().length > 0);
+  if (!target) return null; // every prompted scene is generated → chain is done
+  if (target.status === "generating") return null; // N is in progress → do not start anything
+  if (target.hasActiveJob) return null; // a job already exists for it → idempotent, no double-start
+  return target;
+}
+
 /** Ordered list of the scenes a chain run will go through (for the confirmation modal / tests). */
 export function chainOrder<S extends ChainSceneLike>(scenes: readonly S[]): S[] {
   const out: S[] = [];

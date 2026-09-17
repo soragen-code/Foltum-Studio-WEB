@@ -22,6 +22,20 @@ export function verifyWorkerSecret(request: Request): boolean {
   return request.headers.get(WORKER_SECRET_HEADER) === expected;
 }
 
+/**
+ * Stage 153 — authorize a scheduled sweeper (Vercel cron) invocation.
+ *
+ * Accepts EITHER Vercel's cron convention (`Authorization: Bearer $CRON_SECRET`, sent automatically to
+ * cron paths when the `CRON_SECRET` env var is set) OR the existing internal `x-worker-secret` header.
+ * Denies when neither matching secret is configured, so the sweeper is never an unauthenticated
+ * generation trigger.
+ */
+export function authorizeCron(request: Request): boolean {
+  const cronSecret = process.env.CRON_SECRET || "";
+  if (cronSecret && request.headers.get("authorization") === `Bearer ${cronSecret}`) return true;
+  return verifyWorkerSecret(request);
+}
+
 /** Resolve the public base URL of this deployment (used to call our own worker routes). */
 export function getBaseUrl(): string {
   if (process.env.NEXTAUTH_URL) return process.env.NEXTAUTH_URL.replace(/\/$/, "");
