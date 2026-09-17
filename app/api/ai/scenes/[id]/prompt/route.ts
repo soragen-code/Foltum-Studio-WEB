@@ -153,11 +153,18 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
   });
   if (!scene) return NextResponse.json({ error: "Scene not found" }, { status: 404 });
 
+  // Stage 150 — reset-to-auto must REBUILD from scratch via the live buildScenePrompt rules, never reuse a
+  // stored/cached prompt. Clearing promptOverride already forces a fresh auto assembly, but the character-look
+  // rewrite is memoised in `lookCache` (hash-keyed by the effective prompt) and gated by `lookStale`. On a reset
+  // we drop that cache too, so the next read/generation recomputes the look on top of the freshly rebuilt auto
+  // prompt (reflecting the current rules) instead of a value cached against the old manual override.
+  const isReset = raw !== undefined && promptOverride === null;
   const updated = await prisma.scene.update({
     where: { id: scene.id },
     data: {
       ...(raw !== undefined ? { promptOverride } : {}),
       ...(rawSkip !== undefined ? { skipReferences: rawSkip } : {}),
+      ...(isReset ? { lookCache: null, lookStale: false } : {}),
     },
     select: { promptOverride: true, skipReferences: true },
   });

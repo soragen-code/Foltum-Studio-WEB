@@ -222,6 +222,14 @@ export const SURFACE_PROPS_IMMUTABLE_LINE =
 export const SINGLE_SPEAKER_DIRECTION =
   "PACE: one continuous beat built AROUND the single speaking character — medium / medium-close / over-the-shoulder framing with the character large in frame and the location only a soft background; a face close-up is allowed and encouraged on an emotional beat. The character's lips move in exact sync with the spoken English line, which is delivered VERBATIM; no second party speaks and nobody is posed face-to-face. The camera holds steady while the character talks — it does not drift, orbit or push in on its own — but it FOLLOWS the character if they walk, and it stays free to pick any angle, height or shot scale on the cut.";
 
+/** Stage 150 — proxemics for a SHORT line delivered IN PASSING. When a moving/passing character has a
+ *  single short line, real people do NOT close to point-blank range or stop face-to-face just to say it —
+ *  they keep walking, turn only head and shoulders, and call the line over the shoulder / after the other
+ *  person. This conditional module (emitted only for the passing-short-line case — see isPassingShortLine)
+ *  stops the model from staging an unnatural point-blank convergence with the listener frozen into a face-off. */
+export const PASSING_SHORT_LINE_DIRECTION =
+  "PROXEMICS (short line in passing): the speaking character does NOT close to point-blank range and does NOT stop to stand face-to-face just to deliver this short line. They keep moving / pass by at a natural conversational distance, turn only the head and shoulders toward the other person, and call the line out over the shoulder or after them as they go. The other character does NOT freeze into a face-off; do NOT force the two together into a point-blank convergence for the line.";
+
 const oneLine = (t?: string | null) => (t ?? "").replace(/\s+/g, " ").trim();
 
 /* ====================================================================================== */
@@ -268,6 +276,35 @@ const CONFRONTATION_RE =
 export function isConfrontation(scene: { sceneKind?: string | null; videoPrompt?: string | null; action?: string | null }): boolean {
   if ((scene.sceneKind ?? "") === "action") return true;
   return CONFRONTATION_RE.test(`${scene.action ?? ""}\n${scene.videoPrompt ?? ""}`);
+}
+
+/** Stage 150 — a "short" line is a single spoken line at or under this many words. */
+export const SHORT_LINE_MAX_WORDS = 7;
+
+/** Stage 150 — travel / walking evidence: the speaker is moving THROUGH the shot, not stopping to talk. */
+const PASSING_MOTION_RE =
+  /\b(walk(?:s|ing)?|pass(?:es|ing)?\s+by|passes|passing|strides?|striding|cross(?:es|ing)?|moves?\s+past|move[sd]?\s+past|breez(?:es|ing)?\s+past|head(?:s|ing)?\s+past|brush(?:es|ing)?\s+past|keeps?\s+(?:moving|walking)|without\s+stopping|on\s+(?:his|her|their)\s+way|walk(?:s|ing)?\s+away)\b/i;
+
+/** Stage 150 — stop-and-talk evidence: overrides the passing heuristic (it's a stationary beat after all). */
+const STOP_TO_TALK_RE =
+  /\b(stops?|halts?|stands?\s+still|sits?|sits\s+down|freezes?)\b/i;
+
+/**
+ * Stage 150 — is this beat a SHORT line delivered IN PASSING (Scene-3 proxemics bug)? Conservative
+ * heuristic: exactly ONE labelled spoken line whose text is 1..SHORT_LINE_MAX_WORDS words, AND the
+ * action / video-prompt carries travel/walking evidence (PASSING_MOTION_RE) while NOT being an explicit
+ * stop-and-talk beat (STOP_TO_TALK_RE). Only then do we emit PASSING_SHORT_LINE_DIRECTION so the speaker
+ * calls the line over the shoulder instead of closing to point-blank range. Normal stationary dialogue,
+ * long lines, and multi-line exchanges all return false and are unaffected.
+ */
+export function isPassingShortLine(input: { dialogue?: string | null; action?: string | null; videoPrompt?: string | null }): boolean {
+  const lines = parseDialogue(input.dialogue);
+  if (lines.length !== 1) return false;
+  const words = (lines[0]?.text ?? "").trim().split(/\s+/).filter(Boolean);
+  if (words.length < 1 || words.length > SHORT_LINE_MAX_WORDS) return false;
+  const motionText = `${input.action ?? ""}\n${input.videoPrompt ?? ""}`;
+  if (STOP_TO_TALK_RE.test(motionText)) return false;
+  return PASSING_MOTION_RE.test(motionText);
 }
 
 /**
@@ -691,6 +728,11 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const twoParty = speakerCount >= 2;
   const confront = !isNarration && isConfrontation(scene);
   const interior = isInteriorLocation(scene.locationDesc, locationAngles.length > 0);
+  // Stage 150 — proxemics for a SHORT line delivered in passing: when a moving/passing character has a
+  // single short line, emit PASSING_SHORT_LINE_DIRECTION so they call it over the shoulder instead of
+  // closing to point-blank range and freezing the other person into a face-off (Scene-3 bug). Conservative:
+  // normal stationary dialogue, long lines and multi-line exchanges are unaffected.
+  const passingLine = !isNarration && isPassingShortLine({ dialogue, action: scene.action, videoPrompt: scene.videoPrompt });
   const direction = isNarration
     ? PACE_DIRECTION
     : isAction
@@ -735,6 +777,10 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     // turned to the listener, natural angles, never to camera, never a static face-to-face stand-off).
     // Stage 149 — EYELINES CONNECT is a two-party rule: only emit it when 2+ distinct speakers converse.
     twoParty ? GAZE_AT_LISTENER_LINE : "",
+    // Stage 150 — proxemics for a short line in passing: the moving speaker calls the line over the
+    // shoulder at a natural distance instead of closing to point-blank range and freezing the listener
+    // into a face-off. Emitted ONLY for the passing-short-line case; stationary dialogue is unaffected.
+    passingLine ? PASSING_SHORT_LINE_DIRECTION : "",
     // Stage 119/122 — whenever the shot has master location plates attached, anchor the environment so the
     // fixed set objects (bench, floor, columns, fixtures, large props) stay identical across every clip. When a
     // pre-generated REGION PLATE is also attached, it becomes the PRIMARY environment authority for this part of
