@@ -65,19 +65,23 @@ for (let i = 0; i < 14; i++) raw.push({ actionOrDialogue: `Beat ${i + 1}: someth
 raw.push({ actionOrDialogue: '   ' }); // empty -> dropped
 raw.push({ actionOrDialogue: 'Extra 1' });
 raw.push({ actionOrDialogue: 'Extra 2' });
-raw.push({ actionOrDialogue: 'Extra 3' }); // pushes beyond 15 -> trimmed
+raw.push({ actionOrDialogue: 'Extra 3' }); // Stage 148 — no longer trimmed: the count is content-derived
 const norm = normalizeBoards(raw);
-ok(norm.length >= STORYBOARD_MIN_BOARDS && norm.length <= STORYBOARD_MAX_BOARDS, `normalizeBoards clamps to 12–15 (got ${norm.length})`);
-ok(norm.length === STORYBOARD_MAX_BOARDS, 'normalizeBoards drops empties then trims the overflow to the 15-board max');
+// Stage 148 — normalizeBoards no longer slices to a fixed 12–15 window; it keeps EVERY non-empty board
+// (14 beats + 3 extras = 17; the one blank board is still dropped). The count follows the content.
+ok(norm.length === 17, `normalizeBoards keeps every non-empty board (17), no slice to a fixed max (got ${norm.length})`);
+ok(norm.length > STORYBOARD_MAX_BOARDS, 'normalizeBoards drops empties but keeps the overflow beyond the old 15-board max');
 ok(norm.every((b, i) => b.index === i), 'normalizeBoards assigns strict 0-based order');
 ok(norm.every((b) => b.actionOrDialogue.trim().length > 0), 'normalizeBoards keeps only non-empty beats');
 ok(norm.every((b) => b.durationSec >= STORYBOARD_MIN_BOARD_SEC && b.durationSec <= STORYBOARD_MAX_BOARD_SEC), 'every normalized board duration ∈ [4,6]');
-ok(validateBoards(norm).length === 0, 'validateBoards: a well-formed 15-board list has no problems');
+ok(validateBoards(norm).length === 0, 'validateBoards: a well-formed board list has no problems (any count ≥ 1 is valid — Stage 148)');
 ok(totalBoardSeconds(norm) >= 3 * norm.length, 'totalBoardSeconds sums the cut length');
 
-// validateBoards catches a too-short list
-const tooFew = normalizeBoards([{ actionOrDialogue: 'only one' }]);
-ok(validateBoards(tooFew).some((p) => /at least/.test(p)), 'validateBoards flags a below-minimum board count');
+// Stage 148 — a single board is now a VALID list (count is content-derived, no 12-board floor).
+const oneBoard = normalizeBoards([{ actionOrDialogue: 'only one' }]);
+ok(validateBoards(oneBoard).length === 0, 'validateBoards: a 1-board list is valid (no below-minimum floor — Stage 148)');
+// The only count problem left is producing NO boards at all.
+ok(validateBoards([]).some((p) => /at least/.test(p)), 'validateBoards flags an empty board list (need at least one)');
 
 // duration clamp: a model over/under-shoot is pulled into [4,6]
 const clamped = normalizeBoards([{ actionOrDialogue: 'x', durationSec: 99 }, { actionOrDialogue: 'y', durationSec: 1 }]);
@@ -114,7 +118,15 @@ const dlgFrame = buildBoardFramePrompt({
 ok(dlgFrame.aspectRatio === '9:16', 'board frame aspect ratio is 9:16');
 ok(dlgFrame.prompt.includes('9:16'), 'board frame prompt text states 9:16');
 ok(/clearly female/i.test(dlgFrame.prompt) && /do NOT render as a man/i.test(dlgFrame.prompt), 'board frame carries the female gender-lock (Stage 125)');
-ok(/clearly male/i.test(dlgFrame.prompt) && /do NOT render as a woman/i.test(dlgFrame.prompt), 'board frame carries the male gender-lock (Stage 125)');
+// Stage 143 (preserved invariant): only the VISIBLE cast of a board gets an identity/gender-lock line, so the
+// male lock is asserted on a board where the male character (Vane) is the one in frame — not on the Mara board above.
+const maleFrame = buildBoardFramePrompt({
+  board: { index: 5, actionOrDialogue: 'Vane says "Move aside." and steps to the bed.', motion: 'he strides forward' },
+  characters: [cast[1]],
+  locationName: 'Night ward',
+  locationDesc: 'a dim hospital room',
+});
+ok(/clearly male/i.test(maleFrame.prompt) && /do NOT render as a woman/i.test(maleFrame.prompt), 'board frame carries the male gender-lock (Stage 125) for the visible male character');
 ok(/camera is NOT locked/i.test(dlgFrame.prompt) && /no fixed camera/i.test(dlgFrame.prompt), 'board frame is camera-free (never locked)');
 ok(/never a flat frontal line-up/i.test(dlgFrame.prompt), 'board frame keeps the no-frontal-line-up rule');
 ok(isDialogueBoard('Mara says "He is crashing!"') === true, 'isDialogueBoard detects quoted speech');
@@ -134,9 +146,11 @@ ok(motion.trim().length > 0, 'buildBoardMotionPrompt produces a non-empty i2v mo
 ok(/3-6 second/i.test(motion), 'motion prompt targets a 3–6s clip animated from the start frame');
 ok(buildBoardMotionPrompt({ actionOrDialogue: 'She turns to leave.' }).trim().length > 0, 'motion prompt falls back to the action text when no explicit motion');
 
-// ── (F) split prompt covers whole story in 12–15 ordered boards, one beat each ────────────────────────────
+// ── (F) split prompt covers whole story in as-many-as-needed ordered boards, one beat each ────────────────
 const sys = storyboardBoardsSystemPrompt();
-ok(sys.includes(`${STORYBOARD_MIN_BOARDS}-${STORYBOARD_MAX_BOARDS}`), 'split system prompt asks for 12–15 boards');
+// Stage 148 — the prompt no longer asks for a fixed 12–15; the board count is content-derived.
+ok(/as many/i.test(sys) && /no fixed board count/i.test(sys), 'split system prompt asks for as many boards as the content needs (no fixed count — Stage 148)');
+ok(!/12-15/.test(sys) && !/12–15/.test(sys), 'split system prompt no longer hard-codes a 12–15 board target');
 ok(/1 board = 1 SHOT CHANGE/i.test(sys), 'split prompt: 1 board = 1 shot change');
 ok(/every 3-6 seconds/i.test(sys), 'split prompt: a shot change every 3–6s');
 ok(/one physical action beat OR one pair of dialogue lines/i.test(sys), 'split prompt: each board = one action beat OR one dialogue pair (never both)');

@@ -143,10 +143,11 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
         `\n\nSOURCE SCRIPT (original language; authoritative action and speech):\n${source.source}` +
         `\n\nSOURCE ACTION (literal travel evidence only):\n${source.actionSource}` +
         `\n\nIMMUTABLE SOURCE SPEECH SEGMENTS (use IDs, preserve order):\n${JSON.stringify(source.segments)}` +
-        (conflict ? `\n\nPLANNING CONFLICT: ${conflict}. Fix the allocation without changing source speech or the 12–15 / 4–6s limits.` : "");
+        (conflict ? `\n\nPLANNING CONFLICT: ${conflict}. Fix the allocation without changing source speech; keep each board 4–6s and use as many boards as the content needs.` : "");
       const res = await chatJSON<{ boards?: RawDirectedBoard[] }>(storyboardBoardsSystemPrompt(), user, { maxTokens: 6000, temperature: 0.7 });
       try {
-        // Stage 136 — converge on 12–15 boards (merge/split) before finalizing, never truncating speech.
+        // Stage 148 — balance per-board budget with a CONTENT-DERIVED board count (no fixed 12–15 window):
+        // distribute overflow, guard against pathological over-split, never truncating speech, then finalize.
         const balanced = balanceBoardCount(res?.boards ?? [], source.segments);
         boards = finalizeDirectedBoards(balanced, source.segments, characters, source.actionSource);
       } catch (err) { conflict = err instanceof Error ? err.message : "Invalid board plan"; }

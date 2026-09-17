@@ -3,10 +3,12 @@
  *
  * An alternative to the classic SCENES pipeline, chosen AFTER the episode story is built. Instead of
  * dividing the episode into 9 scenes with reangle/region-plate continuity (text-to-video), STORYBOARD
- * breaks the story into 12–15 KEYFRAME BOARDS. Each board is ONE shot change — one action beat OR one
- * pair of dialogue lines — rendered as a 9:16 reference still (Seedream) that is then ANIMATED into a
- * 3–6s clip via IMAGE-TO-VIDEO (the board frame is the clip's START frame). The 12–15 clips are stitched
- * into one ~90s cut.
+ * breaks the story into AS MANY KEYFRAME BOARDS as the content needs (Stage 148 — the count is derived
+ * automatically from the number of speech segments, the total spoken time and the necessary silent
+ * establishing/action shots; there is no fixed 12–15 window). Each board is ONE shot change — one action
+ * beat OR one pair of dialogue lines — rendered as a 9:16 reference still (Seedream) that is then ANIMATED
+ * into a 3–6s clip via IMAGE-TO-VIDEO (the board frame is the clip's START frame). The clips are stitched
+ * into one continuous cut (~90s for a typical episode, shorter for a sparse one).
  *
  * This module is PURE (no network, no LLM, no DB): board-count / duration maths, the single flowing
  * through-line derived from the shared footage description (WITHOUT the SHOT 1 / SHOT 2 "first-30 /
@@ -21,7 +23,13 @@ import { deriveRegionKey } from "@/lib/region-plate";
 
 /* ───────────── board-count & duration budget ───────────── */
 
-/** 12–15 boards per episode (one shot change each). */
+/**
+ * Stage 148 — ADVISORY board-count hints only (NOT a hard range). The actual number of boards is derived
+ * automatically from the content (speech-segment count + total spoken time at 4–6s/board + the silent
+ * establishing/action shots the scene needs), so a sparse scene may fall below 12 and a dialogue-heavy one
+ * may exceed 15 — neither is an error. These constants are kept as a typical guidance range for the LLM
+ * prompt and for legacy callers/tests; they no longer gate the pipeline.
+ */
 export const STORYBOARD_MIN_BOARDS = 12;
 export const STORYBOARD_MAX_BOARDS = 15;
 
@@ -88,9 +96,32 @@ export function distributeBoardDurations(count: number, total = STORYBOARD_TARGE
 }
 
 /**
- * Normalize the LLM's board list into persistable boards: trim to 12–15, assign 0-based indices in
- * order, and clamp/fill each board's duration to the [4,6]s window (using the ~90s distribution for
- * any board the model left without a duration). Boards with empty text are dropped before counting.
+ * Stage 148 — content-derived board-count bounds (pure). Given the estimated spoken seconds of every
+ * source speech segment, compute:
+ *   - `min`: the FEWEST boards that can hold all the speech without overflow — every board carries at
+ *     most two segments AND at most MAX_BOARD_SEC of speech (a scene with no speech still needs 1 board).
+ *   - `ceiling`: a GENEROUS content-derived upper bound (min speech boards ×2 plus a silent-board
+ *     allowance) used only to trim pathological LLM over-splitting via lossless merges. It always sits
+ *     well above what the content needs, so normal sparse OR dialogue-heavy plans pass untouched.
+ * There is NO fixed 12–15 range: the count follows the content between these bounds.
+ */
+export function contentBoardBounds(segmentSecs: number[]): { min: number; ceiling: number } {
+  const secs = (segmentSecs ?? []).filter((s) => Number.isFinite(s) && s > 0);
+  const totalSpeechSec = secs.reduce((s, d) => s + d, 0);
+  const min = Math.max(
+    1,
+    Math.ceil(secs.length / 2),
+    Math.ceil(totalSpeechSec / STORYBOARD_MAX_BOARD_SEC),
+  );
+  const ceiling = min * 2 + 8;
+  return { min, ceiling };
+}
+
+/**
+ * Normalize the LLM's board list into persistable boards: keep EVERY non-empty board (Stage 148 — the
+ * count is content-derived, never capped to a fixed window), assign 0-based indices in order, and
+ * clamp/fill each board's duration to the [4,6]s window (using the ~90s distribution for any board the
+ * model left without a duration). Boards with empty text are dropped before counting.
  */
 export function normalizeBoards(raw: RawBoard[]): NormalizedBoard[] {
   const cleaned = (raw ?? [])
@@ -106,8 +137,9 @@ export function normalizeBoards(raw: RawBoard[]): NormalizedBoard[] {
       };
     })
     .filter((b) => b.actionOrDialogue.length > 0);
-  // Enforce the 12–15 window: never keep more than the max (extra boards are dropped from the end).
-  const kept = cleaned.slice(0, STORYBOARD_MAX_BOARDS);
+  // Stage 148 — keep EVERY non-empty board. The count is derived from the content upstream
+  // (balanceBoardCount), so nothing is ever dropped here to satisfy a fixed window.
+  const kept = cleaned;
   const fallback = distributeBoardDurations(kept.length);
   return kept.map((b, i) => ({
     index: i,
@@ -125,10 +157,10 @@ export function normalizeBoards(raw: RawBoard[]): NormalizedBoard[] {
 /** Human-readable problems with a normalized board list (empty = valid). Used by the route and tests. */
 export function validateBoards(boards: NormalizedBoard[]): string[] {
   const problems: string[] = [];
-  if (boards.length < STORYBOARD_MIN_BOARDS)
-    problems.push(`only ${boards.length} boards (need at least ${STORYBOARD_MIN_BOARDS})`);
-  if (boards.length > STORYBOARD_MAX_BOARDS)
-    problems.push(`${boards.length} boards (max ${STORYBOARD_MAX_BOARDS})`);
+  // Stage 148 — the board count is content-derived; there is no fixed 12–15 window to enforce here. The
+  // only structural requirement is that the scene produced at least one board (per-board budget/order/
+  // emptiness are still checked below, and balanceBoardCount already guarantees no board overflows 4–6s).
+  if (boards.length < 1) problems.push(`no boards produced (need at least one)`);
   boards.forEach((b, i) => {
     if (b.index !== i) problems.push(`board ${i}: index out of order (${b.index})`);
     if (!b.actionOrDialogue.trim()) problems.push(`board ${i}: empty action/dialogue`);
@@ -185,19 +217,19 @@ export function storyboardBoardsSystemPrompt(): string {
   return [
     "You are a storyboard director for a vertical 9:16 short AI drama (~90 seconds).",
     "You receive the episode STORY as a single flowing through-line (no scene division).",
-    `Break it into ${STORYBOARD_MIN_BOARDS}-${STORYBOARD_MAX_BOARDS} KEYFRAME BOARDS.`,
+    "Break it into AS MANY KEYFRAME BOARDS as the story needs — one board per shot change (one shot change every 3-6 seconds). Use fewer boards for a short/sparse scene and more for a dialogue-heavy one; there is NO fixed board count to hit.",
     "RULES:",
     "- 1 board = 1 SHOT CHANGE. A shot change happens every 3-6 seconds of screen time.",
     "- Each board depicts EITHER one physical action beat OR one pair of dialogue lines (at most two spoken lines) — never combine unrelated beats. Scripted walking while speaking is allowed, never add unscripted travel.",
     "- The boards run in strict chronological order and together cover the WHOLE story from its opening image to its final image, with no gaps and no time skips.",
     "- Each board's frame is a single still that becomes the START frame of a 3-6s image-to-video clip, so describe actor MOTION only. Default animation camera is LOCKED-OFF in the board framing for the whole clip. Only actual scripted physical travel allows motivated tracking with stable distance, relative angle and shot size. Gestures, negations and mentions of walking in speech are NOT travel.",
-    `- The clips are stitched into one continuous cut of about ${STORYBOARD_TARGET_TOTAL_SEC} seconds; give each board a durationSec between ${STORYBOARD_MIN_BOARD_SEC} and ${STORYBOARD_MAX_BOARD_SEC}.`,
+    `- Give each board a durationSec between ${STORYBOARD_MIN_BOARD_SEC} and ${STORYBOARD_MAX_BOARD_SEC}; the clips are stitched into one continuous cut (about ${STORYBOARD_TARGET_TOTAL_SEC} seconds for a typical episode, and naturally shorter for a sparse one — do NOT pad with filler to reach a target length).`,
     "- Keep the same characters and locations throughout; do not invent new events beyond the story.",
     "- The whole episode plays in ONE location. For each board, name the ZONE/corner of that location where it happens (region), and REUSE the identical wording whenever consecutive boards stay in the same corner — this keeps the furniture, walls, materials and lighting of that corner constant across boards.",
     "- Use the immutable SOURCE SPEECH SEGMENTS by speechIds, each exactly once in order. Do not rewrite, summarize, invent or omit dialogue, speaker labels or delivery. Segment text is inserted by the application, not generated by you. Empty speechIds means genuinely silent action, never a paraphrase of a source line.",
     '- ALL dialogue is spoken in ENGLISH: every provided source speech segment is already in English and the application rebuilds each board as NAME (delivery): "line" in English. Any actionOrDialogue / delivery / description you write must also be in English. Never translate the segment text yourself — it is inserted verbatim by the application.',
     '- Every spoken line the application inserts is already attributed in the explicit format NAME (delivery): "line" — one canonical cast NAME plus a delivery cue. Treat that attribution as authoritative: the NAME is the ONLY active speaker of that board and the delivery drives the performance. Never leave a quoted line without an explicit cast speaker and never reassign it.',
-    "- Allocate speech segments across consecutive boards at their estimated natural speaking duration (including delivery and pauses), at most two segments per board. Parts of one utterance must be consecutive. You MUST land on exactly 12–15 boards, each 4–6 seconds: if the story is dialogue-heavy, PACK up to two short adjacent lines into one board (staying inside 4–6s); if it is sparse, SPLIT a long action beat or a two-line exchange into separate boards. A single board may never hold more spoken time than its 4–6s budget: two lines whose combined natural duration exceeds one board must be placed on consecutive boards, not packed together. Never drop, omit, re-order, paraphrase or speed up speech to hit the count or the budget, and never leave the count outside 12–15 — redistribute across consecutive boards instead.",
+    "- Allocate speech segments across consecutive boards at their estimated natural speaking duration (including delivery and pauses), at most two segments per board. Parts of one utterance must be consecutive. Use as many boards as the content needs — a shot change every 3–6 seconds: pack up to two short adjacent lines into one board when they fit inside 4–6s, otherwise give each line its own board. A single board may never hold more spoken time than its 4–6s budget: two lines whose combined natural duration exceeds one board must be placed on consecutive boards, not packed together. Never drop, omit, re-order, paraphrase or speed up speech to hit a count or a budget — always redistribute across consecutive boards instead. The board count follows the content; there is no fixed target.",
     "- Dialogue coverage (two OR more speakers in the same location): each board shows the ONE active speaker of its line, with a medium, close-up or over-the-shoulder framing, alternating with a reverse-shot of the person that line ADDRESSES or the next speaker. With three or more speakers, use two_shot / three_shot / group framings to keep the others visible, and set listener/addressee to the SPECIFIC cast member the current line is spoken to — not always the same partner. When the addressee changes, cut to the new pairing and move the eyeline onto the new addressee, but keep every character on their established screen side (who stands/sits where never teleports). One shot per board; hard cut BETWEEN boards, no internal cuts. Keep the same side of the 180-degree axis for the whole group, stable screen sides and real per-line eyelines, never face the audience. Off-screen partners still occupy the location: crop is NOT disappearance — no named character ever vanishes. Walking dialogue may track; stationary dialogue must not.",
     "- travelEvidence is an exact excerpt of SOURCE ACTION describing the actors physically travelling in THIS board. Never copy camera motion, a spoken mention, a negated action, or a future intention. Leave it empty for gestures/static dialogue. Preserve location master/region authority and all cast/action continuity while selecting camera angles freely BETWEEN boards.",
     STORYBOARD_BOARDS_JSON_HINT,

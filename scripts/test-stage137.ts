@@ -1,10 +1,11 @@
-/** Stage 137: deterministic PER-BOARD budget balancing (Storyboard only). A board that packs more spoken
- * time than a single 4–6s clip can carry no longer hard-fails at finalize ("Board N: dialogue exceeds its
- * Xs estimated budget…"). balanceBoardCount now AUTO-DISTRIBUTES the overflowing source IDs onto the
+/** Stage 137 (updated for Stage 148): deterministic PER-BOARD budget balancing (Storyboard only). A board that
+ * packs more spoken time than a single 4–6s clip can carry no longer hard-fails at finalize ("Board N: dialogue
+ * exceeds its Xs estimated budget…"). balanceBoardCount AUTO-DISTRIBUTES the overflowing source IDs onto the
  * following board(s) — keeping a fitting prefix, splicing the remainder onto a fresh board inserted right
- * after — and co-converges with the Stage 136 count balancing so the plan simultaneously lands on 12–15
- * boards, each inside 4–6s, with speech NEVER dropped, omitted, re-ordered, paraphrased or sped up. A hard,
- * INFORMATIVE conflict is raised ONLY for genuinely unfittable material (more speech than 15×6s can hold).
+ * after. Under Stage 148 the board COUNT is content-derived (no hard 12–15 window): the per-board redistribution
+ * simply grows the plan to whatever the speech needs, each board inside 4–6s, with speech NEVER dropped,
+ * omitted, re-ordered, paraphrased or sped up. There is no count hard-fail — a dialogue-heavy plan legitimately
+ * exceeds 15 boards and a sparse plan legitimately stays below 12, both WITHOUT error.
  * Stage 133/134/135/136 invariants (attribution NAME (delivery): "line", per-line addressee/eyeline,
  * multi-speaker staging, verbatim text/order, count balancing, no unsupported i2v fields, SCENES untouched)
  * are regressed here. Pure logic + mocked REAL provider transport and workers. No network, no paid generation. */
@@ -63,9 +64,12 @@ ok(/never .*speed up speech|Never drop, omit, re-order, paraphrase or speed up s
   'prompt forbids speeding up / dropping speech to hit the count or the budget');
 ok(/redistribute across consecutive boards instead/i.test(boardsPrompt),
   'prompt tells the model to redistribute over consecutive boards instead of truncating');
-for (const substr of ['speechIds', 'listener_reverse', 'LOCKED-OFF', '180-degree', 'NOT disappearance', 'NAME (delivery): "line"', 'land on exactly 12–15 boards']) {
+for (const substr of ['speechIds', 'listener_reverse', 'LOCKED-OFF', '180-degree', 'NOT disappearance', 'NAME (delivery): "line"']) {
   ok(boardsPrompt.includes(substr), `prompt still carries the Stage 133/134/135/136 requirement: ${substr}`);
 }
+// Stage 148 — the fixed-count instruction is gone; the prompt now asks for a content-derived count.
+ok(!/land on exactly 12–15 boards/i.test(boardsPrompt) && !/12-15/.test(boardsPrompt),
+  'prompt no longer demands a fixed 12–15 board count (content-derived — Stage 148)');
 
 /* ─────────── 2) An over-BUDGET board (2 long lines in one board) is redistributed, not hard-failed ─────────── */
 const over = buildLong(13, cast2);
@@ -114,15 +118,15 @@ const finBoth = finalizeDirectedBoards(balBoth, both.src.segments, cast2, both.s
 ok(finBoth.length >= 12 && finBoth.length <= 15 && finBoth.every(b => b.durationSec >= 4 && b.durationSec <= 6),
   'finalize accepts the co-converged plan (12–15 boards, each 4–6s)');
 
-/* ─────────── 4) Stage 136 count balancing still works alongside the new per-board redistribution ─────────── */
-const big = buildShort(20, cast2); // 20 short one-line boards → merge down
+/* ─────────── 4) Content-derived count: dialogue-heavy stays high, sparse stays low, both WITHOUT error (Stage 148) ─────────── */
+const big = buildShort(20, cast2); // 20 short one-line boards → kept as-is (below the content ceiling)
 const balBig = balanceBoardCount(big.src.segments.map((seg, i): RawDirectedBoard => ({
   actionOrDialogue: `Beat ${i + 1}`, actionEnglish: 'Anna gestures.', durationSec: 6, region: 'at the table', speechIds: [seg.id], shot: 'over_shoulder',
 })), big.src.segments);
-ok(balBig.length >= 12 && balBig.length <= 15 &&
+ok(balBig.length === 20 &&
    JSON.stringify(balBig.flatMap(b => b.speechIds ?? [])) === JSON.stringify(big.src.segments.map(s => s.id)),
-  'a dialogue-heavy 20-board plan still merges down to 12–15 with every short line preserved (Stage 136 path intact)');
-const small = buildShort(6, cast2); // 8 boards (4 two-line + 4 static) → split up
+  'a dialogue-heavy 20-board plan is kept above 15 with every short line preserved (content-derived — Stage 148)');
+const small = buildShort(6, cast2); // 8 boards (3 two-line + 5 static) → kept below 12, no padding
 const rawSmall: RawDirectedBoard[] = [
   ...Array.from({ length: 3 }, (_, i): RawDirectedBoard => ({
     actionOrDialogue: `Exchange ${i + 1}`, actionEnglish: 'The two talk quietly.', durationSec: 6, region: 'at the table',
@@ -134,21 +138,29 @@ const rawSmall: RawDirectedBoard[] = [
   })),
 ];
 const balSmall = balanceBoardCount(rawSmall, small.src.segments);
-ok(balSmall.length >= 12 && balSmall.length <= 15 &&
+ok(balSmall.length === 8 &&
    JSON.stringify(balSmall.flatMap(b => b.speechIds ?? [])) === JSON.stringify(small.src.segments.map(s => s.id)),
-  'a sparse plan is still padded to 12–15 by splitting, with all short lines preserved (Stage 136 path intact)');
+  'a sparse plan is kept below 12 (no filler padding), with all short lines preserved (content-derived — Stage 148)');
 
-/* ─────────── 5) TRULY UNFITTABLE material (far more speech than 15×6s) still raises an INFORMATIVE conflict ─────────── */
-const huge = buildLong(19, cast2); // 19 long single-line boards: two longs (>6s) can never merge → count stuck >15
+/* ─────────── 5) High-volume single-line dialogue (19 long lines) is KEPT above 15, never hard-blocked (Stage 148) ─────────── */
+// Stage 148 — there is no 12–15 cap to violate, so 19 long single-line boards no longer throw a planning
+// conflict. Each board already fits its 4–6s budget and the count is below the content ceiling, so the plan
+// is returned intact with every one of the 19 speech segments preserved, exactly once, in source order.
+const huge = buildLong(19, cast2); // 19 long single-line boards
+const idsHuge = huge.src.segments.map(s => s.id);
 const rawHuge: RawDirectedBoard[] = huge.src.segments.map((seg, i): RawDirectedBoard => ({
   actionOrDialogue: `Dense ${i + 1}`, actionEnglish: 'Someone speaks.', durationSec: 6, region: 'at the table',
   speechIds: [seg.id], shot: 'over_shoulder',
 }));
-throwsWith(
-  () => balanceBoardCount(rawHuge, huge.src.segments),
-  (m) => /outside the required 12–15/i.test(m) && /19 speech segments/.test(m) && /No boards or dialogue were truncated/i.test(m) && /\d+s of dialogue/i.test(m),
-  'genuinely unfittable dialogue volume throws an informative conflict naming the count, seconds and segments',
-);
+let hugeThrew = false;
+let balHuge: RawDirectedBoard[] = [];
+try { balHuge = balanceBoardCount(rawHuge, huge.src.segments); } catch { hugeThrew = true; }
+ok(!hugeThrew, 'high-volume dialogue (19 long lines) no longer raises a planning conflict (no 12–15 cap — Stage 148)');
+ok(balHuge.length === 19, `all 19 single-line boards are kept above 15 (content-derived; got ${balHuge.length})`);
+ok(JSON.stringify(balHuge.flatMap(b => b.speechIds ?? [])) === JSON.stringify(idsHuge),
+  'every one of the 19 speech segments is preserved, exactly once, in source order (no truncation)');
+ok(balHuge.every(b => speechSec(b, new Map(huge.src.segments.map(s => [s.id, s]))) <= MAX_BOARD_SEC),
+  'every kept board still fits its 4–6s per-board budget');
 
 /* ─────────── 6) Stage 133/134 staging invariants survive an over-budget split (addressee/eyeline/reverse) ─────────── */
 const cast3 = ['Anna', 'Boris', 'Clara'];

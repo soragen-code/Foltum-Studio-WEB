@@ -1,8 +1,7 @@
 /** Stage 132 — validated shot/speech/camera data, confined to Storyboard. */
 import { z } from "zod";
 import {
-  normalizeBoards, validateBoards,
-  STORYBOARD_MIN_BOARDS, STORYBOARD_MAX_BOARDS,
+  normalizeBoards, validateBoards, contentBoardBounds,
   STORYBOARD_MIN_BOARD_SEC, STORYBOARD_MAX_BOARD_SEC, STORYBOARD_TARGET_TOTAL_SEC,
   type RawBoard,
 } from "@/lib/storyboard";
@@ -97,21 +96,22 @@ export function reconcileSpeechIds(raw: RawDirectedBoard[], segments: SpeechSegm
 }
 
 /**
- * Stage 136 + 137 — deterministic board-count AND per-board-budget balancing so planning CONVERGES on the
- * hard 12–15 window with every board inside 4–6s, instead of hard-failing. The LLM split can naively yield
- * a count outside 12–15, OR pack a board with more spoken time than a single 4–6s clip can carry. We
- * redistribute WITHOUT ever truncating, omitting, re-ordering or speeding up speech, in three phases:
+ * Stage 148 — deterministic per-board-budget balancing with a CONTENT-DERIVED board count. The board count
+ * is NOT forced into a fixed 12–15 window: it follows the content (speech-segment count + total spoken time
+ * at 4–6s/board + the silent establishing/action shots the scene needs). A sparse scene may legitimately
+ * yield fewer than 12 boards and a dialogue-heavy one more than 15 — neither is an error, and speech is
+ * NEVER truncated, omitted, re-ordered or sped up. We only reshape the plan so no single board holds more
+ * than one 4–6s clip can carry:
  *   - Phase 1 (Stage 137): distribute OVERFLOWING speech — any board whose lines exceed one board's 4–6s
  *     budget (or the two-line cap) keeps a fitting prefix and pushes the remaining source IDs onto a new
  *     board inserted right after; a long run of speech fans out across as many consecutive boards as needed.
- *   - Phase 2 (Stage 136) too many boards (> MAX): merge adjacent short/static boards — pack up to two short
- *     spoken lines into one board while staying inside 4–6s; every speech ID is preserved, in source order,
- *     with its NAME (delivery): "line" attribution. Boards with real scripted travel are never merged.
- *   - Phase 3 (Stage 136) too few boards (< MIN): split a two-line dialogue board into one line each (a shot
- *     change at the cut), or split the longest static action board into two, without inventing speech.
- * The phases run in sequence (split-up then merge-down then split-up), so they converge without oscillating.
- * Durations are re-fit into [4,6]s summing toward ~90s. Only genuinely unfittable material (more speech than
- * MAX boards × 6s can hold) throws an informative conflict describing how much speech there is.
+ *     This is what grows the count to match dialogue-heavy content.
+ *   - Merge guard (content-derived ceiling only): if the model pathologically OVER-splits beyond a generous
+ *     content-derived ceiling (contentBoardBounds().ceiling), fold adjacent boards that fit losslessly into
+ *     one (≤2 short spoken lines, ≤ MAX_BOARD_SEC, neither travelling). This never runs for normal plans and
+ *     never truncates speech — it only trims runaway over-splitting. There is NO merge-down to a fixed max
+ *     and NO split-up to a fixed min.
+ * Durations are re-fit into [4,6]s summing toward ~90s (soft target; a short scene is simply shorter).
  *
  * Runs BEFORE finalizeDirectedBoards so the ledger's exact-once speech-ID check still sees every segment.
  */
@@ -134,9 +134,14 @@ export function balanceBoardCount(raw: RawDirectedBoard[], segments: SpeechSegme
     return parts.filter((p, i) => parts.indexOf(p) === i).join(". ") || undefined;
   };
 
-  // Fast path: already valid on EVERY axis (count in range AND no board overflows its budget) — leave the
-  // model's plan untouched, exactly as before. A count-valid plan with an over-budget board still balances.
-  if (boards.length >= STORYBOARD_MIN_BOARDS && boards.length <= STORYBOARD_MAX_BOARDS && !boards.some(overflows))
+  // Stage 148 — content-derived generous ceiling on the board count (never a fixed range). It sits well
+  // above what the content needs, so it only trims pathological LLM over-splitting via lossless merges.
+  const { ceiling: contentMaxBoards } = contentBoardBounds(segments.map(s => estimatedSpeechSeconds(s)));
+
+  // Fast path: no board overflows its 4–6s budget AND the count is not a pathological over-split — leave
+  // the model's plan untouched. The count is content-derived, so ANY count at or below the ceiling passes,
+  // including a sparse scene well under 12 or a dialogue-heavy scene well over 15.
+  if (boards.length <= contentMaxBoards && !boards.some(overflows))
     return boards;
 
   // ── PHASE 1 (Stage 137): distribute overflowing speech onto FOLLOWING boards ──
@@ -168,11 +173,13 @@ export function balanceBoardCount(raw: RawDirectedBoard[], segments: SpeechSegme
     });
   }
 
-  // ── MERGE: too many boards ──────────────────────────────────────────────────
-  // Pick the adjacent pair that fits inside ONE board (≤2 spoken lines, ≤ MAX_BOARD_SEC of speech,
-  // neither travelling) with the smallest combined speech time, and fold them together.
+  // ── MERGE guard: pathological over-split only (content-derived ceiling) ──────
+  // The board count is content-derived, so this does NOT merge down to a fixed max. It only fires when the
+  // model over-splits beyond the generous content ceiling, folding the adjacent pair that fits inside ONE
+  // board (≤2 spoken lines, ≤ MAX_BOARD_SEC of speech, neither travelling) with the smallest combined
+  // speech time. It never truncates speech; a normal sparse OR dialogue-heavy plan never triggers it.
   let guard = boards.length * 4;
-  while (boards.length > STORYBOARD_MAX_BOARDS && guard-- > 0) {
+  while (boards.length > contentMaxBoards && guard-- > 0) {
     let best = -1, bestSec = Infinity;
     for (let i = 0; i < boards.length - 1; i++) {
       const a = boards[i], b = boards[i + 1];
@@ -198,50 +205,9 @@ export function balanceBoardCount(raw: RawDirectedBoard[], segments: SpeechSegme
     boards.splice(best, 2, merged);
   }
 
-  // ── SPLIT: too few boards ───────────────────────────────────────────────────
-  guard = STORYBOARD_MAX_BOARDS * 4;
-  while (boards.length < STORYBOARD_MIN_BOARDS && guard-- > 0) {
-    // Prefer splitting a two-line dialogue board into one line each — a genuine shot change at the cut.
-    const twoLine = boards.findIndex(b => (b.speechIds?.length ?? 0) === 2 && !travels(b));
-    if (twoLine >= 0) {
-      const b = boards[twoLine];
-      const [id1, id2] = b.speechIds!;
-      const seg2 = ledger.get(id2);
-      const first: RawDirectedBoard = { ...b, speechIds: [id1], durationSec: null };
-      const second: RawDirectedBoard = {
-        ...b, speechIds: [id2], durationSec: null,
-        shot: seg2?.addressee ? "listener_reverse" : (b.shot ?? "over_shoulder"),
-        listener: seg2?.addressee || b.listener,
-      };
-      boards.splice(twoLine, 1, first, second);
-      continue;
-    }
-    // Otherwise split the longest static (no-speech, no-travel) action board into two identical halves.
-    let longest = -1, longestLen = -1;
-    for (let i = 0; i < boards.length; i++) {
-      const b = boards[i];
-      if ((b.speechIds?.length ?? 0) !== 0 || travels(b)) continue;
-      const len = (b.actionOrDialogue ?? "").length;
-      if (len > longestLen) { longestLen = len; longest = i; }
-    }
-    if (longest >= 0) {
-      const b = boards[longest];
-      boards.splice(longest, 1, { ...b, durationSec: null }, { ...b, durationSec: null });
-      continue;
-    }
-    break; // nothing splittable without inventing speech
-  }
-
-  // ── Still outside the window → genuinely unfittable material. ────────────────
-  if (boards.length < STORYBOARD_MIN_BOARDS || boards.length > STORYBOARD_MAX_BOARDS) {
-    const totalSpeechSec = segments.reduce((sum, s) => sum + estimatedSpeechSeconds(s), 0);
-    throw new Error(
-      `after balancing, ${boards.length} boards remain, outside the required ${STORYBOARD_MIN_BOARDS}–${STORYBOARD_MAX_BOARDS}. ` +
-      `This episode carries ~${Math.round(totalSpeechSec)}s of dialogue across ${segments.length} speech segments, which cannot ` +
-      `be packed into ${STORYBOARD_MAX_BOARDS} boards of ${STORYBOARD_MIN_BOARD_SEC}–${STORYBOARD_MAX_BOARD_SEC}s without ` +
-      `truncating speech. Shorten or split the script, or approve a longer board budget. No boards or dialogue were truncated.`,
-    );
-  }
+  // Stage 148 — NO split-up to a fixed minimum: a short/sparse scene keeps its small board count. The count
+  // is content-derived (Phase 1 already grew it to fit dialogue-heavy content, and each board is within its
+  // 4–6s budget by construction), so a plan with fewer than 12 boards is valid and never padded with filler.
 
   // ── Re-fit durations into [4,6]s, summing toward ~90s (each segment is ≤6s by construction). ──
   const dur = boards.map(b => Math.min(STORYBOARD_MAX_BOARD_SEC, Math.max(STORYBOARD_MIN_BOARD_SEC, Math.ceil(speechSec(b)))));
@@ -254,8 +220,10 @@ export function balanceBoardCount(raw: RawDirectedBoard[], segments: SpeechSegme
 
 /** Preserve the ledger exactly: model references immutable IDs, never rewrites spoken text. */
 export function finalizeDirectedBoards(raw: RawDirectedBoard[], segments: SpeechSegment[], cast: string[], actionSource: string) {
-  if (!Array.isArray(raw) || raw.length < STORYBOARD_MIN_BOARDS || raw.length > STORYBOARD_MAX_BOARDS)
-    throw new Error(`Storyboard planning conflict: exactly ${STORYBOARD_MIN_BOARDS}–${STORYBOARD_MAX_BOARDS} boards required. No boards or dialogue were truncated.`);
+  // Stage 148 — the board count is content-derived; there is no fixed 12–15 window to enforce. Only a
+  // genuinely empty plan is a conflict (nothing to render). Speech is never truncated to satisfy a count.
+  if (!Array.isArray(raw) || raw.length < 1)
+    throw new Error(`Storyboard planning conflict: at least one board is required. No boards or dialogue were truncated.`);
   const ledger = new Map(segments.map(s => [s.id, s]));
   const used: string[] = [];
   const plannedDirections = raw.map((b, index): BoardDirection => {
