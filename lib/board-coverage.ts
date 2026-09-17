@@ -10,10 +10,11 @@
  *   1. resolveVisibleCast(): from the board's BoardDirection (speaker / addressee / shot) and its position in the
  *      scene → EXACTLY which characters are in frame and the shot size. Only THEIR reference images go into
  *      image_input; everyone else is named once as OFF-SCREEN.
- *   2. planSceneCoverage(): applied at planning time to the whole scene — board 1 is a WIDE ESTABLISHING with the
- *      whole cast, later dialogue boards alternate speaker single / OTS / reverse, and a wide repeats at most once
- *      per WIDE_MIN_GAP boards (consecutive wides degrade to OTS / medium on the speaker). Group ACTION (3+
- *      participants, entrances/exits) keeps its wide.
+ *   2. planSceneCoverage(): applied at planning time to the whole scene — CHARACTER-FORWARD (Stage 146): board 1 is
+ *      a WIDE ESTABLISHING with the whole cast (a justified scene-opening establishing), and every LATER dialogue
+ *      board stays built around the characters — a mid-scene "group" wide ALWAYS degrades to OTS / medium on the
+ *      speaker (a wide is no longer the periodic base of a talking scene). Group ACTION (3+ participants,
+ *      entrances/exits) is still a justified wide, resolved by count.
  *   3. Prompt blocks: SHOT SIZE (EXACTLY N in frame, nobody else anywhere) + OFF-SCREEN line.
  * The 180° axis / established screen sides (S134) and the speech ledger (S139) are untouched.
  */
@@ -113,28 +114,22 @@ export function resolveVisibleCast(
 }
 
 /**
- * Deterministic scene coverage applied to the WHOLE scene at planning time (shots are then known before render):
- *   - board 1 → WIDE ESTABLISHING (dialogue board: shot "group"; an action board resolves wide by position)
- *   - a dialogue "group" wide repeats at most once per WIDE_MIN_GAP boards; a too-early wide degrades to
- *     over_shoulder (when the line has an addressee) or medium on the speaker
- *   - group ACTION (3+ named participants / whole cast moving) is a justified wide and resets the gap
+ * Stage 146 — CHARACTER-FORWARD scene coverage applied to the WHOLE scene at planning time (shots known before render):
+ *   - board 1 → WIDE ESTABLISHING (dialogue board: shot "group") — a justified scene-opening establishing that
+ *     shows where everyone is; an action board resolves wide by position / participant count.
+ *   - every LATER dialogue board stays built around the characters: a mid-scene "group" wide ALWAYS degrades to
+ *     over_shoulder (when the line has an addressee / listener) or medium on the speaker — a wide is no longer the
+ *     periodic base of a talking scene, it only returns when a shot genuinely needs it.
+ *   - group ACTION (3+ named participants / whole cast moving) is still a justified wide (resolveVisibleCast by count).
  * Speech, cast, addressee, listener, camera data and the S139 ledger are never touched — only `shot` / `focus`.
  */
-export function planSceneCoverage(directions: BoardDirection[], actionTexts: string[] = []): BoardDirection[] {
-  let lastWide = -Infinity;
+export function planSceneCoverage(directions: BoardDirection[], _actionTexts: string[] = []): BoardDirection[] {
   return directions.map((d, i) => {
-    let next = d;
-    if (d.speech.length) {
-      const speaker = d.speech[d.speech.length - 1]?.speaker || d.focus;
-      if (i === 0) {
-        next = { ...d, shot: "group", focus: speaker };
-      } else if (d.shot === "group" && i - lastWide < WIDE_MIN_GAP) {
-        next = { ...d, shot: d.addressee || d.listener ? "over_shoulder" : "medium", focus: speaker };
-      }
-    }
-    const cov = resolveVisibleCast(next, i, next.cast, actionTexts[i] ?? "");
-    if (cov.shotSize === "WIDE ESTABLISHING") lastWide = i;
-    return next;
+    if (!d.speech.length) return d;
+    const speaker = d.speech[d.speech.length - 1]?.speaker || d.focus;
+    if (i === 0) return { ...d, shot: "group", focus: speaker };
+    if (d.shot === "group") return { ...d, shot: d.addressee || d.listener ? "over_shoulder" : "medium", focus: speaker };
+    return d;
   });
 }
 

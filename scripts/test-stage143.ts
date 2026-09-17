@@ -105,9 +105,9 @@ ok(covs[6].shotSize === 'MEDIUM' && covs[6].visible.join() === 'Boris', 'board 7
 ok(covs[7].shotSize === 'WIDE ESTABLISHING' && covs[7].visible.join() === 'Boris,Clara,Dmitri' && covs[7].offScreen.join() === 'Anna', 'board 8 (group exit): justified wide with the 3 moving participants only');
 const wideIdx = covs.map((c, i) => c.shotSize === 'WIDE ESTABLISHING' ? i : -1).filter(i => i >= 0);
 ok(wideIdx.every((w, k) => k === 0 || w - wideIdx[k - 1] >= WIDE_MIN_GAP || plans[w].speech.length === 0), `dialogue wides at least ${WIDE_MIN_GAP} boards apart (wides at ${wideIdx.map(i => i + 1).join(',')})`);
-// gap rule directly on planSceneCoverage: after a justified gap a wide IS allowed again
+// Stage 146 — character-forward planSceneCoverage: a mid-scene group wide ALWAYS degrades (no periodic wide)
 const late = planSceneCoverage(Array.from({ length: 6 }, (_, i) => dir({ shot: i === 5 ? 'group' : 'medium', speech: [sp('Anna', 'Boris')] })));
-ok(late[5].shot === 'group' && late[1].shot === 'medium' && late[0].shot === 'group', 'planSceneCoverage: a wide 5 boards after board 1 is kept; singles untouched');
+ok(late[5].shot === 'over_shoulder' && late[1].shot === 'medium' && late[0].shot === 'group', 'planSceneCoverage (Stage 146): a mid-scene group wide degrades to character-forward OTS even late in the scene; board 1 keeps the scene-opening establishing; singles untouched');
 const early = planSceneCoverage([dir({}), dir({ shot: 'group' }), dir({ shot: 'group', addressee: '', listener: '' })]);
 ok(early[1].shot === 'over_shoulder' && early[2].shot === 'medium', 'planSceneCoverage: too-early wides → OTS (with addressee) / medium (without)');
 // S139 integrity, S134 sides/axis

@@ -320,8 +320,9 @@ export function finalizeDirectedBoards(raw: RawDirectedBoard[], segments: Speech
       listener, addressee, cast: [...cast], speech, cameraDegradedReason,
     });
   });
-  // Stage 143 — deterministic scene coverage: board 1 is a WIDE ESTABLISHING of the whole cast; later boards go
-  // single / OTS / reverse on the speech, with a wide at most once per WIDE_MIN_GAP boards. Only shot/focus change.
+  // Stage 146 — deterministic CHARACTER-FORWARD scene coverage: board 1 is a WIDE ESTABLISHING of the whole cast
+  // (scene-opening establishing); every later dialogue board stays built around the characters — single / OTS /
+  // reverse on the speech, a mid-scene "group" wide always degrades to OTS / medium. Only shot/focus change.
   const directions = planSceneCoverage(plannedDirections, raw.map(b => b.actionOrDialogue));
   if (JSON.stringify(used) !== JSON.stringify(segments.map(s => s.id)))
     throw new Error("Dialogue integrity conflict: source lines must appear exactly once, in source order, without omissions or paraphrases.");
