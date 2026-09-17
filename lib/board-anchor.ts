@@ -66,6 +66,41 @@ export function renderingLowerSiblings(self: { id: string; index: number; sceneK
   return siblings.filter((s) => s.id !== self.id && s.sceneKey === self.sceneKey && s.index < self.index && !validUrl(s.imageUrl) && s.status === "frame_generating");
 }
 
+/** Result of the Stage 145 sequential-frame gate. */
+export interface BoardFrameGate {
+  allowed: boolean;
+  /** English reason (used as the 409 message and the UI tooltip) when blocked. */
+  reason?: string;
+}
+
+/**
+ * Stage 145 — STRICTLY SEQUENTIAL board frames (pure, no network / DB). A board frame may only be
+ * rendered once the immediately-previous board (the highest `index` below this one, within the same
+ * episode/scene) already has a ready frame. This is a HARD guard reinforcing the Stage 142/144
+ * in-worker ordering, so the route can reject (409) a premature request instead of relying on the
+ * worker's wait alone.
+ *   - The first board of the episode (index 0, or no earlier sibling) is ALWAYS allowed.
+ *   - Regenerating an already-completed board (its own frame is already rendered) is ALWAYS allowed —
+ *     completed elements can be re-created in any order.
+ *   - Otherwise the previous board's frame must be ready. "Ready" is keyed off a valid `imageUrl`
+ *     rather than the exact `frame_ready` string, because a board keeps its frame while its status
+ *     advances past it (frame_ready → animating → done); a rendered frame is the terminal-success
+ *     signal for a board frame regardless of what happens to the clip afterwards.
+ */
+export function boardFramePrecondition(
+  self: { index: number; imageUrl?: string | null },
+  siblings: { index: number; imageUrl?: string | null }[],
+): BoardFrameGate {
+  if (self.index <= 0) return { allowed: true };
+  if (validUrl(self.imageUrl)) return { allowed: true };
+  const prev = siblings
+    .filter((s) => s.index < self.index)
+    .sort((a, b) => b.index - a.index)[0];
+  if (!prev) return { allowed: true };
+  if (validUrl(prev.imageUrl)) return { allowed: true };
+  return { allowed: false, reason: "Generate the previous shot first." };
+}
+
 export interface ComposedBoardImageInput {
   imageInput: string[];
   /** 1-based position of the anchor frame inside imageInput (null when no anchor is attached). */

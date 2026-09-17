@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Loader2, Film, Wand2, ImageIcon, Play, Download } from 'lucide-react'
 import { JobProgressBar, SmoothProgress, useJobPolling } from '../../_components/use-job-polling'
+import { boardFramePrecondition } from '@/lib/board-anchor'
 
 type Board = {
   id: string
@@ -32,7 +33,7 @@ function validUrl(u?: string | null): u is string {
 }
 
 /** One board card: keyframe still + action/dialogue text + per-board frame/animate controls. */
-function BoardCard({ board, onChanged }: { board: Board; onChanged: () => void }) {
+function BoardCard({ board, onChanged, frameLocked }: { board: Board; onChanged: () => void; frameLocked: boolean }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
@@ -82,7 +83,9 @@ function BoardCard({ board, onChanged }: { board: Board; onChanged: () => void }
       {animatePoll.isActive && animatePoll.job && <div className="mt-2"><SmoothProgress job={animatePoll.job} expectedTotalSec={60} /></div>}
       {err && <p className="mt-1 text-xs text-destructive">{err}</p>}
       <div className="mt-2 flex flex-wrap gap-2">
-        <button onClick={() => run('frame')} disabled={busy} className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium disabled:opacity-50" data-testid={`board-frame-${board.index}`}>
+        {/* Stage 145 — strictly sequential: the frame button is disabled until the previous board's
+            frame is ready (regenerating an already-framed board stays enabled). English tooltip. */}
+        <button onClick={() => run('frame')} disabled={busy || frameLocked} title={frameLocked ? 'Generate the previous shot first' : undefined} className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium disabled:opacity-50" data-testid={`board-frame-${board.index}`}>
           {busy && framePoll.isActive ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />} {validUrl(board.imageUrl) ? 'Перерисовать кадр' : 'Сгенерировать кадр'}
         </button>
         <button onClick={() => run('animate')} disabled={busy || !validUrl(board.imageUrl)} title={!validUrl(board.imageUrl) ? 'Сначала сгенерируйте кадр' : 'Оживить кадр в клип'} className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium disabled:opacity-50" data-testid={`board-animate-${board.index}`}>
@@ -196,7 +199,14 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
         <p className="mt-6 text-sm text-muted-foreground">Кадров пока нет. Нажмите «Разбить историю на кадры», чтобы сгенерировать раскадровку из готовой истории.</p>
       ) : (
         <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4" data-testid="storyboard-boards">
-          {boards.map((b) => <BoardCard key={b.id} board={b} onChanged={refresh} />)}
+          {boards.map((b) => (
+            <BoardCard
+              key={b.id}
+              board={b}
+              onChanged={refresh}
+              frameLocked={!boardFramePrecondition({ index: b.index, imageUrl: b.imageUrl }, boards.map((s) => ({ index: s.index, imageUrl: s.imageUrl }))).allowed}
+            />
+          ))}
         </div>
       )}
     </div>

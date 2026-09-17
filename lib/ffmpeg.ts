@@ -737,10 +737,29 @@ export type AssembleProgressEvent =
  */
 export const MUSIC_FINAL_FADEOUT_SEC = 1.5;
 
+/**
+ * Stage 145 — background-music level under the clip audio for the single continuous track.
+ * Lowered from the historical 0.18 so the music sits as a quiet bed and the English dialogue stays
+ * clearly audible. Linear ffmpeg `volume` multiplier (≈ -20 dB).
+ */
+export const MUSIC_BED_VOLUME = 0.09;
+
+/**
+ * Stage 145 — sidechain ducking of the music bed under the clip's speech (single-track path). The
+ * music signal is pushed further down whenever the voice (sidechain key) is present and released back
+ * up in the speech gaps. Mirrors the segmented soundtrack ducking (buildMusicSegmentsMixFilter) so
+ * both assembly paths behave the same. Policy unchanged: still ONE music track, hard cuts — only the
+ * LEVEL and the ducking change, never the track composition.
+ */
+export const MUSIC_DUCK_THRESHOLD = 0.03; // voice level (linear) above which the music starts ducking
+export const MUSIC_DUCK_RATIO = 8;        // how hard the music is pushed down while speech is present
+export const MUSIC_DUCK_ATTACK = 20;      // ms — how fast the music dips when speech starts
+export const MUSIC_DUCK_RELEASE = 300;    // ms — how fast the music recovers in speech gaps
+
 export interface MusicMixOptions {
   /** Episode length in seconds — music is trimmed to it. */
   durationSec: number;
-  /** Music gain under the clip audio (0.15–0.2 recommended). Default 0.18. */
+  /** Music gain under the clip audio. Default MUSIC_BED_VOLUME (a quiet bed). */
   volume?: number;
   /** Seconds. Stage 117 default 0 (hard music start, no fade-in). */
   fadeIn?: number;
@@ -750,26 +769,33 @@ export interface MusicMixOptions {
 
 /**
  * Pure: filtergraph mixing looped background music (input 1) under the clip audio (input 0).
- * Music: trimmed to the episode, gain `volume`; clip audio stays primary (`duration=first`, no
- * normalisation). Output label `[aout]`. Stage 117: NO fade-in on the seams or the start — the one
- * continuous track begins hard; a short fade-out is applied ONLY at the very finale (0-safe: afade is
- * omitted entirely when a fade value is 0, so the music can also start/stop as a pure hard cut).
+ * Music: trimmed to the episode, gain `volume` (Stage 145: MUSIC_BED_VOLUME — a quiet bed); clip
+ * audio stays primary (`duration=first`, no normalisation). Stage 145: the music bed is additionally
+ * ducked under the clip's speech with `sidechaincompress` — the clip audio is split into a main copy
+ * and a sidechain key, the music is compressed whenever the voice is present, then the main clip audio
+ * is mixed back on top so dialogue is always clearly audible and the music dips only under speech.
+ * Output label `[aout]`. Stage 117: NO fade-in on the seams or the start — the one continuous track
+ * begins hard; a short fade-out is applied ONLY at the very finale (0-safe: afade is omitted entirely
+ * when a fade value is 0, so the music can also start/stop as a pure hard cut). Policy unchanged: one
+ * music track, hard cuts — only the level and the ducking differ from earlier stages.
  */
 export function buildMusicMixFilter(opts: MusicMixOptions): string {
   const dur = Math.max(0.1, opts.durationSec);
-  const volume = opts.volume ?? 0.18;
+  const volume = opts.volume ?? MUSIC_BED_VOLUME;
   const fadeIn = Math.min(Math.max(0, opts.fadeIn ?? 0), dur / 2);
   const fadeOut = Math.min(Math.max(0, opts.fadeOut ?? MUSIC_FINAL_FADEOUT_SEC), dur / 2);
   const fadeOutStart = Math.max(0, dur - fadeOut);
   const fades =
     (fadeIn > 0 ? `,afade=t=in:st=0:d=${fadeIn.toFixed(2)}` : "") +
     (fadeOut > 0 ? `,afade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fadeOut.toFixed(2)}` : "");
+  const aformat = "aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo";
   return (
-    `[1:a]atrim=0:${dur.toFixed(3)},asetpts=PTS-STARTPTS,` +
-    `aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo,` +
+    `[1:a]atrim=0:${dur.toFixed(3)},asetpts=PTS-STARTPTS,${aformat},` +
     `volume=${volume}${fades}[m];` +
-    `[0:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[c];` +
-    `[c][m]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]`
+    `[0:a]${aformat},asplit=2[c][ckey];` +
+    `[m][ckey]sidechaincompress=threshold=${MUSIC_DUCK_THRESHOLD}:ratio=${MUSIC_DUCK_RATIO}:` +
+    `attack=${MUSIC_DUCK_ATTACK}:release=${MUSIC_DUCK_RELEASE}[ducked];` +
+    `[c][ducked]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]`
   );
 }
 

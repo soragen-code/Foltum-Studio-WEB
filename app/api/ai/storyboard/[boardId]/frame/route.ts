@@ -7,6 +7,7 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runBoardImageJob, BOARD_IMAGE_JOB_TYPE } from "@/lib/workers/storyboard-job";
+import { boardFramePrecondition } from "@/lib/board-anchor";
 
 /**
  * Stage 127 — POST /api/ai/storyboard/[boardId]/frame  →  { jobId, resumed }
@@ -25,10 +26,19 @@ export async function POST(request: Request, ctx: { params: Promise<{ boardId: s
     const { boardId } = await ctx.params;
     const board = await prisma.board.findFirst({
       where: { id: boardId, episode: { mode: "STORYBOARD", season: { project: { userId: session.user.id } } } },
-      select: { id: true, episode: { select: { season: { select: { projectId: true } } } } },
+      select: { id: true, index: true, imageUrl: true, episodeId: true, episode: { select: { season: { select: { projectId: true } } } } },
     });
     if (!board) return NextResponse.json({ error: "Board not found" }, { status: 404 });
     const pid = board.episode.season.projectId;
+
+    // Stage 145 — HARD sequential guard: reject (409) rendering this board's frame until the previous
+    // board's frame is ready. First board and regenerating an already-framed board are always allowed.
+    const siblings = await prisma.board.findMany({
+      where: { episodeId: board.episodeId },
+      select: { index: true, imageUrl: true },
+    });
+    const gate = boardFramePrecondition({ index: board.index, imageUrl: board.imageUrl }, siblings);
+    if (!gate.allowed) return NextResponse.json({ error: gate.reason ?? "Generate the previous shot first." }, { status: 409 });
 
     await failStaleJobs({ projectId: pid, type: BOARD_IMAGE_JOB_TYPE });
     const active = await prisma.generationJob.findFirst({

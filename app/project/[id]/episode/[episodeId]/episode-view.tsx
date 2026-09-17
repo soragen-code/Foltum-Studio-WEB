@@ -1414,8 +1414,13 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             const gen = !!activeGen[scene.id]
             const job = videoJobs[scene.id]
             const ready = validUrl(scene.videoUrl)
-            // Stage 39: no sequential gate — any scene can start at any time (scenes are independent);
-            // the button is disabled only while THIS scene is generating.
+            // Stage 145 — STRICTLY SEQUENTIAL scene videos: the immediately-previous scene (by number,
+            // within this episode) must be generated before this one can start. The first scene of the
+            // episode has no in-episode predecessor and is not UI-locked (the backend still enforces the
+            // cross-episode rule and returns 409 if the previous episode isn't finished). Regenerating an
+            // already-ready scene stays allowed (the gate only applies to the not-yet-generated button).
+            const prevScene = scenes.filter((s) => s.number < scene.number).sort((a, b) => b.number - a.number)[0]
+            const sceneLocked = !ready && !!prevScene && !validUrl(prevScene.videoUrl)
             return (
               <div key={scene.id} className="rounded-xl border border-border bg-card p-4" data-testid="scene-card" data-scene-status={gen ? 'generating' : validUrl(scene.videoUrl) ? 'ready' : 'pending'}>
                 <div className="flex items-start justify-between gap-2">
@@ -1491,9 +1496,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       <div className="flex w-full flex-col gap-1">
                         <button
                           onClick={() => generateScene(scene.id, true)}
+                          disabled={sceneLocked}
                           className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
                           data-testid="scene-generate"
-                          title="Generate this scene"
+                          title={sceneLocked ? 'Generate the previous scene first' : 'Generate this scene'}
                         >
                           <Wand2 className="h-4 w-4" /> Generate scene
                         </button>
