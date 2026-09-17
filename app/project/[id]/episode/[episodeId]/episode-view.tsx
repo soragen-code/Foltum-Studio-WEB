@@ -98,6 +98,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [reviseText, setReviseText] = useState('')
   const [revising, setRevising] = useState(false)
   const [reviseNotice, setReviseNotice] = useState<string | null>(null)
+  // Stage 158 — "insert your own full episode script": the author pastes a complete script and it becomes the
+  // authoritative source the season job structures into scenes. `showManual` toggles the textarea (both in the
+  // no-script panel and above an existing script).
+  const [manualScript, setManualScript] = useState('')
+  const [showManual, setShowManual] = useState(false)
   // Stage 83 — the episode-wide rewrite RESETS all scenes; ask before that destructive step when
   // scenes already exist (per-scene «"Edit"/"Regenerate" stay instant, not gated here).
   const [resetAsk, setResetAsk] = useState(false)
@@ -689,6 +694,21 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       await reloadEpisode(); setRevising(false)
     } catch (e) { setError(e instanceof Error ? e.message : 'Failed to start the script job'); setRevising(false) }
   }
+  // Stage 158 — submit the author's pasted full episode script. Mirrors generateScript exactly, but POSTs the
+  // text to the manual route; the season job structures it into scenes (resetting any existing scenes/clips).
+  const useMyScript = async () => {
+    const script = manualScript.trim()
+    if (!script || revising) return
+    setRevising(true); setError(null); setReviseNotice(null)
+    try {
+      const res = await fetch(`/api/ai/episodes/${episode.id}/script/manual`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ script }) })
+      const data = await res.json().catch(() => ({}))
+      if (res.status === 409 && data?.jobId) { revisePoll.start(data.jobId); return }
+      if (!res.ok) throw new Error(data?.error ?? 'Failed to start the script job')
+      if (data?.jobId) { revisePoll.start(data.jobId); return }
+      await reloadEpisode(); setRevising(false)
+    } catch (e) { setError(e instanceof Error ? e.message : 'Failed to start the script job'); setRevising(false) }
+  }
   const reviseEpisode = async (force = false) => {
     const instruction = reviseText.trim(); if (!instruction) return
     setRevising(true); setError(null); setReviseNotice(null)
@@ -1016,13 +1036,56 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               <RewritePlaceholder job={revisePoll.job} expectedTotalSec={EPISODE_REVISE_EXPECTED_SEC} label={hasScript ? 'Rewriting episode script…' : 'Writing the episode script…'} testId="episode-revise-progress" />
             ) : hasScript ? (
               /* Stage 110 — the script re-generation button was removed; the script is generated once when missing. */
-              <BookScript text={episode.script} scenes={scenes} />
+              <>
+                <BookScript text={episode.script} scenes={scenes} />
+                {/* Stage 158 — replace the existing script with your own pasted one (rebuilds all scenes). */}
+                <div className="mt-4 rounded-lg border border-border bg-background p-3">
+                  {!showManual ? (
+                    <button type="button" onClick={() => setShowManual(true)} disabled={revising} className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground disabled:opacity-50" data-testid="replace-with-manual">
+                      <Wand2 className="h-4 w-4" /> Replace with my own script
+                    </button>
+                  ) : (
+                    <div>
+                      <p className="mb-2 text-xs text-muted-foreground">Paste your full episode script below. The scenes will be built from it — this replaces the current script and resets any existing scenes and clips.</p>
+                      <textarea value={manualScript} onChange={(e) => setManualScript(e.target.value)} rows={10} disabled={revising} placeholder="Paste your full episode script here…" className="w-full rounded-lg border border-border bg-card p-3 font-mono text-xs text-foreground disabled:opacity-50" data-testid="manual-script-input" />
+                      <div className="mt-2 flex flex-wrap items-center gap-3">
+                        <button type="button" onClick={useMyScript} disabled={revising || !manualScript.trim()} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50" data-testid="use-manual-script">
+                          {revising ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Use my script
+                        </button>
+                        <button type="button" onClick={() => setShowManual(false)} disabled={revising} className="text-sm text-muted-foreground hover:text-foreground disabled:opacity-50">Cancel</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
             ) : (
               <div className="rounded-lg border border-dashed border-border bg-background p-6 text-center" data-testid="no-script">
                 <p className="text-sm text-muted-foreground">No script yet — the script is written from the episode&apos;s 60-second footage above.</p>
                 <button type="button" onClick={generateScript} disabled={revising} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50" data-testid="generate-script">
                   {revising ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Generate script
                 </button>
+                {/* Stage 158 — or paste your own full episode script instead of auto-generating. */}
+                <div className="mt-5 border-t border-border pt-4 text-left">
+                  {!showManual ? (
+                    <div className="text-center">
+                      <p className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">or</p>
+                      <button type="button" onClick={() => setShowManual(true)} disabled={revising} className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground disabled:opacity-50" data-testid="paste-own-script-toggle">
+                        <Wand2 className="h-4 w-4" /> Paste my own script
+                      </button>
+                    </div>
+                  ) : (
+                    <div>
+                      <p className="mb-2 text-xs text-muted-foreground">Paste your full episode script below. The scenes will be built from it — this replaces any existing scenes and clips for this episode.</p>
+                      <textarea value={manualScript} onChange={(e) => setManualScript(e.target.value)} rows={10} disabled={revising} placeholder="Paste your full episode script here…" className="w-full rounded-lg border border-border bg-card p-3 font-mono text-xs text-foreground disabled:opacity-50" data-testid="manual-script-input" />
+                      <div className="mt-2 flex flex-wrap items-center gap-3">
+                        <button type="button" onClick={useMyScript} disabled={revising || !manualScript.trim()} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50" data-testid="use-manual-script">
+                          {revising ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Use my script
+                        </button>
+                        <button type="button" onClick={() => setShowManual(false)} disabled={revising} className="text-sm text-muted-foreground hover:text-foreground disabled:opacity-50">Cancel</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
             {reviseNotice && <p className="mt-3 text-sm text-primary" data-testid="episode-revise-notice">{reviseNotice}</p>}

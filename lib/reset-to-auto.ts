@@ -43,6 +43,42 @@ export function isScriptResetDirective(d: { instruction?: string | null; force?:
   return !!d && (d.instruction ?? "").trim() === "" && d.force === true;
 }
 
+/**
+ * Stage 158 — "insert your own full episode script" directive. The script-level analog of the Stage 155
+ * plot upload: the author pastes a COMPLETE episode shooting script and it becomes the AUTHORITATIVE source
+ * fed to the SAME season-script LLM path, which only STRUCTURES it into the required shooting-script JSON
+ * (splitting into shots + synthesizing technical fields) while preserving the author's scenes, dialogue and
+ * action verbatim. `instruction: ""` (empty = not an author revise hint) and `force: true` (overwrite the
+ * existing script) match scriptResetDirective; the extra `userScript` carries the author's pasted text.
+ */
+export interface ManualScriptDirective {
+  episodeIds: string[];
+  instruction: "";
+  force: true;
+  userScript: string;
+}
+
+/** Build the manual-script directive for one episode (pure). */
+export function manualScriptDirective(episodeId: string, userScript: string): ManualScriptDirective {
+  return { episodeIds: [episodeId], instruction: "", force: true, userScript };
+}
+
+/**
+ * True when a season-job revise directive carries an author-supplied full episode script (Stage 158): empty
+ * instruction + force + a non-empty userScript. Distinguishes the manual-script path from a plain reset-to-auto.
+ */
+export function isManualScriptDirective(
+  d: { instruction?: string | null; force?: boolean; userScript?: string | null } | null | undefined,
+): boolean {
+  return (
+    !!d &&
+    (d.instruction ?? "").trim() === "" &&
+    d.force === true &&
+    typeof d.userScript === "string" &&
+    d.userScript.trim().length > 0
+  );
+}
+
 /** The minimal season structure the story builder needs (title + logline + ordered episodes). */
 export interface StoryResetStructure {
   title?: string | null;

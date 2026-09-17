@@ -94,7 +94,9 @@ export type SeasonJobState = {
   /** Full story failed twice — do not block the episode scripts on it. */
   skipFullStory?: boolean;
   /** Author-requested rewrite of specific (already written) episodes. */
-  revise?: { episodeIds: string[]; instruction: string; force?: boolean };
+  // Stage 158 — `userScript` carries the author's pasted full episode script (manual-script choice); when
+  // present the episode step feeds it as the AUTHORITATIVE source to episodeScriptUserPrompt.
+  revise?: { episodeIds: string[]; instruction: string; force?: boolean; userScript?: string };
   /** Stage 45 — advisory notes shown with the final job message (e.g. an episode over the 1:30 budget). */
   warnings?: string[];
   /** Stage 105 — why the previous attempt of the current step failed (appended to the retry prompt; cleared on success). */
@@ -143,7 +145,7 @@ export type PlannerEpisode = { id: string; number: number; script: string | null
 export type PlannedStep =
   | { step: "structure" }
   | { step: "fullStory" }
-  | { step: "episode"; episodeId: string; instruction?: string }
+  | { step: "episode"; episodeId: string; instruction?: string; userScript?: string }
   | { step: "done" };
 
 /** Decide the next step from what is in the DB (pure). */
@@ -155,7 +157,7 @@ export function planNextStep(
   if (!season.fullStory && !state.skipFullStory) return { step: "fullStory" };
   const queue = state.revise?.episodeIds ?? [];
   for (const id of queue) {
-    if (season.episodes.some((e) => e.id === id)) return { step: "episode", episodeId: id, instruction: state.revise!.instruction || undefined };
+    if (season.episodes.some((e) => e.id === id)) return { step: "episode", episodeId: id, instruction: state.revise!.instruction || undefined, userScript: state.revise!.userScript || undefined };
   }
   // Stage 107 — the season job writes ONLY the structure + season plot. Episode scripts are written on demand
   // from the episode page (POST /api/ai/episodes/[id]/script → a job with a one-episode queue); the old
@@ -535,7 +537,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
         state = { ...state, skipFullStory: true, attempt: 0 };
       } else {
         retryStep = state.step === "episode" && state.episodeId
-          ? { step: "episode", episodeId: state.episodeId, instruction: state.revise?.episodeIds.includes(state.episodeId) ? state.revise.instruction : undefined }
+          ? { step: "episode", episodeId: state.episodeId, instruction: state.revise?.episodeIds.includes(state.episodeId) ? state.revise.instruction : undefined, userScript: state.revise?.episodeIds.includes(state.episodeId) ? state.revise.userScript : undefined }
           : { step: state.step as "structure" | "fullStory" };
         state = { ...state, attempt: state.attempt + 1, lastFailure: failure };
       }
@@ -608,13 +610,18 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
         // becomes the AUTHORITATIVE source for the script (selectPlotSource: uploaded plot wins, else none →
         // the outline is used as before). This also carries through the per-episode script reset (Stage 151).
         plotSource: season!.userPlotUploaded ? selectPlotSource({ uploadedPlot: season!.fullStory, autoStory: null }) : null,
+        // Stage 158 — the author pasted a FULL episode script for THIS episode: the AUTHORITATIVE source the
+        // model must only structure into the shooting-script JSON (dialogue/action verbatim). Wins over plotSource.
+        userScript: planned.userScript,
         ...(planned.instruction ? { instruction: reviseInstruction(planned.instruction, next) } : {}),
       }) + episodeRetryNote(state),
       // Stage 108 — the episode script is written by gpt-4o (EPISODE_SCRIPT_MODEL): non-reasoning →
       // temperature + max_output_tokens ≤ 16 384. Still a background response (same polling path).
       { model: EPISODE_SCRIPT_MODEL, maxTokens: EPISODE_SCRIPT_MAX_TOKENS, temperature: EPISODE_SCRIPT_TEMPERATURE }
     );
-    message = planned.instruction
+    message = planned.userScript
+      ? `Building the script from your text... (usually 1-3 minutes)`
+      : planned.instruction
       ? `Rewriting the script for episode ${ep.number}... (usually 1-3 minutes)`
       : `Writing the episode script... (usually 1-3 minutes)`;
     progress = episodeProgress(done, curTotal);

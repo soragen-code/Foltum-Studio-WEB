@@ -1289,6 +1289,14 @@ export function episodeScriptUserPrompt(input: {
    * the auto-derived outline where they differ); absent/empty → written the usual way from the outline.
    */
   plotSource?: string | null;
+  /**
+   * Stage 158 — the AUTHOR-PROVIDED FULL EPISODE SCRIPT ("insert your own script"). When present, this is the
+   * finished script for THIS episode written by the author: the model must ONLY STRUCTURE it into the required
+   * shooting-script JSON (keeping the author's scenes/order/action and EVERY dialogue line verbatim, only
+   * splitting into shots + synthesizing technical fields). This is the STRONGEST source — it wins over both the
+   * plotSource and the auto-derived outline. Absent/empty → written the usual way.
+   */
+  userScript?: string | null;
 }): string {
   const prev = input.previous.length
     ? input.previous.map((p) => `Ep.${p.number} «${p.title}»: ${p.logline} Cliffhanger: ${p.cliffhanger}`).join("\n")
@@ -1308,7 +1316,14 @@ export function episodeScriptUserPrompt(input: {
   const plotBlock = plot
     ? `\n\nAUTHOR-PROVIDED SEASON PLOT (AUTHORITATIVE — write THIS episode's script from it; where it differs from the outline above, the plot wins; use the part covering episode ${input.episode.number}):\n${plot}`
     : "";
-  return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}${plotBlock}\n\nPREVIOUS EPISODES:\n${prev}${prevEndingBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}${locationInventoryBlock(input.locationInventory)}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
+  // Stage 158 — the author pasted a COMPLETE episode script. This is the STRONGEST source: the model must only
+  // STRUCTURE it into the required shooting-script JSON, preserving the author's scenes/order/action and every
+  // dialogue line EXACTLY as written, and synthesize ONLY the technical fields. It wins over plotSource + outline.
+  const userScript = (input.userScript ?? "").trim();
+  const userScriptBlock = userScript
+    ? `\n\nAUTHOR-PROVIDED FULL EPISODE SCRIPT (AUTHORITATIVE — this is the finished script for THIS episode ${input.episode.number}, written by the author). Your job is ONLY to STRUCTURE it into the required shooting-script JSON: keep the author's scenes, their order, their on-screen action and EVERY line of dialogue EXACTLY as written (do NOT rewrite, add, remove, shorten, translate away or invent any dialogue or plot beat). Split the author's script into the required consecutive shots and, for each shot, synthesize ONLY the technical fields the JSON needs (shotType, camera, videoPrompt, startState, endState, durationSec, continuity metadata) so the clips can be generated — never change WHAT happens or WHAT is said. Where this author script differs from the outline/synopsis/season plot above, THIS SCRIPT WINS.\n${userScript}`
+    : "";
+  return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}${plotBlock}${userScriptBlock}\n\nPREVIOUS EPISODES:\n${prev}${prevEndingBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}${locationInventoryBlock(input.locationInventory)}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
 }
 
 /**
