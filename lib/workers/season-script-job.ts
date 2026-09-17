@@ -216,13 +216,18 @@ export function validateFullStory(raw: unknown): string {
 }
 
 /** Schema + normalization + hard-problem gate; soft problems are logged. Dialogue translation is done by the caller. */
-export function validateEpisode(raw: unknown, episodeNumber: number, characters: CharacterCard[], opts: { finalAttempt?: boolean } = {}): EpisodeScript {
+export function validateEpisode(raw: unknown, episodeNumber: number, characters: CharacterCard[], opts: { finalAttempt?: boolean; manual?: boolean } = {}): EpisodeScript {
   const script = normalizeEpisodeScript(episodeScriptSchema.parse(raw), characters);
   // Stage 110 — dialogue must be English with the cast's English speaker names. First attempt: a violation is
   // HARD (→ retry with a correction note). Final attempt: language problems are soft — the caller repairs
   // the text itself (ensureEnglishDialogue / translateDialogue) instead of failing the job. A silent scene is
   // ALWAYS hard (we cannot invent lines).
-  const problems = validateEpisodeScript(script, { characterNames: characters.map((c) => c.name), languageIsSoft: !!opts.finalAttempt });
+  // Stage 159 — a MANUAL (author-provided) script is treated as soft-language from the FIRST attempt: the
+  // author legitimately pastes non-English dialogue and speaker names outside the project cast, and those must
+  // never HARD-reject the job (otherwise it exhausts its retries and "does not regenerate"). The spoken track
+  // is still forced to English downstream (ensureEnglishDialogue / forceEnglishDialogue), and the author's
+  // original text is preserved in dialogueLocal — so the author's script is accepted as written.
+  const problems = validateEpisodeScript(script, { characterNames: characters.map((c) => c.name), languageIsSoft: !!opts.finalAttempt || !!opts.manual });
   // Word-count drift is tolerated (logged); hard problems (count, missing prompt lines, silent scene) fail → retry.
   const hard = hardProblems(problems);
   if (hard.length) throw new Error(`episode ${episodeNumber} script invalid: ${hard.slice(0, 3).join("; ")}`);
@@ -683,7 +688,11 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
     const outline = outlineFromEpisode(ep);
     // Seedance voices `dialogue` → it must be English; swap swapped fields / translate leftovers (short gpt-4o pass).
     const finalAttempt = state.attempt >= MAX_ATTEMPTS - 1;
-    let script = await ensureEnglishDialogue(validateEpisode(raw, ep.number, cards, { finalAttempt }), deps.chatJSON);
+    // Stage 159 — this is a MANUAL (author-provided) script when the current episode is in the manual queue
+    // (revise.userScript set). Then language / cast-name checks are soft from the first attempt so the author's
+    // pasted dialogue and speaker names are never HARD-rejected (still forced to English downstream).
+    const manual = !!(state.revise?.userScript && state.episodeId && state.revise.episodeIds.includes(state.episodeId));
+    let script = await ensureEnglishDialogue(validateEpisode(raw, ep.number, cards, { finalAttempt, manual }), deps.chatJSON);
     // Stage 110 — last line of defence on the final attempt: any scene still not English after the swap /
     // batch translation is translated line-by-line (lib/voiceover translateDialogue); the original stays in dialogueLocal.
     script = await forceEnglishDialogue(script);
