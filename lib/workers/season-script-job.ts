@@ -48,6 +48,7 @@ import {
   ensureEnglishDialogue,
   nonEnglishScenes,
   isEnglishDialogue,
+  isSilent,
   normalizeEpisodeScript,
   renderEpisodeScriptText,
   episodeTotalSeconds,
@@ -217,17 +218,22 @@ export function validateFullStory(raw: unknown): string {
 
 /** Schema + normalization + hard-problem gate; soft problems are logged. Dialogue translation is done by the caller. */
 export function validateEpisode(raw: unknown, episodeNumber: number, characters: CharacterCard[], opts: { finalAttempt?: boolean; manual?: boolean } = {}): EpisodeScript {
-  const script = normalizeEpisodeScript(episodeScriptSchema.parse(raw), characters);
+  // Stage 161 — a MANUAL script may carry an extra silent establishing scene in front of the author's beats, so
+  // normalize keeps every authored scene for the manual path instead of truncating to EPISODE_SCENE_COUNT.
+  const script = normalizeEpisodeScript(episodeScriptSchema.parse(raw), characters, { manual: !!opts.manual });
   // Stage 110 — dialogue must be English with the cast's English speaker names. First attempt: a violation is
   // HARD (→ retry with a correction note). Final attempt: language problems are soft — the caller repairs
   // the text itself (ensureEnglishDialogue / translateDialogue) instead of failing the job. A silent scene is
-  // ALWAYS hard (we cannot invent lines).
+  // ALWAYS hard for the AUTO path (we cannot invent lines).
   // Stage 159 — a MANUAL (author-provided) script is treated as soft-language from the FIRST attempt: the
   // author legitimately pastes non-English dialogue and speaker names outside the project cast, and those must
   // never HARD-reject the job (otherwise it exhausts its retries and "does not regenerate"). The spoken track
   // is still forced to English downstream (ensureEnglishDialogue / forceEnglishDialogue), and the author's
   // original text is preserved in dialogueLocal — so the author's script is accepted as written.
-  const problems = validateEpisodeScript(script, { characterNames: characters.map((c) => c.name), languageIsSoft: !!opts.finalAttempt || !!opts.manual });
+  // Stage 161 — a MANUAL script also allows ONE silent establishing/atmospheric scene the author wrote (e.g.
+  // an opening skyline shot "без диалогов"): the silent problem becomes soft: for the manual path only, so the
+  // author's intended silent scene is kept instead of being HARD-rejected. The AUTO path stays HARD on silence.
+  const problems = validateEpisodeScript(script, { characterNames: characters.map((c) => c.name), languageIsSoft: !!opts.finalAttempt || !!opts.manual, allowSilent: !!opts.manual });
   // Word-count drift is tolerated (logged); hard problems (count, missing prompt lines, silent scene) fail → retry.
   const hard = hardProblems(problems);
   if (hard.length) throw new Error(`episode ${episodeNumber} script invalid: ${hard.slice(0, 3).join("; ")}`);
@@ -278,13 +284,17 @@ export async function persistEpisodeScript(
   await prisma.$transaction(async (tx) => {
     await tx.scene.deleteMany({ where: { episodeId } });
     for (const s of script.scenes) {
+      // Stage 161 — a silent establishing/atmospheric scene (author-provided) carries NO spoken speech: keep the
+      // "[NO DIALOGUE]" sentinel in `dialogue` (UI + subtitles show nothing to voice) and store an EMPTY
+      // `dialogueEn` so the video track has no lines to speak — only the ambient/room-tone audio.
+      const silent = isSilent(s.dialogue);
       const scene = await tx.scene.create({
         data: {
           episodeId,
           number: s.number,
           // `dialogue` = story-language text (UI + burned-in subtitles); `dialogueEn` = the English lines the model voices.
-          dialogue: s.dialogueLocal ?? s.dialogue,
-          dialogueEn: s.dialogue,
+          dialogue: silent ? "[NO DIALOGUE]" : (s.dialogueLocal ?? s.dialogue),
+          dialogueEn: silent ? "" : s.dialogue,
           // Stage 20 (A2): lock every non-location-change scene to the episode's single canonical location
           // (Episode.locationDesc) so the place never drifts scene-to-scene and frame-chaining stays reliable.
           // Stage 160: a MANUAL author script keeps the author's own per-scene location (anchor only when empty).

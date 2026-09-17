@@ -436,7 +436,7 @@ export const episodeScriptSchema = z.object({
   visualIdentity: z.string().min(10),
   // Stage 93 — tolerant bounds so a model that emits a few extra/fewer scenes still parses;
   // normalizeEpisodeScript() truncates to EPISODE_SCENE_COUNT and forces the fixed durations.
-  scenes: z.array(sceneScriptSchema).min(1).max(Math.max(EPISODE_MAX_SCENES, 8)), // Stage 103: legacy 4-scene episodes still parse
+  scenes: z.array(sceneScriptSchema).min(1).max(Math.max(EPISODE_MAX_SCENES, 8) + 6), // Stage 103: legacy 4-scene episodes still parse; Stage 161: +6 headroom so a manual script with a silent establishing scene still parses before normalize caps it
 });
 export type EpisodeScript = z.infer<typeof episodeScriptSchema>;
 export type SceneScript = z.infer<typeof sceneScriptSchema>;
@@ -627,6 +627,8 @@ export type ValidateEpisodeOptions = {
   characterNames?: string[];
   /** Final attempt: language / speaker-name problems become "soft:" (the job repairs them itself). */
   languageIsSoft?: boolean;
+  /** Manual (author-provided) script: a purely silent atmospheric/establishing scene is allowed (problem becomes soft:), never HARD-rejected. */
+  allowSilent?: boolean;
 };
 
 /** Speaker labels of a dialogue block (`NAME (cue): "line"` → "NAME"); generic labels (ALL, BOTH, VOICE…) are skipped. */
@@ -667,8 +669,13 @@ export function validateEpisodeScript(script: EpisodeScript, opts: ValidateEpiso
   const isNarration = (s: SceneScript) => s.sceneKind === "narration" && !!(s.voiceover ?? "").trim();
   // Stage 110 — a silent on-camera scene is a HARD failure (MAX_SILENT_SCENES = 0): the job retries with a
   // targeted correction; we never store a "[NO DIALOGUE]" scene.
+  // Stage 161 — MANUAL (author-provided) script: a purely silent atmospheric/establishing scene the author
+  // wrote is legitimate, so the silent problem becomes "soft:" (kept for reporting, never HARD-rejected).
+  // The AUTO path keeps allowSilent falsy → silent stays a HARD failure exactly as before.
+  const silentPrefix = opts.allowSilent ? "soft: " : "";
   const silentScenes = script.scenes.filter((s) => isSilent(s.dialogue) && !isNarration(s)).map((s) => s.number);
-  if (silentScenes.length > MAX_SILENT_SCENES) problems.push(`silent scene(s) ${silentScenes.join(", ")}: every scene must carry on-camera dialogue (max silent ${MAX_SILENT_SCENES})`);
+  if (silentScenes.length > MAX_SILENT_SCENES) problems.push(`${silentPrefix}silent scene(s) ${silentScenes.join(", ")}: every scene must carry on-camera dialogue (max silent ${MAX_SILENT_SCENES})`);
+  // An all-silent script still fails HARD even with allowSilent — at least one scene must carry dialogue.
   const speaking = script.scenes.filter((s) => !isSilent(s.dialogue) || isNarration(s)).length;
   if (speaking < 1) problems.push("no dialogue in episode");
   // Stage 110 — dialogue language / speaker names. These are HARD on the first attempt (→ retry with a
@@ -903,7 +910,7 @@ export function pickDifferentCamera(prevCamera: string, seed = 0): string {
 }
 
 /** Fix what can be fixed mechanically (numbering, [VISUAL STYLE] / [CHARACTER] lines, duration clamp). */
-export function normalizeEpisodeScript(script: EpisodeScript, characters?: CharacterCard[]): EpisodeScript {
+export function normalizeEpisodeScript(script: EpisodeScript, characters?: CharacterCard[], opts?: { manual?: boolean }): EpisodeScript {
   const repairPrompt = (s: SceneScript) => {
     let vp = s.videoPrompt.trim();
     if (!vp.includes("[VISUAL STYLE]")) vp = `[VISUAL STYLE]: ${script.visualIdentity}\n${vp}`;
@@ -921,7 +928,11 @@ export function normalizeEpisodeScript(script: EpisodeScript, characters?: Chara
   // Stage 27a: auto-split any over-long scene FIRST, then renumber the flat result contiguously (1..N)
   // and derive each piece's durationSec from its own (now-fitting) speech.
   // Stage 93 — an episode is a fixed EPISODE_SCENE_COUNT scenes; drop any extras the model emitted.
-  const scenes = splitOverlongScenes(script.scenes).slice(0, EPISODE_SCENE_COUNT).map((s, i) => {
+  // Stage 161 — a MANUAL (author-provided) script may legitimately carry more than EPISODE_SCENE_COUNT scenes
+  // (e.g. a silent establishing Scene 0 in front of the author's own beats). For the manual path we keep every
+  // authored scene instead of truncating to EPISODE_SCENE_COUNT; the AUTO path (no opts) is unchanged.
+  const sceneCap = opts?.manual ? Math.max(EPISODE_SCENE_COUNT, script.scenes.length) : EPISODE_SCENE_COUNT;
+  const scenes = splitOverlongScenes(script.scenes).slice(0, sceneCap).map((s, i) => {
       // Stage 110 — narration scenes are no longer accepted from the model: a "narration" scene is treated as an
       // on-camera scene (its voiceover is dropped), so a silent one fails validation and triggers the retry.
       const narrationText = "";
@@ -1321,7 +1332,7 @@ export function episodeScriptUserPrompt(input: {
   // dialogue line EXACTLY as written, and synthesize ONLY the technical fields. It wins over plotSource + outline.
   const userScript = (input.userScript ?? "").trim();
   const userScriptBlock = userScript
-    ? `\n\nAUTHOR-PROVIDED FULL EPISODE SCRIPT (AUTHORITATIVE — this is the finished script for THIS episode ${input.episode.number}, written by the author). Your job is ONLY to STRUCTURE it into the required shooting-script JSON: keep the author's scenes, their order, their on-screen action and EVERY line of dialogue EXACTLY as written (do NOT rewrite, add, remove, shorten, translate away or invent any dialogue or plot beat). Split the author's script into the required consecutive shots and, for each shot, synthesize ONLY the technical fields the JSON needs (shotType, camera, videoPrompt, startState, endState, durationSec, continuity metadata) so the clips can be generated — never change WHAT happens or WHAT is said. Where this author script differs from the outline/synopsis/season plot above, THIS SCRIPT WINS. PRESERVE THE AUTHOR'S LOCATIONS: use the location the author gives each scene — set each scene's "locationDesc" to that scene's own place ("INT/EXT — place — time"), and DO NOT collapse every scene into a single location. When a scene's location differs from the previous scene's, set its "continuesFrom" to "location-change". Keep the author's scene order and their location headings.\n${userScript}`
+    ? `\n\nAUTHOR-PROVIDED FULL EPISODE SCRIPT (AUTHORITATIVE — this is the finished script for THIS episode ${input.episode.number}, written by the author). Your job is ONLY to STRUCTURE it into the required shooting-script JSON: keep the author's scenes, their order, their on-screen action and EVERY line of dialogue EXACTLY as written (do NOT rewrite, add, remove, shorten, translate away or invent any dialogue or plot beat). Split the author's script into the required consecutive shots and, for each shot, synthesize ONLY the technical fields the JSON needs (shotType, camera, videoPrompt, startState, endState, durationSec, continuity metadata) so the clips can be generated — never change WHAT happens or WHAT is said. Where this author script differs from the outline/synopsis/season plot above, THIS SCRIPT WINS. PRESERVE THE AUTHOR'S LOCATIONS: use the location the author gives each scene — set each scene's "locationDesc" to that scene's own place ("INT/EXT — place — time"), and DO NOT collapse every scene into a single location. When a scene's location differs from the previous scene's, set its "continuesFrom" to "location-change". Keep the author's scene order and their location headings. If the author's script contains a SILENT establishing/atmospheric scene with NO spoken lines (e.g. an opening city/skyline shot marked "без диалогов"/"no dialogue"), KEEP IT SILENT — do NOT invent any dialogue for it: set that scene's "dialogue" field to exactly "[NO DIALOGUE]", but STILL give it a COMPLETE videoPrompt with all nine tags describing the atmosphere, ambience and camera move plus a full startState and endState so the clip can be generated.\n${userScript}`
     : "";
   return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}${plotBlock}${userScriptBlock}\n\nPREVIOUS EPISODES:\n${prev}${prevEndingBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}${locationInventoryBlock(input.locationInventory)}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
 }
