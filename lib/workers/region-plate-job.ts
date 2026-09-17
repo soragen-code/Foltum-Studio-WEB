@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { generateImage, GenerationCanceledError } from "@/lib/providers/image-provider";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
-import { VISUAL_STYLE_ID } from "@/lib/visual-style";
+import { VISUAL_STYLE_ID, REFERENCE_ASPECT_RATIO } from "@/lib/visual-style";
 import {
   buildRegionPlateRequest,
   resolveRegionPlate,
@@ -122,7 +122,7 @@ export async function ensureSceneRegionPlate(input: {
       if (already) return already;
 
       const remote = await generateImage(
-        { prompt: request.prompt, aspect_ratio: "9:16", image_input: request.image_input },
+        { prompt: request.prompt, aspect_ratio: REFERENCE_ASPECT_RATIO, image_input: request.image_input },
         { jobId: jobId ?? "", imageModel },
       );
       const url = await uploadRemoteToS3(

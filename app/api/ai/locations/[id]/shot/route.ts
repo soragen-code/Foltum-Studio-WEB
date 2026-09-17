@@ -10,7 +10,7 @@ import { normalizeImageModel } from "@/lib/ai-models";
 import { runInBackground, completeJob, failJob } from "@/lib/jobs";
 import { generateImage } from "@/lib/providers/image-provider";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
-import { locationAnglePrompt, locationExtraAnglePrompt, parseLocationExtra, VISUAL_STYLE_ID } from "@/lib/visual-style";
+import { locationAnglePrompt, locationExtraAnglePrompt, parseLocationExtra, VISUAL_STYLE_ID, REFERENCE_ASPECT_RATIO } from "@/lib/visual-style";
 import { extraJobImageInputs } from "@/lib/workers/location-extra-image-job";
 import { CHARACTER_REFERENCE_COST } from "@/lib/power-tier";
 
@@ -96,14 +96,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         const ctx = { jobId: job.id, imageModel };
         let remote: string;
         if (slot === "master") {
-          remote = await generateImage({ prompt: locationAnglePrompt(visual, loc.name, "wide", loc.setInventory), aspect_ratio: "9:16" }, ctx);
+          remote = await generateImage({ prompt: locationAnglePrompt(visual, loc.name, "wide", loc.setInventory), aspect_ratio: REFERENCE_ASPECT_RATIO }, ctx);
         } else if (slot === "extra") {
           remote = await generateImage(
-            { prompt: locationExtraAnglePrompt(visual, loc.name, index!), aspect_ratio: "9:16", image_input: extraJobImageInputs(loc, extras) },
+            { prompt: locationExtraAnglePrompt(visual, loc.name, index!), aspect_ratio: REFERENCE_ASPECT_RATIO, image_input: extraJobImageInputs(loc, extras) },
             ctx
           );
         } else {
-          remote = await generateImage({ prompt: locationAnglePrompt(visual, loc.name, slot, loc.setInventory), aspect_ratio: "9:16", image_input: [loc.imageUrl!] }, ctx);
+          remote = await generateImage({ prompt: locationAnglePrompt(visual, loc.name, slot, loc.setInventory), aspect_ratio: REFERENCE_ASPECT_RATIO, image_input: [loc.imageUrl!] }, ctx);
         }
         const url = await uploadRemoteToS3(remote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${Date.now()}-${slotKey}.png`, "image/png");
 

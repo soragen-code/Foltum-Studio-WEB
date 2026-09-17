@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import { generateImage, GenerationCanceledError } from "@/lib/providers/image-provider";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
-import { locationExtraAnglePrompt, parseLocationExtra, VISUAL_STYLE_ID } from "@/lib/visual-style";
+import { locationExtraAnglePrompt, parseLocationExtra, VISUAL_STYLE_ID, REFERENCE_ASPECT_RATIO } from "@/lib/visual-style";
 import { detectC2paFromUrl } from "@/lib/c2pa";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -70,7 +70,7 @@ export async function runLocationExtraImagesJob({ jobId, projectId, locationId, 
       try {
         const input: { prompt: string; aspect_ratio: string; image_input?: string[] } = {
           prompt: locationExtraAnglePrompt(visual, loc.name, idx),
-          aspect_ratio: "9:16",
+          aspect_ratio: REFERENCE_ASPECT_RATIO,
           image_input: extraJobImageInputs(loc, [...existing, ...added]),
         };
         const remote = await generateImage(input, { jobId, imageModel, shouldCancel: canceled});
