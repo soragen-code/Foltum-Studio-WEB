@@ -144,7 +144,7 @@ const mpLegacy = buildStoryboardAnimationPrompt({ actionOrDialogue: 'Anna and Cl
 ok(/SCENE CAST CONTEXT — IN FRAME: Anna, Clara; nobody else appears in the frame/.test(mpLegacy), 'i2v prompt (legacy): only the named participants are in frame');
 
 /* ─────────── (F) SCENES / shared adapters byte-identical ─────────── */
-for (const file of ['lib/workers/video-job.ts', 'lib/scene-prompt.ts', 'lib/region-plate.ts', 'lib/assemble.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {
+for (const file of ['lib/workers/video-job.ts', 'lib/region-plate.ts', 'lib/assemble.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {
   const baseline = execFileSync('git', ['show', `18b71a09e6c6:${file}`], { encoding: 'utf8' });
   ok(baseline === readFileSync(file, 'utf8'), `unchanged SCENES/shared adapter: ${file}`);
 }

@@ -415,3 +415,42 @@ export function moderationHints(text: string): string[] {
   applyRules(text ?? "", [...SENSITIVE_L1, ...SENSITIVE_L2], hits);
   return Array.from(new Set(hits)).slice(0, 6);
 }
+
+/* ====================================================================================== */
+/*  Stage 149 — ASCII-only guarantee for the emitted English video prompt                  */
+/* ====================================================================================== */
+
+/**
+ * Stage 149 — deterministic Cyrillic → Latin transliteration (Russian + Ukrainian).
+ *
+ * The emitted Seedance prompt is ENGLISH. Group / crowd / location NAMES authored in Cyrillic
+ * (e.g. "Прохожие на улице", "Улица мегаполиса") used to leak into the prompt verbatim, and a
+ * Cyrillic label pulls the model toward Cyrillic on-screen text. This romanises ONLY Cyrillic
+ * code points; every other character — em-dashes "—", curly quotes "'", accented Latin "é" — is
+ * passed through UNCHANGED (many rule blocks and tests rely on those). Callers should prefer an
+ * existing English field where one exists; this is the deterministic last-resort fallback applied
+ * centrally so no emitter can leak Cyrillic.
+ */
+const CYRILLIC_MAP: Record<string, string> = {
+  а: "a", б: "b", в: "v", г: "g", ґ: "g", д: "d", е: "e", ё: "e", є: "ie", ж: "zh",
+  з: "z", и: "i", і: "i", ї: "i", й: "y", к: "k", л: "l", м: "m", н: "n", о: "o",
+  п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f", х: "kh", ц: "ts", ч: "ch", ш: "sh",
+  щ: "shch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya",
+};
+
+export function transliterateCyrillic(text: string | null | undefined): string {
+  const s = text ?? "";
+  if (!s) return s;
+  return s.replace(/[\u0400-\u04FF\u0500-\u052F]/g, (ch) => {
+    const lower = ch.toLowerCase();
+    const mapped = CYRILLIC_MAP[lower];
+    if (mapped === undefined) return ""; // unknown Cyrillic sign → drop (keeps output ASCII)
+    if (ch === lower || !mapped) return mapped;
+    return mapped.charAt(0).toUpperCase() + mapped.slice(1);
+  });
+}
+
+/** Stage 149 — true when the string still contains any Cyrillic code point. */
+export function hasCyrillic(text: string | null | undefined): boolean {
+  return /[\u0400-\u04FF\u0500-\u052F]/.test(text ?? "");
+}

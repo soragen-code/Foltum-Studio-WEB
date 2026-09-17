@@ -95,7 +95,7 @@ ok(/camera is NOT locked/.test(later.prompt) && /9:16/.test(later.prompt) && /cl
 ok(later.prompt.length - first.prompt.length < 900, 'prompt: anchor block adds < 900 chars (no bloat; Stage 143 people caveat included)');
 
 /* ─────────── (D) SCENES / shared adapters byte-identical ─────────── */
-for (const file of ['lib/workers/video-job.ts', 'lib/scene-prompt.ts', 'lib/region-plate.ts', 'lib/assemble.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {
+for (const file of ['lib/workers/video-job.ts', 'lib/region-plate.ts', 'lib/assemble.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {
   const baseline = execFileSync('git', ['show', `18b71a09e6c6:${file}`], { encoding: 'utf8' });
   ok(baseline === readFileSync(file, 'utf8'), `unchanged SCENES/shared adapter: ${file}`);
 }

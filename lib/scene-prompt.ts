@@ -17,8 +17,9 @@
  * reference URLs. The preview never does any of those — it uses the stored scene fields as-is and
  * only ever emits `[ImageN]` placeholders, so no real reference URL is exposed to the client.
  */
-import { buildNativeAudioPrompt, buildNarrationAudioPrompt } from "@/lib/voiceover";
+import { buildNativeAudioPrompt, buildNarrationAudioPrompt, parseDialogue } from "@/lib/voiceover";
 import { PACE_DIRECTION, ACTION_PACE_DIRECTION, CONFRONTATION_STAGING_SENTENCE } from "@/lib/season";
+import { transliterateCyrillic } from "@/lib/sanitize-prompt";
 import { styledVisualPrompt, isStyledAsset, locationAngleImages, parseLocationExtra, locationExtraLabel, locationLayoutNote } from "@/lib/visual-style";
 import { normalizeVideoModel, videoModelSlug, type VideoModelId } from "@/lib/ai-models";
 import { matchPropsInText, type PropRegistryEntry } from "@/lib/prop-registry";
@@ -214,7 +215,88 @@ export const ACTION_CONTINUES_ACROSS_CUT_LINE =
 export const SURFACE_PROPS_IMMUTABLE_LINE =
   "TABLE/SURFACE PROPS ARE IMMUTABLE (same objects on every surface in every shot): the small objects resting on this location's tables, counters, desks and shelves are FIXED set dressing — the SAME items in the SAME spots in every shot here (a mug, glass, bottle, plate, bowl, book, stack of papers, phone, lamp or utensil stays put, same quantity, colour and shape). Do NOT add, remove, swap, restyle, resize, recolour or rearrange anything sitting on a surface between shots, and do NOT re-invent what is on a table from scratch each scene. A surface object changes ONLY when this scene's action shows it changing on screen (a character picks it up, sets it down or moves it). The camera is free to frame these surfaces from any new angle, height or distance; the objects on them do not change.";
 
+/** Stage 149 — compact direction tail for a single-speaker / no-second-party clip. Keeps the
+ *  lip-sync + verbatim-line guarantee and the character-forward framing, and the static-camera-in-
+ *  dialogue vs follow-walking rule (S133), WITHOUT the two-party eyeline / face-to-face staging rules
+ *  (those only make sense with two conversing characters). */
+export const SINGLE_SPEAKER_DIRECTION =
+  "PACE: one continuous beat built AROUND the single speaking character — medium / medium-close / over-the-shoulder framing with the character large in frame and the location only a soft background; a face close-up is allowed and encouraged on an emotional beat. The character's lips move in exact sync with the spoken English line, which is delivered VERBATIM; no second party speaks and nobody is posed face-to-face. The camera holds steady while the character talks — it does not drift, orbit or push in on its own — but it FOLLOWS the character if they walk, and it stays free to pick any angle, height or shot scale on the cut.";
+
 const oneLine = (t?: string | null) => (t ?? "").replace(/\s+/g, " ").trim();
+
+/* ====================================================================================== */
+/*  Stage 149 — conditional / leaner emitted video-clip prompt helpers                     */
+/* ====================================================================================== */
+
+/**
+ * Stage 149 — number of DISTINCT speaking characters in a dialogue block (by labelled speaker).
+ * Two-party dialogue staging rules (EYELINES CONNECT, the "never two people face to face" tail) are
+ * only emitted when this is ≥ 2; a single-speaker or unlabelled line does not pull them in.
+ */
+export function distinctSpeakerCount(dialogue: string | null | undefined): number {
+  return new Set(
+    parseDialogue(dialogue)
+      .map(l => (l.speaker ?? "").toLowerCase().trim())
+      .filter(Boolean),
+  ).size;
+}
+
+/**
+ * Stage 149 — interior vs exterior inference for the interior-only environment rules (LOCATION
+ * ANCHOR / SURFACE PROPS / wall-constancy). There is no boolean schema flag, so:
+ *   • an INT. slate in the location description ⇒ interior;
+ *   • an EXT. slate ⇒ exterior;
+ *   • otherwise fall back to `hasLocationPlates` — a plate-anchored location with no slate is treated
+ *     as interior (preserves the Stage 119/122 behaviour for the existing plate-anchored scenes).
+ */
+export function isInteriorLocation(locationDesc: string | null | undefined, hasLocationPlates: boolean): boolean {
+  const d = (locationDesc ?? "").trim();
+  if (/(^|\b)INT\b\.?/i.test(d)) return true;
+  if (/(^|\b)EXT\b\.?/i.test(d)) return false;
+  return hasLocationPlates;
+}
+
+/** Stage 149 — blocking / fight keywords that mark a confrontation beat outside an "action" scene. */
+const CONFRONTATION_RE =
+  /\b(fight|fights|fighting|fought|punch|punche[ds]|strike[sd]?|struck|shove[sd]?|grab(?:s|bed|bing)?|weapon|knife|blade|gun|sword|attack(?:s|ed|ing)?|lunge[sd]?|slap[s]?|slapped|choke[sd]?|strangl|struggl|brawl|confront(?:s|ed|ation)?|threaten(?:s|ed)?|kick(?:s|ed|ing)?|clash(?:es|ed)?|stab(?:s|bed)?|throttl|wrestl|beat(?:s|ing)?\s+(?:him|her|them|up))\b/i;
+
+/**
+ * Stage 149 — is this a confrontation / fight scene? The CONFRONTATION staging sentence is only
+ * emitted for these; ordinary dialogue scenes omit it. True for an "action" scene, or when the
+ * scene's action / video-prompt text carries physical-confrontation keywords.
+ */
+export function isConfrontation(scene: { sceneKind?: string | null; videoPrompt?: string | null; action?: string | null }): boolean {
+  if ((scene.sceneKind ?? "") === "action") return true;
+  return CONFRONTATION_RE.test(`${scene.action ?? ""}\n${scene.videoPrompt ?? ""}`);
+}
+
+/**
+ * Stage 149 — drop any "NOT IN FRAME: <names>" inventory clause from a state description before it is
+ * emitted. The screenwriter writes an "IN FRAME … NOT IN FRAME …" inventory into start/end states
+ * (FRAME_STATE_ASPECTS); naming the ABSENT characters in the video prompt tends to summon them, so the
+ * emitted OPENING/END STATE keeps only the positive "IN FRAME" listing (plus the numeric PEOPLE IN
+ * FRAME counter). The stored state is untouched — this strips ONLY the emitted copy.
+ */
+export function stripNotInFrame(text: string | null | undefined): string {
+  let s = text ?? "";
+  if (!s) return s;
+  // "(b) NOT IN FRAME: …" (optional parenthesised marker) or bare "NOT IN FRAME: …" up to the next
+  // sentence end or newline.
+  s = s.replace(/\s*(?:\([a-z]\)\s*)?NOT\s+IN\s+FRAME\s*:[^\n.]*\.?/gi, " ");
+  return s.replace(/ {2,}/g, " ").replace(/\s+([.,;])/g, "$1").trim();
+}
+
+/**
+ * Stage 149 — neutralise the inter-shot [TRANSITION] tag. The scripted [TRANSITION] used to DESCRIBE
+ * the NEXT shot's content, which the model would start rendering inside THIS clip. Replace its content
+ * with a fixed neutral hard-cut instruction while keeping the `[TRANSITION]` token (the 9-tag order is
+ * relied on elsewhere). Internal seam metadata (openingState/endState/continuesFrom) is untouched.
+ */
+export const NEUTRAL_TRANSITION_LINE =
+  "[TRANSITION]: hard cut to the next shot — no fade, no dissolve. Do NOT show, begin or foreshadow the next shot's action, location or dialogue inside this clip; this clip ends on its own final beat.";
+export function neutralizeTransition(prompt: string): string {
+  return (prompt ?? "").replace(/\[TRANSITION\]:?[^\n]*/i, NEUTRAL_TRANSITION_LINE);
+}
 
 /**
  * The state the scene must open from (Stage 40/41), in priority order:
@@ -601,11 +683,21 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // staging block INSTEAD of the talking-scene PACE_DIRECTION; a dialogue scene gets PACE_DIRECTION
   // plus the universal "confrontation is staged face to face" sentence. Narration is unchanged.
   const isAction = !isNarration && scene.sceneKind === "action";
+  // Stage 149 — modular direction tail. The full two-party dialogue staging (PACE_DIRECTION with its
+  // eyeline / framing / performance rules) is emitted only when 2+ DISTINCT speakers actually converse;
+  // a single-speaker / soliloquy clip gets the compact SINGLE_SPEAKER_DIRECTION instead. The
+  // CONFRONTATION staging sentence is added only for a confrontation / fight beat, never on calm talk.
+  const speakerCount = distinctSpeakerCount(dialogue);
+  const twoParty = speakerCount >= 2;
+  const confront = !isNarration && isConfrontation(scene);
+  const interior = isInteriorLocation(scene.locationDesc, locationAngles.length > 0);
   const direction = isNarration
     ? PACE_DIRECTION
     : isAction
       ? ACTION_PACE_DIRECTION
-      : `${PACE_DIRECTION} ${CONFRONTATION_STAGING_SENTENCE}`;
+      : twoParty
+        ? (confront ? `${PACE_DIRECTION} ${CONFRONTATION_STAGING_SENTENCE}` : PACE_DIRECTION)
+        : (confront ? `${SINGLE_SPEAKER_DIRECTION} ${CONFRONTATION_STAGING_SENTENCE}` : SINGLE_SPEAKER_DIRECTION);
   // Stage 40 — scripted / actual end-state hand-off: when this scene continues the previous one
   // (not a location-change / new-sequence), the previous scene's end state opens the prompt so the
   // model starts frame 1 exactly where the last clip ended. The previous frame IMAGE is still never sent.
@@ -617,9 +709,12 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // instant while the CAMERA is new; the directive line makes that explicit for the video model.
   const continuousSeam = !!previous && !breaksSequence(scene.continuesFrom) && !!openingState;
   const stateBlocks = [
-    openingState ? `${OPENING_STATE_PREFIX}${openingState}` : "",
+    // Stage 149 — the emitted OPENING/END STATE keeps only the positive "IN FRAME" roster; the
+    // screenwriter's "NOT IN FRAME: <names>" clause is stripped so the absent cast is never named
+    // (naming them tends to summon them). The stored state (returned below) is untouched.
+    openingState ? `${OPENING_STATE_PREFIX}${stripNotInFrame(openingState)}` : "",
     continuousSeam && !reangleUrl ? NEW_CAMERA_ON_CUT_LINE : "",
-    endState ? `${END_STATE_PREFIX}${endState}` : "",
+    endState ? `${END_STATE_PREFIX}${stripNotInFrame(endState)}` : "",
     // Stage 118 — enforce cast continuity whenever this shot continues from a previous one
     // (continuous seam) or is a re-angle of an existing frame: the on-screen group never silently swaps.
     continuousSeam || reangleUrl ? CAST_CONTINUITY_LINE : "",
@@ -638,18 +733,22 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     REFERENCE_APPEARANCE_ONLY_LINE,
     // Stage 120 — in a dialogue shot, eyelines connect: the speaker looks at whoever they address (head/eyes
     // turned to the listener, natural angles, never to camera, never a static face-to-face stand-off).
-    dialogue ? GAZE_AT_LISTENER_LINE : "",
+    // Stage 149 — EYELINES CONNECT is a two-party rule: only emit it when 2+ distinct speakers converse.
+    twoParty ? GAZE_AT_LISTENER_LINE : "",
     // Stage 119/122 — whenever the shot has master location plates attached, anchor the environment so the
     // fixed set objects (bench, floor, columns, fixtures, large props) stay identical across every clip. When a
     // pre-generated REGION PLATE is also attached, it becomes the PRIMARY environment authority for this part of
     // the room (it already re-frames the master plates onto this region), so its stronger line REPLACES the master
     // anchor line here — this keeps the prompt from carrying two overlapping environment blocks.
-    hasRegionPlate ? REGION_PLATE_ANCHOR_LINE : (locationAngles.length ? LOCATION_ANCHOR_LINE : ""),
+    // Stage 149 — the wall / architecture / layout constancy anchor is an INTERIOR-only rule: emit it
+    // only for interior locations (exteriors — streets, rooftops — have no fixed room to hold constant).
+    interior && hasRegionPlate ? REGION_PLATE_ANCHOR_LINE : (interior && locationAngles.length ? LOCATION_ANCHOR_LINE : ""),
     // Stage 126 — whenever the environment is anchored (region plate or master plates), the small props resting
     // on tables/counters/desks/shelves are immutable set dressing: the same objects in the same spots in every
     // shot, re-invented never, changing only when the on-screen action moves them. Carried between scenes of the
     // same location because the location's fixed inventory is identical in every scene there.
-    hasRegionPlate || locationAngles.length ? SURFACE_PROPS_IMMUTABLE_LINE : "",
+    // Stage 149 — TABLE/SURFACE props constancy is likewise interior-only.
+    interior && (hasRegionPlate || locationAngles.length) ? SURFACE_PROPS_IMMUTABLE_LINE : "",
   ].filter(Boolean);
   // Stage 54 — the deterministic structure block (reference map + people counter + clothing&props)
   // sits AFTER the state blocks and BEFORE the reused 9-tag body, so the prompt still opens with the
@@ -681,7 +780,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     // pace direction), covering logos/watermarks/subtitles/extra people plus the narration-only bits.
     prompt = `${prompt}\n\n${negativesBlock}`;
   }
-  const basePrompt = prompt;
+  let basePrompt = prompt;
 
   const model = normalizeVideoModel(input.provider);
   const modelSlug = videoModelSlug(model);
@@ -711,6 +810,14 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     reference = { mode: "text_only", sceneId: scene.id, reason: "no_references" };
     referenceKind = "text_only";
   }
+
+  // Stage 149 — final emitted-copy pass: guard [TRANSITION] against rendering next-shot
+  // content (neutral hard-cut note) and force ASCII English (romanize any residual Cyrillic,
+  // incl. REFERENCE MAP name echoes). Idempotent; English dialogue carries no Cyrillic so the
+  // verbatim spoken lines are preserved untouched.
+  const finalizeEmitted = (p: string) => transliterateCyrillic(neutralizeTransition(p));
+  prompt = finalizeEmitted(prompt);
+  basePrompt = finalizeEmitted(basePrompt);
 
   return {
     prompt,

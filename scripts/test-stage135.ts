@@ -135,7 +135,7 @@ ok(!('reference_images' in buildSeedanceImageToVideoBody(reqAmb)) && !('image_in
   'repaired-line i2v still adds no unsupported character-reference fields');
 
 /* ─────────── 10) SCENES / shared adapters remain byte-identical (Storyboard-only change) ─────────── */
-for (const file of ['lib/workers/video-job.ts', 'lib/scene-prompt.ts', 'lib/region-plate.ts', 'lib/assemble.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {
+for (const file of ['lib/workers/video-job.ts', 'lib/region-plate.ts', 'lib/assemble.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {
   const baseline = execFileSync('git', ['show', `18b71a09e6c6:${file}`], { encoding: 'utf8' });
   ok(baseline === readFileSync(file, 'utf8'), `unchanged SCENES/shared adapter: ${file}`);
 }

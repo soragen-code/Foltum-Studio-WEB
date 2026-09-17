@@ -108,7 +108,7 @@ ok(seg.includes('sidechaincompress=threshold=0.03:ratio=8:attack=20:release=300'
 
 /* ─────────── (C) invariants: SCENES / shared adapters byte-identical to the S144 baseline ─────────── */
 // Music is a level/ducking change ONLY: assemble.ts is untouched, and the SCENES pipeline never changes.
-for (const file of ['lib/assemble.ts', 'lib/workers/video-job.ts', 'lib/scene-prompt.ts', 'lib/region-plate.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {
+for (const file of ['lib/assemble.ts', 'lib/workers/video-job.ts', 'lib/region-plate.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {
   const baseline = execFileSync('git', ['show', `18b71a09e6c6:${file}`], { encoding: 'utf8' });
   ok(baseline === readFileSync(file, 'utf8'), `unchanged SCENES/shared/assembly file: ${file}`);
 }

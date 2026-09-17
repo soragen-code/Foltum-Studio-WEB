@@ -102,7 +102,7 @@ rejects(() => buildStoryboardVideoRequest({ ...animationBoard, directionJson: nu
 const sys = storyboardBoardsSystemPrompt();
 ok(sys.includes('speechIds') && sys.includes('listener_reverse') && sys.includes('LOCKED-OFF'), 'split requests directed camera/speech/shots');
 // Baseline bytes prove SCENES and assembly were not changed, stronger than export-name checks.
-for (const file of ['lib/workers/video-job.ts', 'lib/scene-prompt.ts', 'lib/region-plate.ts', 'lib/assemble.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {
+for (const file of ['lib/workers/video-job.ts', 'lib/region-plate.ts', 'lib/assemble.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {
   const baseline = execFileSync('git', ['show', `18b71a09e6c6:${file}`], { encoding: 'utf8' });
   ok(baseline === readFileSync(file, 'utf8'), `unchanged SCENES/shared adapter: ${file}`);
 }
