@@ -24,6 +24,20 @@ export type MoodSegment = { mood: Mood; startSceneIndex: number; endSceneIndex: 
 /** A segment mapped onto the output timeline (seconds). */
 export type TimelineSegment = { mood: Mood; startSec: number; endSec: number; intensity: number };
 
+/**
+ * Stage 156 — system prompt biasing the per-scene plan toward a restrained cinematic DRAMA score.
+ * Favours tension/drama/emotional restraint, forbids a cheerful/upbeat read, and guides intensity so
+ * the music stays low under dialogue and only swells in dramatic, dialogue-free beats. Exported for
+ * tests. The output JSON contract is unchanged (mood stays one of MOODS or "none").
+ */
+export const MUSIC_PLAN_SYSTEM_PROMPT =
+  `You score a serious, restrained cinematic TV drama, choosing the background-music mood for EACH scene, moment by moment. ` +
+  `This is a cinematic drama score: favour tension, drama and emotional restraint, and NEVER a cheerful, poppy, bright or upbeat tone. ` +
+  `Use a lighter, warmer mood only sparingly for a genuinely tender beat; never pick a happy tone just because a scene is positive. ` +
+  `For every scene pick ONE mood from [${MOODS.join(", ")}] or "none" when that scene should play with NO music (a beat of silence). ` +
+  `Also give an intensity 0..1: keep it low and unobtrusive under dialogue, and let the music swell only in dramatic, dialogue-free beats. ` +
+  `Answer ONLY with JSON {"scenes":[{"index":<scene index>,"mood":<mood|"none">,"intensity":<0..1>}, ...]} covering every scene.`;
+
 /** Clamp a raw number to the 0..1 intensity range (default 0.6). */
 function clampIntensity(v: unknown): number {
   const n = typeof v === "number" ? v : Number(v);
@@ -53,10 +67,7 @@ export async function buildMusicPlan(
     .slice(0, 6000);
   try {
     const raw = await chatJSON<{ scenes?: Array<{ index?: number; mood?: string; intensity?: number }> }>(
-      `You choose the background-music mood for EACH scene of a short vertical drama episode, moment by moment. ` +
-        `For every scene pick ONE mood from [${MOODS.join(", ")}] or "none" when that scene should play with NO music ` +
-        `(a beat of silence). Also give an intensity 0..1 (how loud/present the music should feel). ` +
-        `Answer ONLY with JSON {"scenes":[{"index":<scene index>,"mood":<mood|"none">,"intensity":<0..1>}, ...]} covering every scene.`,
+      MUSIC_PLAN_SYSTEM_PROMPT,
       `${context ? context + "\n\n" : ""}Scenes:\n${sceneLines}`,
       { model: "gpt-4o", temperature: 0.2, maxTokens: 900 }
     );

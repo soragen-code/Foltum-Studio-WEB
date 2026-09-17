@@ -32,15 +32,22 @@ export const MOOD_LABELS: Record<Mood, string> = {
   action: "action",
 };
 
-/** Instrumental style description per mood (short, no vocals, loop-friendly) — becomes the ACE-Step tags. */
+/**
+ * Instrumental style description per mood (short, no vocals, loop-friendly) — becomes the ACE-Step tags.
+ *
+ * Stage 156 — every mood is a RESTRAINED CINEMATIC DRAMA underscore: emotionally serious, minor-leaning,
+ * suited to a TV drama. Nothing bright, happy, cheerful, bouncy, upbeat or jolly, and no light plucky
+ * percussion — even the "warm" moods stay subdued and wistful. The score adds drama/tension where the
+ * scene needs it and sits quietly under dialogue (mix/ducking handled in lib/ffmpeg.ts).
+ */
 export const MOOD_PROMPTS: Record<Mood, string> = {
-  tense: "tense suspenseful cinematic underscore, pulsing low strings, ticking percussion, no vocals, seamless loop",
-  romantic: "warm romantic cinematic piano and soft strings, gentle and intimate, no vocals, seamless loop",
-  melancholic: "melancholic slow cinematic piano with soft pads, wistful and sad, no vocals, seamless loop",
-  uplifting: "uplifting hopeful cinematic score, bright strings and light percussion, no vocals, seamless loop",
-  dark: "dark brooding cinematic drone, deep bass, ominous textures, no vocals, seamless loop",
-  mysterious: "mysterious atmospheric cinematic underscore, soft synth pads, subtle bells, no vocals, seamless loop",
-  action: "driving action cinematic score, fast percussion, powerful brass and strings, no vocals, seamless loop",
+  tense: "tense suspenseful cinematic underscore, pulsing low strings, ticking percussion, minor key, dramatic and foreboding, no vocals, seamless loop",
+  romantic: "tender wistful cinematic piano, delicate and intimate, Chopin-esque nocturne, melancholy-tinged, minor-leaning, no vocals, seamless loop",
+  melancholic: "melancholic slow cinematic piano with mournful strings and soft pads, wistful and sorrowful, minor key, no vocals, seamless loop",
+  uplifting: "restrained hopeful cinematic swell, warm sustained strings and soft piano, subdued and understated, minor-leaning and emotionally serious, no vocals, seamless loop",
+  dark: "dark brooding cinematic drone, deep bass, ominous low textures, dissonant and foreboding, no vocals, seamless loop",
+  mysterious: "mysterious atmospheric cinematic underscore, soft synth pads, subtle low bells, muted and shadowy, no vocals, seamless loop",
+  action: "driving dramatic cinematic score, urgent percussion, forceful low brass and strings, dark and relentless, no vocals, seamless loop",
 };
 
 /** WaveSpeed ACE-Step 1.5 model slug (instrumental background score). */
@@ -72,13 +79,24 @@ export function parseMood(raw: unknown): Mood {
   return r.success ? r.data.mood : DEFAULT_MOOD;
 }
 
+/**
+ * Stage 156 — system prompt biasing the single-mood pick toward a restrained cinematic DRAMA score.
+ * Favours tension/drama/emotional restraint and forbids a cheerful/upbeat read. Exported for tests.
+ * The output JSON contract is unchanged (mood must stay one of MOODS).
+ */
+export const MOOD_PICK_SYSTEM_PROMPT =
+  `You score a serious, restrained cinematic TV drama. Pick the ONE background-music mood for a short vertical drama episode. ` +
+  `Favour tension, drama and emotional restraint — the soundtrack is a cinematic drama score, never cheerful, poppy, bright or upbeat. ` +
+  `Use a lighter, warmer mood only for a genuinely tender beat, and never pick a happy tone just because a scene is positive. ` +
+  `Answer ONLY with JSON {"mood": <one of ${MOODS.join(", ")}>}.`;
+
 /** Pick the episode mood with gpt-4o from the synopsis / logline / genre hints. */
 export async function pickMood(input: { logline?: string | null; synopsis?: string | null; title?: string | null }): Promise<Mood> {
   const text = [input.title, input.logline, input.synopsis].filter(Boolean).join("\n\n").slice(0, 4000);
   if (!text.trim()) return DEFAULT_MOOD;
   try {
     const raw = await chatJSON<unknown>(
-      `You pick the background music mood for a short vertical drama episode. Answer ONLY with JSON {"mood": <one of ${MOODS.join(", ")}>}.`,
+      MOOD_PICK_SYSTEM_PROMPT,
       text,
       { model: "gpt-4o", temperature: 0.2, maxTokens: 30 }
     );
