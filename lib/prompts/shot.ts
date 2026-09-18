@@ -21,6 +21,7 @@
  * from lib/scene-prompt.ts for consistency with the scene-level prompt.
  */
 import { DIALOGUE_FRAMING_RULE, buildNegatives } from "@/lib/scene-prompt";
+import { normalizeDialogueLanguage, isEnglish, dialogueLanguageLabel } from "@/lib/dialogue-language";
 import type { PlannedShot, ShotType, ShotSize } from "./shot-plan";
 // Stage 4 (task Stage 4) — type-only import (erased at build; keeps this a leaf module) of the live
 // world-state slice. When supplied, the CHARACTER block reads wardrobe / physicalState from it by name.
@@ -100,6 +101,12 @@ export interface ShotPromptInput {
   isSceneLast?: boolean;
   dialogueLanguage?: string | null;
   /**
+   * Stage 8: English translation of the spoken line. Video models understand English best, so when
+   * dialogueLanguage != "en" the LINE block references THIS (English) for the model, while the burned
+   * subtitle + stored line stay in dialogueLanguage. When "en" it is unused (line IS English).
+   */
+  lineTranslation?: string | null;
+  /**
    * Stage 4 (task Stage 4) — the live SeasonState slice. When present the CHARACTER block prefers each
    * character's wardrobe / physicalState / location from here (matched by name) over the per-shot
    * ShotCharacterLike fallback. Absent/null → the block behaves exactly as before (appearance fallback).
@@ -166,11 +173,16 @@ export function shotActionBlock(i: ShotPromptInput): string {
 export function shotLineBlock(i: ShotPromptInput): string {
   const line = oneLine(i.shot.line);
   if (!line) return "";
-  const lang = oneLine(i.dialogueLanguage) || "English";
-  const langNote = lang.toLowerCase() === "english"
-    ? "spoken in English, voiced verbatim"
-    : `spoken in ${lang}; English translation given verbatim for the model`;
-  return `LINE (${langNote}): ${line}`;
+  const code = normalizeDialogueLanguage(i.dialogueLanguage);
+  if (isEnglish(code)) {
+    // English (default): the line IS English — no translation branch, byte-identical to prior behavior.
+    return `LINE (spoken in English, voiced verbatim): ${line}`;
+  }
+  // Non-English: the video model understands English best, so it reads the ENGLISH translation while the
+  // burned subtitle + stored line stay in the dialogue language. Fall back to the line if no translation.
+  const label = dialogueLanguageLabel(code);
+  const englishForModel = oneLine(i.lineTranslation) || line;
+  return `LINE (spoken in ${label}; the model reads this English translation verbatim): ${englishForModel}`;
 }
 
 export function shotCameraBlock(i: ShotPromptInput): string {

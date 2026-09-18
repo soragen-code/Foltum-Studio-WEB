@@ -497,3 +497,6 @@ CREATE TABLE IF NOT EXISTS "GenerationLog" (
 
 CREATE INDEX IF NOT EXISTS "GenerationLog_projectId_idx" ON "GenerationLog"("projectId");
 CREATE INDEX IF NOT EXISTS "GenerationLog_kind_idx" ON "GenerationLog"("kind");
+
+-- Stage 8 (final): project-level dialogue language (default English). Additive + idempotent.
+ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "dialogueLanguage" TEXT DEFAULT 'en';

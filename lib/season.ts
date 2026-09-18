@@ -8,6 +8,7 @@ import { VISUAL_STYLE } from "@/lib/visual-style";
 import { POWER_TIER_CONFIG, SEEDANCE_MAX_DURATION, sceneTierConfig, type PowerTier } from "@/lib/power-tier";
 import { LOCATION_DETAIL_LEVELS } from "@/lib/location-scale";
 import { DIRECTING_RULES } from "@/lib/directing-rules";
+import { dialogueLanguageDirective } from "@/lib/dialogue-language";
 // Stage 166 — episode-script prompt strings + pure helpers live in a LEAF module (no runtime import of this
 // file) so referencing them at season.ts module top-level (STATE_SIZE_TEXT, START/END_STATE_RULE) is cycle-safe.
 import {
@@ -1448,6 +1449,12 @@ export function episodeScriptUserPrompt(input: {
    * season-state types.
    */
   seasonStateBlock?: string | null;
+  /**
+   * Stage 8 (final) — the project dialogue language (ISO 639-1, resolved via getDialogueLanguage). When
+   * not "en" a v6.8.0 directive is injected telling the model to write ALL dialogue, character names and
+   * titles in that language; "en"/absent → no directive (byte-identical to prior behavior).
+   */
+  dialogueLanguage?: string | null;
 }): string {
   const prev = input.previous.length
     ? input.previous.map((p) => `Ep.${p.number} «${p.title}»: ${p.logline} Cliffhanger: ${p.cliffhanger}`).join("\n")
@@ -1488,7 +1495,12 @@ export function episodeScriptUserPrompt(input: {
   // absent/empty for old bible-less projects ⇒ the prompt is unchanged.
   const bibleText = (input.dramaBibleBlock ?? "").trim();
   const dramaBibleBlock = bibleText ? `\n\nSTORY BIBLE (keep this episode consistent with it):\n${bibleText}` : "";
-  return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}${plotBlock}${userScriptBlock}${dramaBibleBlock}\n\nPREVIOUS EPISODES:\n${prev}${continuityBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}${locationInventoryBlock(input.locationInventory)}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${seasonMapBlock}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
+  // Stage 8 (final) — dialogue-language directive. For the default English this is "" (no-op), so English
+  // projects get exactly today's prompt; for another language it instructs the model to write dialogue,
+  // names and titles in that language while keeping stage directions / field keys English.
+  const langDirective = dialogueLanguageDirective(input.dialogueLanguage);
+  const langBlock = langDirective ? `\n\n${langDirective}` : "";
+  return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}${plotBlock}${userScriptBlock}${dramaBibleBlock}\n\nPREVIOUS EPISODES:\n${prev}${continuityBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}${locationInventoryBlock(input.locationInventory)}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${seasonMapBlock}${langBlock}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
 }
 
 /**

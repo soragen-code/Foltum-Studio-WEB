@@ -73,6 +73,11 @@ model Project {
   powerTier   String   @default("MEDIUM")
   // Auto-detected language of the idea/synopsis (ISO 639-1, e.g. "ru", "en").
   language    String   @default("en")
+  // Stage 8 (final): project-level DIALOGUE language (ISO 639-1). Default "en" — dialogue, character
+  // names and titles are generated in this language; burned subtitles + stored lines use it, while the
+  // video-model prompt falls back to the English lineTranslation only when this is not "en". Additive +
+  // optional: old rows are NULL and resolve to "en" via getDialogueLanguage(), keeping current behavior.
+  dialogueLanguage String? @default("en")
   idea        String?  @db.Text
   // New flow (Stage 14 B): producer-chosen number of episodes for the season. Null = let the AI decide.
   episodeCount Int?

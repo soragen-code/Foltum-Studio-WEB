@@ -82,6 +82,7 @@ import { seasonMapCellBrief, SEASON_MAP_PROMPT_VERSION, type SeasonMapCell } fro
 // and rendered into a compact brief threaded into each episode's script prompt (both read defensively).
 import { toDramaBibleForMap, type DramaBible } from "@/lib/drama-bible";
 import { renderSeasonStateBlock, normalizeSeasonState } from "@/lib/season-state";
+import { getDialogueLanguage } from "@/lib/dialogue-language";
 import { dramaBibleBrief } from "@/lib/prompts/drama-bible";
 
 export const SEASON_JOB_TYPE = "season_script";
@@ -666,6 +667,8 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
         seasonMapCellBlock,
         dramaBibleBlock,
         seasonStateBlock,
+        // Stage 8 (final) — project dialogue language (default "en" → no-op directive; old rows resolve to en).
+        dialogueLanguage: getDialogueLanguage(project),
         ...(planned.instruction ? { instruction: reviseInstruction(planned.instruction, next) } : {}),
       }) + episodeRetryNote(state),
       // Stage 108 — the episode script is written by gpt-4o (EPISODE_SCRIPT_MODEL): non-reasoning →
