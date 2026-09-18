@@ -522,3 +522,25 @@ model GenerationJob {
   @@index([projectId, status])
   @@index([sceneId])
 }
+
+// Stage 7 (task Stage 7 — critic-driven generation) — diagnostic log of generation outcomes.
+// Additive + optional; a row is written when a generation exhausts retries or the critic never accepts
+// (and optionally on accepted results). Old records / flows are unaffected — nothing reads this to run.
+model GenerationLog {
+  id            String   @id @default(cuid())
+  projectId     String?
+  seasonId      String?
+  episodeId     String?
+  kind          String   // "synopsis" | "seasonMap" | "episodeScript" | "dramaBible" | ...
+  model         String
+  promptVersion String
+  attempts      Int      @default(0)
+  finalScore    Float?
+  accepted      Boolean  @default(false)
+  notes         Json?
+  error         String?  @db.Text
+  createdAt     DateTime @default(now())
+
+  @@index([projectId])
+  @@index([kind])
+}

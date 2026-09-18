@@ -1,0 +1,359 @@
+/**
+ * Stage 7 (task Stage 7 — critic-driven generation) — a reusable RUBRIC CRITIC framework.
+ *
+ * The old generation flow leaned on a repair / clamp / retry-note cascade: generate once, then patch the
+ * output when it failed a check. Stage 7 replaces that with a critic-driven loop:
+ *
+ *   - SYNOPSIS / SEASON MAP: generate 3 PARALLEL variants at temperature 0.9 → critique each on a rubric →
+ *     pick the best → attach the best variant's notes with an "improve" action → ONE targeted-improve pass.
+ *   - EPISODE SCRIPT: generate 2 variants → critique → pick best → dialoguePolish → continuity check;
+ *     a generate → critique → targeted-fix loop of at most 3 iterations (stop on "accept" or after 3).
+ *
+ * This module owns the PURE, unit-testable core (rubric shape, response parsing with defensive fallback,
+ * score aggregation that treats continuityRisk as a RISK, best-variant selection, fix-instruction assembly,
+ * and GenerationLog record shaping) plus thin LLM-calling wrappers that isolate the network behind an
+ * INJECTABLE client so tests pass a stub and NEVER hit the network.
+ *
+ * All prompts / comments are English. No network is performed by the pure helpers.
+ */
+
+/** Bumped whenever the rubric axes / critic prompt contract changes; stored on GenerationLog.promptVersion. */
+export const CRITIC_PROMPT_VERSION = "6.7.0";
+
+/* ───────────────────────── rubric ───────────────────────── */
+
+/**
+ * The rubric axes. All are scored 1–10. Every axis EXCEPT `continuityRisk` is "higher is better".
+ * `continuityRisk` is a RISK: a HIGH score means a HIGH risk of a continuity break, so it is INVERTED
+ * when folded into the overall score (see aggregateScore).
+ */
+export const RUBRIC_AXES = [
+  "hookStrength",
+  "stakesClarity",
+  "escalation",
+  "characterDistinctness",
+  "tropeExecution",
+  "cliffhangerPull",
+  "continuityRisk",
+] as const;
+
+export type RubricAxis = (typeof RUBRIC_AXES)[number];
+
+/** The single axis that is a RISK (lower is better) rather than a quality (higher is better). */
+export const RISK_AXES: ReadonlySet<RubricAxis> = new Set<RubricAxis>(["continuityRisk"]);
+
+export type RubricScores = Record<RubricAxis, number>;
+
+export type CriticAction = "improve" | "accept";
+
+export interface Critique {
+  scores: RubricScores;
+  /** 0–10 aggregate (risk axes inverted). Higher is better. */
+  overall: number;
+  /** Up to 3 short, actionable notes. */
+  notes: string[];
+  action: CriticAction;
+}
+
+/** The score assigned to a missing / unparseable axis — a cautious mid value. */
+export const DEFAULT_AXIS_SCORE = 5;
+
+/** overall ≥ this (out of 10) means the candidate is good enough to accept without another pass. */
+export const ACCEPT_THRESHOLD = 7.5;
+
+const clampScore = (n: unknown): number => {
+  const v = typeof n === "number" && Number.isFinite(n) ? n : DEFAULT_AXIS_SCORE;
+  return Math.min(10, Math.max(1, Math.round(v * 10) / 10));
+};
+
+const oneLine = (t: unknown): string => (typeof t === "string" ? t : "").replace(/\s+/g, " ").trim();
+
+/* ───────────────────────── pure: score aggregation ───────────────────────── */
+
+/**
+ * Fold the per-axis scores into a single 0–10 overall. Quality axes contribute their score; each RISK
+ * axis contributes its INVERTED value (11 − score), so a low continuityRisk raises the overall and a
+ * high continuityRisk lowers it. The result is the mean across all axes. Pure.
+ */
+export function aggregateScore(scores: Partial<RubricScores>): number {
+  let sum = 0;
+  for (const axis of RUBRIC_AXES) {
+    const s = clampScore(scores[axis]);
+    sum += RISK_AXES.has(axis) ? 11 - s : s;
+  }
+  return Math.round((sum / RUBRIC_AXES.length) * 100) / 100;
+}
+
+/** Decide the action from an overall score: accept when it clears the threshold, else improve. Pure. */
+export function actionForOverall(overall: number): CriticAction {
+  return overall >= ACCEPT_THRESHOLD ? "accept" : "improve";
+}
+
+/* ───────────────────────── pure: response parsing (defensive) ───────────────────────── */
+
+/**
+ * Parse a raw critic response (already JSON-parsed object, or a JSON string) into a well-formed Critique.
+ * DEFENSIVE: any missing / malformed axis defaults to DEFAULT_AXIS_SCORE, notes are trimmed to ≤3 strings,
+ * the overall is RE-COMPUTED from the parsed scores (never trusted from the model), and the action is
+ * derived from the overall unless the model explicitly said "accept"/"improve". Never throws. Pure.
+ */
+export function parseCriticResponse(raw: unknown): Critique {
+  let obj: any = raw;
+  if (typeof raw === "string") {
+    try {
+      obj = JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/i, ""));
+    } catch {
+      obj = {};
+    }
+  }
+  if (!obj || typeof obj !== "object") obj = {};
+  const rawScores = (obj.scores && typeof obj.scores === "object" ? obj.scores : obj) as Record<string, unknown>;
+  const scores = {} as RubricScores;
+  for (const axis of RUBRIC_AXES) scores[axis] = clampScore(rawScores[axis]);
+
+  const notesSrc = Array.isArray(obj.notes) ? obj.notes : Array.isArray(obj.feedback) ? obj.feedback : [];
+  const notes = notesSrc.map(oneLine).filter((s: string) => s.length > 0).slice(0, 3);
+
+  const overall = aggregateScore(scores);
+  const explicit = oneLine(obj.action).toLowerCase();
+  const action: CriticAction = explicit === "accept" || explicit === "improve" ? (explicit as CriticAction) : actionForOverall(overall);
+  return { scores, overall, notes, action };
+}
+
+/* ───────────────────────── pure: best-variant selection ───────────────────────── */
+
+/**
+ * Return the INDEX of the best critique (highest overall). Ties break toward the earlier variant. Returns
+ * -1 for an empty list. Pure.
+ */
+export function pickBestVariant(critiques: Array<Pick<Critique, "overall">>): number {
+  let best = -1;
+  let bestScore = -Infinity;
+  critiques.forEach((c, i) => {
+    if (c && c.overall > bestScore) {
+      bestScore = c.overall;
+      best = i;
+    }
+  });
+  return best;
+}
+
+/* ───────────────────────── pure: fix-instruction assembly ───────────────────────── */
+
+/**
+ * Build a targeted-fix instruction from the critic's notes, appended to the generation prompt on an
+ * "improve" pass. Empty notes → an empty string (the caller then skips the improve pass). Pure.
+ */
+export function buildFixInstruction(notes: string[], opts: { label?: string } = {}): string {
+  const clean = (notes ?? []).map(oneLine).filter(Boolean).slice(0, 3);
+  if (!clean.length) return "";
+  const head = opts.label ? `Revise this ${opts.label} to fix the following, keeping everything that already works:` : "Revise the draft to fix the following, keeping everything that already works:";
+  return `${head}\n${clean.map((n, i) => `${i + 1}. ${n}`).join("\n")}\nReturn the full corrected result only.`;
+}
+
+/* ───────────────────────── pure: GenerationLog record shaping ───────────────────────── */
+
+export type GenerationKind = "synopsis" | "seasonMap" | "episodeScript" | "dramaBible" | string;
+
+export interface GenerationLogInput {
+  projectId?: string | null;
+  seasonId?: string | null;
+  episodeId?: string | null;
+  kind: GenerationKind;
+  model: string;
+  promptVersion: string;
+  attempts: number;
+  finalScore?: number | null;
+  accepted: boolean;
+  notes?: string[] | null;
+  error?: string | null;
+}
+
+/** The exact shape written to the GenerationLog table (JSON-serialisable). Pure — no DB call. */
+export interface GenerationLogRecord {
+  projectId: string | null;
+  seasonId: string | null;
+  episodeId: string | null;
+  kind: string;
+  model: string;
+  promptVersion: string;
+  attempts: number;
+  finalScore: number | null;
+  accepted: boolean;
+  notes: string[] | null;
+  error: string | null;
+}
+
+/**
+ * Shape a GenerationLog row from a generation outcome. Normalises optional ids to null, clamps attempts to
+ * ≥0, trims notes, and truncates a long error. Pure — the caller persists the returned record. */
+export function buildGenerationLog(input: GenerationLogInput): GenerationLogRecord {
+  const notes = Array.isArray(input.notes) ? input.notes.map(oneLine).filter(Boolean).slice(0, 6) : null;
+  return {
+    projectId: input.projectId ?? null,
+    seasonId: input.seasonId ?? null,
+    episodeId: input.episodeId ?? null,
+    kind: oneLine(input.kind) || "unknown",
+    model: oneLine(input.model) || "unknown",
+    promptVersion: oneLine(input.promptVersion) || CRITIC_PROMPT_VERSION,
+    attempts: Math.max(0, Math.round(input.attempts || 0)),
+    finalScore: typeof input.finalScore === "number" && Number.isFinite(input.finalScore) ? input.finalScore : null,
+    accepted: !!input.accepted,
+    notes: notes && notes.length ? notes : null,
+    error: input.error ? oneLine(input.error).slice(0, 1000) : null,
+  };
+}
+
+/* ───────────────────────── critic system prompt + injectable wrappers ───────────────────────── */
+
+/** The critic's system prompt — scores a candidate on the rubric and returns strict JSON. */
+export const CRITIC_SYSTEM = [
+  "You are a ruthless but fair story editor for a short-form vertical (9:16) AI drama.",
+  "Score the CANDIDATE on this rubric, each axis an integer 1–10:",
+  "- hookStrength: how hard the opening grabs a scrolling viewer.",
+  "- stakesClarity: how clear what the heroine stands to lose is.",
+  "- escalation: whether tension climbs and never slides back.",
+  "- characterDistinctness: whether the characters read as distinct voices.",
+  "- tropeExecution: how sharply the intended trope lands.",
+  "- cliffhangerPull: how strongly the ending forces the next episode.",
+  "- continuityRisk: RISK of a continuity break (1 = airtight, 10 = likely to contradict established facts). LOWER IS BETTER.",
+  'Return STRICT JSON: { "scores": { "hookStrength": n, "stakesClarity": n, "escalation": n, "characterDistinctness": n, "tropeExecution": n, "cliffhangerPull": n, "continuityRisk": n }, "notes": ["...", "...", "..."], "action": "improve"|"accept" }.',
+  "notes: at most 3 short, ACTIONABLE fixes ranked by impact. Do not restate the candidate.",
+].join("\n");
+
+/** Build the critic user message for a candidate. Pure. */
+export function criticUserPrompt(kind: GenerationKind, candidate: string, context?: string | null): string {
+  const ctx = oneLine(context);
+  return [`KIND: ${kind}`, ctx ? `CONTEXT: ${ctx}` : "", "CANDIDATE:", candidate, "", "Score it on the rubric and return the JSON only."].filter(Boolean).join("\n");
+}
+
+/** An injectable JSON chat client — matches lib/ai.ts chatJSON's shape so the worker passes it directly. */
+export type CriticChatJSON = (system: string, user: string, opts?: any) => Promise<unknown>;
+
+/**
+ * Critique ONE candidate via the injected client. Any client / parse failure returns a DEFENSIVE neutral
+ * critique (mid scores, "improve" action) so a critic outage never breaks generation — it simply yields no
+ * useful notes and the caller falls back to the first valid variant.
+ */
+export async function critiqueCandidate(
+  chatJSON: CriticChatJSON,
+  kind: GenerationKind,
+  candidate: string,
+  context?: string | null,
+  opts?: any
+): Promise<Critique> {
+  try {
+    const raw = await chatJSON(CRITIC_SYSTEM, criticUserPrompt(kind, candidate, context), { temperature: 0.2, maxTokens: 700, ...opts });
+    return parseCriticResponse(raw);
+  } catch {
+    const scores = {} as RubricScores;
+    for (const axis of RUBRIC_AXES) scores[axis] = DEFAULT_AXIS_SCORE;
+    return { scores, overall: aggregateScore(scores), notes: [], action: "improve" };
+  }
+}
+
+/* ───────────────────────── orchestrators (injectable — testable with stubs) ───────────────────────── */
+
+export interface CriticVariantOutcome<T> {
+  /** The chosen (and possibly improved) result. */
+  best: T;
+  /** The critique of the chosen variant BEFORE the improve pass. */
+  critique: Critique;
+  /** How many candidate generations ran in total (variants + any improve pass). */
+  attempts: number;
+  /** Whether the flow ended on an accepted critique (best already ≥ threshold, or improved). */
+  accepted: boolean;
+  /** The best variant's notes (also the improve-pass instructions). */
+  notes: string[];
+}
+
+/**
+ * SYNOPSIS / SEASON MAP flow: generate `variantCount` variants IN PARALLEL, critique each, pick the best,
+ * and — when the best is not already "accept" — run ONE targeted-improve pass using its notes. Every LLM
+ * call is injected, so tests drive it with pure stubs and no network. Defensive: if all variants fail to
+ * generate it throws (nothing to work with); if the critic is useless the first variant is returned.
+ */
+export async function generateBestOfN<T>(args: {
+  variantCount: number;
+  /** Generate one variant (index i). Should already carry temperature ~0.9. */
+  generate: (i: number) => Promise<T>;
+  /** Turn a candidate into the text the critic reads. */
+  render: (candidate: T) => string;
+  /** Critique a rendered candidate. */
+  critique: (rendered: string) => Promise<Critique>;
+  /** Run the single improve pass with the best variant's fix instruction. */
+  improve?: (best: T, fixInstruction: string, notes: string[]) => Promise<T>;
+  kind?: GenerationKind;
+}): Promise<CriticVariantOutcome<T>> {
+  const n = Math.max(1, Math.round(args.variantCount));
+  const settled = await Promise.allSettled(Array.from({ length: n }, (_, i) => args.generate(i)));
+  const variants: T[] = settled.filter((s) => s.status === "fulfilled").map((s) => (s as PromiseFulfilledResult<T>).value);
+  if (!variants.length) throw new Error("generateBestOfN: every variant failed to generate");
+  let attempts = variants.length;
+
+  const critiques = await Promise.all(variants.map((v) => args.critique(args.render(v))));
+  const bestIdx = Math.max(0, pickBestVariant(critiques));
+  let best = variants[bestIdx];
+  const critique = critiques[bestIdx];
+  let accepted = critique.action === "accept";
+  const notes = critique.notes;
+
+  if (!accepted && args.improve) {
+    const fix = buildFixInstruction(notes, { label: args.kind });
+    if (fix) {
+      try {
+        best = await args.improve(best, fix, notes);
+        attempts += 1;
+        accepted = true; // one targeted-improve pass is the contract; we accept its result
+      } catch {
+        // keep the best pre-improve variant on failure
+      }
+    }
+  }
+  return { best, critique, attempts, accepted, notes };
+}
+
+/**
+ * EPISODE SCRIPT flow: a generate → critique → targeted-fix loop of at most `maxIterations` (default 3).
+ * Iteration 0 generates `variantCount` variants (default 2) and critiques each, picking the best. While the
+ * best critique says "improve" and iterations remain, apply a targeted fix (built from its notes) and
+ * re-critique; stop on "accept" or when iterations run out. All LLM calls are injected. Post-steps
+ * (dialoguePolish, continuity) are the caller's job — this returns the chosen script + the outcome.
+ */
+export async function runCriticLoop<T>(args: {
+  variantCount?: number;
+  maxIterations?: number;
+  generate: (i: number) => Promise<T>;
+  render: (candidate: T) => string;
+  critique: (rendered: string) => Promise<Critique>;
+  fix: (current: T, fixInstruction: string, notes: string[]) => Promise<T>;
+  kind?: GenerationKind;
+}): Promise<CriticVariantOutcome<T>> {
+  const variantCount = Math.max(1, Math.round(args.variantCount ?? 2));
+  const maxIterations = Math.max(1, Math.round(args.maxIterations ?? 3));
+
+  const settled = await Promise.allSettled(Array.from({ length: variantCount }, (_, i) => args.generate(i)));
+  const variants: T[] = settled.filter((s) => s.status === "fulfilled").map((s) => (s as PromiseFulfilledResult<T>).value);
+  if (!variants.length) throw new Error("runCriticLoop: every variant failed to generate");
+  let attempts = variants.length;
+
+  const critiques = await Promise.all(variants.map((v) => args.critique(args.render(v))));
+  let bestIdx = Math.max(0, pickBestVariant(critiques));
+  let current = variants[bestIdx];
+  let critique = critiques[bestIdx];
+
+  let iteration = 1; // iteration 0 was the initial variant round
+  while (critique.action === "improve" && iteration < maxIterations) {
+    const fix = buildFixInstruction(critique.notes, { label: args.kind });
+    if (!fix) break;
+    try {
+      current = await args.fix(current, fix, critique.notes);
+      attempts += 1;
+      critique = await args.critique(args.render(current));
+    } catch {
+      break; // a fix / re-critique failure stops the loop with the last good candidate
+    }
+    iteration += 1;
+  }
+  return { best: current, critique, attempts, accepted: critique.action === "accept", notes: critique.notes };
+}

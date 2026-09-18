@@ -16,8 +16,10 @@ import { updateJob, completeJob, failJob, heartbeatJob, markCanceled, isCancelRe
 import { chat, chatJSON, SCRIPT_MODEL } from "@/lib/ai";
 // Stage 1 (dramaBible) — generate + validate the structured story bible FIRST, then derive the prose synopsis
 // consistent with it; persist the bible on the Project. Best-effort: failure leaves the classic flow unchanged.
-import { generateDramaBible, type DramaBible } from "@/lib/drama-bible";
+import { generateDramaBible, type DramaBible, type GenerateDramaBibleResult } from "@/lib/drama-bible";
 import { dramaBibleBrief, DRAMA_BIBLE_PROMPT_VERSION } from "@/lib/prompts/drama-bible";
+// Stage 172 (Stage 7) — critic-driven generation: best-of-N variants → critique → targeted improve.
+import { generateBestOfN, critiqueCandidate, buildGenerationLog, CRITIC_PROMPT_VERSION } from "@/lib/critic";
 import {
   ideaSystemPrompt,
   ideaUserPrompt,
@@ -88,16 +90,70 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
     let bibleToPersist: DramaBible | null = null;
     try {
       await heartbeatJob(jobId);
-      const bibleRes = await generateDramaBible(
-        { idea: bibleIdeaText, genres: bibleGenres, episodeCount: bibleEpisodeCount },
-        (sys, usr, o) => chatJSON(sys, usr, { ...o, temperature: 0.7, maxTokens: 3000 }),
-        { model: SCRIPT_MODEL, maxRetries: 3 }
-      );
+      // A single bible generation at a given temperature; `note` is appended to the idea on the improve pass.
+      const bibleGen = (ideaText: string, temperature: number): Promise<GenerateDramaBibleResult> =>
+        generateDramaBible(
+          { idea: ideaText, genres: bibleGenres, episodeCount: bibleEpisodeCount },
+          (sys, usr, o) => chatJSON(sys, usr, { ...o, temperature, maxTokens: 3000 }),
+          { model: SCRIPT_MODEL, maxRetries: 2 }
+        );
+
+      // Stage 172 (Stage 7) — critic-driven best-of-3: generate 3 parallel variants @0.9, critique each on
+      // its brief, pick the best, then run ONE targeted-improve pass built from the winner's notes. Every
+      // LLM call is the injected chatJSON, so no new transport. Fully defensive: any throw (e.g. every
+      // variant invalid) falls back to a single classic generation below.
+      let bibleOutcome: Awaited<ReturnType<typeof generateBestOfN<GenerateDramaBibleResult>>> | null = null;
+      try {
+        bibleOutcome = await generateBestOfN<GenerateDramaBibleResult>({
+          variantCount: 3,
+          kind: "dramaBible",
+          generate: async () => {
+            const r = await bibleGen(bibleIdeaText, 0.9);
+            if (!r.valid) throw new Error("invalid drama bible variant");
+            return r;
+          },
+          render: (r) => dramaBibleBrief(r.bible),
+          critique: (rendered) => critiqueCandidate(chatJSON, "dramaBible", rendered),
+          improve: async (_best, fix) => {
+            const r = await bibleGen(`${bibleIdeaText}\n\n${fix}`, 0.7);
+            if (!r.valid) throw new Error("invalid improved drama bible");
+            return r;
+          },
+        });
+      } catch (e) {
+        console.warn(`[synopsis] critic best-of-3 skipped: ${e instanceof Error ? e.message : String(e)}`);
+        bibleOutcome = null;
+      }
+
+      // Fallback to a single classic generation when the critic flow produced nothing valid.
+      const bibleRes = bibleOutcome?.best ?? (await bibleGen(bibleIdeaText, 0.7));
       if (bibleRes.valid) {
         bibleToPersist = bibleRes.bible;
         bibleBriefNote = `\n\nSTORY BIBLE (make the synopsis consistent with it):\n${dramaBibleBrief(bibleRes.bible)}`;
       } else {
         console.warn(`[synopsis] drama bible advisory after ${bibleRes.attempts} attempt(s); outstanding: ${bibleRes.errors.map((e) => e.field).join(", ")}`);
+      }
+
+      // Stage 172 — best-effort GenerationLog row (never breaks the job). Logs the critic outcome (or the
+      // fallback failure) so persistently-invalid / low-score generations are auditable.
+      try {
+        const logRec = buildGenerationLog({
+          projectId,
+          kind: "dramaBible",
+          model: SCRIPT_MODEL,
+          promptVersion: CRITIC_PROMPT_VERSION,
+          attempts: bibleOutcome?.attempts ?? bibleRes.attempts ?? 1,
+          finalScore: bibleOutcome?.critique.overall ?? null,
+          accepted: !!bibleOutcome?.accepted && bibleRes.valid,
+          notes: bibleOutcome?.notes ?? null,
+          error: bibleRes.valid ? null : "drama bible invalid after critic loop",
+        });
+        await prisma.generationLog.create({
+          // `notes` is a nullable Json column — omit it (undefined) rather than pass a bare null.
+          data: { ...logRec, notes: logRec.notes ?? undefined },
+        });
+      } catch (e) {
+        console.warn(`[synopsis] GenerationLog skipped: ${e instanceof Error ? e.message : String(e)}`);
       }
     } catch (e) {
       console.warn(`[synopsis] drama bible generation skipped: ${e instanceof Error ? e.message : String(e)}`);

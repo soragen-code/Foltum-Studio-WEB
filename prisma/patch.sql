@@ -474,3 +474,26 @@ ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "secretsKnown" JSONB;
 ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "relationshipsTo" JSONB;
 ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "castPromptVersion" TEXT;
 ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "dramaticFunction" TEXT;
+
+
+
+-- Stage 7 (task Stage 7 — critic-driven generation) — GenerationLog. Additive + idempotent; NO drops.
+CREATE TABLE IF NOT EXISTS "GenerationLog" (
+  "id"            TEXT NOT NULL,
+  "projectId"     TEXT,
+  "seasonId"      TEXT,
+  "episodeId"     TEXT,
+  "kind"          TEXT NOT NULL,
+  "model"         TEXT NOT NULL,
+  "promptVersion" TEXT NOT NULL,
+  "attempts"      INTEGER NOT NULL DEFAULT 0,
+  "finalScore"    DOUBLE PRECISION,
+  "accepted"      BOOLEAN NOT NULL DEFAULT false,
+  "notes"         JSONB,
+  "error"         TEXT,
+  "createdAt"     TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "GenerationLog_pkey" PRIMARY KEY ("id")
+);
+
+CREATE INDEX IF NOT EXISTS "GenerationLog_projectId_idx" ON "GenerationLog"("projectId");
+CREATE INDEX IF NOT EXISTS "GenerationLog_kind_idx" ON "GenerationLog"("kind");
