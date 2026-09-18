@@ -442,3 +442,26 @@ ALTER TABLE "Season" ADD COLUMN IF NOT EXISTS "seasonMapVersion" TEXT;
 -- Project row. Old projects keep NULL and generate the synopsis exactly as before (backward compatible).
 ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "dramaBible" JSONB;
 ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "dramaBibleVersion" TEXT;
+
+
+
+-- Stage 4 (task Stage 4): additive, idempotent — the live per-season WORLD-STATE. After each episode is
+-- approved the state is refreshed by a separate LLM call and fed into the next episode's prompt instead of
+-- the old text tail. Old seasons keep zero rows and fall back to the previous behaviour (backward compatible).
+CREATE TABLE IF NOT EXISTS "SeasonState" (
+  "id"                    TEXT NOT NULL,
+  "seasonId"              TEXT NOT NULL,
+  "reflectsEpisodeNumber" INTEGER,
+  "state"                 JSONB NOT NULL,
+  "version"               TEXT NOT NULL,
+  "createdAt"             TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt"             TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "SeasonState_pkey" PRIMARY KEY ("id")
+);
+
+CREATE INDEX IF NOT EXISTS "SeasonState_seasonId_idx" ON "SeasonState"("seasonId");
+
+DO $$ BEGIN
+  ALTER TABLE "SeasonState" ADD CONSTRAINT "SeasonState_seasonId_fkey"
+    FOREIGN KEY ("seasonId") REFERENCES "Season"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;

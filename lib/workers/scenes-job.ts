@@ -20,7 +20,17 @@ import {
   startBackgroundJSON,
   pollBackgroundJSON,
   cancelBackgroundResponse,
+  chatJSON,
 } from "@/lib/ai";
+import {
+  generateSeasonStateUpdate,
+  seedSeasonState,
+  normalizeSeasonState,
+  SEASON_STATE_PROMPT_VERSION,
+  type SeasonStateData,
+  type SeedCastMember,
+} from "@/lib/season-state";
+import { normalizeDramaBible } from "@/lib/drama-bible";
 import { updateJob, completeJob, failJob, heartbeatJob, markCanceled, isCancelRequested } from "@/lib/jobs";
 import { VISUAL_STYLE } from "@/lib/visual-style";
 import { anchorSceneLocation } from "@/lib/location-anchor";
@@ -393,6 +403,16 @@ export async function runScenesJob(jobId: string, projectId: string | undefined,
       return;
     }
 
+    // Stage 4 (task Stage 4) — moving an episode into the scene breakdown is the practical APPROVAL of its
+    // script. Refresh the season's live WORLD-STATE from the approved script (separate gpt-6-astra call,
+    // generate→validate→targeted-retry) so the NEXT episode is written from the updated state. Fully
+    // non-blocking + defensive: any failure is swallowed so it can never break scene generation.
+    try {
+      await updateSeasonStateForApprovedEpisode(episodeId);
+    } catch (err: any) {
+      console.error("[scenes] season-state update skipped:", err?.message ?? err);
+    }
+
     // Keep episodeId in resultData so the idempotency / resume lookups (which match on episodeId)
     // still find this job after it completes.
     await completeJob(jobId, { ...result, episodeId }, "Scenes ready");
@@ -400,4 +420,64 @@ export async function runScenesJob(jobId: string, projectId: string | undefined,
     console.error("[scenes] job error:", err);
     await failJob(jobId, "Generation failed: " + (err?.message ?? "Unknown error"));
   }
+}
+
+/**
+ * Stage 4 (task Stage 4) — refresh the season's live WORLD-STATE after an episode's script is approved
+ * (moved into the scene breakdown). Loads the season's newest SeasonState (or seeds an initial one from the
+ * project cast + drama bible when none exists), asks gpt-6-astra to fold the approved script into it (with the
+ * contradiction validator + targeted retry), and appends the updated state as a new SeasonState row
+ * (append-only; the newest row wins in the next-episode prompt). NEVER throws to the caller — the caller
+ * already wraps it, and every failure mode degrades to "keep the previous state".
+ */
+export async function updateSeasonStateForApprovedEpisode(episodeId: string): Promise<void> {
+  const episode = await prisma.episode.findUnique({
+    where: { id: episodeId },
+    include: {
+      season: { include: { project: { include: { characters: { orderBy: { createdAt: "asc" } } } } } },
+    },
+  });
+  if (!episode || !episode.season) return;
+  const season = episode.season;
+  const scriptText = (episode.script ?? "").trim();
+  if (!scriptText) return; // nothing to fold in — keep the previous state
+
+  // Current state: the newest persisted SeasonState row, else a freshly seeded initial state.
+  const existing = await prisma.seasonState.findFirst({ where: { seasonId: season.id }, orderBy: { updatedAt: "desc" } });
+  let currentState: SeasonStateData;
+  if (existing?.state) {
+    currentState = normalizeSeasonState(existing.state);
+  } else {
+    const cast: SeedCastMember[] = (season.project?.characters ?? []).map((c) => ({
+      id: c.id,
+      name: c.name,
+      appearance: c.appearance ?? null,
+    }));
+    const bible = season.project?.dramaBible ? normalizeDramaBible(season.project.dramaBible) : null;
+    currentState = seedSeasonState(cast, bible);
+  }
+
+  // Fold the approved script into the state on gpt-6-astra (SCRIPT_MODEL). chatJSON returns parsed JSON.
+  const result = await generateSeasonStateUpdate(
+    {
+      currentState,
+      episodeScript: scriptText,
+      seasonTitle: season.title ?? null,
+      episodeNumber: episode.number,
+      episodeTitle: episode.title ?? null,
+    },
+    (system, user, opts) => chatJSON<unknown>(system, user, { model: opts?.model ?? SCRIPT_MODEL, maxTokens: 8000 }),
+    { model: SCRIPT_MODEL },
+  );
+
+  // Persist regardless of valid flag: an invalid-but-normalized state is still better continuity than the old
+  // text tail, and the version records which prompt family produced it. Append-only (newest row wins).
+  await prisma.seasonState.create({
+    data: {
+      seasonId: season.id,
+      reflectsEpisodeNumber: episode.number,
+      state: result.state as unknown as object,
+      version: result.version ?? SEASON_STATE_PROMPT_VERSION,
+    },
+  });
 }

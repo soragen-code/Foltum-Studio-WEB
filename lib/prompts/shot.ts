@@ -22,6 +22,9 @@
  */
 import { DIALOGUE_FRAMING_RULE, buildNegatives } from "@/lib/scene-prompt";
 import type { PlannedShot, ShotType, ShotSize } from "./shot-plan";
+// Stage 4 (task Stage 4) — type-only import (erased at build; keeps this a leaf module) of the live
+// world-state slice. When supplied, the CHARACTER block reads wardrobe / physicalState from it by name.
+import type { SeasonStateLike } from "./scene";
 
 /** Bumped whenever the shot-prompt block ordering / wording changes; written to Shot.promptVersion. */
 export const SHOT_PROMPT_VERSION = "6.2.0";
@@ -96,6 +99,12 @@ export interface ShotPromptInput {
   /** True when this shot is the last shot of its scene (adds STATE-OUT). */
   isSceneLast?: boolean;
   dialogueLanguage?: string | null;
+  /**
+   * Stage 4 (task Stage 4) — the live SeasonState slice. When present the CHARACTER block prefers each
+   * character's wardrobe / physicalState / location from here (matched by name) over the per-shot
+   * ShotCharacterLike fallback. Absent/null → the block behaves exactly as before (appearance fallback).
+   */
+  seasonState?: SeasonStateLike | null;
 }
 
 const oneLine = (t?: string | null) => (t ?? "").replace(/\s+/g, " ").trim();
@@ -117,10 +126,19 @@ export function shotLocationBlock(i: ShotPromptInput): string {
 export function shotCharacterBlock(i: ShotPromptInput): string {
   const named = i.characters.filter((c) => c.tier !== "CROWD" && oneLine(c.name));
   if (!named.length) return "";
+  const stateChars = i.seasonState?.characters ?? [];
+  const findState = (name: string) => stateChars.find((s) => oneLine(s?.name).toLowerCase() === name.toLowerCase()) ?? null;
   const lines = named.map((c) => {
-    const wardrobe = oneLine(c.wardrobe) || oneLine(c.appearance); // SeasonState wardrobe, else appearance fallback
+    const st = findState(oneLine(c.name));
+    // SeasonState wardrobe wins, then the per-shot wardrobe, then the static appearance.
+    const wardrobe = oneLine(st?.wardrobe) || oneLine(c.wardrobe) || oneLine(c.appearance);
+    const physical = oneLine(st?.physicalState); // live physical condition from SeasonState, when present
     const look = oneLine(c.appearance);
-    const bits = [look ? `look: ${look}` : "", wardrobe ? `wardrobe: ${wardrobe}` : ""].filter(Boolean);
+    const bits = [
+      look ? `look: ${look}` : "",
+      wardrobe ? `wardrobe: ${wardrobe}` : "",
+      physical ? `physical: ${physical}` : "",
+    ].filter(Boolean);
     return `- ${c.name.trim()}${bits.length ? ` — ${bits.join("; ")}` : ""}.`;
   });
   return `CHARACTERS (only these people are in frame):\n${lines.join("\n")}`;

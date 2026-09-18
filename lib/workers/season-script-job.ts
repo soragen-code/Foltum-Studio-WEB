@@ -81,6 +81,7 @@ import { seasonMapCellBrief, SEASON_MAP_PROMPT_VERSION, type SeasonMapCell } fro
 // Stage 1 (dramaBible) — the persisted story bible (Project.dramaBible) is mapped into the season-map slice
 // and rendered into a compact brief threaded into each episode's script prompt (both read defensively).
 import { toDramaBibleForMap, type DramaBible } from "@/lib/drama-bible";
+import { renderSeasonStateBlock, normalizeSeasonState } from "@/lib/season-state";
 import { dramaBibleBrief } from "@/lib/prompts/drama-bible";
 
 export const SEASON_JOB_TYPE = "season_script";
@@ -637,6 +638,17 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
     // consistent with the theme / arcs / escalation / secrets / midpoint / finale question / B-line / relationships.
     // Reads the bible defensively: absent (old projects) → "" ⇒ prompt unchanged.
     const dramaBibleBlock = dramaBibleBrief(readDramaBible(project));
+    // Stage 4 (task Stage 4) — feed the season's LIVE WORLD-STATE into the episode prompt instead of the old
+    // ~1200-char previous-episode text tail. Read defensively: the newest SeasonState row for this season is
+    // rendered into a compact block; absent (episode 1 / old seasons / no row yet) → "" ⇒ the prompt falls
+    // back to previousEnding exactly as before. Wrapped so a state/DB hiccup can never break script generation.
+    let seasonStateBlock = "";
+    try {
+      const row = await prisma.seasonState.findFirst({ where: { seasonId: season!.id }, orderBy: { updatedAt: "desc" } });
+      if (row?.state) seasonStateBlock = renderSeasonStateBlock(normalizeSeasonState(row.state), ep.number);
+    } catch {
+      seasonStateBlock = "";
+    }
     responseId = await deps.start(
       episodeScriptSystemPrompt(language, ep.number),
       episodeScriptUserPrompt({
@@ -653,6 +665,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
         userScript: planned.userScript,
         seasonMapCellBlock,
         dramaBibleBlock,
+        seasonStateBlock,
         ...(planned.instruction ? { instruction: reviseInstruction(planned.instruction, next) } : {}),
       }) + episodeRetryNote(state),
       // Stage 108 — the episode script is written by gpt-4o (EPISODE_SCRIPT_MODEL): non-reasoning →

@@ -169,8 +169,27 @@ model Season {
 
   project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   episodes    Episode[]
+  seasonStates SeasonState[]
 
   @@index([projectId])
+}
+
+// Stage 4 (task Stage 4): the live world-state of a season. After each episode is approved (moved to
+// scene breakdown) a separate LLM call updates this state; the next episode's prompt is built FROM this
+// state instead of the old ~1200-char continuity text tail. Optional/additive — when absent (episode 1 or
+// old seasons) the pipeline falls back to the previous behaviour, so this is fully backward compatible.
+model SeasonState {
+  id                    String   @id @default(cuid())
+  seasonId              String
+  reflectsEpisodeNumber Int?     // the episode number whose approval produced this state (null = seeded)
+  state                 Json     // SeasonStateData: characters/props/openThreads/plantedSetups/revealedToAudience/lastSceneEndState
+  version               String   // the season-state prompt version this record was produced with
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  season                Season   @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+
+  @@index([seasonId])
 }
 
 model Episode {

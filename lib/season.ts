@@ -1438,6 +1438,16 @@ export function episodeScriptUserPrompt(input: {
    * so this module stays decoupled from the drama-bible types.
    */
   dramaBibleBlock?: string | null;
+  /**
+   * Stage 4 (task Stage 4) — the pre-rendered live SEASON STATE block (built by the worker via
+   * renderSeasonStateBlock(state) from the season's current SeasonState record). When present it REPLACES the
+   * old ~1200-char previous-episode continuity tail (previousEnding): the episode is continued from the exact
+   * world-state (character locations/wardrobe/knowledge, live props, open threads, planted setups, last-scene
+   * end state). Absent/empty (episode 1 or old seasons with no SeasonState) → the prompt falls back to the
+   * previousEnding tail exactly as before. Kept as an opaque string so this module stays decoupled from the
+   * season-state types.
+   */
+  seasonStateBlock?: string | null;
 }): string {
   const prev = input.previous.length
     ? input.previous.map((p) => `Ep.${p.number} «${p.title}»: ${p.logline} Cliffhanger: ${p.cliffhanger}`).join("\n")
@@ -1449,6 +1459,13 @@ export function episodeScriptUserPrompt(input: {
   const prevEndingBlock = pe
     ? `\n\nHOW THE PREVIOUS EPISODE (Ep.${pe.number} «${pe.title}») ENDED — THIS EPISODE CONTINUES DIRECTLY FROM HERE:\nCliffhanger: ${pe.cliffhanger}${(pe.endState ?? "").trim() ? `\nFinal frame / world-state left behind: ${(pe.endState ?? "").trim()}` : ""}${(pe.tail ?? "").trim() ? `\nClosing beats:\n${(pe.tail ?? "").trim()}` : ""}\nWrite THIS episode as the direct next chapter: pick up the story, the world-state, the locations and the characters exactly where the previous episode left them (nobody teleports, resets or forgets what just happened), resolve or escalate that cliffhanger, and open scene 1 with the characters ALREADY talking on camera in the middle of that situation — no narrator, no recap, no "previously on" (never restart the story from scratch).`
     : "";
+  // Stage 4 (task Stage 4) — when the live SEASON STATE is available it REPLACES the previous-episode text
+  // tail above: continuity is driven by the structured world-state instead of the ~1200-char prose slice.
+  // Falls back to prevEndingBlock when absent (episode 1 or old seasons with no SeasonState).
+  const seasonStateText = (input.seasonStateBlock ?? "").trim();
+  const continuityBlock = seasonStateText
+    ? `\n\n${seasonStateText}\nWrite THIS episode as the direct next chapter: pick up the story, the world-state, the locations and the characters EXACTLY from the SEASON STATE above (nobody teleports, resets or forgets what just happened), resolve or escalate the open threads, and open scene 1 with the characters ALREADY talking on camera in the middle of that situation — no narrator, no recap, no "previously on" (never restart the story from scratch).`
+    : prevEndingBlock;
   const beats = episodeFootageGivens(input.episode.description);
   // Stage 155 — author-uploaded plot: the AUTHORITATIVE source for the script (its events, order and
   // character actions take precedence over the auto-derived outline above). Keep to the part of the plot
@@ -1471,7 +1488,7 @@ export function episodeScriptUserPrompt(input: {
   // absent/empty for old bible-less projects ⇒ the prompt is unchanged.
   const bibleText = (input.dramaBibleBlock ?? "").trim();
   const dramaBibleBlock = bibleText ? `\n\nSTORY BIBLE (keep this episode consistent with it):\n${bibleText}` : "";
-  return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}${plotBlock}${userScriptBlock}${dramaBibleBlock}\n\nPREVIOUS EPISODES:\n${prev}${prevEndingBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}${locationInventoryBlock(input.locationInventory)}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${seasonMapBlock}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
+  return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}${plotBlock}${userScriptBlock}${dramaBibleBlock}\n\nPREVIOUS EPISODES:\n${prev}${continuityBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}${locationInventoryBlock(input.locationInventory)}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${seasonMapBlock}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
 }
 
 /**
