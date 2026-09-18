@@ -52,6 +52,12 @@ import {
   normalizeEpisodeScript,
   renderEpisodeScriptText,
   episodeTotalSeconds,
+  // Stage 166 — dialogue-polish pass, frame-state checklist critic, peak-scene resolution and prompt version.
+  polishEpisodeDialogue,
+  judgeStateChecklist,
+  stateChecklistRetryNote,
+  resolvePeakSceneIndex,
+  EPISODE_SCRIPT_PROMPT_VERSION,
   EPISODE_MAX_TOTAL_SECONDS,
   EPISODE_TOTAL_LABEL,
   SEASON_DEFAULT_EPISODES,
@@ -347,7 +353,8 @@ export async function persistEpisodeScript(
     await tx.episode.update({
       where: { id: episodeId },
       // Stage 105 — a new script replaces the old scenes (deleted above, keyframes/videos go with the rows) → the stitched episode video is stale too.
-      data: { script: text, description: outline.description ?? outline.logline, logline: outline.logline, cliffhanger: outline.cliffhanger, locationName: outline.locationName, locationDesc: outline.locationDesc, arcRole: outline.arcRole, status: "script_ready", title: outline.title, videoUrl: null },
+      // Stage 166 — record the single emotional-peak scene index and the prompt version this script was generated with.
+      data: { script: text, description: outline.description ?? outline.logline, logline: outline.logline, cliffhanger: outline.cliffhanger, locationName: outline.locationName, locationDesc: outline.locationDesc, arcRole: outline.arcRole, status: "script_ready", title: outline.title, videoUrl: null, peakSceneIndex: resolvePeakSceneIndex(script), promptVersion: EPISODE_SCRIPT_PROMPT_VERSION },
     });
   }, { timeout: 60_000, maxWait: 15_000 }); // 15 scenes × (create + characters) over Neon exceed Prisma's default 5 s interactive-transaction timeout (seen on prod: "Transaction not found")
 }
@@ -684,12 +691,41 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
     // Stage 110 — last line of defence on the final attempt: any scene still not English after the swap /
     // batch translation is translated line-by-line (lib/voiceover translateDialogue); the original stays in dialogueLocal.
     script = await forceEnglishDialogue(script);
+    // Stage 166 (Rule 6) — SEPARATE dialogue-polish pass: removes motive-explaining lines, keeps the average line
+    // ≤12 words, favours subtext and applies per-character voice profiles when present (Stage 2 — read DEFENSIVELY,
+    // absent for now). Fully best-effort: any failure returns the original dialogue untouched, and it never
+    // turns a spoken scene silent.
+    script = await polishEpisodeDialogue(script, deps.chatJSON, { voiceProfiles: undefined });
+    // Stage 166 (Rule 8) — verify every scene's start/end frame-state CHECKLIST with an LLM critic (NOT regex /
+    // sentence counting). On the FIRST attempt a failure triggers ONE targeted retry naming the missing item (via
+    // the standard retry loop + episodeRetryNote, which echoes state.lastFailure); from the second attempt on, and
+    // for manual author scripts, it is only recorded as a warning and never blocks the job. A critic outage = pass.
+    let checklistMiss = "";
+    try {
+      outer: for (const sc of script.scenes) {
+        for (const [label, stateText] of [["startState", sc.startState], ["endState", sc.endState]] as const) {
+          const verdict = await judgeStateChecklist((stateText ?? "").trim(), deps.chatJSON);
+          if (!verdict.pass && verdict.missingItem) {
+            checklistMiss = `${label} — ${stateChecklistRetryNote(verdict.missingItem, sc.number)}`;
+            break outer; // one concrete missing item is enough to drive the targeted retry
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`[season-job] episode ${ep.number} checklist critic skipped:`, err);
+      checklistMiss = "";
+    }
+    if (checklistMiss && state.attempt <= 0 && !finalAttempt && !manual) {
+      throw new Error(`episode ${ep.number} frame-state checklist incomplete: ${checklistMiss}`);
+    }
     // Stage 45/103 — the episode budget (EPISODE_TOTAL_LABEL) is enforced by normalize where speech allows;
     // what is left over is shown to the author instead of failing the job (no line of dialogue is ever cut to make it fit).
     const total = episodeTotalSeconds(script.scenes);
     const overNote = `episode ${ep.number} is longer than ${EPISODE_TOTAL_LABEL} (${total} s) - shorten the scenes`;
     state.warnings = (state.warnings ?? []).filter((w) => !w.startsWith(`episode ${ep.number} `));
     if (total > EPISODE_MAX_TOTAL_SECONDS) state.warnings.push(overNote);
+    // Stage 166 — surface an incomplete frame-state checklist as a diagnostic warning (kept after the filter above).
+    if (checklistMiss) state.warnings.push(`episode ${ep.number} frame-state: ${checklistMiss}`);
     // Stage 113 — soft set-inventory check: objects mentioned in a scene's "set" line that are not in the location
     // inventory are only logged (diagnostics), never retried.
     const epLoc = ep.locationId ? project.locations.find((l) => l.id === ep.locationId) : matchLocation(project.locations, ep.locationName ?? "");

@@ -375,3 +375,13 @@ CREATE INDEX IF NOT EXISTS "Scene_locationId_idx" ON "Scene" ("locationId");
 -- produced them. Both nullable — legacy rows stay NULL until a prompt is next assembled. Additive & idempotent.
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "promptBlocks" JSONB;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "promptVersion" TEXT;
+
+
+
+
+
+-- Stage 166 (task Stage 5): reworked episode-script generation. Record the episode's single emotional-peak
+-- scene index and the episode-script PROMPT_VERSION the script was generated with. Both nullable — legacy
+-- rows stay NULL. Additive & idempotent.
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "peakSceneIndex" INTEGER;
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "promptVersion" TEXT;

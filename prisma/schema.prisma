@@ -190,6 +190,10 @@ model Episode {
   //                      clips stitched into one ~90s cut. The keyframe/i2v ban is LIFTED only for this mode.
   // Legacy rows have null → treated as SCENES (fallback), so existing episodes are unaffected.
   mode          String?
+  // Stage 166 (additive): the 1-based index of the episode's single emotional-peak scene, and the episode-script
+  // prompt version this script was generated with. Both nullable so existing rows are unaffected.
+  peakSceneIndex Int?
+  promptVersion  String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
