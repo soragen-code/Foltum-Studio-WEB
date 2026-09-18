@@ -1387,7 +1387,7 @@ export function sceneLocationName(locationDesc?: string | null): string {
 }
 
 /** Stage 160 — distinct per-scene location NAMES in scene order (deduped, case-insensitive). */
-function distinctSceneLocationNames(scenes: { locationDesc?: string | null }[]): string[] {
+export function distinctSceneLocationNames(scenes: { locationDesc?: string | null }[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const s of scenes) {
@@ -1404,6 +1404,58 @@ function distinctSceneLocationNames(scenes: { locationDesc?: string | null }[]):
  */
 export function episodeHasMultipleLocations(scenes: { locationDesc?: string | null }[]): boolean {
   return distinctSceneLocationNames(scenes).length >= 2;
+}
+
+/** Stage 162 — a Location row the episode needs but the project does not have yet (to be created by the caller). */
+export type PlannedLocation = { name: string; visualPrompt: string };
+/** Stage 162 — result of planning an episode's Location rows from its FINISHED shooting script. */
+export type EpisodeLocationPlan = {
+  /** distinct location names present in the script, in scene order */
+  names: string[];
+  /** names not found among `existing` → new Location rows the caller must create (visualPrompt from the script) */
+  create: PlannedLocation[];
+  /** scene id → the resolved location NAME (caller maps name → Location id after creating the new rows) */
+  bindings: { sceneId: string; locationName: string }[];
+  /** the episode's PRIMARY location (first distinct name), or null when the script has no usable location */
+  primaryName: string | null;
+};
+
+/**
+ * Stage 162 — PURE (no DB) planner: given an episode's persisted scenes (each with the FINAL locationDesc
+ * stored by persistEpisodeScript) and the project's already-existing locations, work out which Location rows
+ * the episode needs. It (1) extracts the distinct location names from the script, (2) reuses an existing
+ * project location whenever its name matches (case-insensitive, via matchLocation — so a location created for
+ * an earlier episode is reused, never duplicated), (3) lists the remaining names as new rows to create, and
+ * (4) binds every scene to its location name. A single-location (auto) episode yields exactly one entry that
+ * binds all of its scenes. Scenes whose descriptor has no usable place name are left unbound (locationId null →
+ * the app falls back to the episode location).
+ */
+export function planEpisodeLocations(
+  scenes: { id: string; locationDesc?: string | null }[],
+  existing: { id: string; name: string }[],
+): EpisodeLocationPlan {
+  const names = distinctSceneLocationNames(scenes);
+  // First scene descriptor per distinct name → source text for a new location's visual prompt.
+  const firstDescByName = new Map<string, string>();
+  for (const s of scenes) {
+    const n = sceneLocationName(s.locationDesc);
+    if (n && !firstDescByName.has(n.toLowerCase())) firstDescByName.set(n.toLowerCase(), (s.locationDesc ?? "").trim() || n);
+  }
+  const create: PlannedLocation[] = [];
+  for (const name of names) {
+    if (!matchLocation(existing, name)) {
+      create.push({ name, visualPrompt: firstDescByName.get(name.toLowerCase()) ?? name });
+    }
+  }
+  const bindings: { sceneId: string; locationName: string }[] = [];
+  for (const s of scenes) {
+    const n = sceneLocationName(s.locationDesc);
+    if (!n) continue;
+    // Resolve to the canonical name: an existing location's stored name wins over the raw script name.
+    const matched = matchLocation(existing, n);
+    bindings.push({ sceneId: s.id, locationName: matched ? matched.name : n });
+  }
+  return { names, create, bindings, primaryName: names[0] ?? null };
 }
 
 /** Readable script text stored in Episode.script. */

@@ -358,3 +358,12 @@ ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "anchorBoardId" TEXT;
 -- Stage 155: mark a season whose fullStory is an author-uploaded plot file (drives the episode
 -- scripts as the authoritative source) rather than the deterministically built auto plot. Additive & idempotent.
 ALTER TABLE "Season" ADD COLUMN IF NOT EXISTS "userPlotUploaded" BOOLEAN NOT NULL DEFAULT false;
+
+
+
+-- Stage 162: per-scene location binding. Scenes are bound to a Location derived from the episode's
+-- finished shooting script (not all up front). Plain nullable column — the safest additive change; no
+-- FK constraint is added (an orphaned locationId simply resolves to null via the relation include, and
+-- the app falls back to the episode location). Additive & idempotent.
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "locationId" TEXT;
+CREATE INDEX IF NOT EXISTS "Scene_locationId_idx" ON "Scene" ("locationId");

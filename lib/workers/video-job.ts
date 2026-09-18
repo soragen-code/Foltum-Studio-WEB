@@ -152,7 +152,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
   let state: VideoJobState | null = null;
   const persist = () => updateJob(jobId, { resultData: JSON.stringify({ ...state, diagnostics }) });
   try {
-    const scene = await prisma.scene.findUnique({ where: { id: sceneId } });
+    const scene = await prisma.scene.findUnique({ where: { id: sceneId }, include: { location: true } }); // Stage 162: per-scene location (null → fall back to the episode location)
     if (!scene?.videoPrompt) throw new Error("Scene has no video prompt");
     // Stage 11: if cancellation was requested before we submitted any prediction, stop now —
     // no provider call is made, the scene is reset and the reserved credits are refunded.
@@ -242,7 +242,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     const characters = links.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier,
       imageFront: l.character.imageFront, imageFull: l.character.imageFull, appearance: l.character.appearance, age: l.character.age }));
     const forbiddenReferenceUrls = [scene.keyframeUrl, previousRow?.lastFrameUrl, (previousRow as any)?.keyframeUrl].filter((u): u is string => !!u);
-    const support = buildScenePrompt({ scene, characters, location: episodeLoc?.location ?? null, previous,
+    const support = buildScenePrompt({ scene, characters, location: scene.location ?? episodeLoc?.location ?? null, previous,
       forbiddenReferenceUrls }).retryRefs;
     // Stage 122: resolve (or lazily generate once, reusing the Location.regionPlates cache) this scene's REGION
     // PLATE — the authoritative environment reference for this part of the location. Non-blocking: null → the
@@ -267,7 +267,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
       scene: lookScene,
       reangleUrl, regionPlateUrl, forbiddenReferenceUrls,
       characters: links.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront, imageProfile: l.character.imageProfile, imageFull: l.character.imageFull, imageExtra: l.character.imageExtra, appearance: l.character.appearance, age: l.character.age })),
-      location: episodeLoc?.location ?? null,
+      location: scene.location ?? episodeLoc?.location ?? null,
       previous,
       provider: params.provider,
       resolvedDialogueEn: dialogueEn,
@@ -340,7 +340,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     // Stage 40: `reference_images` is omitted entirely for text-only submissions (never sent as []).
     // Re-read the actual source just before submission: a concurrently regenerated predecessor invalidates the edit.
     const freshScene = await prisma.scene.findUnique({ where: { id: sceneId }, include: {
-      characters: { include: { character: true }, orderBy: { characterId: "asc" } }, episode: { include: { location: true } },
+      characters: { include: { character: true }, orderBy: { characterId: "asc" } }, episode: { include: { location: true } }, location: true, // Stage 162: per-scene location (null → episode location)
     } });
     if (!freshScene) throw new Error("Scene was removed during preprocessing.");
     const currentPrevious = await resolveVideoPredecessor(prisma, freshScene);
@@ -348,7 +348,7 @@ export async function runVideoJob(params: VideoJobParams): Promise<void> {
     const freshCharacters = freshScene.characters.map(l => ({ characterId: l.characterId, name: l.character.name,
       tier: l.character.tier, imageFront: l.character.imageFront, imageFull: l.character.imageFull,
       appearance: l.character.appearance, age: l.character.age }));
-    const freshRefs = buildScenePrompt({ scene: freshScene, characters: freshCharacters, location: freshScene.episode.location,
+    const freshRefs = buildScenePrompt({ scene: freshScene, characters: freshCharacters, location: freshScene.location ?? freshScene.episode.location,
       previous: currentPrevious, forbiddenReferenceUrls }).retryRefs;
     if (reangleRequest && (!currentPrevious || buildReangleRequest({ sceneId, number: freshScene.number,
       startState: freshScene.startState, videoPrompt: freshScene.videoPrompt, promptOverride: freshScene.promptOverride,

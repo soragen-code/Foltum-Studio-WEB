@@ -107,7 +107,7 @@ ok(withAnchors.prompt.includes(platedNoAnchors.prompt.split('\n').filter(l => !/
   'frame: set-anchors insertion leaves the rest of the plate prompt intact (additive)');
 
 /* ─────────── (D) SCENES / shared adapters byte-identical (Storyboard-only change) ─────────── */
-for (const file of ['lib/workers/video-job.ts', 'lib/region-plate.ts', 'lib/assemble.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {
+for (const file of ['lib/region-plate.ts', 'lib/assemble.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {
   const baseline = execFileSync('git', ['show', `18b71a09e6c6:${file}`], { encoding: 'utf8' });
   ok(baseline === readFileSync(file, 'utf8'), `unchanged SCENES/shared adapter: ${file}`);
 }

@@ -60,8 +60,10 @@ import {
   type SeasonStructure,
   matchCharacter,
   matchLocation,
+  planEpisodeLocations,
 } from "@/lib/season";
 import { anchorSceneLocation } from "@/lib/location-anchor";
+import { startLocationImageJob } from "@/lib/location-refs";
 import { selectPlotSource } from "@/lib/plot-import";
 import { deriveRegionKey } from "@/lib/region-plate";
 import { translateDialogue } from "@/lib/voiceover";
@@ -376,7 +378,7 @@ export function outlineFromEpisode(e: { number: number; title: string; logline: 
 const seasonInclude = { episodes: { orderBy: { number: "asc" as const }, include: { characters: { include: { character: true } }, location: { select: { detailLevel: true } } } } };
 
 async function loadProject(projectId: string) {
-  return prisma.project.findUnique({ where: { id: projectId }, include: { characters: true, locations: { orderBy: { createdAt: "asc" } } } });
+  return prisma.project.findUnique({ where: { id: projectId }, include: { characters: true, locations: { orderBy: { createdAt: "asc" } }, user: { select: { id: true, credits: true } } } });
 }
 
 async function loadSeason(projectId: string) {
@@ -458,35 +460,14 @@ async function generateSeasonCast(projectId: string, synopsis: string, language:
   const parsed = seasonCastResultSchema.parse(raw);
   const names = parsed.characters.map((c) => c.name);
   const characters = dedupeCast(parsed.characters).map((c) => sanitizeCharacterCard(c, names));
-  let locations = dedupeCast(parsed.locations).map(sanitizeLocationCard);
-  // Stage 113: every location must carry a FULL set inventory (≥ MIN_SET_INVENTORY entries). One targeted
-  // retry for the incomplete cards only (keeps their name/description/visualPrompt), then accept as-is —
-  // a short inventory must never block season creation.
-  const incomplete = locations.filter((l) => !hasFullSetInventory(l));
-  if (incomplete.length) {
-    try {
-      const retryUser = `SYNOPSIS:\n${synopsis}\n\nCURRENT LOCATIONS (keep "name", "description" and "visualPrompt" EXACTLY as given; add the complete "setInventory" to each):\n${JSON.stringify(incomplete.map((l) => ({ name: l.name, description: l.description, visualPrompt: l.visualPrompt })))}\n\n${setInventoryRetryNote(incomplete.map((l) => l.name))}\nReturn ONLY these ${incomplete.length} location(s).`;
-      const retryRaw = await deps.chatJSON(locationsFromSynopsisSystemPrompt(language), retryUser, { temperature: 0.5, maxTokens: 8000 });
-      const retried = locationsResultSchema.parse(retryRaw).locations.map(sanitizeLocationCard);
-      const byName = new Map(retried.map((l) => [l.name.trim().toLowerCase(), l]));
-      locations = locations.map((l) => {
-        const r = byName.get(l.name.trim().toLowerCase());
-        return r && (r.setInventory?.length ?? 0) > (l.setInventory?.length ?? 0) ? { ...l, setInventory: r.setInventory } : l;
-      });
-    } catch (err) {
-      console.warn(`[season] set inventory retry failed for ${incomplete.length} location(s), accepting as-is:`, err instanceof Error ? err.message : String(err));
-    }
-    const still = locations.filter((l) => !hasFullSetInventory(l));
-    if (still.length) console.warn(`[season] ${still.length} location(s) kept with a short set inventory: ${still.map((l) => `${l.name} (${l.setInventory?.length ?? 0})`).join(", ")}`);
-  }
+  // Stage 162: create CHARACTERS ONLY here. Locations are no longer generated up front from the synopsis —
+  // they are derived PER EPISODE from that episode's finished shooting script (see applyStepResult's episode
+  // branch). The cast LLM may still return a "locations" array; we intentionally ignore it for persistence.
   await prisma.$transaction(async (tx) => {
     // Idempotency guard: another poller (or a retry) may have already created the cast.
     if ((await tx.character.count({ where: { projectId } })) > 0) return;
     for (const c of characters) {
       await tx.character.create({ data: { projectId, ...characterCardToData(c), status: "draft", imageFront: "", imageProfile: "", imageFull: "" } });
-    }
-    for (const l of locations) {
-      await tx.location.create({ data: { projectId, name: l.name, description: l.description, visualPrompt: l.visualPrompt, visualPromptAuto: l.visualPrompt, setInventory: serializeSetInventory(l.setInventory) } });
     }
   }, { timeout: 30_000 });
 }
@@ -671,20 +652,11 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
       const s = season
         ? await tx.season.update({ where: { id: season.id }, data: { title: structure.title, logline: structure.logline } })
         : await tx.season.create({ data: { projectId, number: 1, title: structure.title, logline: structure.logline } });
-      const locs: { id: string; name: string; detailLevel: string | null }[] = project.locations.map((l) => ({ id: l.id, name: l.name, detailLevel: l.detailLevel }));
       for (const e of structure.episodes) {
-        // Bind the episode to an existing project Location (reference image); unknown names become new Locations without an image.
-        let loc = matchLocation(locs, e.locationName);
-        if (!loc) {
-          const created = await tx.location.create({ data: { projectId, name: e.locationName, description: e.locationName, visualPrompt: e.locationDesc, visualPromptAuto: e.locationDesc, detailLevel: e.locationDetail } });
-          loc = { id: created.id, name: created.name, detailLevel: created.detailLevel };
-          locs.push(loc);
-        } else {
-          // Reused location: raise its required detail level if the new structure needs more (never downgrade).
-          const level = maxDetailLevel(loc.detailLevel, e.locationDetail);
-          if (level && level !== loc.detailLevel) { await tx.location.update({ where: { id: loc.id }, data: { detailLevel: level } }); loc.detailLevel = level; }
-        }
-        const ep = await tx.episode.create({ data: { seasonId: s.id, number: e.number, title: e.title, description: e.description ?? e.logline, logline: e.logline, cliffhanger: e.cliffhanger, locationName: loc.name, locationDesc: e.locationDesc, locationId: loc.id, arcRole: e.arcRole, status: "draft" } });
+        // Stage 162: keep the structure's location NAME/DESCRIPTION text on the episode, but do NOT create a
+        // Location card here (locationId stays null). Location rows are created PER EPISODE later, from that
+        // episode's finished shooting script — this is what stops "all locations up front".
+        const ep = await tx.episode.create({ data: { seasonId: s.id, number: e.number, title: e.title, description: e.description ?? e.logline, logline: e.logline, cliffhanger: e.cliffhanger, locationName: e.locationName, locationDesc: e.locationDesc, locationId: null, arcRole: e.arcRole, status: "draft" } });
         const ids = Array.from(new Set(e.characters.map((n) => byName.get(n.toLowerCase())).filter((x): x is string => !!x)));
         if (ids.length) await tx.episodeCharacter.createMany({ data: ids.map((characterId) => ({ episodeId: ep.id, characterId })) });
       }
@@ -724,6 +696,52 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
     const invWarnings = checkSceneSetInventory(script.scenes, epLoc?.setInventory);
     if (invWarnings.length) console.warn(`[season-job] episode ${ep.number} set inventory: ${invWarnings.join(" | ")}`);
     await persistEpisodeScript(ep.id, outline, script, project.characters.map((c) => ({ id: c.id, name: c.name })), language, { preserveSceneLocations: manual });
+    // Stage 162 — derive this episode's Location rows FROM the finished, persisted script (not all up front).
+    // Reload the scenes with their final locationDesc, plan create/reuse against the project's existing locations,
+    // create the new rows, bind every scene to its location, set the episode's primary location, and (best-effort)
+    // enqueue reference images for the NEW locations only. A location problem is logged, never thrown — it must
+    // never fail the episode job.
+    try {
+      const persisted = await prisma.scene.findMany({ where: { episodeId: ep.id }, orderBy: { number: "asc" }, select: { id: true, locationDesc: true } });
+      const existing = project.locations.map((l) => ({ id: l.id, name: l.name }));
+      const plan = planEpisodeLocations(persisted, existing);
+      const idByName = new Map(existing.map((l) => [l.name.toLowerCase(), l.id]));
+      const newLocationIds: string[] = [];
+      for (const c of plan.create) {
+        const created = await prisma.location.create({ data: { projectId, name: c.name, description: c.name, visualPrompt: c.visualPrompt, visualPromptAuto: c.visualPrompt } });
+        idByName.set(created.name.toLowerCase(), created.id);
+        newLocationIds.push(created.id);
+        project.locations.push(created); // keep the in-memory project in step so LATER episodes reuse this row
+      }
+      // Bind scenes to their locations (grouped by location id → one updateMany per location).
+      const sceneIdsByLoc = new Map<string, string[]>();
+      for (const b of plan.bindings) {
+        const locId = idByName.get(b.locationName.toLowerCase());
+        if (!locId) continue;
+        const arr = sceneIdsByLoc.get(locId) ?? [];
+        arr.push(b.sceneId);
+        sceneIdsByLoc.set(locId, arr);
+      }
+      for (const [locId, sceneIds] of sceneIdsByLoc) {
+        await prisma.scene.updateMany({ where: { id: { in: sceneIds } }, data: { locationId: locId } });
+      }
+      // Episode's primary location = the first distinct location in the script.
+      const primaryId = plan.primaryName ? idByName.get(plan.primaryName.toLowerCase()) ?? null : null;
+      if (primaryId) await prisma.episode.update({ where: { id: ep.id }, data: { locationId: primaryId } });
+      // Best-effort: start reference images for the NEW locations only (they have no image yet; a reused location
+      // keeps its existing image). startLocationImageJob does its own credit guard — an insufficient balance or any
+      // error here is logged and swallowed, never fails the episode job.
+      if (newLocationIds.length && project.user) {
+        try {
+          const res = await startLocationImageJob({ user: { id: project.user.id, credits: project.user.credits }, projectId, locationIds: newLocationIds });
+          if ("error" in res) console.warn(`[season-job] episode ${ep.number} location images not started: ${res.error}`);
+        } catch (err) {
+          console.warn(`[season-job] episode ${ep.number} location image job failed to start:`, err instanceof Error ? err.message : String(err));
+        }
+      }
+    } catch (err) {
+      console.warn(`[season-job] episode ${ep.number} per-episode location derivation failed:`, err instanceof Error ? err.message : String(err));
+    }
     return loadSeason(projectId);
   }
   return season;

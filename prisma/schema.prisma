@@ -261,6 +261,7 @@ model Location {
 
   project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   episodes     Episode[]
+  scenes       Scene[]  @relation("SceneLocation") // Stage 162: scenes bound to this location (derived per-episode from the script)
 
   @@index([projectId])
 }
@@ -359,13 +360,16 @@ model Scene {
   regionKey      String?          // normalized cache key of the region (locationId + regionKey → shared plate)
   regionDesc     String? @db.Text // English description of WHICH part / vantage of the location this scene occupies (drives the plate edit)
   regionPlateUrl String?          // S3 URL of the pre-generated region plate for this scene
+  locationId    String?  // Stage 162: the Location this scene was bound to (derived per-episode from the finished script); null = fall back to the episode location
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   episode       Episode  @relation(fields: [episodeId], references: [id], onDelete: Cascade)
+  location      Location? @relation("SceneLocation", fields: [locationId], references: [id], onDelete: SetNull)
   characters    SceneCharacter[]
 
   @@index([episodeId])
+  @@index([locationId])
 }
 
 model SceneCharacter {
