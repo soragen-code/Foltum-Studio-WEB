@@ -591,7 +591,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
   if (planned.step === "structure") {
     // Stage 105 — the single retry after a rejected structure gets an explicit format instruction (plus the exact problems).
     const retryNote = state.attempt > 0 ? `\n\n${EPISODE_SYNOPSIS_RETRY_NOTE}${state.lastFailure ? ` Problems found: ${state.lastFailure}` : ""}` : "";
-    responseId = await deps.start(seasonStructureSystemPrompt(language, state.episodeCount), seasonStructureUserPrompt(project.synopsis, cards, project.locations, shortSynopsisOutline(project.shortSynopsis)) + retryNote, { model: SCRIPT_MODEL, maxTokens: Math.min(64000, 4000 + 800 * state.episodeCount) });
+    responseId = await deps.start(seasonStructureSystemPrompt(language, state.episodeCount), seasonStructureUserPrompt(project.synopsis ?? "", cards, project.locations, shortSynopsisOutline(project.shortSynopsis)) + retryNote, { model: SCRIPT_MODEL, maxTokens: Math.min(64000, 4000 + 800 * state.episodeCount) });
     message = "Building the season structure..."; progress = 3;
   } else if (planned.step === "fullStory") {
     // Unreachable since Stage 106 (handled deterministically above); kept so the state machine stays exhaustive.
@@ -611,7 +611,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
     responseId = await deps.start(
       episodeScriptSystemPrompt(language, ep.number),
       episodeScriptUserPrompt({
-        synopsis: project.synopsis, season: seasonStruct!, episode: outlineFromEpisode(ep), characters: cards,
+        synopsis: project.synopsis ?? "", season: seasonStruct!, episode: outlineFromEpisode(ep), characters: cards,
         previous: season!.episodes.filter((p) => p.number < ep.number).map((p) => ({ number: p.number, title: p.title, logline: p.logline ?? "", cliffhanger: p.cliffhanger ?? "" })),
         previousEnding,
         locationInventory,
