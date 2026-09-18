@@ -367,3 +367,11 @@ ALTER TABLE "Season" ADD COLUMN IF NOT EXISTS "userPlotUploaded" BOOLEAN NOT NUL
 -- the app falls back to the episode location). Additive & idempotent.
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "locationId" TEXT;
 CREATE INDEX IF NOT EXISTS "Scene_locationId_idx" ON "Scene" ("locationId");
+
+
+
+-- Stage 165 (task Stage 6): deterministic block-assembled scene prompts. Store the assembled prompt
+-- and its individual blocks for debugging / per-block regeneration, plus the PROMPT_VERSION that
+-- produced them. Both nullable — legacy rows stay NULL until a prompt is next assembled. Additive & idempotent.
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "promptBlocks" JSONB;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "promptVersion" TEXT;

@@ -14,6 +14,7 @@ import { buildScenePrompt } from "@/lib/scene-prompt";
 import { isRefusal } from "@/lib/frame-state";
 import { stripPreviousCameraLine } from "@/lib/prompt-seam";
 import { normalizePromptOverride } from "@/lib/prompt-override";
+import { PROMPT_VERSION, assembleScenePrompt, type SceneBlockInput } from "@/lib/prompts";
 
 /**
  * GET /api/ai/scenes/[id]/prompt
@@ -82,6 +83,40 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     forbiddenReferenceUrls, reangleUrl, props: parsePropRegistry(scene.episode.propRegistry)?.props ?? [], provider: scene.videoModel });
   const prompt = finalVideoPrompt(built);
   const continuity = reangleUrl ? "reangled_frame" : "none";
+
+  // Stage 165 — additively persist the deterministic block-assembled prompt (+ its individual blocks)
+  // for debugging / per-block regeneration. Best-effort: never let a persist failure break the read,
+  // and never change the response above (the worker still generates from buildScenePrompt).
+  try {
+    const blockInput: SceneBlockInput = {
+      scene: {
+        id: scene.id, sceneKind: scene.sceneKind, locationDesc: scene.locationDesc, videoPrompt: scene.videoPrompt,
+        action: scene.action, dialogue: scene.dialogue, dialogueEn: scene.dialogueEn, voiceover: scene.voiceover,
+        startState: scene.startState, endState: scene.endState, continuesFrom: scene.continuesFrom,
+        beatType: (scene as { beatType?: string | null }).beatType ?? null, // Stage 3/5 — absent today
+      },
+      characters: scene.characters.map(l => ({
+        characterId: l.characterId, name: l.character.name, tier: l.character.tier,
+        appearance: l.character.appearance, age: l.character.age, gender: l.character.gender,
+      })),
+      location: scene.episode.location
+        ? { id: scene.episode.location.id, name: scene.episode.location.name, setInventory: scene.episode.location.setInventory, imageUrl: scene.episode.location.imageUrl }
+        : null,
+      regionPlateUrl: scene.regionPlateUrl,
+      seasonState: null, // Stage 4 — falls back to cast / scene
+      previous: previousEndStateRaw ? { endState: stripPreviousCameraLine(previousEndStateRaw) || null, cameraMove: null } : null,
+      dialogueLanguage: null, // default English
+    };
+    const assembled = assembleScenePrompt(blockInput);
+    await prisma.scene.update({
+      where: { id: scene.id },
+      data: {
+        promptBlocks: { version: PROMPT_VERSION, prompt: assembled.prompt, blocks: assembled.blocks, cameraMove: assembled.cameraMove },
+        promptVersion: PROMPT_VERSION,
+      },
+    });
+  } catch { /* debug persistence only — ignore */ }
+
   return NextResponse.json({
     prompt, preprocessing,
     referenceKinds: built.retryRefs.map(r => r.kind),
