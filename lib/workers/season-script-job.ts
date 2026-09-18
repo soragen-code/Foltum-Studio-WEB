@@ -74,6 +74,10 @@ import { selectPlotSource } from "@/lib/plot-import";
 import { deriveRegionKey } from "@/lib/region-plate";
 import { translateDialogue } from "@/lib/voiceover";
 import { episodeCastFromScenes } from "@/lib/episode-cast";
+// Stage 3 (seasonMap) — validated per-episode season map: the generate→validate→retry loop (season-map.ts)
+// and the shared cell shape + per-episode outline brief (prompts/season-map.ts).
+import { generateSeasonMap } from "@/lib/season-map";
+import { seasonMapCellBrief, SEASON_MAP_PROMPT_VERSION, type SeasonMapCell } from "@/lib/prompts/season-map";
 
 export const SEASON_JOB_TYPE = "season_script";
 
@@ -608,6 +612,12 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
     // script may use; legacy locations without it → no block (script written exactly as before).
     const epLocation = ep.locationId ? project.locations.find((l) => l.id === ep.locationId) : matchLocation(project.locations, ep.locationName ?? "");
     const locationInventory = parseSetInventory(epLocation?.setInventory);
+    // Stage 3 (seasonMap) — thread THIS episode's assigned season-map cell into the outline brief so the
+    // script fulfils it (beat / cliffhanger / escalation / time-skip / locations / threads / secret). Reads
+    // the persisted map defensively: absent (old seasons) or no matching cell → "" ⇒ prompt unchanged.
+    const seasonMapCells = Array.isArray(season!.seasonMap) ? (season!.seasonMap as unknown as SeasonMapCell[]) : null;
+    const seasonMapCell = seasonMapCells?.find((c) => c && c.episode === ep.number) ?? null;
+    const seasonMapCellBlock = seasonMapCellBrief(seasonMapCell);
     responseId = await deps.start(
       episodeScriptSystemPrompt(language, ep.number),
       episodeScriptUserPrompt({
@@ -622,6 +632,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
         // Stage 158 — the author pasted a FULL episode script for THIS episode: the AUTHORITATIVE source the
         // model must only structure into the shooting-script JSON (dialogue/action verbatim). Wins over plotSource.
         userScript: planned.userScript,
+        seasonMapCellBlock,
         ...(planned.instruction ? { instruction: reviseInstruction(planned.instruction, next) } : {}),
       }) + episodeRetryNote(state),
       // Stage 108 — the episode script is written by gpt-4o (EPISODE_SCRIPT_MODEL): non-reasoning →
@@ -669,7 +680,35 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
       }
     }, { timeout: 30_000 });
     await prisma.project.update({ where: { id: projectId }, data: { stage: "structure" } });
-    return loadSeason(projectId);
+    const reloaded = await loadSeason(projectId);
+    // Stage 3 (seasonMap) — once the episodes exist, design a validated per-episode SEASON MAP that will
+    // constrain each episode's outline (beat variety, cliffhanger spacing, escalation, secrets, finale).
+    // Best-effort: any failure (LLM/transport/validation) is swallowed and the season simply carries no map
+    // (old behavior). The dramaBible (Stage 1) is not built yet, so the generator/validators degrade to the
+    // documented structural fallbacks (escalationStep from episode position; no scheduled secrets).
+    if (reloaded) {
+      try {
+        const result = await generateSeasonMap(
+          {
+            episodes: structure.episodes.map((e) => ({ number: e.number, title: e.title, logline: e.logline, locationName: e.locationName })),
+            episodeCount: structure.episodes.length,
+            seasonLogline: structure.logline,
+            locations: project.locations.map((l) => l.name).filter(Boolean),
+          },
+          (sys, usr, o) => deps.chatJSON(sys, usr, { ...o, maxTokens: Math.min(16000, 2000 + 500 * structure.episodes.length) }),
+          { model: SCRIPT_MODEL, maxRetries: 3 }
+        );
+        if (!result.valid) console.warn(`[season-job] season map persisted as advisory after ${result.attempts} attempt(s); outstanding: ${result.errors.map((e) => e.rule).join(", ")}`);
+        await prisma.season.update({
+          where: { id: reloaded.id },
+          data: { seasonMap: result.seasonMap as unknown as object, seasonMapVersion: SEASON_MAP_PROMPT_VERSION },
+        });
+        return loadSeason(projectId);
+      } catch (err) {
+        console.warn(`[season-job] season map generation skipped: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return reloaded;
   }
   if (!season) throw new Error("season missing");
   if (state.step === "fullStory") {

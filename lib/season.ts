@@ -1422,6 +1422,14 @@ export function episodeScriptUserPrompt(input: {
    * plotSource and the auto-derived outline. Absent/empty → written the usual way.
    */
   userScript?: string | null;
+  /**
+   * Stage 3 (seasonMap) — the pre-rendered SEASON-MAP CELL brief for THIS episode (built by the worker via
+   * seasonMapCellBrief(cell) from Season.seasonMap). When present the outline MUST fulfil the cell's beat,
+   * cliffhanger, escalation step, time-skip, locations, threads and scheduled secret. Absent/empty (old
+   * map-less seasons) → the prompt is unchanged. Kept as an opaque string so this module stays decoupled
+   * from the season-map types.
+   */
+  seasonMapCellBlock?: string | null;
 }): string {
   const prev = input.previous.length
     ? input.previous.map((p) => `Ep.${p.number} «${p.title}»: ${p.logline} Cliffhanger: ${p.cliffhanger}`).join("\n")
@@ -1448,7 +1456,10 @@ export function episodeScriptUserPrompt(input: {
   const userScriptBlock = userScript
     ? `\n\nAUTHOR-PROVIDED FULL EPISODE SCRIPT (AUTHORITATIVE — this is the finished script for THIS episode ${input.episode.number}, written by the author). Your job is ONLY to STRUCTURE it into the required shooting-script JSON: keep the author's scenes, their order, their on-screen action and EVERY line of dialogue EXACTLY as written (do NOT rewrite, add, remove, shorten, translate away or invent any dialogue or plot beat). Split the author's script into the required consecutive shots and, for each shot, synthesize ONLY the technical fields the JSON needs (shotType, camera, videoPrompt, startState, endState, durationSec, continuity metadata) so the clips can be generated — never change WHAT happens or WHAT is said. Where this author script differs from the outline/synopsis/season plot above, THIS SCRIPT WINS. PRESERVE THE AUTHOR'S LOCATIONS: use the location the author gives each scene — set each scene's "locationDesc" to that scene's own place ("INT/EXT — place — time"), and DO NOT collapse every scene into a single location. When a scene's location differs from the previous scene's, set its "continuesFrom" to "location-change". Keep the author's scene order and their location headings. If the author's script contains a SILENT establishing/atmospheric scene with NO spoken lines (e.g. an opening city/skyline shot marked "без диалогов"/"no dialogue"), KEEP IT SILENT — do NOT invent any dialogue for it: set that scene's "dialogue" field to exactly "[NO DIALOGUE]", but STILL give it a COMPLETE videoPrompt with all nine tags describing the atmosphere, ambience and camera move plus a full startState and endState so the clip can be generated.\n${userScript}`
     : "";
-  return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}${plotBlock}${userScriptBlock}\n\nPREVIOUS EPISODES:\n${prev}${prevEndingBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}${locationInventoryBlock(input.locationInventory)}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
+  // Stage 3 (seasonMap) — the assigned season-map cell brief for this episode (already rendered by the
+  // worker). Appended defensively: absent/empty for old map-less seasons ⇒ the prompt is unchanged.
+  const seasonMapBlock = (input.seasonMapCellBlock ?? "").trim() ? `\n\n${(input.seasonMapCellBlock ?? "").trim()}` : "";
+  return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}${plotBlock}${userScriptBlock}\n\nPREVIOUS EPISODES:\n${prev}${prevEndingBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}${locationInventoryBlock(input.locationInventory)}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${seasonMapBlock}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
 }
 
 /**

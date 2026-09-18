@@ -152,6 +152,11 @@ model Season {
   previousSeasonId String? // stage 46C: the season this one continues
   episodeCount Int?    // stage 46C: planned episode count
   direction   String?  @db.Text // stage 46C: author's comment for this season
+  // Stage 3 (task Stage 3 seasonMap): the validated per-episode SEASON MAP (one cell per episode:
+  // beatType / escalationStep / secretRevealed? / cliffhangerType / timeSkipBefore / locations / activeThreads).
+  // Optional/additive so older seasons keep working; when null the episode outlines are built exactly as before.
+  seasonMap        Json?    // Stage 3: SeasonMapCell[] constraining each episode outline
+  seasonMapVersion String?  // Stage 3: the season-map prompt version this map was generated with
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

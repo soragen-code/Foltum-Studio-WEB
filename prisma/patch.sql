@@ -428,3 +428,10 @@ DO $$ BEGIN
   ALTER TABLE "Shot" ADD CONSTRAINT "Shot_sceneId_fkey"
     FOREIGN KEY ("sceneId") REFERENCES "Scene"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+
+
+-- Stage 3 (task Stage 3 seasonMap): additive, idempotent — the validated per-episode SEASON MAP and its
+-- prompt version on the Season row. Old seasons keep NULL and build episode outlines exactly as before.
+ALTER TABLE "Season" ADD COLUMN IF NOT EXISTS "seasonMap" JSONB;
+ALTER TABLE "Season" ADD COLUMN IF NOT EXISTS "seasonMapVersion" TEXT;
