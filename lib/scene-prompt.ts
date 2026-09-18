@@ -31,7 +31,7 @@ export const REFERENCE_IMAGE_CAP = 30;
 export const LOCATION_EXTRA_REF_CAP = 6;
 /** Stage 44 — the note appended when location references are sent: the characters are INSIDE the photographed place. */
 export const LOCATION_INSIDE_NOTE =
-  "Camera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location references. Only the camera angle changes between shots. These frames are the SAME real place photographed from different positions — the characters are INSIDE this space: floor under their feet, walls/objects beside and behind them, real depth in front and behind; shoot them in wide/full shots within the environment, never as figures placed in front of a picture of the place. They interact with its objects and surfaces; the cuts show the same location from different angles with real depth (foreground, characters, background) — never a flat backdrop.";
+  "Camera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location references. Only the camera angle changes between shots. These frames are the SAME real place photographed from different positions — the characters are INSIDE this space: floor under their feet, walls/objects beside and behind them, real depth in front and behind; frame them inside this space at the shot scale the scene calls for (a dialogue shot stays close on the people), never as figures placed in front of a picture of the place. They interact with its objects and surfaces; the cuts show the same location from different angles with real depth (foreground, characters, background) — never a flat backdrop.";
 /** @deprecated alias kept for older imports — use REFERENCE_IMAGE_CAP. */
 export const MAX_REFERENCE_IMAGES = REFERENCE_IMAGE_CAP;
 /** Stage 112: only a camera edit of the ACTUAL predecessor frame can lead video references. */
@@ -229,6 +229,13 @@ export const SINGLE_SPEAKER_DIRECTION =
  *  stops the model from staging an unnatural point-blank convergence with the listener frozen into a face-off. */
 export const PASSING_SHORT_LINE_DIRECTION =
   "PROXEMICS (short line in passing): the speaking character does NOT close to point-blank range and does NOT stop to stand face-to-face just to deliver this short line. They keep moving / pass by at a natural conversational distance, turn only the head and shoulders toward the other person, and call the line out over the shoulder or after them as they go. The other character does NOT freeze into a face-off; do NOT force the two together into a point-blank convergence for the line.";
+
+/** Stage 164 — universal no-wide-shot-while-speaking rule for a talking scene (any on-screen speaker). Emitted
+ *  as a compact conditional tail module for every talking scene (not narration, not action). It makes the
+ *  prohibition explicit: while any line is being spoken the shot is a DIALOGUE framing kept close on the people,
+ *  never a wide / establishing / group / whole-space shot, and only two or three characters converse (no crowd). */
+export const DIALOGUE_FRAMING_RULE =
+  "DIALOGUE FRAMING (no wide shots while anyone speaks): whenever a character is speaking, this is a DIALOGUE shot — frame it as an over-the-shoulder, waist-up half-body, medium, medium-close or close-up on the speaker and the person addressed, with the characters large in the frame and the location only a soft background. Do NOT use a wide, establishing, full-length, high-angle, aerial, group or whole-space shot while any line is being spoken; keep the camera close to the people. Only two or three characters are present and converse — never a crowd around the conversation.";
 
 const oneLine = (t?: string | null) => (t ?? "").replace(/\s+/g, " ").trim();
 
@@ -733,6 +740,10 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // closing to point-blank range and freezing the other person into a face-off (Scene-3 bug). Conservative:
   // normal stationary dialogue, long lines and multi-line exchanges are unaffected.
   const passingLine = !isNarration && isPassingShortLine({ dialogue, action: scene.action, videoPrompt: scene.videoPrompt });
+  // Stage 164 — a TALKING scene is any on-screen dialogue clip (not pure narration/voiceover, not an
+  // action/fight beat). While anyone speaks the shot must stay a close dialogue framing — never a wide /
+  // establishing / group shot — and only two or three characters converse (no crowd). Emitted as a tail module.
+  const talking = !isNarration && !isAction;
   const direction = isNarration
     ? PACE_DIRECTION
     : isAction
@@ -781,6 +792,10 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     // shoulder at a natural distance instead of closing to point-blank range and freezing the listener
     // into a face-off. Emitted ONLY for the passing-short-line case; stationary dialogue is unaffected.
     passingLine ? PASSING_SHORT_LINE_DIRECTION : "",
+    // Stage 164 — universal no-wide-shot-while-speaking rule: for every talking scene the shot stays a close
+    // dialogue framing (never wide / establishing / group), and only two or three characters converse (no crowd).
+    // Emitted for talking scenes only; narration and action beats are unaffected.
+    talking ? DIALOGUE_FRAMING_RULE : "",
     // Stage 119/122 — whenever the shot has master location plates attached, anchor the environment so the
     // fixed set objects (bench, floor, columns, fixtures, large props) stay identical across every clip. When a
     // pre-generated REGION PLATE is also attached, it becomes the PRIMARY environment authority for this part of

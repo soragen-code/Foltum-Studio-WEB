@@ -90,8 +90,8 @@ ok(epPrompt.includes(PACE_DIRECTION) && epPrompt.includes(SCALE_DEPTH_RULE) && e
 
 /* ─────────── (E) sceneReviseSystemPrompt — inline framing rules character-forward ─────────── */
 const rev = sceneReviseSystemPrompt('en');
-ok(/Talking scenes are built AROUND the characters/i.test(rev) && /a wide \/ establishing shot is used only when the scene needs it/i.test(rev),
-  'revise prompt: character-forward talking-scene framing');
+ok(/Talking scenes are built AROUND the characters/i.test(rev) && /every shot in which a line is spoken is a DIALOGUE shot/i.test(rev) && /is NOT used while any character is speaking/i.test(rev),
+  'revise prompt: character-forward talking-scene framing (dialogue shot, no wide while speaking)');
 ok(!/Talking scenes stay on wide \/ medium two-shots \/ over-the-shoulder/i.test(rev) && !/NO full-screen face close-ups/i.test(rev),
   'revise prompt: old wide/medium base + face-close-up ban gone');
 ok(/character-forward framing/i.test(rev) && rev.includes(ACTION_STAGING_RULE),
