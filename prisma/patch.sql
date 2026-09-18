@@ -465,3 +465,12 @@ DO $$ BEGIN
   ALTER TABLE "SeasonState" ADD CONSTRAINT "SeasonState_seasonId_fkey"
     FOREIGN KEY ("seasonId") REFERENCES "Season"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+
+-- Stage 2 (Stage171) — cast depth (from dramaBible) + location dramaticFunction. Additive + idempotent; NO drops.
+ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "voiceProfile" TEXT;
+ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "speechTics" JSONB;
+ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "secretsKnown" JSONB;
+ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "relationshipsTo" JSONB;
+ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "castPromptVersion" TEXT;
+ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "dramaticFunction" TEXT;

@@ -135,6 +135,12 @@ model Character {
   // Stage 3 (extended cast): MAIN / SUPPORTING / MINOR / CROWD; groupSize only for CROWD groups.
   tier        String   @default("MAIN")
   groupSize   Int?
+  // Stage 2 (Stage171) — character depth seeded from the dramaBible. All OPTIONAL/additive; legacy rows keep working.
+  voiceProfile   String? @db.Text // casting / voice description (timbre, accent, pace)
+  speechTics     Json?           // 2-3 short verbal habits (string[])
+  secretsKnown   Json?           // which dramaBible secrets this character knows (string[])
+  relationshipsTo Json?          // map charName -> relationship-dynamic (from the bible relationships)
+  castPromptVersion String?      // lib/prompts/cast.ts version that produced these depth fields
   prevSnapshot Json?   // stage 60: one previous version for one-step undo
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -290,6 +296,7 @@ model Location {
   imageExtra   String?  @db.Text // JSON array of extra angle/shot URLs generated on demand
   refLocked    Boolean  @default(false) // Stage 22: reference finalized ("save forever" or after one prompt edit) — no further edits allowed
   detailLevel  String?  // LLM-set required visual detail level: "low" | "medium" | "high" → number of reference frames (4/6/9); null = legacy (heuristic fallback)
+  dramaticFunction String? @db.Text // Stage 2 (Stage171) — why this location matters to the drama (one sentence); OPTIONAL/additive, null for legacy rows
   prevSnapshot Json?    // stage 60: one previous version for one-step undo
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
