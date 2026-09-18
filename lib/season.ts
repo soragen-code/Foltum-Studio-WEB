@@ -75,6 +75,47 @@ export const SCENE_DEFAULT_SECONDS = 9;
  * normalizeEpisodeScript (= EPISODE_MAX_SCENES); it is no longer a fixed "every episode has exactly N scenes".
  */
 export const EPISODE_SCENE_COUNT = EPISODE_MAX_SCENES;
+
+/* ───────────── Stage 167 (task Stage 5+6 replacement) — the SHOT is the atomic unit ─────────────
+ * The whole scene/episode is now built from SHOTS below the scene. An episode is 60–90 s made of
+ * 15–30 shots of 1.5–4 s each, playing over 1–2 scene-locations; each shot dramatizes ONE step of
+ * its scene's 5–7-step escalation ladder. These are ADDITIVE — the Stage 166 scene-level constants
+ * above are kept unchanged for backward compatibility (old episodes still validate at scene level).
+ */
+/** A normal shot clip runs a variable 1.5–4 s (floor). */
+export const SHOT_MIN_SECONDS = 1.5;
+/** A normal shot clip runs a variable 1.5–4 s (ceiling). */
+export const SHOT_MAX_SECONDS = 4;
+/** A REACTION shot (the beat right after a high-impact line) is a tight 0.8–1.5 s. */
+export const REACTION_SHOT_MIN_SECONDS = 0.8;
+export const REACTION_SHOT_MAX_SECONDS = 1.5;
+/** An episode is 15–30 shots. */
+export const EPISODE_MIN_SHOTS = 15;
+export const EPISODE_MAX_SHOTS = 30;
+/** The sum of all shot durations must land in 60–90 s. */
+export const EPISODE_SHOT_TOTAL_MIN = 60;
+export const EPISODE_SHOT_TOTAL_MAX = 90;
+/** A scene's escalation ladder is 5–7 ordered steps; each shot is tied to one of them. */
+export const SCENE_ESCALATION_MIN_BEATS = 5;
+export const SCENE_ESCALATION_MAX_BEATS = 7;
+/** Every spoken line in a shot must be AT OR UNDER 12 words. */
+export const SHOT_LINE_MAX_WORDS = 12;
+/** At least 30% of an episode's shots must carry NO spoken line (image-driven beats). */
+export const SHOT_MIN_SILENT_RATIO = 0.3;
+/**
+ * The canonical ESCALATION LADDER — the ordered rungs a scene climbs. A scene picks 5–7 CONSECUTIVE
+ * rungs from this order (never re-orders them). Exported so the shot planner, validators and prompts
+ * share ONE source of truth.
+ */
+export const ESCALATION_LADDER = [
+  "verbal",        // a verbal jab / accusation
+  "physicalLight", // a light physical / light change (a step closer, a light snapped on)
+  "symbolic",      // a symbolic act on the scene's keyProp (it is picked up, turned, revealed)
+  "physicalHeavy", // a heavy physical act (a grab, a strike, a door slammed)
+  "statusReveal",  // a status reveal that flips who holds power
+  "thirdForce",    // a third force arrives (a new person / phone / event) that breaks the deadlock
+] as const;
+export type EscalationStep = (typeof ESCALATION_LADDER)[number];
 /** Stage 115 — clamp a raw durationSec into the valid clip range [SCENE_MIN_SECONDS, SCENE_CLIP_MAX_SECONDS]; missing/invalid → default. */
 export function clampSceneDuration(v: number | null | undefined): number {
   const n = typeof v === "number" && Number.isFinite(v) ? Math.round(v) : SCENE_DEFAULT_SECONDS;

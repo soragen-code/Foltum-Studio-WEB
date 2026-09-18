@@ -367,15 +367,56 @@ model Scene {
   locationId    String?  // Stage 162: the Location this scene was bound to (derived per-episode from the finished script); null = fall back to the episode location
   promptBlocks  Json?    // Stage 165: the block-assembled prompt for debugging { version, prompt, blocks{...}, cameraMove } (null on legacy rows / before first assembly)
   promptVersion String?  // Stage 165: PROMPT_VERSION that produced promptBlocks (traces a stored prompt back to its block rules)
+  // Stage 167 (task Stage 5+6 replacement): a scene is now built as a ladder of SHOTS. Both additive & nullable so
+  // legacy scenes (no ladder / no shots) still load and play through the classic scene pipeline unchanged.
+  escalationBeats Json?  // Stage 167: ordered JSON array of 5-7 escalation steps for this scene (verbal → physicalLight → symbolic(keyProp) → physicalHeavy → statusReveal → thirdForce). null on legacy scenes.
+  keyProp         String? // Stage 167: the single key prop the scene's symbolic escalation step turns on. null on legacy scenes.
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   episode       Episode  @relation(fields: [episodeId], references: [id], onDelete: Cascade)
   location      Location? @relation("SceneLocation", fields: [locationId], references: [id], onDelete: SetNull)
   characters    SceneCharacter[]
+  shots         Shot[]   // Stage 167: the ordered shots this scene is chain-generated from (empty for legacy scenes)
 
   @@index([episodeId])
   @@index([locationId])
+}
+
+/// Stage 167 (task Stage 5+6 replacement): the SHOT — the ATOMIC unit of generation, one level below the Scene.
+/// An episode is 60-90 s of 15-30 shots of 1.5-4 s each, planned from the approved scene/episode script. Each shot
+/// is tied to ONE escalation step of its scene and is chain-generated (earliest ungenerated shot first, strictly
+/// sequential). All fields beyond the identity/order are nullable / additive so nothing here is required to load an
+/// old scene. Mirrors how Scene tracks generation (videoUrl / lastFrameUrl / status) so shots stitch like scenes.
+model Shot {
+  id             String   @id @default(cuid())
+  sceneId        String
+  index          Int      // 0-based order of the shot WITHIN its scene
+  shotType       String   @default("dialogue") // dialogue | reaction | insert | action | establishing
+  size           String?  // CU | MCU | MS | WS (framing scale)
+  duration       Float?   // planned clip length in seconds (1.5-4; a reaction shot is 0.8-1.5)
+  speakerId      String?  // Character.id of the speaker (dialogue shots)
+  line           String?  @db.Text // the spoken line (English), when the shot has one
+  lineTranslation String? @db.Text // Stage 8 (deferred): translation for burned subtitles; English == line for now
+  reactionOfId   String?  // Character.id whose reaction this shot shows (reaction shots)
+  escalationBeat String?  @db.Text // the scene escalation-ladder step this shot dramatizes
+  postFx         String   @default("none") // slowmo | punchZoom | none — applied at assembly time
+  matchCutIn     String?  @db.Text // 1-2 phrases: pose / gaze / prop carried IN from the previous shot
+  matchCutOut    String?  @db.Text // 1-2 phrases: pose / gaze / prop carried OUT to the next shot
+  prompt         String?  @db.Text // the assembled video-model prompt (blocks joined)
+  promptBlocks   Json?    // the individual assembled prompt blocks { version, blocks{...} }
+  promptVersion  String?  // SHOT_PROMPT_VERSION that produced prompt / promptBlocks
+  videoUrl       String?  // generated shot clip URL (mirrors Scene.videoUrl)
+  lastFrameUrl   String?  // last frame of this shot's clip (fed to the next shot for continuity, mirrors Scene.lastFrameUrl)
+  status         String   @default("pending") // pending | generating | generated | accepted | error
+  error          String?  @db.Text
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  scene          Scene    @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+
+  @@unique([sceneId, index])
+  @@index([sceneId])
 }
 
 model SceneCharacter {

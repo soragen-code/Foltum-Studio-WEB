@@ -385,3 +385,46 @@ ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "promptVersion" TEXT;
 -- rows stay NULL. Additive & idempotent.
 ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "peakSceneIndex" INTEGER;
 ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "promptVersion" TEXT;
+
+
+
+-- Stage 167 (task Stage 5+6 replacement): the SHOT becomes the atomic unit of generation, below the Scene.
+-- Scene gains an escalation ladder (5-7 steps) and a key prop; a new Shot table holds the ordered shots each
+-- scene is chain-generated from. All additive & idempotent; legacy scenes keep NULL / no shots and still play.
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "escalationBeats" JSONB;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "keyProp" TEXT;
+
+CREATE TABLE IF NOT EXISTS "Shot" (
+  "id"              TEXT NOT NULL,
+  "sceneId"         TEXT NOT NULL,
+  "index"           INTEGER NOT NULL,
+  "shotType"        TEXT NOT NULL DEFAULT 'dialogue',
+  "size"            TEXT,
+  "duration"        DOUBLE PRECISION,
+  "speakerId"       TEXT,
+  "line"            TEXT,
+  "lineTranslation" TEXT,
+  "reactionOfId"    TEXT,
+  "escalationBeat"  TEXT,
+  "postFx"          TEXT NOT NULL DEFAULT 'none',
+  "matchCutIn"      TEXT,
+  "matchCutOut"     TEXT,
+  "prompt"          TEXT,
+  "promptBlocks"    JSONB,
+  "promptVersion"   TEXT,
+  "videoUrl"        TEXT,
+  "lastFrameUrl"    TEXT,
+  "status"          TEXT NOT NULL DEFAULT 'pending',
+  "error"           TEXT,
+  "createdAt"       TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt"       TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT "Shot_pkey" PRIMARY KEY ("id")
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS "Shot_sceneId_index_key" ON "Shot"("sceneId", "index");
+CREATE INDEX IF NOT EXISTS "Shot_sceneId_idx" ON "Shot"("sceneId");
+
+DO $$ BEGIN
+  ALTER TABLE "Shot" ADD CONSTRAINT "Shot_sceneId_fkey"
+    FOREIGN KEY ("sceneId") REFERENCES "Scene"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
