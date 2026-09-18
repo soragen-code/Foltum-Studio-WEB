@@ -99,7 +99,7 @@ const spCont = buildStoryboardAnimationPrompt({ actionOrDialogue: 'Anna: "Stay."
 ok(/ENGLISH SPOKEN LINES/.test(spCont) && /SAY EXACTLY: "Stay\."/.test(spCont), 'i2v (continued dialogue board): S139 verbatim speech is untouched by continuity');
 
 /* ─────────── (F) unchanged SCENES / shared adapters + no obsolete wording in code ─────────── */
-for (const file of ['lib/workers/video-job.ts', 'lib/region-plate.ts', 'lib/assemble.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {
+for (const file of ['lib/region-plate.ts', 'lib/assemble.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {
   const baseline = execFileSync('git', ['show', `18b71a09e6c6:${file}`], { encoding: 'utf8' });
   ok(baseline === readFileSync(file, 'utf8'), `unchanged SCENES/shared adapter: ${file}`);
 }

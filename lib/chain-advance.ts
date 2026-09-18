@@ -13,7 +13,7 @@
  */
 import { prisma } from "@/lib/db";
 import { runInBackground } from "@/lib/jobs";
-import { nextChainScene, chainStopMessage, CHAIN_INSUFFICIENT_CREDITS } from "@/lib/chain-run";
+import { nextSequentialChainScene, chainStopMessage, CHAIN_INSUFFICIENT_CREDITS } from "@/lib/chain-run";
 import { resolvePowerTier } from "@/lib/power-tier";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
 import { normalizeVideoModel } from "@/lib/ai-models";
@@ -26,7 +26,8 @@ export async function advanceChainScene(episodeId: string, finishedSceneNumber: 
   });
   if (!episode || !episode.chainRunActive) return false;
   const project = episode.season.project;
-  const next = nextChainScene(episode.scenes, finishedSceneNumber);
+  // Stage 163 — strict sequential: re-arm the LOWEST ungenerated scene, never skip ahead past a gap.
+  const next = nextSequentialChainScene(episode.scenes);
   if (!next) {
     await prisma.episode.update({ where: { id: episodeId }, data: { chainRunActive: false } });
     return false;

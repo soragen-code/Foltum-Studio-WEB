@@ -24,7 +24,7 @@ import { updateJob, heartbeatJob, runInBackground, isCancelRequested, markCancel
 import { moderationHints } from "@/lib/sanitize-prompt";
 import { downscaleReferences, REFERENCE_WIDTH } from "@/lib/reference-downscale";
 import { describeLastFrame, isRefusal } from "@/lib/frame-state";
-import { nextChainScene, chainStopMessage, CHAIN_INSUFFICIENT_CREDITS } from "@/lib/chain-run";
+import { nextSequentialChainScene, chainStopMessage, CHAIN_INSUFFICIENT_CREDITS } from "@/lib/chain-run";
 import { resolvePowerTier, SCENE_RESOLUTION } from "@/lib/power-tier";
 import { sceneProgressStage, SCENE_STAGE_PROGRESS, SCENE_STAGE_MESSAGE } from "@/lib/scene-progress";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
@@ -474,7 +474,9 @@ async function continueChainRun(episodeId: string, finishedSceneNumber: number):
   });
   if (!episode || !episode.chainRunActive) return;
   const project = episode.season.project;
-  const next = nextChainScene(episode.scenes, finishedSceneNumber);
+  // Stage 163 — always continue with the LOWEST ungenerated scene (strict sequential); never skip
+  // ahead past an earlier scene that still has no video, even if scenes completed out of order.
+  const next = nextSequentialChainScene(episode.scenes);
   if (!next) {
     await prisma.episode.update({ where: { id: episodeId }, data: { chainRunActive: false } });
     return;

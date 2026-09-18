@@ -97,7 +97,7 @@ const anim = buildStoryboardAnimationPrompt({ actionOrDialogue: boards[0].action
 ok(anim.includes('180-degree') && anim.includes('CAMERA MODE: LOCKED-OFF'), 'axis + locked-off camera retained in animation prompt');
 
 // SCENES / shared adapters must be byte-identical (Storyboard-only change).
-for (const file of ['lib/workers/video-job.ts', 'lib/region-plate.ts', 'lib/assemble.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {
+for (const file of ['lib/region-plate.ts', 'lib/assemble.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {
   const baseline = execFileSync('git', ['show', `18b71a09e6c6:${file}`], { encoding: 'utf8' });
   ok(baseline === readFileSync(file, 'utf8'), `unchanged SCENES/shared adapter: ${file}`);
 }

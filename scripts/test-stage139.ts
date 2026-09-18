@@ -165,7 +165,7 @@ ok(claraPlan.addressee === 'Boris' && claraPlan.cast.length === 3, 'per-line add
 ok(readBoardDirection(fin3[0].directionJson)!.version === 134, 'boards persist as the Stage 134 direction version');
 
 /* ─────────── 11) SCENES / shared adapters remain byte-identical (Storyboard-only change) ─────────── */
-for (const file of ['lib/workers/video-job.ts', 'lib/region-plate.ts', 'lib/assemble.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {
+for (const file of ['lib/region-plate.ts', 'lib/assemble.ts', 'lib/wavespeed.ts', 'lib/providers/video-provider.ts']) {
   const baseline = execFileSync('git', ['show', `18b71a09e6c6:${file}`], { encoding: 'utf8' });
   ok(baseline === readFileSync(file, 'utf8'), `unchanged SCENES/shared adapter: ${file}`);
 }
