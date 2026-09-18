@@ -80,6 +80,13 @@ model Project {
   synopsisApproved Boolean @default(false)
   // Stage 46A: approved SHORT synopsis (JSON {premise, episodes[{number, logline}]}) — mandatory outline for the season structure.
   shortSynopsis String? @db.Text
+  // Stage 1 (dramaBible): the structured story bible (theme, tropes, protagonist/antagonist arcs, escalation
+  // ladder, scheduled secrets, midpoint reversal, finale question, B-line, relationships) — generated FIRST,
+  // the prose synopsis is derived from it, and it is threaded into every later prompt (season map / episode
+  // outlines / scripts). Additive + optional: old projects keep NULL and behave exactly as before.
+  dramaBible  Json?
+  // Stage 1: the drama-bible prompt CONTRACT version that produced `dramaBible` (see DRAMA_BIBLE_PROMPT_VERSION).
+  dramaBibleVersion String?
   charactersApproved Boolean @default(false)
   charactersLocked Boolean @default(false)
   structureApproved Boolean @default(false)

@@ -435,3 +435,10 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 -- prompt version on the Season row. Old seasons keep NULL and build episode outlines exactly as before.
 ALTER TABLE "Season" ADD COLUMN IF NOT EXISTS "seasonMap" JSONB;
 ALTER TABLE "Season" ADD COLUMN IF NOT EXISTS "seasonMapVersion" TEXT;
+
+
+
+-- Stage 1 (dramaBible): additive, idempotent — the structured story bible and its prompt version on the
+-- Project row. Old projects keep NULL and generate the synopsis exactly as before (backward compatible).
+ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "dramaBible" JSONB;
+ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "dramaBibleVersion" TEXT;

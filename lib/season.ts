@@ -1430,6 +1430,14 @@ export function episodeScriptUserPrompt(input: {
    * from the season-map types.
    */
   seasonMapCellBlock?: string | null;
+  /**
+   * Stage 1 (dramaBible) — the pre-rendered STORY-BIBLE brief (built by the worker via dramaBibleBrief(bible)
+   * from Project.dramaBible). When present, the episode must stay consistent with the bible's theme,
+   * protagonist/antagonist arcs, escalation, scheduled secrets, midpoint reversal, finale question, B-line and
+   * relationships. Absent/empty (old bible-less projects) → the prompt is unchanged. Kept as an opaque string
+   * so this module stays decoupled from the drama-bible types.
+   */
+  dramaBibleBlock?: string | null;
 }): string {
   const prev = input.previous.length
     ? input.previous.map((p) => `Ep.${p.number} «${p.title}»: ${p.logline} Cliffhanger: ${p.cliffhanger}`).join("\n")
@@ -1459,7 +1467,11 @@ export function episodeScriptUserPrompt(input: {
   // Stage 3 (seasonMap) — the assigned season-map cell brief for this episode (already rendered by the
   // worker). Appended defensively: absent/empty for old map-less seasons ⇒ the prompt is unchanged.
   const seasonMapBlock = (input.seasonMapCellBlock ?? "").trim() ? `\n\n${(input.seasonMapCellBlock ?? "").trim()}` : "";
-  return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}${plotBlock}${userScriptBlock}\n\nPREVIOUS EPISODES:\n${prev}${prevEndingBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}${locationInventoryBlock(input.locationInventory)}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${seasonMapBlock}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
+  // Stage 1 (dramaBible) — the story-bible brief (already rendered by the worker). Appended defensively:
+  // absent/empty for old bible-less projects ⇒ the prompt is unchanged.
+  const bibleText = (input.dramaBibleBlock ?? "").trim();
+  const dramaBibleBlock = bibleText ? `\n\nSTORY BIBLE (keep this episode consistent with it):\n${bibleText}` : "";
+  return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}${plotBlock}${userScriptBlock}${dramaBibleBlock}\n\nPREVIOUS EPISODES:\n${prev}${prevEndingBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}${locationInventoryBlock(input.locationInventory)}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${seasonMapBlock}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
 }
 
 /**

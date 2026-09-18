@@ -78,6 +78,10 @@ import { episodeCastFromScenes } from "@/lib/episode-cast";
 // and the shared cell shape + per-episode outline brief (prompts/season-map.ts).
 import { generateSeasonMap } from "@/lib/season-map";
 import { seasonMapCellBrief, SEASON_MAP_PROMPT_VERSION, type SeasonMapCell } from "@/lib/prompts/season-map";
+// Stage 1 (dramaBible) — the persisted story bible (Project.dramaBible) is mapped into the season-map slice
+// and rendered into a compact brief threaded into each episode's script prompt (both read defensively).
+import { toDramaBibleForMap, type DramaBible } from "@/lib/drama-bible";
+import { dramaBibleBrief } from "@/lib/prompts/drama-bible";
 
 export const SEASON_JOB_TYPE = "season_script";
 
@@ -397,6 +401,17 @@ async function loadSeason(projectId: string) {
 }
 
 /**
+ * Stage 1 (dramaBible) — read the persisted story bible off the Project defensively. Project.dramaBible is a
+ * Json column; old projects have NULL (returned as null here) so every downstream use degrades to its
+ * bible-less fallback. Returns the object as-is (validated at generation time), or null when absent/not an object.
+ */
+function readDramaBible(project: { dramaBible?: unknown }): DramaBible | null {
+  const raw = project.dramaBible;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw as DramaBible;
+  return null;
+}
+
+/**
  * Stage 88 — the concrete ENDING context of the immediately-preceding episode, so the next episode is
  * written as a direct continuation. Reads the previous episode's LAST scene's scripted end state
  * (endStateActual wins over endState when present) plus a short tail of its closing scenes (action +
@@ -618,6 +633,10 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
     const seasonMapCells = Array.isArray(season!.seasonMap) ? (season!.seasonMap as unknown as SeasonMapCell[]) : null;
     const seasonMapCell = seasonMapCells?.find((c) => c && c.episode === ep.number) ?? null;
     const seasonMapCellBlock = seasonMapCellBrief(seasonMapCell);
+    // Stage 1 (dramaBible) — thread the persisted story bible into the script prompt so the episode stays
+    // consistent with the theme / arcs / escalation / secrets / midpoint / finale question / B-line / relationships.
+    // Reads the bible defensively: absent (old projects) → "" ⇒ prompt unchanged.
+    const dramaBibleBlock = dramaBibleBrief(readDramaBible(project));
     responseId = await deps.start(
       episodeScriptSystemPrompt(language, ep.number),
       episodeScriptUserPrompt({
@@ -633,6 +652,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
         // model must only structure into the shooting-script JSON (dialogue/action verbatim). Wins over plotSource.
         userScript: planned.userScript,
         seasonMapCellBlock,
+        dramaBibleBlock,
         ...(planned.instruction ? { instruction: reviseInstruction(planned.instruction, next) } : {}),
       }) + episodeRetryNote(state),
       // Stage 108 — the episode script is written by gpt-4o (EPISODE_SCRIPT_MODEL): non-reasoning →
@@ -684,8 +704,9 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
     // Stage 3 (seasonMap) — once the episodes exist, design a validated per-episode SEASON MAP that will
     // constrain each episode's outline (beat variety, cliffhanger spacing, escalation, secrets, finale).
     // Best-effort: any failure (LLM/transport/validation) is swallowed and the season simply carries no map
-    // (old behavior). The dramaBible (Stage 1) is not built yet, so the generator/validators degrade to the
-    // documented structural fallbacks (escalationStep from episode position; no scheduled secrets).
+    // (old behavior). When the project has a Stage 1 dramaBible, its real escalation ladder / scheduled
+    // secrets / finale question drive the map; without one the generator/validators degrade to the documented
+    // structural fallbacks (escalationStep from episode position; no scheduled secrets).
     if (reloaded) {
       try {
         const result = await generateSeasonMap(
@@ -694,6 +715,9 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
             episodeCount: structure.episodes.length,
             seasonLogline: structure.logline,
             locations: project.locations.map((l) => l.name).filter(Boolean),
+            // Stage 1 (dramaBible) — pass the REAL escalation ladder / scheduled secrets / finale question when
+            // the project has a bible; toDramaBibleForMap returns null when absent → structural fallback (old behavior).
+            bible: toDramaBibleForMap(readDramaBible(project)),
           },
           (sys, usr, o) => deps.chatJSON(sys, usr, { ...o, maxTokens: Math.min(16000, 2000 + 500 * structure.episodes.length) }),
           { model: SCRIPT_MODEL, maxRetries: 3 }

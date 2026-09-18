@@ -13,7 +13,11 @@
  */
 import { prisma } from "@/lib/db";
 import { updateJob, completeJob, failJob, heartbeatJob, markCanceled, isCancelRequested } from "@/lib/jobs";
-import { chat, chatJSON } from "@/lib/ai";
+import { chat, chatJSON, SCRIPT_MODEL } from "@/lib/ai";
+// Stage 1 (dramaBible) — generate + validate the structured story bible FIRST, then derive the prose synopsis
+// consistent with it; persist the bible on the Project. Best-effort: failure leaves the classic flow unchanged.
+import { generateDramaBible, type DramaBible } from "@/lib/drama-bible";
+import { dramaBibleBrief, DRAMA_BIBLE_PROMPT_VERSION } from "@/lib/prompts/drama-bible";
 import {
   ideaSystemPrompt,
   ideaUserPrompt,
@@ -69,6 +73,36 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
     await updateJob(jobId, { status: "processing", progress: 15, message: "Drafting season synopsis…" });
 
+    // Stage 1 (dramaBible) — design the structured STORY BIBLE FIRST (generate → validate → targeted retry).
+    // On success we (a) persist it on the Project and (b) thread a compact brief into the synopsis prompt so
+    // the prose synopsis is DERIVED consistently from the bible. Best-effort: any failure (LLM / transport /
+    // persistently-invalid) is swallowed and the classic idea→synopsis flow runs unchanged (backward compat).
+    const bibleGenres = auto ? genresToEnglish(genres) : null;
+    const bibleIdeaText = fromStory
+      ? storyText
+      : auto
+      ? [bibleGenres?.join(", ") ?? "", (extras ?? "").trim()].filter(Boolean).join("\n")
+      : idea ?? "";
+    const bibleEpisodeCount = typeof episodeCount === "number" && episodeCount > 0 ? episodeCount : null;
+    let bibleBriefNote = "";
+    let bibleToPersist: DramaBible | null = null;
+    try {
+      await heartbeatJob(jobId);
+      const bibleRes = await generateDramaBible(
+        { idea: bibleIdeaText, genres: bibleGenres, episodeCount: bibleEpisodeCount },
+        (sys, usr, o) => chatJSON(sys, usr, { ...o, temperature: 0.7, maxTokens: 3000 }),
+        { model: SCRIPT_MODEL, maxRetries: 3 }
+      );
+      if (bibleRes.valid) {
+        bibleToPersist = bibleRes.bible;
+        bibleBriefNote = `\n\nSTORY BIBLE (make the synopsis consistent with it):\n${dramaBibleBrief(bibleRes.bible)}`;
+      } else {
+        console.warn(`[synopsis] drama bible advisory after ${bibleRes.attempts} attempt(s); outstanding: ${bibleRes.errors.map((e) => e.field).join(", ")}`);
+      }
+    } catch (e) {
+      console.warn(`[synopsis] drama bible generation skipped: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     // One retry if the model returns malformed JSON / schema violations (same as the old sync route).
     let result: ReturnType<typeof normalizeIdeaResult> | null = null;
     let lastError = "";
@@ -77,10 +111,10 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
       try {
         await heartbeatJob(jobId);
         const raw = fromStory
-          ? await chatJSON(ideaFromStorySystemPrompt(storyLanguage), ideaFromStoryUserPrompt(storyText), { temperature: 0.6, maxTokens: 4200 })
+          ? await chatJSON(ideaFromStorySystemPrompt(storyLanguage), ideaFromStoryUserPrompt(storyText) + bibleBriefNote, { temperature: 0.6, maxTokens: 4200 })
           : auto
-          ? await chatJSON(ideaAutoSystemPrompt(autoLanguage), ideaAutoUserPrompt(genres, extras), { temperature: 0.95, maxTokens: 3800 })
-          : await chatJSON(ideaSystemPrompt(), ideaUserPrompt(idea ?? ""), { temperature: 0.8, maxTokens: 3500 });
+          ? await chatJSON(ideaAutoSystemPrompt(autoLanguage), ideaAutoUserPrompt(genres, extras) + bibleBriefNote, { temperature: 0.95, maxTokens: 3800 })
+          : await chatJSON(ideaSystemPrompt(), ideaUserPrompt(idea ?? "") + bibleBriefNote, { temperature: 0.8, maxTokens: 3500 });
         result = normalizeIdeaResult(
           raw,
           fromStory ? storyText : auto ? (extras && extras.trim() ? extras : autoLanguage === "ru" ? "Russian history" : "story") : idea ?? ""
@@ -109,6 +143,9 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
           // Stage 40: the project is named automatically from the plot.
           name: resolveProjectName(result!.title, fromStory ? storyText : idea && idea.trim() ? idea : result!.synopsis),
           ...(episodeCountToStore !== undefined ? { episodeCount: episodeCountToStore } : {}),
+          // Stage 1 (dramaBible) — persist the validated bible + its prompt version alongside the synopsis.
+          // Only written when a VALID bible was produced; otherwise the column stays NULL (classic flow).
+          ...(bibleToPersist ? { dramaBible: bibleToPersist as unknown as object, dramaBibleVersion: DRAMA_BIBLE_PROMPT_VERSION } : {}),
         },
       });
     }, { timeout: 30_000 });
