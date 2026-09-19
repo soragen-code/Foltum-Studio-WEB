@@ -29,6 +29,10 @@ import {
   isPostFx,
   isLineImpact,
   DEFAULT_CLIFFHANGER_TYPE,
+  SHOT_PLAN_SYSTEM,
+  SHOT_PLAN_PROMPT_VERSION,
+  shotPlanUserPrompt,
+  shotPlanRetryNote,
 } from "@/lib/prompts/shot-plan";
 
 /** A single actionable validation failure. `rule` is a stable id; `message` is human-readable. */
@@ -250,4 +254,67 @@ export function normalizeShotPlan(raw: unknown): PlannedShot[] {
       cliffhangerType: typeof r.cliffhangerType === "string" ? r.cliffhangerType : null,
     } satisfies PlannedShot;
   });
+}
+
+/* ───────────────────────── generator (generate → validate → targeted retry) ───────────────────────── */
+
+/** A scene as fed to the shot planner (only the fields the shot-plan prompt reads). */
+export interface ShotPlanScene {
+  number: number;
+  action?: string | null;
+  dialogue?: string | null;
+  keyProp?: string | null;
+  escalationBeats?: string[] | null;
+}
+
+/** The injected JSON-chat function (so the generator is unit-testable / DB-free). Mirrors chatJSON. */
+export type ShotPlanCallJSON = (system: string, user: string, opts?: { model?: string; maxTokens?: number }) => Promise<unknown>;
+
+export interface GenerateShotPlanResult {
+  /** The validated (or best-effort last) shot list. */
+  shots: PlannedShot[];
+  /** True when the final list passed every validator. */
+  valid: boolean;
+  /** Remaining validation errors on the returned list (empty when valid). */
+  errors: ShotPlanError[];
+  /** How many LLM attempts were spent (1–maxAttempts). */
+  attempts: number;
+  /** Prompt-contract version that produced the list (stamped onto Shot.promptVersion). */
+  version: string;
+}
+
+/** Max shot-plan attempts (initial + 2 targeted retries) — mirrors the scene generate→retry budget of 3. */
+export const SHOT_PLAN_MAX_ATTEMPTS = 3;
+
+/**
+ * Stage 167 — generate an episode's ordered shot list from its approved scenes using the SAME
+ * generate → validate → targeted-retry loop the season-state / scene passes use:
+ *   1. call the LLM (SHOT_PLAN_SYSTEM + shotPlanUserPrompt) on SCRIPT_MODEL (gpt-6-astra by default),
+ *   2. normalizeShotPlan the raw JSON into a well-typed PlannedShot[],
+ *   3. validateShotPlan; when it fails, append shotPlanRetryNote naming the FIRST failing rule and retry
+ *      (up to SHOT_PLAN_MAX_ATTEMPTS). The best-effort last list is returned even if still invalid, so
+ *      the caller can persist SOMETHING (shots are additive; an imperfect plan is better than none).
+ * The `callJSON` function is injected so this stays a pure, DB-free, network-free unit under test.
+ */
+export async function generateShotPlan(
+  scenes: ShotPlanScene[],
+  opts: { cliffhangerType?: string | null; model?: string; maxTokens?: number; maxAttempts?: number },
+  callJSON: ShotPlanCallJSON
+): Promise<GenerateShotPlanResult> {
+  const maxAttempts = Math.max(1, opts.maxAttempts ?? SHOT_PLAN_MAX_ATTEMPTS);
+  const baseUser = shotPlanUserPrompt(scenes, { cliffhangerType: opts.cliffhangerType });
+  let system = SHOT_PLAN_SYSTEM;
+  let last: PlannedShot[] = [];
+  let lastErrors: ShotPlanError[] = [];
+  let attempt = 0;
+  for (attempt = 1; attempt <= maxAttempts; attempt++) {
+    const raw = await callJSON(system, baseUser, { model: opts.model, maxTokens: opts.maxTokens });
+    last = normalizeShotPlan(raw);
+    const { ok, errors } = validateShotPlan(last, { cliffhangerType: opts.cliffhangerType });
+    lastErrors = errors;
+    if (ok) return { shots: last, valid: true, errors: [], attempts: attempt, version: SHOT_PLAN_PROMPT_VERSION };
+    // Targeted retry: name the FIRST failing rule so the model fixes it while keeping the rest.
+    system = `${SHOT_PLAN_SYSTEM}\n\n${shotPlanRetryNote(errors[0]?.message ?? "unknown rule")}`;
+  }
+  return { shots: last, valid: false, errors: lastErrors, attempts: attempt - 1, version: SHOT_PLAN_PROMPT_VERSION };
 }

@@ -22,6 +22,8 @@ import {
   cancelBackgroundResponse,
   chatJSON,
 } from "@/lib/ai";
+// Stage 167 — shot-plan persistence at the approval transition (see below).
+import { persistShotPlanForApprovedEpisode } from "@/lib/workers/shot-plan-persist";
 import {
   generateSeasonStateUpdate,
   seedSeasonState,
@@ -411,6 +413,17 @@ export async function runScenesJob(jobId: string, projectId: string | undefined,
       await updateSeasonStateForApprovedEpisode(episodeId);
     } catch (err: any) {
       console.error("[scenes] season-state update skipped:", err?.message ?? err);
+    }
+
+    // Stage 167 — at the SAME approval transition, plan and persist this episode's SHOT rows (the atomic
+    // units of generation, one level below the scene) so the per-shot chain (video-job → assembly-job)
+    // has something to iterate. Idempotent (re-approving rebuilds the shot list) + fully non-blocking:
+    // any failure degrades to "no shots" and the episode still plays through the legacy scene fallback.
+    try {
+      const shotPlan = await persistShotPlanForApprovedEpisode(episodeId);
+      console.log(`[scenes] shot plan persisted for episode ${episodeId}:`, shotPlan);
+    } catch (err: any) {
+      console.error("[scenes] shot-plan persist skipped:", err?.message ?? err);
     }
 
     // Keep episodeId in resultData so the idempotency / resume lookups (which match on episodeId)

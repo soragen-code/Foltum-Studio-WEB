@@ -107,6 +107,40 @@ export function chainSceneToResume<S extends ChainResumeSceneLike>(
   return target;
 }
 
+/* ───────────────────────── Stage 167 — SHOT chain ───────────────────────── */
+
+/**
+ * Stage 167 — a SHOT in a chain run. The atomic unit of generation is now the shot (one level below
+ * the scene). Shots are ordered GLOBALLY across the episode by (sceneNumber, index) — `Shot.index` is
+ * 0-based WITHIN its scene, so the scene number is the primary sort key and the per-scene index breaks
+ * ties. `videoUrl` set = generated; `status === "generating"` = a clip is already in flight.
+ */
+export interface ChainShotLike {
+  id: string;
+  /** 1-based scene number the shot belongs to (primary global-order key). */
+  sceneNumber: number;
+  /** 0-based order of the shot WITHIN its scene (secondary global-order key). */
+  index: number;
+  videoUrl?: string | null;
+  status?: string | null;
+}
+
+/**
+ * Stage 167 — the SHOT a running chain must generate next: ALWAYS the earliest ungenerated shot in the
+ * strict global order (sceneNumber, then index). Direct analogue of `nextSequentialChainScene`, dropped
+ * one level to the shot: it takes NO "after" cursor so it can never skip an earlier ungenerated shot
+ * when shots finish out of order, and it returns null when that earliest gap is already `generating`
+ * (the chain waits for it rather than starting a later shot in parallel). Every persisted shot is in
+ * the chain — unlike scenes there is no per-shot prompt gate (the prompt is assembled at generation time).
+ */
+export function nextSequentialShot<S extends ChainShotLike>(shots: readonly S[]): S | null {
+  const sorted = [...shots].sort((a, b) => a.sceneNumber - b.sceneNumber || a.index - b.index);
+  const target = sorted.find((s) => !s.videoUrl); // earliest shot that still needs a clip
+  if (!target) return null; // every shot has a clip → the episode is fully generated (ready to assemble)
+  if (target.status === "generating") return null; // earliest gap is in progress → do not skip ahead
+  return target;
+}
+
 /** Ordered list of the scenes a chain run will go through (for the confirmation modal / tests). */
 export function chainOrder<S extends ChainSceneLike>(scenes: readonly S[]): S[] {
   const out: S[] = [];

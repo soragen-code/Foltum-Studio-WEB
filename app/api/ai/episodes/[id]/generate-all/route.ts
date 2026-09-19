@@ -10,7 +10,7 @@ import { runVideoJob } from "@/lib/workers/video-job";
 import { resolvePowerTier, isPowerTier } from "@/lib/power-tier";
 import { sceneClipPlan, sceneClipSeconds, sceneClipCost } from "@/lib/season";
 import { normalizeVideoModel } from "@/lib/ai-models";
-import { nextChainScene, chainOrder } from "@/lib/chain-run";
+import { nextChainScene, chainOrder, nextSequentialShot } from "@/lib/chain-run";
 
 /**
  * Stage 100: scenes are generated STRICTLY SEQUENTIALLY (chain) — parallel mode was removed entirely.
@@ -87,6 +87,46 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     }
   }
   const tier = resolvePowerTier(project);
+  // Stage 167 — when the episode has Shot rows, generation runs as a strict one-SHOT-at-a-time chain
+  // (the shot is the atomic unit). Only the first ungenerated shot is charged and started here; the
+  // worker charges and starts each following shot when the previous one is published, and triggers the
+  // assembly job after the last shot (lib/workers/video-job.ts → continueShotChain). The SCENE chain
+  // below is the LEGACY fallback for old episodes that were broken into scenes before the shot pipeline
+  // existed and therefore have NO Shot rows.
+  const episodeShots = await prisma.shot.findMany({
+    where: { scene: { episodeId: episode.id } },
+    select: { id: true, index: true, sceneId: true, videoUrl: true, status: true, duration: true },
+  });
+  if (episodeShots.length > 0) {
+    const sceneNumberById = new Map(episode.scenes.map((s) => [s.id, s.number]));
+    const orderKey = (s: (typeof episodeShots)[number]) => ({ id: s.id, sceneNumber: sceneNumberById.get(s.sceneId) ?? 0, index: s.index, videoUrl: s.videoUrl, status: s.status });
+    for (const scene of episode.scenes) await failStaleJobs({ sceneId: scene.id, type: "video" });
+    const running = await prisma.generationJob.findFirst({ where: { sceneId: { in: episode.scenes.map((s) => s.id) }, type: "video", status: { in: ["pending", "processing"] } }, orderBy: { createdAt: "desc" } });
+    if (running) {
+      // A shot is already in flight: (re)arm the chain so the run continues from it, charge nothing.
+      await prisma.episode.update({ where: { id: episode.id }, data: { chainRunActive: true, chainRunNote: null } });
+      return NextResponse.json({ chain: true, shot: true, jobs: [{ sceneId: running.sceneId, jobId: running.id, resumed: true }], started: 0, insufficient: [], plan: null, creditsRemaining: user.credits ?? 0 });
+    }
+    if (force) {
+      // Re-run of the whole episode: clear the clips of the shots so the chain walks through them again.
+      await prisma.shot.updateMany({ where: { scene: { episodeId: episode.id }, status: { not: "generating" } }, data: { videoUrl: null, lastFrameUrl: null, status: "pending" } });
+      for (const s of episodeShots) s.videoUrl = null;
+    }
+    const firstShot = nextSequentialShot(episodeShots.map(orderKey));
+    if (!firstShot) return NextResponse.json({ error: "All episode shots have already been generated" }, { status: 400 });
+    const shotRow = episodeShots.find((s) => s.id === firstShot.id)!;
+    const duration = sceneClipSeconds(tier.id, Math.max(1, Math.round(Number(shotRow.duration ?? 3))));
+    const cost = sceneClipCost(tier.id, duration);
+    const charged = await prisma.user.updateMany({ where: { id: user.id, credits: { gte: cost } }, data: { credits: { decrement: cost } } });
+    if (charged.count !== 1) return NextResponse.json({ error: `Insufficient credits: for the next shot need ${cost}, balance ${user.credits ?? 0}` }, { status: 402 });
+    await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Episode ${episode.number}, scene ${firstShot.sceneNumber}, shot ${firstShot.index + 1} — video generation via chain (${tier.id})` } });
+    await prisma.shot.update({ where: { id: firstShot.id }, data: { status: "generating", error: null } });
+    await prisma.episode.update({ where: { id: episode.id }, data: { chainRunActive: true, chainRunNote: null } });
+    const job = await prisma.generationJob.create({ data: { type: "video", status: "processing", progress: 2, message: "Chain: starting first shot...", projectId: project.id, sceneId: shotRow.sceneId } });
+    runInBackground(() => runVideoJob({ jobId: job.id, sceneId: shotRow.sceneId, shotId: firstShot.id, projectId: project.id, userId: user.id, cost, duration, resolution: tier.resolution, provider }));
+    const fresh = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true } });
+    return NextResponse.json({ chain: true, shot: true, jobs: [{ sceneId: shotRow.sceneId, shotId: firstShot.id, jobId: job.id }], started: 1, insufficient: [], plan: { duration, costPerScene: cost, total: cost }, creditsRemaining: fresh?.credits ?? 0 });
+  }
   // Stage 100 — parallel mode removed: generation is ALWAYS a strict one-scene-at-a-time chain. Only
   // the first pending scene is charged and started here; the worker charges and starts each following
   // scene when the previous one is published (lib/workers/video-job.ts → continueChainRun). A failure

@@ -17,7 +17,11 @@ export default async function EpisodePage({ params }: { params: Promise<{ id: st
     include: {
       characters: { include: { character: true } },
       location: true, // stage 12: bound location with reference images
-      scenes: { orderBy: { number: 'asc' }, include: { characters: { include: { character: { select: { id: true, name: true, imageFront: true } } } } } },
+      scenes: { orderBy: { number: 'asc' }, include: {
+        characters: { include: { character: { select: { id: true, name: true, imageFront: true } } } },
+        // Stage 167 — per-shot generation progress shown on the episode card (status / videoUrl per shot).
+        shots: { orderBy: { index: 'asc' }, select: { id: true, index: true, shotType: true, size: true, duration: true, line: true, status: true, videoUrl: true, error: true } },
+      } },
       season: { include: { project: { include: { characters: true, locations: true } } } },
     },
   })

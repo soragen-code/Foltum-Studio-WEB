@@ -137,6 +137,53 @@ export function buildSubtitleSpec(
   return { cues, language, alignment: "center" };
 }
 
+/** Format a seconds value as an ASS timestamp `H:MM:SS.cs` (centiseconds). */
+function assTime(sec: number): string {
+  const s = Math.max(0, sec);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const secs = Math.floor(s % 60);
+  const cs = Math.round((s - Math.floor(s)) * 100);
+  const pad = (n: number, w = 2) => String(n).padStart(w, "0");
+  return `${h}:${pad(m)}:${pad(secs)}.${pad(cs)}`;
+}
+
+/** Escape a subtitle line for an ASS dialogue event (newlines → \N, strip braces that start overrides). */
+function assEscape(t: string): string {
+  return t.replace(/[{}]/g, "").replace(/\r?\n/g, "\\N");
+}
+
+/**
+ * Serialize a CENTERED SubtitleSpec into an ASS (Advanced SubStation Alpha) document. Alignment=2 is
+ * ASS bottom-CENTER (horizontally centered), which is what "centered subtitles" means for a 9:16 reel.
+ * Pure — the worker writes this to a temp .ass file and burns it in with ffmpeg's `subtitles` filter.
+ * PlayResX/Y match the 1080×1920 vertical canvas so the font size and margins scale correctly.
+ */
+export function subtitleSpecToAss(spec: SubtitleSpec, opts: { playResX?: number; playResY?: number } = {}): string {
+  const w = opts.playResX ?? 1080;
+  const h = opts.playResY ?? 1920;
+  const header = [
+    "[Script Info]",
+    "ScriptType: v4.00+",
+    "WrapStyle: 0",
+    "ScaledBorderAndShadow: yes",
+    `PlayResX: ${w}`,
+    `PlayResY: ${h}`,
+    "",
+    "[V4+ Styles]",
+    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
+    // Alignment 2 = bottom-center; white fill, black outline, generous bottom margin for a 9:16 canvas.
+    "Style: Default,Arial,64,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,1,2,80,80,180,1",
+    "",
+    "[Events]",
+    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
+  ];
+  const events = spec.cues.map(
+    (c) => `Dialogue: 0,${assTime(c.start)},${assTime(c.end)},Default,,0,0,0,,${assEscape(c.text)}`
+  );
+  return `${header.join("\n")}\n${events.join("\n")}\n`;
+}
+
 /* ───────────────────────── quiet music per beat ───────────────────────── */
 
 /**

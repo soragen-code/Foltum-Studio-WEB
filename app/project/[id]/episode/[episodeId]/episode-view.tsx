@@ -87,7 +87,10 @@ const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.ima
 // Stage 17: top up location extras in serverless-safe chunks (a single 12-frame job can overrun the
 // serverless window and get killed — chunking + re-firing guarantees the target is actually reached).
 
-type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; lookStale?: boolean | null; videoModel?: string | null; status: string; hasUndo?: boolean | null; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
+// Stage 167 — a persisted Shot of a scene (the atomic unit of generation). The episode card shows each
+// shot's per-shot status / videoUrl so producers can watch the shot chain progress.
+type Shot = { id: string; index: number; shotType?: string | null; size?: string | null; duration?: number | null; line?: string | null; status: string; videoUrl?: string | null; error?: string | null }
+type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; lookStale?: boolean | null; videoModel?: string | null; status: string; hasUndo?: boolean | null; shots?: Shot[]; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null; hasScript?: boolean }
 
 export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits }: { episode: any; project: any; siblings?: Sibling[]; credits: number }) {
@@ -1522,6 +1525,34 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                 </div>
                 </div>
 
+                {/* Stage 167 — per-shot generation progress. The shot is the atomic unit: the shot chain
+                    generates one clip per shot (status / videoUrl below), then the assembly job stitches
+                    them into the final Episode.videoUrl shown at the top of the page. */}
+                {(scene.shots?.length ?? 0) > 0 && (
+                  <div className="mt-3 rounded-lg border border-border bg-muted/30 p-2" data-testid="scene-shots">
+                    <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Shots ({scene.shots!.filter((sh) => validUrl(sh.videoUrl)).length}/{scene.shots!.length})</div>
+                    <ul className="space-y-1">
+                      {scene.shots!.map((sh) => {
+                        const shReady = validUrl(sh.videoUrl)
+                        const shStatus = sh.status === 'generated' || shReady ? 'ready' : sh.status
+                        const dot = shReady ? 'bg-emerald-500' : sh.status === 'generating' ? 'bg-amber-500 animate-pulse' : sh.status === 'error' ? 'bg-destructive' : 'bg-muted-foreground/40'
+                        return (
+                          <li key={sh.id} className="flex items-center gap-2 text-[11px]" data-testid="shot-row" data-shot-status={shStatus}>
+                            <span className={`h-2 w-2 shrink-0 rounded-full ${dot}`} />
+                            <span className="w-10 shrink-0 font-mono text-muted-foreground">#{sh.index + 1}</span>
+                            <span className="w-14 shrink-0 text-muted-foreground">{sh.shotType ?? 'shot'}</span>
+                            <span className="min-w-0 flex-1 truncate text-muted-foreground" title={sh.line ?? ''}>{sh.line || (sh.error ? sh.error : '—')}</span>
+                            {shReady ? (
+                              <a href={sh.videoUrl as string} target="_blank" rel="noreferrer" className="shrink-0 text-primary hover:underline" data-testid="shot-link">clip</a>
+                            ) : (
+                              <span className="shrink-0 text-muted-foreground">{shStatus}</span>
+                            )}
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  </div>
+                )}
 
                 {sceneError[scene.id] && (
                   <div className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">

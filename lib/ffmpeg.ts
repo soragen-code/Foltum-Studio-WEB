@@ -1095,3 +1095,26 @@ export async function assembleEpisodeLocally(scenes: SceneClipInput[], opts: Ass
 
   return { outputPath, workDir, audioSources, info, quality, fps, musicApplied };
 }
+
+
+/**
+ * Stage 167 — BURN centered subtitles into a finished video.
+ *
+ * The shot-pipeline assembly (lib/workers/assembly-job.ts) joins the per-shot clips into one episode
+ * video, then calls this to hard-burn the CENTERED dialogue subtitles (an .ass file written from
+ * `subtitleSpecToAss`, Alignment=2 = bottom-center). We re-encode video (the subtitles filter must
+ * rasterize onto every frame) and stream-copy audio so the mixed music/voice track is preserved.
+ *
+ * `assPath` is passed to ffmpeg's `subtitles` filter; on Linux the path needs its `:` and `\`
+ * escaped inside the filter string, so we `cd` into the .ass directory and reference it by basename
+ * to sidestep the escaping entirely.
+ */
+export async function burnSubtitlesFile(inputPath: string, assPath: string, outputPath: string): Promise<void> {
+  const dir = path.dirname(assPath);
+  const base = path.basename(assPath);
+  await runFfmpeg(
+    ["-i", inputPath, "-vf", `subtitles=${base}`, "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "copy", outputPath],
+    "burn subtitles",
+    { cwd: dir }
+  );
+}
