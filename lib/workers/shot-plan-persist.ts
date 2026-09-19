@@ -27,7 +27,7 @@
 import { prisma } from "@/lib/db";
 import { chatJSON, SCRIPT_MODEL } from "@/lib/ai";
 import { generateShotPlan, type ShotPlanScene, type ShotPlanCallJSON } from "@/lib/shot-plan";
-import type { PlannedShot } from "@/lib/prompts/shot-plan";
+import { DEFAULT_CLIFFHANGER_TYPE, type PlannedShot } from "@/lib/prompts/shot-plan";
 
 /** ТЗ: an episode needs 15–30 shots; the acceptance floor for a usable plan is 15. */
 export const MIN_SHOTS = 15;
@@ -71,7 +71,7 @@ export async function persistShotPlanForApprovedEpisode(
 ): Promise<{ ok: boolean; persisted: number; valid: boolean; attempts: number }> {
   const episode = await prisma.episode.findUnique({
     where: { id: episodeId },
-    include: { scenes: { orderBy: { number: "asc" } } },
+    include: { scenes: { orderBy: { number: "asc" } }, season: { select: { seasonMap: true } } },
   });
   if (!episode || episode.scenes.length === 0) {
     await markShotPlanFailed(episodeId, "no approved episode/scenes to plan shots from");
@@ -87,9 +87,25 @@ export async function persistShotPlanForApprovedEpisode(
     escalationBeats: toEscalationBeats(s.escalationBeats),
   }));
 
-  // Stage 3 (seasonMap) cliffhangerType is read DEFENSIVELY — not built yet, so the default
-  // expectationFlip is used. When the season map lands, resolve the per-episode cell type here.
-  const cliffhangerType: string | null = null;
+  // Stage 3 (seasonMap) — resolve THIS episode's cliffhanger type from the validated season map.
+  // Season.seasonMap is a SeasonMapCell[] keyed by the 1-based `episode` number; each cell carries a
+  // `cliffhangerType`. Fall back to the DEFAULT (expectationFlip) ONLY when the map is absent or has no
+  // cell for this episode — and log a warning so the blind fallback is visible in the logs.
+  const seasonMapCells = Array.isArray(episode.season?.seasonMap)
+    ? (episode.season!.seasonMap as Array<{ episode?: number; cliffhangerType?: string | null }>)
+    : null;
+  const mapCell = seasonMapCells?.find((c) => c && c.episode === episode.number) ?? null;
+  const mapCliffhangerType = (mapCell?.cliffhangerType ?? "").trim();
+  let cliffhangerType: string;
+  if (mapCliffhangerType) {
+    cliffhangerType = mapCliffhangerType;
+    console.log(`[shots] cliffhanger from seasonMap: ${cliffhangerType} (episode ${episode.number})`);
+  } else {
+    cliffhangerType = DEFAULT_CLIFFHANGER_TYPE;
+    console.warn(
+      `[shots] no seasonMap cliffhangerType for episode ${episode.number} — falling back to ${DEFAULT_CLIFFHANGER_TYPE}`,
+    );
+  }
 
   let result: Awaited<ReturnType<typeof generateShotPlan>>;
   try {
