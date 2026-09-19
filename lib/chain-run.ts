@@ -52,27 +52,6 @@ export function nextChainScene<S extends ChainSceneLike>(scenes: readonly S[], a
 }
 
 /**
- * Stage 163 — the scene a RUNNING chain must generate next: ALWAYS the lowest-numbered scene that
- * still needs a video, has a prompt and is idle (not already generating). Unlike
- * `nextChainScene(scenes, afterNumber)`, this takes NO "after" cursor, so it can never skip an
- * earlier ungenerated scene when scenes happen to complete out of order (a manual middle re-gen, a
- * double trigger, a transient) — which previously produced a permanent non-prefix set like
- * {1,3,4,6} with scenes 2 and 5 skipped forever. It is the exact strict selection the cron sweeper
- * already applies via `chainSceneToResume`, so the server chain and the sweeper now agree: strict
- * prefix growth 1→2→3→…, gaps always filled in order, nothing skipped.
- */
-export function nextSequentialChainScene<S extends ChainSceneLike>(scenes: readonly S[]): S | null {
-  const sorted = [...scenes].sort((a, b) => a.number - b.number);
-  // The earliest scene that still needs a video AND has a prompt (unprompted scenes are not in the
-  // chain). Crucially we do NOT skip past it: if this scene is already generating we return null so
-  // the chain waits for it, rather than starting a LATER scene in parallel / leaving it behind.
-  const target = sorted.find((s) => !s.videoUrl && (s.videoPrompt ?? "").trim().length > 0);
-  if (!target) return null; // every prompted scene has a video → chain is complete
-  if (target.status === "generating") return null; // earliest gap is in progress → do not skip ahead
-  return target;
-}
-
-/**
  * Stage 153 — a scene enriched with whether a video GenerationJob is currently in flight for it.
  * Used by the server-side sweeper to decide, from a fresh DB snapshot, what a stalled chain should do.
  */
@@ -127,8 +106,7 @@ export interface ChainShotLike {
 
 /**
  * Stage 167 — the SHOT a running chain must generate next: ALWAYS the earliest ungenerated shot in the
- * strict global order (sceneNumber, then index). Direct analogue of `nextSequentialChainScene`, dropped
- * one level to the shot: it takes NO "after" cursor so it can never skip an earlier ungenerated shot
+ * strict global order (sceneNumber, then index): it takes NO "after" cursor so it can never skip an earlier ungenerated shot
  * when shots finish out of order, and it returns null when that earliest gap is already `generating`
  * (the chain waits for it rather than starting a later shot in parallel). Every persisted shot is in
  * the chain — unlike scenes there is no per-shot prompt gate (the prompt is assembled at generation time).

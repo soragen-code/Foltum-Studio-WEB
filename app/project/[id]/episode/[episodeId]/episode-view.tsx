@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Header } from '@/components/header'
-import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Copy, Check, FileText, RotateCcw, Save, Plus, Undo2 } from 'lucide-react'
+import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Copy, Check, FileText, RotateCcw, Save, Plus, Undo2, AlertTriangle } from 'lucide-react'
 import { FrameToolbar, DownloadAllButton } from '@/app/project/[id]/_components/frame-toolbar'
 import { PromptModal, CHARACTER_PROMPT_DESCRIPTION, LOCATION_PROMPT_DESCRIPTION } from '@/app/project/[id]/_components/prompt-modal'
 import { referenceFileName } from '@/lib/download-name'
@@ -1440,6 +1440,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           </p>
           {stitching && stitchJob.job && <div className="w-full" data-testid="assemble-progress"><JobProgressBar job={stitchJob.job} expectedTotalSec={180} /></div>}
           {assembleNote && <p className="w-full text-sm text-amber-400" data-testid="assemble-note">{assembleNote}</p>}
+          {/* Stage 167 — loud shot-plan failure: generation is SHOT-only, so a failed plan blocks video
+              generation entirely. The human-readable reason is carried in chainRunNote (rendered below). */}
+          {episode.status === 'shot_plan_failed' && <span className="inline-flex w-full items-center gap-1 text-sm font-medium text-destructive" data-testid="shot-plan-failed"><AlertTriangle className="h-4 w-4" /> Shot plan failed — regenerate the shot plan for this episode before generating video.</span>}
           {chainRunNote && !chainRunActive && <p className="w-full text-sm text-destructive" data-testid="chain-run-note">{chainRunNote}</p>}
           {error && <p className="w-full text-sm text-destructive" data-testid="error">{error}</p>}
         </div>

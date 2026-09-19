@@ -417,13 +417,19 @@ export async function runScenesJob(jobId: string, projectId: string | undefined,
 
     // Stage 167 — at the SAME approval transition, plan and persist this episode's SHOT rows (the atomic
     // units of generation, one level below the scene) so the per-shot chain (video-job → assembly-job)
-    // has something to iterate. Idempotent (re-approving rebuilds the shot list) + fully non-blocking:
-    // any failure degrades to "no shots" and the episode still plays through the legacy scene fallback.
+    // has something to iterate. Idempotent (re-approving rebuilds the shot list). There is NO silent
+    // legacy scene fallback: on failure `persistShotPlanForApprovedEpisode` marks the episode
+    // `status = "shot_plan_failed"` with a UI-visible note, and the generate-all route refuses to start
+    // video generation until a valid plan exists. This call stays non-blocking for the scenes job itself
+    // (scene text is already saved); the loud failure lives on the episode record.
     try {
       const shotPlan = await persistShotPlanForApprovedEpisode(episodeId);
-      console.log(`[scenes] shot plan persisted for episode ${episodeId}:`, shotPlan);
+      console.log(`[scenes] shot plan for episode ${episodeId}:`, shotPlan);
+      if (!shotPlan.ok) {
+        console.error(`[scenes] shot plan FAILED for episode ${episodeId} — episode marked shot_plan_failed, video generation blocked`);
+      }
     } catch (err: any) {
-      console.error("[scenes] shot-plan persist skipped:", err?.message ?? err);
+      console.error("[scenes] shot-plan persist threw unexpectedly:", err?.message ?? err);
     }
 
     // Keep episodeId in resultData so the idempotency / resume lookups (which match on episodeId)

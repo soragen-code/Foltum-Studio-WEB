@@ -1,7 +1,7 @@
 /**
- * Stage 78 — seam directives applied to the assembled scene prompt AFTER `buildScenePrompt`
- * (lib/scene-prompt.ts is frozen, so this is a pure post-processing layer used by BOTH the
- * video worker and the GET prompt preview, keeping the shown text byte-identical to the submitted one).
+ * Stage 78 — seam directives applied to an assembled prompt as a pure post-processing layer
+ * (Stage 167: the whole-scene assembler was removed; these helpers are now used by the SHOT
+ * pipeline to keep clip-to-clip seams continuous).
  *
  *  - the "speech finished before the final second" line is removed: it made every clip end on a
  *    silent, frozen beat (the model "lands" the line and holds a pose);
