@@ -101,9 +101,10 @@ export interface ShotPromptInput {
   isSceneLast?: boolean;
   dialogueLanguage?: string | null;
   /**
-   * Stage 8: English translation of the spoken line. Video models understand English best, so when
-   * dialogueLanguage != "en" the LINE block references THIS (English) for the model, while the burned
-   * subtitle + stored line stay in dialogueLanguage. When "en" it is unused (line IS English).
+   * Stage 8: English translation of the SPOKEN line (drives native audio only — NOT subtitles, which
+   * were removed). Video models understand English best, so when dialogueLanguage != "en" the LINE
+   * block references THIS (English) for the model to voice, while the stored line stays in
+   * dialogueLanguage. When "en" it is unused (line IS English).
    */
   lineTranslation?: string | null;
   /**
@@ -178,8 +179,8 @@ export function shotLineBlock(i: ShotPromptInput): string {
     // English (default): the line IS English — no translation branch, byte-identical to prior behavior.
     return `LINE (spoken in English, voiced verbatim): ${line}`;
   }
-  // Non-English: the video model understands English best, so it reads the ENGLISH translation while the
-  // burned subtitle + stored line stay in the dialogue language. Fall back to the line if no translation.
+  // Non-English: the video model understands English best, so it VOICES the ENGLISH translation while the
+  // stored line stays in the dialogue language (no subtitles). Fall back to the line if no translation.
   const label = dialogueLanguageLabel(code);
   const englishForModel = oneLine(i.lineTranslation) || line;
   return `LINE (spoken in ${label}; the model reads this English translation verbatim): ${englishForModel}`;

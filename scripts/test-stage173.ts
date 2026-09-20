@@ -8,8 +8,10 @@
  *   - the v6.8.0 directive is a genuine NO-OP for English (""), non-empty for others;
  *   - the shot LINE block: English path is unchanged (line verbatim), non-English path references the
  *     ENGLISH lineTranslation for the model while the stored line stays in the dialogue language;
- *   - burned subtitles carry the dialogue language and default to "en";
  *   - the episode-script prompt injects the directive only for non-English (default byte-identical).
+ *
+ * NOTE: subtitles were REMOVED from the product/pipeline; the former buildSubtitleSpec assertions
+ * (section 4) have been deleted since the helper no longer exists.
  *
  * Pure/synthetic only — NO network, NO LLM, NO DB, NO paid generations.
  * Run: timeout 180 npx tsx --tsconfig tsconfig.json scripts/test-stage173.ts
@@ -24,7 +26,6 @@ import {
   dialogueLanguageDirective,
 } from "../lib/dialogue-language";
 import { shotLineBlock } from "../lib/prompts/shot";
-import { buildSubtitleSpec } from "../lib/shot-pipeline";
 import { episodeScriptUserPrompt } from "../lib/season";
 
 let passed = 0;
@@ -120,18 +121,9 @@ function shotInput(over: Record<string, unknown>) {
   ok(shotLineBlock({ characters: [], shot, dialogueLanguage: "uk", lineTranslation: "x" } as never) === "", "silent shot → no LINE block");
 }
 
-/* ────────────────────────── 4) subtitles carry the dialogue language ────────────────────────── */
-
-{
-  const shots = [
-    { index: 0, duration: 3, line: "Hello there." },
-    { index: 1, duration: 2, line: "" },
-  ];
-  ok(buildSubtitleSpec(shots).language === "en", "subtitles default to en");
-  ok(buildSubtitleSpec(shots, { dialogueLanguage: "uk" }).language === "uk", "subtitles carry the project dialogue language");
-  ok(buildSubtitleSpec(shots).alignment === "center", "subtitles stay centered (unchanged burning behavior)");
-  ok(buildSubtitleSpec(shots).cues.length === 1, "one cue per spoken line; silent shot has none");
-}
+/* ────────────────────────── 4) (removed) subtitles ──────────────────────────
+ * Subtitles were REMOVED from the product/pipeline; buildSubtitleSpec no longer exists, so the former
+ * subtitle-language assertions here are gone. SPEECH language plumbing (sections 1–3, 5) is unaffected. */
 
 /* ────────────────────────── 5) episode-script prompt: default no-op, non-en injects directive ────────────────────────── */
 

@@ -74,9 +74,9 @@ model Project {
   // Auto-detected language of the idea/synopsis (ISO 639-1, e.g. "ru", "en").
   language    String   @default("en")
   // Stage 8 (final): project-level DIALOGUE language (ISO 639-1). Default "en" — dialogue, character
-  // names and titles are generated in this language; burned subtitles + stored lines use it, while the
-  // video-model prompt falls back to the English lineTranslation only when this is not "en". Additive +
-  // optional: old rows are NULL and resolve to "en" via getDialogueLanguage(), keeping current behavior.
+  // names and titles are generated in this language and stored lines use it (subtitles removed from the
+  // product, so this no longer drives any subtitle rendering). Additive + optional: old rows are NULL
+  // and resolve to "en" via getDialogueLanguage(), keeping current behavior.
   dialogueLanguage String? @default("en")
   idea        String?  @db.Text
   // New flow (Stage 14 B): producer-chosen number of episodes for the season. Null = let the AI decide.
@@ -366,8 +366,10 @@ model Scene {
   episodeId     String
   number        Int
   dialogue      String?  @db.Text
-  dialogueEn    String?  @db.Text // stage 4: English lines actually spoken by Seedance (dialogue = story-language text for UI/subtitles)
-  subtitled     Boolean  @default(false) // stage 4: subtitles already burned into videoUrl
+  dialogueEn    String?  @db.Text // stage 4: English lines actually spoken by Seedance (dialogue = story-language text for UI display)
+  // DEPRECATED (subtitles removed from the product): no longer read or written by product code.
+  // Column kept for historical rows only — additive schema policy, do NOT drop or migrate.
+  subtitled     Boolean  @default(false)
   locationDesc  String?  @db.Text
   videoPrompt   String?  @db.Text
   videoUrl      String?  // generated scene video URL (Seedance native audio)
@@ -440,7 +442,9 @@ model Shot {
   duration       Float?   // planned clip length in seconds (1.5-4; a reaction shot is 0.8-1.5)
   speakerId      String?  // Character.id of the speaker (dialogue shots)
   line           String?  @db.Text // the spoken line (English), when the shot has one
-  lineTranslation String? @db.Text // Stage 8 (deferred): translation for burned subtitles; English == line for now
+  // DEPRECATED (subtitles removed from the product): never read or written by product code.
+  // Column kept for historical rows only — additive schema policy, do NOT drop or migrate.
+  lineTranslation String? @db.Text
   reactionOfId   String?  // Character.id whose reaction this shot shows (reaction shots)
   escalationBeat String?  @db.Text // the scene escalation-ladder step this shot dramatizes
   postFx         String   @default("none") // slowmo | punchZoom | none — applied at assembly time

@@ -56,14 +56,14 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     const ensured = await ensureEnglishDialogue({ visualIdentity: "", scenes: [{ ...raw0, number: scene.number, sceneKind, characters: scene.characters.map((c) => c.character.name) }] }, chatJSON);
     const raw = { ...raw0, sceneKind, dialogue: ensured.scenes[0].dialogue, dialogueLocal: ensured.scenes[0].dialogueLocal };
     const { dialogueLocal, ...rest } = raw;
-    // Speech is always English (`dialogueEn`); `dialogue` keeps the story-language text for the UI / subtitles.
+    // Speech is always English (`dialogueEn`); `dialogue` keeps the story-language text for the UI display.
+    // NOTE: `Scene.subtitled` is DEPRECATED/inactive (subtitles removed) — no longer written here.
     const parsed = {
       ...rest,
       durationSec: clampSceneDuration(raw.durationSec),
       dialogue: (dialogueLocal ?? "").trim() || raw.dialogue,
       dialogueEn: raw.dialogue,
       language: "en",
-      subtitled: false,
       videoUrl: null,
       // Stage 40 — the revised scene has a new scripted end state; any vision-described actual state is stale.
       endState: raw.endState.trim(),
@@ -87,7 +87,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       status: scene.status,
       sceneKind: scene.sceneKind,
       language: scene.language,
-      subtitled: scene.subtitled,
+      // `Scene.subtitled` is DEPRECATED/inactive (subtitles removed) — not snapshotted for undo.
     };
     const updated = await prisma.scene.update({ where: { id: scene.id }, data: { ...parsed, status: "pending", prevSnapshot } });
     const scenes = scene.episode.scenes.map((s) => (s.id === scene.id ? { ...s, ...parsed } : s));

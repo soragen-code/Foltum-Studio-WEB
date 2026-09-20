@@ -446,7 +446,7 @@ async function finalizeShotVideoJob(jobId: string, state: VideoJobState, source:
 /**
  * Stage 167 — SHOT chain. After a shot is published, generate the next ungenerated shot in strict
  * episode-global order (nextSequentialShot). When every shot has a clip the episode is complete: run
- * the assembly job (buildConcatPlan → concat → burned subtitles → music → Episode.videoUrl).
+ * the assembly job (buildConcatPlan → concat → music → Episode.videoUrl; no subtitles).
  */
 async function continueShotChain(episodeId: string): Promise<void> {
   const episode = await prisma.episode.findUnique({

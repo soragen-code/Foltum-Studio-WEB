@@ -8,7 +8,7 @@
  *   - the shotType→camera table + resolveShotSize dialogue-framing (dialogue/reaction+line never WS);
  *   - assembleShotPrompt block presence/order, startState only on the first shot, endState only on the
  *     last, and the DIALOGUE_FRAMING_RULE folded into a speaking dialogue shot;
- *   - the assembly pipeline helpers (concat plan, postFx filters, centered subtitles, quiet music);
+ *   - the assembly pipeline helpers (concat plan, postFx filters, quiet music);
  *   - the textual continuity critic (consistent vs jump) and the VLM path skipping without a vision fn;
  *   - backward compatibility (a legacy scene with no escalationBeats/shots flows through every helper).
  *
@@ -72,7 +72,6 @@ import {
   postFxToFfmpegFilter,
   postFxToAudioFilter,
   buildConcatPlan,
-  buildSubtitleSpec,
   musicForBeat,
   textualContinuityCheck,
   textualContinuityChain,
@@ -309,16 +308,9 @@ ok(postFxToAudioFilter("slowmo") === "atempo=0.5" && postFxToAudioFilter("none")
   const notReady = buildConcatPlan([{ index: 0, duration: 3, postFx: "none", videoUrl: null }]);
   ok(!notReady.ready, "concat plan is not ready when a shot lacks a videoUrl");
 }
-{
-  const spec = buildSubtitleSpec(good);
-  ok(spec.alignment === "center", "subtitles are centered");
-  ok(spec.language === "en", "subtitle language defaults to en");
-  const lineCount = good.filter((s) => (s.line ?? "").trim()).length;
-  ok(spec.cues.length === lineCount, "one subtitle cue per spoken line, none for silent shots");
-  ok(spec.cues[0].start === 0, "first cue starts at 0");
-  ok(spec.cues.every((c) => c.end > c.start), "every cue ends after it starts");
-  ok(buildSubtitleSpec(good, { dialogueLanguage: "uk" }).language === "uk", "dialogueLanguage threads through");
-}
+// NOTE: subtitles were REMOVED from the product/pipeline — buildSubtitleSpec/subtitleSpecToAss no longer
+// exist, so the former "subtitle cue" assertions here have been deleted (see test-stage184 #10 for the
+// static proof that the subtitle machinery is gone).
 ok(musicForBeat("expectationFlip") === "tense" && musicForBeat("statusReveal") === "dark", "musicForBeat maps beats to quiet moods");
 ok(musicForBeat(null) === "mysterious", "musicForBeat defaults to a quiet mood");
 
@@ -346,7 +338,7 @@ ok(textualContinuityChain(good).length === good.length - 1, "continuity chain yi
   ok(typeof shotPlanUserPrompt([legacyScene]) === "string", "shotPlanUserPrompt tolerates a legacy scene without escalationBeats/keyProp");
   ok(shotPlanUserPrompt([legacyScene]).includes(DEFAULT_CLIFFHANGER_TYPE), "shot-plan prompt falls back to the default cliffhanger type");
   ok(typeof shotPlanRetryNote("silent-ratio") === "string", "shotPlanRetryNote builds a targeted note");
-  ok(buildConcatPlan([]).ready === false && buildSubtitleSpec([]).cues.length === 0, "empty shot list flows through the pipeline without throwing");
+  ok(buildConcatPlan([]).ready === false, "empty shot list flows through the pipeline without throwing");
 }
 
 /* ────────────────────────────── 10) VLM path is structurally unreachable offline ────────────────────────────── */

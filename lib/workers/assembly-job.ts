@@ -9,9 +9,11 @@
  *   2. buildConcatPlan(shots) — a pure readiness/order check; bail out if any shot is missing a clip,
  *   3. assembleEpisodeLocally(clips) — the SAME seamless-hard-cut join used by the scene assembler,
  *      with QUIET background music chosen by the episode's closing escalation beat (musicForBeat),
- *   4. buildSubtitleSpec → subtitleSpecToAss → burnSubtitlesFile — BURN the CENTERED dialogue
- *      subtitles (Alignment=2 = bottom-center; dialogueLanguage defaults to "en"),
- *   5. upload the subtitled mp4 to S3 and persist `Episode.videoUrl` + `status="assembled"`.
+ *   4. upload the joined mp4 to S3 and persist `Episode.videoUrl` + `status="assembled"`.
+ *
+ * NOTE: subtitles were REMOVED from the product/pipeline. The assembled output is the joined clips
+ * (each carrying its own native Seedance speech) plus the quiet background-music track only — no
+ * burned-in captions of any kind.
  *
  * The terminal artifact is Episode.videoUrl (NOT any per-scene video). Fully non-blocking: any failure
  * is logged and swallowed so the chain never crashes; the episode simply stays un-assembled and can be
@@ -22,18 +24,14 @@ import path from "path";
 import { prisma } from "@/lib/db";
 import {
   assembleEpisodeLocally,
-  burnSubtitlesFile,
   downloadToFile,
   DEFAULT_ASSEMBLE_FPS,
   DEFAULT_ASSEMBLE_QUALITY,
 } from "@/lib/ffmpeg";
 import { uploadBufferToS3 } from "@/lib/s3-upload";
 import { getOrCreateMusicTrack } from "@/lib/music";
-import { getDialogueLanguage } from "@/lib/dialogue-language";
 import {
   buildConcatPlan,
-  buildSubtitleSpec,
-  subtitleSpecToAss,
   musicForBeat,
 } from "@/lib/shot-pipeline";
 import type { PlannedShot } from "@/lib/prompts/shot-plan";
@@ -48,7 +46,8 @@ export interface AssemblyJobResult {
 }
 
 /**
- * Assemble the per-shot clips of an episode into the final subtitled `Episode.videoUrl`.
+ * Assemble the per-shot clips of an episode into the final `Episode.videoUrl` (joined clips + music,
+ * with native clip audio intact; NO burned subtitles).
  * Non-blocking: returns `{ ok: false, reason }` instead of throwing on any precondition/runtime failure.
  */
 export async function runAssemblyJob(episodeId: string): Promise<AssemblyJobResult> {
@@ -57,7 +56,7 @@ export async function runAssemblyJob(episodeId: string): Promise<AssemblyJobResu
     const episode = await prisma.episode.findUnique({
       where: { id: episodeId },
       include: {
-        season: { select: { projectId: true, project: { select: { dialogueLanguage: true } } } },
+        season: { select: { projectId: true } },
         scenes: {
           orderBy: { number: "asc" },
           include: { shots: { orderBy: { index: "asc" } } },
@@ -67,7 +66,7 @@ export async function runAssemblyJob(episodeId: string): Promise<AssemblyJobResu
     if (!episode) return { ok: false, shotCount: 0, reason: "Episode not found" };
 
     // Flatten to an EPISODE-GLOBAL ordered shot list (scene number, then shot index within the scene).
-    // Each shot carries its scene's number so the concat plan / subtitle timings run in play order.
+    // Each shot carries its scene's number so the concat plan runs in play order.
     const ordered = episode.scenes
       .flatMap((scene) =>
         scene.shots.map((shot) => ({
@@ -97,7 +96,6 @@ export async function runAssemblyJob(episodeId: string): Promise<AssemblyJobResu
     }
 
     const projectId = episode.season?.projectId ?? "unknown";
-    const dialogueLanguage = getDialogueLanguage(episode.season?.project ?? null);
     // QUIET music mood is chosen from the episode's CLOSING beat (the last shot's escalation step).
     const closingBeat = ordered[ordered.length - 1]?.escalationBeat ?? "";
     const mood = musicForBeat(closingBeat);
@@ -124,24 +122,9 @@ export async function runAssemblyJob(episodeId: string): Promise<AssemblyJobResu
     );
     workDir = assembled.workDir;
 
-    // 2. BURN the CENTERED dialogue subtitles (from the shot lines) over the joined video.
-    let finalPath = assembled.outputPath;
-    const spec = buildSubtitleSpec(ordered, { dialogueLanguage });
-    if (spec.cues.length > 0) {
-      try {
-        const assPath = path.join(workDir, "subs.ass");
-        await fs.writeFile(assPath, subtitleSpecToAss(spec), "utf8");
-        const subbedPath = path.join(workDir, "episode_subbed.mp4");
-        await burnSubtitlesFile(assembled.outputPath, assPath, subbedPath);
-        finalPath = subbedPath;
-      } catch (err) {
-        // Subtitles are best-effort: a burn failure must not lose the assembled episode.
-        console.warn(`[assembly] ${episodeId}: subtitle burn failed — using un-subtitled cut:`, (err as Error).message);
-        finalPath = assembled.outputPath;
-      }
-    }
-
-    // 3. Upload the final artifact and persist Episode.videoUrl (+ status="assembled").
+    // 2. Upload the joined artifact and persist Episode.videoUrl (+ status="assembled").
+    //    No subtitle burn: the output is the joined clips (native speech) + music only.
+    const finalPath = assembled.outputPath;
     const s3Key = `media/public/episodes/${projectId}/${episodeId}/shots_${Date.now()}.mp4`;
     const buffer = await fs.readFile(finalPath);
     const videoUrl = await uploadBufferToS3(buffer, s3Key, "video/mp4");
@@ -158,8 +141,7 @@ export async function runAssemblyJob(episodeId: string): Promise<AssemblyJobResu
     });
 
     console.log(
-      `[assembly] ${episodeId}: assembled ${ordered.length} shots → ${videoUrl} ` +
-        `(mood=${mood}, subtitles=${spec.cues.length}, lang=${dialogueLanguage})`
+      `[assembly] ${episodeId}: assembled ${ordered.length} shots → ${videoUrl} (mood=${mood}, no subtitles)`
     );
     return { ok: true, videoUrl, shotCount: ordered.length };
   } catch (err: any) {

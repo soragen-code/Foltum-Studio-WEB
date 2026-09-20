@@ -450,7 +450,7 @@ export const sceneScriptSchema = z.object({
   action: z.string().min(5),
   /** ENGLISH spoken lines — this is what Seedance voices (always English, whatever the story language). */
   dialogue: z.string().min(1),
-  /** Same lines in the story language for the UI / subtitles; equals `dialogue` for English projects. */
+  /** Same lines in the story language for the UI display (subtitles removed); equals `dialogue` for English projects. */
   dialogueLocal: z.string().optional(),
   // Stage 12 (Commit D) — optional off-screen NARRATOR voice-over (backstory / catch-up).
   /** ENGLISH narration read by an off-screen narrator (no on-camera lip-sync). Used mainly for the episode-1 opening backstory. */
@@ -1150,7 +1150,7 @@ export function fitEpisodeDuration(scenes: Array<{ durationSec: number; sceneKin
 
 // ---------------------------------------------------------------------------------------------
 // Speech language guard. Seedance voices `dialogue`, which MUST be English; `dialogueLocal` is the
-// story-language text for UI / subtitles. gpt-4o regularly swaps the two for non-Latin stories
+// story-language text for UI display (subtitles removed). gpt-4o regularly swaps the two for non-Latin stories
 // (Russian lines land in "dialogue"). Fix mechanically (swap) and, if there is still no English,
 // translate with a separate cheap LLM call (see `ensureEnglishDialogue`).
 // ---------------------------------------------------------------------------------------------
@@ -1194,7 +1194,7 @@ export const TRANSLATE_DIALOGUE_SYSTEM = `You translate screenplay dialogue into
 /**
  * Guarantees English speech: swaps swapped fields, then translates the remaining non-English scenes via
  * `chat` (a chatJSON-like function, injected so lib/season.ts stays free of the OpenAI client for tests).
- * The original story-language lines are kept as `dialogueLocal` for UI / subtitles. Duration is re-estimated
+ * The original story-language lines are kept as `dialogueLocal` for UI display (subtitles removed). Duration is re-estimated
  * from the English words. Never throws: on a failed translation the script is returned as-is (logged).
  */
 export async function ensureEnglishDialogue(

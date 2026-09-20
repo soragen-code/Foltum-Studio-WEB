@@ -7,7 +7,6 @@
  *
  *   - buildConcatPlan(shots)        → the ordered clip list + per-shot ffmpeg postFx filter.
  *   - postFxToFfmpegFilter(postFx)  → slowmo / punchZoom / none → an ffmpeg -vf filter string.
- *   - buildSubtitleSpec(shots,opts) → CENTERED subtitle cues from spoken lines (dialogueLanguage="en").
  *   - musicForBeat(beatType)        → a QUIET music mood for the closing beat type.
  *   - textualContinuityCheck(a,b)   → compares shot A's matchCutOut vs shot B's matchCutIn (pure text).
  *   - compareShotKeyframesVLM(...)  → the VLM continuity path; STRUCTURED so it is NEVER called in tests
@@ -94,95 +93,16 @@ export function buildConcatPlan(
   };
 }
 
-/* ───────────────────────── subtitles (centered) ───────────────────────── */
+/* ───────────────────────── text helper ───────────────────────── */
 
-export interface SubtitleCue {
-  index: number;
-  /** Cue start time in seconds (cumulative over the ordered clips). */
-  start: number;
-  /** Cue end time in seconds. */
-  end: number;
-  text: string;
-}
-
-export interface SubtitleSpec {
-  cues: SubtitleCue[];
-  language: string;
-  /** Subtitles are burned CENTERED (bottom-center, horizontally centered). */
-  alignment: "center";
-}
-
+/** Collapse whitespace and trim (shared by the pure helpers below). */
 const oneLine = (t?: string | null) => (t ?? "").replace(/\s+/g, " ").trim();
 
-/**
- * Build a CENTERED subtitle spec from the shots' spoken lines. Cue timings accumulate over the ordered
- * clip durations, so cue N starts where clip N starts. Silent shots produce no cue. `dialogueLanguage`
- * defaults to "en" (thread it through from the episode; Stage 3 dialogueLanguage read defensively).
- * Pure — returns the cue list; the worker renders it to burned subtitles.
+/*
+ * Subtitles were REMOVED from the product/pipeline: the former SubtitleCue/SubtitleSpec types,
+ * buildSubtitleSpec, and subtitleSpecToAss (plus the ASS timestamp/escape helpers) lived here and
+ * have been deleted. The assembled episode is now the joined clips (native speech) + music only.
  */
-export function buildSubtitleSpec(
-  shots: Array<Pick<PlannedShot, "index" | "duration" | "line">>,
-  opts: { dialogueLanguage?: string | null } = {}
-): SubtitleSpec {
-  const language = oneLine(opts.dialogueLanguage) || "en";
-  const ordered = [...shots].sort((a, b) => a.index - b.index);
-  const cues: SubtitleCue[] = [];
-  let cursor = 0;
-  for (const s of ordered) {
-    const text = oneLine(s.line);
-    const dur = s.duration || 0;
-    if (text) cues.push({ index: s.index, start: +cursor.toFixed(3), end: +(cursor + dur).toFixed(3), text });
-    cursor += dur;
-  }
-  return { cues, language, alignment: "center" };
-}
-
-/** Format a seconds value as an ASS timestamp `H:MM:SS.cs` (centiseconds). */
-function assTime(sec: number): string {
-  const s = Math.max(0, sec);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const secs = Math.floor(s % 60);
-  const cs = Math.round((s - Math.floor(s)) * 100);
-  const pad = (n: number, w = 2) => String(n).padStart(w, "0");
-  return `${h}:${pad(m)}:${pad(secs)}.${pad(cs)}`;
-}
-
-/** Escape a subtitle line for an ASS dialogue event (newlines → \N, strip braces that start overrides). */
-function assEscape(t: string): string {
-  return t.replace(/[{}]/g, "").replace(/\r?\n/g, "\\N");
-}
-
-/**
- * Serialize a CENTERED SubtitleSpec into an ASS (Advanced SubStation Alpha) document. Alignment=2 is
- * ASS bottom-CENTER (horizontally centered), which is what "centered subtitles" means for a 9:16 reel.
- * Pure — the worker writes this to a temp .ass file and burns it in with ffmpeg's `subtitles` filter.
- * PlayResX/Y match the 1080×1920 vertical canvas so the font size and margins scale correctly.
- */
-export function subtitleSpecToAss(spec: SubtitleSpec, opts: { playResX?: number; playResY?: number } = {}): string {
-  const w = opts.playResX ?? 1080;
-  const h = opts.playResY ?? 1920;
-  const header = [
-    "[Script Info]",
-    "ScriptType: v4.00+",
-    "WrapStyle: 0",
-    "ScaledBorderAndShadow: yes",
-    `PlayResX: ${w}`,
-    `PlayResY: ${h}`,
-    "",
-    "[V4+ Styles]",
-    "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
-    // Alignment 2 = bottom-center; white fill, black outline, generous bottom margin for a 9:16 canvas.
-    "Style: Default,Arial,64,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,1,2,80,80,180,1",
-    "",
-    "[Events]",
-    "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
-  ];
-  const events = spec.cues.map(
-    (c) => `Dialogue: 0,${assTime(c.start)},${assTime(c.end)},Default,,0,0,0,,${assEscape(c.text)}`
-  );
-  return `${header.join("\n")}\n${events.join("\n")}\n`;
-}
 
 /* ───────────────────────── quiet music per beat ───────────────────────── */
 

@@ -303,14 +303,14 @@ export async function persistEpisodeScript(
     await tx.scene.deleteMany({ where: { episodeId } });
     for (const s of script.scenes) {
       // Stage 161 — a silent establishing/atmospheric scene (author-provided) carries NO spoken speech: keep the
-      // "[NO DIALOGUE]" sentinel in `dialogue` (UI + subtitles show nothing to voice) and store an EMPTY
+      // "[NO DIALOGUE]" sentinel in `dialogue` (UI shows nothing to voice) and store an EMPTY
       // `dialogueEn` so the video track has no lines to speak — only the ambient/room-tone audio.
       const silent = isSilent(s.dialogue);
       const scene = await tx.scene.create({
         data: {
           episodeId,
           number: s.number,
-          // `dialogue` = story-language text (UI + burned-in subtitles); `dialogueEn` = the English lines the model voices.
+          // `dialogue` = story-language text (UI display only; subtitles removed); `dialogueEn` = the English lines the model voices.
           dialogue: silent ? "[NO DIALOGUE]" : (s.dialogueLocal ?? s.dialogue),
           dialogueEn: silent ? "" : s.dialogue,
           // Stage 20 (A2): lock every non-location-change scene to the episode's single canonical location
@@ -345,7 +345,8 @@ export async function persistEpisodeScript(
           voiceover: s.voiceover ?? null,
           voiceoverLocal: s.voiceoverLocal ?? s.voiceover ?? null,
           language: "en", // speech is always English (Stage 4)
-          subtitled: false,
+          // NOTE: `Scene.subtitled` is DEPRECATED/inactive (subtitles removed); no longer written here —
+          // the column keeps its schema default (false) for historical rows.
           status: "pending",
         },
       });
