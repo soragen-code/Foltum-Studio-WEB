@@ -357,7 +357,7 @@ async function runShotVideoJob(params: VideoJobParams): Promise<void> {
     const provider = normalizeVideoModel(params.provider);
     const modelSlug = videoModelSlug(provider);
     const input = {
-      prompt, model: modelSlug, duration: Math.max(1, Math.round(Number(shot.duration ?? 3))),
+      prompt, model: modelSlug, duration: Math.max(4, Math.round(Number(params.duration ?? shot.duration ?? 3))),
       resolution: SCENE_RESOLUTION, aspect_ratio: "9:16", generate_audio: true, watermark: false,
     };
     const attempt: GenerationAttempt = {
