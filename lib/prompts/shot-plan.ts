@@ -107,7 +107,7 @@ export const SHOT_OPENING_RULE =
   "Do not open on a wide of the room, a location card, a character arriving, or anyone explaining the situation. Start IN the conflict.";
 
 export const SHOT_REACTION_RULE =
-  "REACTIONS: after every line whose impact is HIGH, the very NEXT shot is a REACTION shot (shotType \"reaction\") of 0.8–1.5 s on the character who receives the line — their face, no new line.";
+  "REACTIONS (cause before reaction): a reaction shot must come AFTER the shot that shows the thing it reacts to, never before it. After every line whose impact is HIGH — and after any strong non-verbal event (a slap, a reveal, a door opening) — the very NEXT shot is a REACTION shot (shotType \"reaction\") of 0.8–1.5 s on the character who RECEIVES that line or event (set \"reactionOfId\" to them): their face, no new line. Never place a character's reaction before the cause has been shown on screen.";
 
 export const SHOT_SILENCE_RULE =
   "SILENCE: at least 30% of the shots carry NO spoken line — inserts, reactions and action beats that tell the story through image alone.";
@@ -128,6 +128,12 @@ export const SHOT_CLIFFHANGER_RULE =
 export const SHOT_FRAMING_RULE =
   "DIALOGUE FRAMING: a dialogue or reaction shot that carries a spoken line is NEVER a wide / establishing shot (WS) — it is an over-the-shoulder / medium / medium-close / close-up. No wide, group, aerial or high-angle shot while anyone is speaking.";
 
+export const SHOT_GEOGRAPHY_RULE =
+  "GEOGRAPHY & SPACE: keep the space consistent. Respect the layout established for the scene's location — where people and key objects stand relative to each other — and keep screen direction and eyelines stable across cuts (a character on the left keeps looking right at the character on the right; do not flip who is on which side between shots of the same exchange). When a shot refers to a character or an object, it must be one already placed in this scene's location; introduce no one and nothing the scene has not established. Only cross the line (reverse the geography) with a deliberate re-establishing shot.";
+
+export const SHOT_SCENE_OPENING_RULE =
+  "NEW-SCENE OPENING: the FIRST shot of each new scene (a new sceneNumber) re-establishes who is present and where — a close or medium shot on the character who speaks or acts first in that scene (not a wide of the empty room). This keeps the audience oriented after every location change while still obeying the DIALOGUE FRAMING rule.";
+
 /* ───────────────────────── prompt builders ───────────────────────── */
 
 export const SHOT_PLAN_SYSTEM =
@@ -143,6 +149,8 @@ export const SHOT_PLAN_SYSTEM =
   `- ${SHOT_ESCALATION_RULE}\n` +
   `- ${SHOT_CLIFFHANGER_RULE}\n` +
   `- ${SHOT_FRAMING_RULE}\n` +
+  `- ${SHOT_GEOGRAPHY_RULE}\n` +
+  `- ${SHOT_SCENE_OPENING_RULE}\n` +
   "Return JSON: { \"shots\": [ { \"sceneNumber\": <int>, \"shotType\": \"dialogue|reaction|insert|action|establishing\", " +
   "\"size\": \"CU|MCU|MS|WS\", \"duration\": <seconds>, \"camera\": \"<technique>\", \"speakerId\": \"<id|null>\", " +
   "\"line\": \"<line|empty>\", \"lineImpact\": \"low|medium|high\", \"reactionOfId\": \"<id|null>\", " +

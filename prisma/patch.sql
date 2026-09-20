@@ -500,3 +500,11 @@ CREATE INDEX IF NOT EXISTS "GenerationLog_kind_idx" ON "GenerationLog"("kind");
 
 -- Stage 8 (final): project-level dialogue language (default English). Additive + idempotent.
 ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "dialogueLanguage" TEXT DEFAULT 'en';
+
+
+
+-- P7/P10 (pipeline fix): staleness flags for derived rows. Additive + idempotent.
+--  Scene.stale       — the approved Episode.script changed after this scene was derived from it.
+--  SeasonState.stale — an earlier episode was reworked after this season-state was written.
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "stale" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "SeasonState" ADD COLUMN IF NOT EXISTS "stale" BOOLEAN NOT NULL DEFAULT false;

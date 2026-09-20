@@ -195,6 +195,9 @@ model SeasonState {
   reflectsEpisodeNumber Int?     // the episode number whose approval produced this state (null = seeded)
   state                 Json     // SeasonStateData: characters/props/openThreads/plantedSetups/revealedToAudience/lastSceneEndState
   version               String   // the season-state prompt version this record was produced with
+  // P10 (additive): true when an EARLIER episode was reworked after this state was written, so this state
+  // reflects a now-outdated continuity chain and must be regenerated. Default false = fresh.
+  stale                 Boolean  @default(false)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
@@ -416,6 +419,9 @@ model Scene {
   // legacy scenes (no ladder / no shots) still load and play through the classic scene pipeline unchanged.
   escalationBeats Json?  // Stage 167: ordered JSON array of 5-7 escalation steps for this scene (verbal → physicalLight → symbolic(keyProp) → physicalHeavy → statusReveal → thirdForce). null on legacy scenes.
   keyProp         String? // Stage 167: the single key prop the scene's symbolic escalation step turns on. null on legacy scenes.
+  // P7 (additive): true when the approved Episode.script changed after this scene was derived from it, so the
+  // scene (and its shots) are outdated and must be rebuilt. Default false = fresh; reset to false on rebuild.
+  stale           Boolean @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

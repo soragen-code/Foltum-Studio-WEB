@@ -65,6 +65,15 @@ import {
   EMOTIONAL_PEAK_RULE,
   LAST_SCENE_CLIFFHANGER_RULE,
 } from "@/lib/prompts/episode-script";
+// P7/P8/P10 — pure, offline-testable decision helpers (approved-script gate, coverage validation,
+// season-memory predecessor + dependents). This module imports nothing at runtime, so its logic is
+// unit-tested on synthetic fixtures without a DB / LLM.
+import {
+  scriptApprovalState,
+  validateSceneCoverage,
+  pickPredecessorState,
+  dependentStateIds,
+} from "@/lib/scene-breakdown";
 
 /** GenerationJob.type value for the episode scene-breakdown job. */
 export const SCENES_JOB_TYPE = "scenes";
@@ -86,9 +95,11 @@ const ESCALATION_LADDER_TEXT = ESCALATION_LADDER.join(" → ");
 
 const SYSTEM = `You are a showrunner + dramatist writing the DRAMATIC BLUEPRINT of ONE episode of a short-form vertical drama series (9:16). You do NOT direct the camera: you write the DRAMA — who is where, what happens between the characters, and how the tension moves. A separate shot planner turns your scenes into camera shots later, so write NO camera directions of any kind (no shot types, no wide / medium / close-up, no camera angles or movements, no "establishing shot", no lighting directions, no video prompts).
 
-A "scene" here is a UNIT OF DRAMA, NOT a camera shot: one continuous beat of the story in ONE place, built around an event that CHANGES the situation. Write as many scenes as the story genuinely needs. The range ${MIN_SCENES}–${MAX_SCENES} is a PRODUCTION LIMIT (how many clips the episode can hold), NOT a quality target — never pad the episode to hit a number and never treat more scenes as "better". Dramatize ONLY this episode's description; do not borrow, foreshadow in detail or resolve events that belong to the other episodes.
+A "scene" here is a UNIT OF DRAMA, NOT a camera shot: one continuous beat of the story in ONE place, built around an event that CHANGES the situation. Write as many scenes as the story genuinely needs. The range ${MIN_SCENES}–${MAX_SCENES} is a PRODUCTION LIMIT (how many clips the episode can hold), NOT a quality target — never pad the episode to hit a number and never treat more scenes as "better". Dramatize ONLY this episode; do not borrow, foreshadow in detail or resolve events that belong to the other episodes.
 
-Given the project synopsis, this episode's description, the previous episode's cliffhanger and the characters, return ONLY valid JSON in this exact shape:
+The APPROVED EPISODE SCRIPT below is the SINGLE SOURCE OF TRUTH for this episode: every event you dramatize and every spoken line MUST come from that script. Break the script into scenes IN ORDER — cover ALL of its events and preserve its dialogue and speakers; do NOT invent events, drop events, reorder them, or re-derive the story from the synopsis or the one-line description (those are background context only). If the script names a line, keep that line's speaker and meaning.
+
+Given the approved episode script (authoritative), the project synopsis and characters (context), and the previous episode's cliffhanger, return ONLY valid JSON in this exact shape:
 
 {
   "scenes": [
@@ -157,6 +168,14 @@ async function buildUserMessage(projectId: string | undefined, episodeId: string
   });
   if (!episode) return { error: "Episode not found" };
 
+  // P7 — the scene breakdown is built from the APPROVED SCRIPT, which is the single source of truth for
+  // this episode's events + dialogue. There is no separate `scriptApprovedAt` field: a non-empty
+  // Episode.script IS the approval signal. If there is no script, HALT with a clear error instead of
+  // silently re-deriving scenes from the synopsis / description.
+  const approval = scriptApprovalState(episode);
+  if (!approval.approved) return { error: approval.reason };
+  const approvedScript = (episode.script ?? "").trim();
+
   const pid = projectId || episode.season?.projectId;
   const synopsis = episode.season?.project?.synopsis ?? "";
 
@@ -207,7 +226,7 @@ async function buildUserMessage(projectId: string | undefined, episodeId: string
     ? `\nProject language: "${projectLanguage}" (context only) — but write ALL scene fields, including "dialogue" and "action", in ENGLISH.`
     : `\nWrite ALL scene fields, including "dialogue" and "action", in ENGLISH.`;
 
-  const userMsg = `Project synopsis: ${synopsis}${languageHint}
+  const userMsg = `Project synopsis (CONTEXT ONLY — do NOT re-derive the story from this): ${synopsis}${languageHint}
 
 Characters:
 ${charSummary || "No characters defined yet."}
@@ -220,7 +239,13 @@ ${prevContext}
 >>> GENERATE SCENES ONLY FOR THIS EPISODE <<<
 ${episodeBriefBlock(episode)}
 
-Write this episode as however many dramatic scenes the story genuinely needs; the range ${MIN_SCENES}–${MAX_SCENES} is a PRODUCTION LIMIT on how many clips fit, NOT a quality target — do not pad to a number. For EACH scene fill: "action" (the PROSE drama of the event and how it turns — NO camera terms), "keyProp" (OPTIONAL — a physical object the tension turns on, only when one genuinely helps; leave empty otherwise), "escalationBeats" (OPTIONAL — the ladder ${ESCALATION_LADDER_TEXT} is a TOOL for shaping the turn, not a requirement: a scene need not climb a fixed ladder, hit a rung count, or grow monotonically louder — tension can come just as well from a refusal, a held pause, information withheld, a goal-shift, or the stakes made plain; when you do list beats, prefix each with its rung name and keep them in order, up to ${SCENE_ESCALATION_MAX_BEATS}, else leave empty), an ENGLISH "dialogue" (SPEAKER (tone): "line" rows — usually a two-way exchange where they answer each other, but a refusal, a one-sided confrontation or a single loaded line is equally valid; never a weak throwaway line), a "location" NAME only, and an integer "durationSec" (${SCENE_MIN_SECONDS}–${SCENE_CLIP_MAX_SECONDS} s; the whole-episode total lands in ${EPISODE_MIN_TOTAL_SECONDS}–${EPISODE_MAX_TOTAL_SECONDS} s). Scene 1 opens on a HOOK — a conflict / threat / burning question in the first ~3 s (NO exposition, NO character merely arriving); the FINAL scene ends on this episode's cliffhanger as a concrete unresolved image. Dramatize ONLY this episode's description, opening by continuing naturally from the previous episode's cliffhanger. Write NO camera directions anywhere — the camera is planned later, one level below.`;
+============ APPROVED EPISODE SCRIPT — THE SINGLE SOURCE OF TRUTH ============
+Break THIS script into scenes in order. Cover ALL of its events, keep its dialogue and speakers, and invent nothing beyond it. The synopsis and one-line description above are background only; the events and lines come from here:
+"""
+${approvedScript}
+"""
+
+Write this episode by breaking the APPROVED SCRIPT above into however many dramatic scenes it genuinely needs; the range ${MIN_SCENES}–${MAX_SCENES} is a PRODUCTION LIMIT on how many clips fit, NOT a quality target — do not pad to a number and do not drop script events to fit under it. Cover EVERY event of the script in story order and preserve its dialogue lines and speakers. For EACH scene fill: "action" (the PROSE drama of the script's event and how it turns — NO camera terms), "keyProp" (OPTIONAL — a physical object the tension turns on, only when one genuinely helps; leave empty otherwise), "escalationBeats" (OPTIONAL — the ladder ${ESCALATION_LADDER_TEXT} is a TOOL for shaping the turn, not a requirement: a scene need not climb a fixed ladder, hit a rung count, or grow monotonically louder — tension can come just as well from a refusal, a held pause, information withheld, a goal-shift, or the stakes made plain; when you do list beats, prefix each with its rung name and keep them in order, up to ${SCENE_ESCALATION_MAX_BEATS}, else leave empty), an ENGLISH "dialogue" (SPEAKER (tone): "line" rows drawn from the script — usually a two-way exchange where they answer each other, but a refusal, a one-sided confrontation or a single loaded line is equally valid; never a weak throwaway line), a "location" NAME only, and an integer "durationSec" (${SCENE_MIN_SECONDS}–${SCENE_CLIP_MAX_SECONDS} s; the whole-episode total lands in ${EPISODE_MIN_TOTAL_SECONDS}–${EPISODE_MAX_TOTAL_SECONDS} s). Scene 1 opens on a HOOK — a conflict / threat / burning question in the first ~3 s (NO exposition, NO character merely arriving); the FINAL scene ends on this episode's cliffhanger as a concrete unresolved image. Write NO camera directions anywhere — the camera is planned later, one level below.`;
 
   return { userMsg };
 }
@@ -252,26 +277,55 @@ async function persistScenes(episodeId: string, data: { scenes?: any[] }): Promi
   const rawScenes = Array.isArray(data?.scenes) ? data.scenes : [];
   if (rawScenes.length === 0) throw new Error("Model returned no scenes");
 
-  // Content-driven count: keep as many scenes as the model wrote, capped at the Stage 166 ceiling.
-  const trimmed = rawScenes.slice(0, MAX_SCENES);
-  // Variable-length clips: take each scene's OWN durationSec, clamp into [SCENE_MIN_SECONDS,
+  // Build the FULL candidate list first (every scene the model produced, in order). We validate COVERAGE
+  // against the whole list BEFORE applying the production ceiling — the count is a hard clip limit, not a
+  // quality gate — so we never silently drop scenes. (Accept "location" NAME-only with a legacy
+  // "locationDesc" fallback.)
+  const candidates = rawScenes.map((s, i) => ({
+    number: i + 1,
+    action: String(s?.action ?? "").trim(),
+    dialogue: String(s?.dialogue ?? "").trim(),
+    keyProp: String(s?.keyProp ?? "").trim(),
+    escalationBeats: normalizeEscalationBeats(s?.escalationBeats),
+    location: String(s?.location ?? s?.locationDesc ?? "").trim(),
+    rawDurationSec: Number(s?.durationSec),
+  }));
+
+  // P8 — coverage validation REPLACES the old blind `slice(0, MAX_SCENES)`. It checks that the breakdown is
+  // faithful to the approved script (order preserved / consecutive numbering, every scene carries action,
+  // speakers preserved in dialogue, a final scene present). A breakdown with FEWER scenes than any minimum
+  // is NOT a problem when its coverage is complete — the count is a PRODUCTION LIMIT, not a quality target.
+  const coverage = validateSceneCoverage(candidates, { maxScenes: MAX_SCENES });
+  if (coverage.problems.length) {
+    console.warn(`[scenes] ${episodeId}: scene coverage problems — ${coverage.problems.join("; ")}`);
+  }
+
+  // Apply the production ceiling EXPLICITLY (never a silent drop). Keep every scene within the limit; only
+  // when the model exceeds MAX_SCENES do we clip the overflow, and we log exactly how many were removed.
+  let kept = candidates;
+  if (coverage.overLimit) {
+    console.warn(
+      `[scenes] ${episodeId}: ${coverage.count} scenes exceed the production ceiling of ${MAX_SCENES} — ` +
+        `clipping the last ${coverage.overflow} scene(s) to fit (explicit ceiling clip, NOT a silent drop). ` +
+        `Consider tightening the script so the whole episode fits the clip budget.`
+    );
+    kept = candidates.slice(0, MAX_SCENES);
+  }
+
+  // Variable-length clips: take each KEPT scene's OWN durationSec, clamp into [SCENE_MIN_SECONDS,
   // SCENE_CLIP_MAX_SECONDS], and trim the longest clips only if the whole episode exceeds the ceiling.
-  const durationHolders = trimmed.map((s) => ({ durationSec: clampSceneDuration(Number(s?.durationSec)) }));
+  const durationHolders = kept.map((s) => ({ durationSec: clampSceneDuration(s.rawDurationSec) }));
   applyFixedSceneDurations(durationHolders);
   const durations = durationHolders.map((h) => h.durationSec ?? SCENE_MIN_SECONDS);
-  const scenesOut = trimmed.map((s, i) => {
-    // Accept "location" (new NAME-only field) with a legacy "locationDesc" fallback.
-    const location = String(s?.location ?? s?.locationDesc ?? "").trim();
-    return {
-      number: i + 1,
-      durationSec: durations[i],
-      action: String(s?.action ?? "").trim(),
-      dialogue: String(s?.dialogue ?? "").trim(),
-      keyProp: String(s?.keyProp ?? "").trim(),
-      escalationBeats: normalizeEscalationBeats(s?.escalationBeats),
-      location,
-    };
-  });
+  const scenesOut = kept.map((s, i) => ({
+    number: i + 1,
+    durationSec: durations[i],
+    action: s.action,
+    dialogue: s.dialogue,
+    keyProp: s.keyProp,
+    escalationBeats: s.escalationBeats,
+    location: s.location,
+  }));
 
   // A scene's only CORE content is its action + spoken lines. keyProp and escalationBeats are OPTIONAL
   // storytelling tools (Stage P3), so their absence is NOT an incompleteness — logged for visibility only.
@@ -304,6 +358,8 @@ async function persistScenes(episodeId: string, data: { scenes?: any[] }): Promi
           locationDesc: anchorSceneLocation(s.location, episode.locationDesc, undefined),
           // Stage 167 integration — the camera lives in the shot planner; the scene stores no videoPrompt.
           videoPrompt: null,
+          // P7 — this scene is freshly derived from the current approved script, so it is not stale.
+          stale: false,
           status: "pending",
         },
       });
@@ -426,11 +482,18 @@ export async function updateSeasonStateForApprovedEpisode(episodeId: string): Pr
   const scriptText = (episode.script ?? "").trim();
   if (!scriptText) return; // nothing to fold in — keep the previous state
 
-  // Current state: the newest persisted SeasonState row, else a freshly seeded initial state.
-  const existing = await prisma.seasonState.findFirst({ where: { seasonId: season.id }, orderBy: { updatedAt: "desc" } });
+  // P10 — pick the PREDECESSOR state by reflectsEpisodeNumber (the largest value strictly LESS than this
+  // episode's number), NOT the newest row by updatedAt. Reading the newest-by-updatedAt row is the bug:
+  // after an early episode is reworked, that row reflects a LATER episode and corrupts continuity. Load all
+  // rows for the season and let the pure helper choose (a seeded row is used only as a fallback).
+  const seasonStates = await prisma.seasonState.findMany({
+    where: { seasonId: season.id },
+    select: { id: true, reflectsEpisodeNumber: true, updatedAt: true, state: true },
+  });
+  const predecessor = pickPredecessorState(seasonStates, episode.number);
   let currentState: SeasonStateData;
-  if (existing?.state) {
-    currentState = normalizeSeasonState(existing.state);
+  if (predecessor?.state) {
+    currentState = normalizeSeasonState(predecessor.state);
   } else {
     const cast: SeedCastMember[] = (season.project?.characters ?? []).map((c) => ({
       id: c.id,
@@ -454,14 +517,39 @@ export async function updateSeasonStateForApprovedEpisode(episodeId: string): Pr
     { model: SCRIPT_MODEL },
   );
 
-  // Persist regardless of valid flag: an invalid-but-normalized state is still better continuity than the old
-  // text tail, and the version records which prompt family produced it. Append-only (newest row wins).
+  // P10 — do NOT canonize an INVALID state. The previous code persisted regardless of the valid flag, which
+  // let a contradictory state become the continuity the NEXT episode is written from. Only append the new
+  // state when the validator passed; otherwise keep the previous state (a safe, non-throwing degrade).
+  if (!result.valid) {
+    console.warn(
+      `[scenes] season-state update for episode ${episode.number} was INVALID ` +
+        `(${(result.errors ?? []).map((e) => `${e.field}: ${e.message}`).join("; ") || "no detail"}) — ` +
+        `keeping the previous state instead of canonizing a contradictory one`
+    );
+    return;
+  }
+
+  // Append-only (this predecessor-then-append model means the row for this episode number is added, not
+  // overwritten). A freshly written state is not stale.
   await prisma.seasonState.create({
     data: {
       seasonId: season.id,
       reflectsEpisodeNumber: episode.number,
       state: result.state as unknown as object,
       version: result.version ?? SEASON_STATE_PROMPT_VERSION,
+      stale: false,
     },
   });
+
+  // P10 — when an EARLIER episode is reworked, every season-state row that reflects a LATER episode was
+  // derived from the now-outdated continuity chain and is stale. Mark them so they can be regenerated. In
+  // the normal forward case (this is the newest episode) there are no dependents and this is a no-op.
+  const staleIds = dependentStateIds(seasonStates, episode.number);
+  if (staleIds.length) {
+    await prisma.seasonState.updateMany({ where: { id: { in: staleIds } }, data: { stale: true } });
+    console.warn(
+      `[scenes] episode ${episode.number} reworked — marked ${staleIds.length} later season-state row(s) stale ` +
+        `(they must be regenerated from the updated chain)`
+    );
+  }
 }
