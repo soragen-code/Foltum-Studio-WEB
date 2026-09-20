@@ -56,6 +56,12 @@ export interface SynopsisJobParams {
  * client's SmoothProgress ease it toward 100 % on a time curve; on save we bump to 80 %.
  */
 export async function runSynopsisJob(jobId: string, projectId: string, params: SynopsisJobParams): Promise<void> {
+  // Stage 175 — keep the job's updatedAt fresh throughout the whole generation. The drama-bible best-of-3
+  // block (generateBestOfN → per-variant generate/critique/improve) runs 3–4.5 min of sequential LLM calls
+  // with no per-step heartbeat, so GET polling's failStaleJobs (STALE_JOB_MS = 3 min) would reap this LIVE
+  // job and surface a false "Generation timed out". A 60 s background ping (well under 3 min) prevents that;
+  // it is cleared in finally on every path. heartbeatJob never throws.
+  let hb: ReturnType<typeof setInterval> | null = null;
   try {
     const { idea, auto, genres = [], extras, fromStory, story, episodeCount } = params;
     // Stage 14 (B): only persist a producer-chosen episode count outside story-upload mode.
@@ -74,6 +80,9 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
 
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
     await updateJob(jobId, { status: "processing", progress: 15, message: "Drafting season synopsis…" });
+
+    // Start the heartbeat now — everything below (drama-bible best-of-3 + synopsis attempt loop) is the slow part.
+    hb = setInterval(() => { heartbeatJob(jobId).catch(() => {}); }, 60_000);
 
     // Stage 1 (dramaBible) — design the structured STORY BIBLE FIRST (generate → validate → targeted retry).
     // On success we (a) persist it on the Project and (b) thread a compact brief into the synopsis prompt so
@@ -167,10 +176,10 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
       try {
         await heartbeatJob(jobId);
         const raw = fromStory
-          ? await chatJSON(ideaFromStorySystemPrompt(storyLanguage), ideaFromStoryUserPrompt(storyText) + bibleBriefNote, { temperature: 0.6, maxTokens: 4200 })
+          ? await chatJSON(ideaFromStorySystemPrompt(storyLanguage), ideaFromStoryUserPrompt(storyText) + bibleBriefNote, { temperature: 0.6, maxTokens: 6000 })
           : auto
-          ? await chatJSON(ideaAutoSystemPrompt(autoLanguage), ideaAutoUserPrompt(genres, extras) + bibleBriefNote, { temperature: 0.95, maxTokens: 3800 })
-          : await chatJSON(ideaSystemPrompt(), ideaUserPrompt(idea ?? "") + bibleBriefNote, { temperature: 0.8, maxTokens: 3500 });
+          ? await chatJSON(ideaAutoSystemPrompt(autoLanguage), ideaAutoUserPrompt(genres, extras) + bibleBriefNote, { temperature: 0.95, maxTokens: 6000 })
+          : await chatJSON(ideaSystemPrompt(), ideaUserPrompt(idea ?? "") + bibleBriefNote, { temperature: 0.8, maxTokens: 6000 });
         result = normalizeIdeaResult(
           raw,
           fromStory ? storyText : auto ? (extras && extras.trim() ? extras : autoLanguage === "ru" ? "Russian history" : "story") : idea ?? ""
@@ -215,6 +224,8 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
   } catch (err: any) {
     console.error("[synopsis] job error:", err);
     await failJob(jobId, "Generation failed: " + (err?.message ?? "Unknown error"));
+  } finally {
+    if (hb) clearInterval(hb);
   }
 }
 

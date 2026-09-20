@@ -131,6 +131,8 @@ export async function completeJob(jobId: string, resultData?: unknown, message =
     status: "completed",
     progress: 100,
     message,
+    // Success clears any stale error a reaper (failStaleJobs) may have written during a race.
+    error: null,
     resultData: resultData === undefined ? undefined : JSON.stringify(resultData),
   });
 }
