@@ -37,7 +37,7 @@ function readSource(rel: string): string {
 
 /* ───────────── 1) the script prompt keeps spoken lines free of stage directions ───────────── */
 {
-  const prompt = episodeScriptSystemPrompt("English", 1);
+  const prompt = episodeScriptSystemPrompt("en", 1);
   // stage directions / action / blocking / narration must never appear inside the spoken "dialogue" line
   ok(/NEVER stage directions/i.test(prompt), "prompt: spoken line carries ONLY words spoken — NEVER stage directions inside the line");
   ok(/belongs in "action"|belongs in \[BLOCKING\]|belongs in .action./i.test(prompt), "prompt: everything characters DO belongs in action / [BLOCKING] / [ACTION], not the line");
@@ -47,14 +47,14 @@ function readSource(rel: string): string {
 
 /* ───────────── 2) the ending must LOGICALLY follow from the episode's events (causality) ───────────── */
 {
-  const prompt = episodeScriptSystemPrompt("English", 1);
+  const prompt = episodeScriptSystemPrompt("en", 1);
   ok(/LOGICALLY FOLLOWS from the events of THIS episode/i.test(prompt), "prompt: cliffhanger must LOGICALLY FOLLOW from the events of THIS episode");
   ok(/causal pay-off/i.test(prompt) && /never an unrelated or arbitrary shock/i.test(prompt), "prompt: ending is a causal pay-off, never an unrelated/arbitrary shock bolted on");
 }
 
 /* ───────────── 3) the two-way exchange is softened to a recommendation, not a mandate ───────────── */
 {
-  const prompt = episodeScriptSystemPrompt("English", 1);
+  const prompt = episodeScriptSystemPrompt("en", 1);
   ok(/NOT mandatory/i.test(prompt), "prompt: a genuine two-way exchange is strongest but NOT mandatory");
   ok(/refusal|one-sided|withheld|loaded silence|phone/i.test(prompt), "prompt: a scene may turn on a refusal / one-sided confrontation / withheld answer / loaded silence / phone");
   // but pure NARRATOR / voice-over-only scenes are still disallowed (spoken-language logic untouched)
