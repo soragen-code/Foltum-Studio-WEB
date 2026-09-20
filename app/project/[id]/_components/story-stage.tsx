@@ -8,7 +8,7 @@ import { RewritePlaceholder } from './rewrite-placeholder'
 import { rewriteViewState } from '@/lib/rewrite-view-state'
 import { CancelButton } from './cancel-button'
 import { StickyReviseBar } from './sticky-revise-bar'
-import { type SeasonEpisode } from './season-stage'
+import { type SeasonEpisode, seasonBuildPercent } from './season-stage'
 import { EpisodeFootage } from './episode-footage'
 import { PLOT_ACCEPT } from '@/lib/plot-import'
 
@@ -104,6 +104,11 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
   const jobActive = !!job && (job.status === 'pending' || job.status === 'processing')
   const total = season?.episodes.length ?? 0
   const episodeCount = total
+  // Percentage shown on the season-build bar. Uses the same monotonic helper as season-stage
+  // (floors by written-episode count so the optimistic "Starting..." 1% reset never jumps backwards;
+  // capped at 99 so a false 100% never appears before the job actually completes).
+  const doneEpisodes = season?.episodes.filter((e) => !!e.script).length ?? 0
+  const buildPct = seasonBuildPercent({ progress: job?.progress, done: doneEpisodes, total })
   // Stage 107: the season job writes structure + plot only; scripts are written on demand from the episode
   // page. «Go to first episode therefore always points at episode 1 (lowest number), script or not.
   const firstEpisode = season ? ([...season.episodes].sort((a, b) => a.number - b.number)[0] ?? null) : null
@@ -332,10 +337,13 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
                 <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-primary" />
                 <span className="truncate">{job?.message ?? 'Starting...'}</span>
               </span>
-              {job?.id && !starting && <CancelButton onCancel={cancelSeason} testId="season-cancel" className="flex-shrink-0" />}
+              <span className="flex flex-shrink-0 items-center gap-2">
+                <span className="tabular-nums font-medium text-muted-foreground" data-testid="season-progress-pct">{buildPct}%</span>
+                {job?.id && !starting && <CancelButton onCancel={cancelSeason} testId="season-cancel" className="flex-shrink-0" />}
+              </span>
             </div>
             <div className="h-2 w-full overflow-hidden rounded bg-muted">
-              <div className="h-full rounded bg-primary transition-all duration-700" style={{ width: `${Math.max(2, job?.progress ?? 0)}%` }} />
+              <div className="h-full rounded bg-primary transition-all duration-700" style={{ width: `${buildPct}%` }} />
             </div>
           </div>
         )}
