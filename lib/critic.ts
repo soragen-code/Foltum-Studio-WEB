@@ -18,22 +18,25 @@
  */
 
 /** Bumped whenever the rubric axes / critic prompt contract changes; stored on GenerationLog.promptVersion. */
-export const CRITIC_PROMPT_VERSION = "6.7.0";
+export const CRITIC_PROMPT_VERSION = "7.0.0";
 
 /* ───────────────────────── rubric ───────────────────────── */
 
 /**
- * The rubric axes. All are scored 1–10. Every axis EXCEPT `continuityRisk` is "higher is better".
- * `continuityRisk` is a RISK: a HIGH score means a HIGH risk of a continuity break, so it is INVERTED
- * when folded into the overall score (see aggregateScore).
+ * The rubric axes (Stage P6). These score VERIFIABLE craft qualities, NOT subjective "interestingness":
+ * the critic no longer gates on hook/trope/cliffhanger appeal. All are scored 1–10; every axis EXCEPT
+ * `continuityRisk` is "higher is better". `continuityRisk` is a RISK (a HIGH score = HIGH risk of a
+ * continuity break), so it is INVERTED when folded into the overall score (see aggregateScore).
+ *
+ * The axis SCORES are ADVISORY (they rank variants and feed the log); the ACCEPT / IMPROVE gate is driven
+ * by the concrete blocking DEFECTS below, never by a subjective engagement threshold.
  */
 export const RUBRIC_AXES = [
-  "hookStrength",
-  "stakesClarity",
-  "escalation",
+  "causalLogic",
+  "clarity",
+  "stagingConcreteness",
+  "dialoguePurity",
   "characterDistinctness",
-  "tropeExecution",
-  "cliffhangerPull",
   "continuityRisk",
 ] as const;
 
@@ -46,13 +49,37 @@ export type RubricScores = Record<RubricAxis, number>;
 
 export type CriticAction = "improve" | "accept";
 
+/** Severity of a concrete defect: a `blocking` defect must be fixed to accept; `advisory` is optional. */
+export type DefectSeverity = "blocking" | "advisory";
+
+/**
+ * ONE concrete, verifiable defect: the offending FRAGMENT, WHY it is wrong, and an actionable FIX.
+ * This is what the critic emits instead of a bare score — the fix instruction is built directly from these.
+ */
+export interface CriticDefect {
+  /** The exact fragment / element of the candidate the defect refers to (quoted, short). */
+  fragment: string;
+  /** Why it is a defect — the concrete rule or logic it breaks. */
+  reason: string;
+  /** A concrete, actionable fix. */
+  fix: string;
+  severity: DefectSeverity;
+}
+
 export interface Critique {
   scores: RubricScores;
-  /** 0–10 aggregate (risk axes inverted). Higher is better. */
+  /** 0–10 aggregate (risk axes inverted). Higher is better. ADVISORY — used to rank variants, not to gate. */
   overall: number;
-  /** Up to 3 short, actionable notes. */
+  /** Up to 3 short, actionable notes (kept for backward compatibility; derived from defects when absent). */
   notes: string[];
+  /** Concrete verifiable defects (fragment + reason + fix), split into blocking vs advisory by severity. */
+  defects: CriticDefect[];
   action: CriticAction;
+}
+
+/** True when the critique carries at least one BLOCKING defect (the accept/improve gate). Pure. */
+export function hasBlockingDefect(defects: CriticDefect[] | undefined | null): boolean {
+  return Array.isArray(defects) && defects.some((d) => d && d.severity === "blocking");
 }
 
 /** The score assigned to a missing / unparseable axis — a cautious mid value. */
@@ -99,25 +126,58 @@ export function actionForOverall(overall: number): CriticAction {
  */
 export function parseCriticResponse(raw: unknown): Critique {
   let obj: any = raw;
+  let parsedOk = true;
   if (typeof raw === "string") {
     try {
       obj = JSON.parse(raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/i, ""));
     } catch {
       obj = {};
+      parsedOk = false;
     }
   }
-  if (!obj || typeof obj !== "object") obj = {};
+  if (!obj || typeof obj !== "object") { obj = {}; parsedOk = false; }
   const rawScores = (obj.scores && typeof obj.scores === "object" ? obj.scores : obj) as Record<string, unknown>;
   const scores = {} as RubricScores;
   for (const axis of RUBRIC_AXES) scores[axis] = clampScore(rawScores[axis]);
 
+  const defects = parseDefects(obj.defects);
+
+  // Notes: prefer explicit notes; otherwise derive one short note per defect (fragment → fix).
   const notesSrc = Array.isArray(obj.notes) ? obj.notes : Array.isArray(obj.feedback) ? obj.feedback : [];
-  const notes = notesSrc.map(oneLine).filter((s: string) => s.length > 0).slice(0, 3);
+  let notes = notesSrc.map(oneLine).filter((s: string) => s.length > 0).slice(0, 3);
+  if (!notes.length && defects.length) notes = defects.slice(0, 3).map((d) => defectToNote(d));
 
   const overall = aggregateScore(scores);
   const explicit = oneLine(obj.action).toLowerCase();
-  const action: CriticAction = explicit === "accept" || explicit === "improve" ? (explicit as CriticAction) : actionForOverall(overall);
-  return { scores, overall, notes, action };
+  // The gate is DEFECT-DRIVEN (P6): accept only when there is no BLOCKING defect — never a subjective
+  // score threshold. An unparseable / empty response is treated cautiously as "improve".
+  let action: CriticAction;
+  if (explicit === "accept" || explicit === "improve") action = explicit as CriticAction;
+  else if (!parsedOk) action = "improve";
+  else action = hasBlockingDefect(defects) ? "improve" : "accept";
+  return { scores, overall, notes, defects, action };
+}
+
+/** Parse a raw defects array defensively into well-formed CriticDefect records (severity defaults to advisory). */
+function parseDefects(raw: unknown): CriticDefect[] {
+  if (!Array.isArray(raw)) return [];
+  const out: CriticDefect[] = [];
+  for (const d of raw) {
+    if (!d || typeof d !== "object") continue;
+    const fragment = oneLine((d as any).fragment);
+    const reason = oneLine((d as any).reason);
+    const fix = oneLine((d as any).fix);
+    if (!reason && !fix && !fragment) continue;
+    const sev = oneLine((d as any).severity).toLowerCase();
+    out.push({ fragment, reason, fix, severity: sev === "blocking" ? "blocking" : "advisory" });
+  }
+  return out.slice(0, 8);
+}
+
+/** Render a defect as one short actionable note ("<fix> (<fragment>)"). Pure. */
+function defectToNote(d: CriticDefect): string {
+  const base = d.fix || d.reason || d.fragment;
+  return d.fragment && d.fix ? `${d.fix} — re: "${d.fragment}"` : base;
 }
 
 /* ───────────────────────── pure: best-variant selection ───────────────────────── */
@@ -206,19 +266,31 @@ export function buildGenerationLog(input: GenerationLogInput): GenerationLogReco
 
 /* ───────────────────────── critic system prompt + injectable wrappers ───────────────────────── */
 
-/** The critic's system prompt — scores a candidate on the rubric and returns strict JSON. */
+/** The critic's system prompt — reports CONCRETE VERIFIABLE defects and rubric scores, returns strict JSON. */
 export const CRITIC_SYSTEM = [
-  "You are a ruthless but fair story editor for a short-form vertical (9:16) AI drama.",
-  "Score the CANDIDATE on this rubric, each axis an integer 1–10:",
-  "- hookStrength: how hard the opening grabs a scrolling viewer.",
-  "- stakesClarity: how clear what the heroine stands to lose is.",
-  "- escalation: whether tension climbs and never slides back.",
-  "- characterDistinctness: whether the characters read as distinct voices.",
-  "- tropeExecution: how sharply the intended trope lands.",
-  "- cliffhangerPull: how strongly the ending forces the next episode.",
+  "You are a precise script editor for a short-form vertical (9:16) AI drama.",
+  "Assess ONLY verifiable craft defects. Do NOT judge subjective 'interestingness', hook appeal, trope",
+  "coolness, or how badly a viewer wants the next episode — those are NOT your job and must NOT affect the",
+  "outcome. Judge what can be checked against the text and the rules.",
+  "",
+  "Score the CANDIDATE on this rubric, each axis an integer 1–10 (advisory — used only to rank variants):",
+  "- causalLogic: do events follow from prior events (cause → effect); does the ending follow from what happened?",
+  "- clarity: is who-wants-what / who-does-what unambiguous and easy to follow?",
+  "- stagingConcreteness: are there concrete actions/reactions/beats, not plot retelling or vague summary?",
+  "- dialoguePurity: are spoken lines FREE of stage directions/action/blocking/narration (spoken words + tone only)?",
+  "- characterDistinctness: do characters read as distinct, non-interchangeable voices?",
   "- continuityRisk: RISK of a continuity break (1 = airtight, 10 = likely to contradict established facts). LOWER IS BETTER.",
-  'Return STRICT JSON: { "scores": { "hookStrength": n, "stakesClarity": n, "escalation": n, "characterDistinctness": n, "tropeExecution": n, "cliffhangerPull": n, "continuityRisk": n }, "notes": ["...", "...", "..."], "action": "improve"|"accept" }.',
-  "notes: at most 3 short, ACTIONABLE fixes ranked by impact. Do not restate the candidate.",
+  "",
+  "Then list CONCRETE DEFECTS. Each defect names the offending FRAGMENT (short quote), the REASON it breaks a",
+  "rule or logic, and an actionable FIX. Mark each defect's severity:",
+  "- 'blocking': a real defect that must be fixed — a causal gap/non-sequitur ending, stage directions inside a",
+  "  spoken line, an unclear who-does-what, an outright continuity contradiction.",
+  "- 'advisory': a genuine improvement that is NOT required to accept.",
+  "Do NOT invent defects to look thorough, and never raise a blocking defect for weak 'engagement', a soft",
+  "cliffhanger, or a trope you dislike. If there are no blocking defects, the candidate is acceptable.",
+  "",
+  'Return STRICT JSON: { "scores": { "causalLogic": n, "clarity": n, "stagingConcreteness": n, "dialoguePurity": n, "characterDistinctness": n, "continuityRisk": n }, "defects": [ { "fragment": "...", "reason": "...", "fix": "...", "severity": "blocking"|"advisory" } ], "action": "improve"|"accept" }.',
+  "Set action to 'accept' when there are no blocking defects, otherwise 'improve'. Keep each field short and specific.",
 ].join("\n");
 
 /** Build the critic user message for a candidate. Pure. */
@@ -248,7 +320,7 @@ export async function critiqueCandidate(
   } catch {
     const scores = {} as RubricScores;
     for (const axis of RUBRIC_AXES) scores[axis] = DEFAULT_AXIS_SCORE;
-    return { scores, overall: aggregateScore(scores), notes: [], action: "improve" };
+    return { scores, overall: aggregateScore(scores), notes: [], defects: [], action: "improve" };
   }
 }
 

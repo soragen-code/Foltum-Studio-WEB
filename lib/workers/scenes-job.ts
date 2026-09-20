@@ -49,7 +49,6 @@ import {
   EPISODE_TOTAL_LABEL,
   SCENE_MIN_SECONDS,
   SCENE_CLIP_MAX_SECONDS,
-  SCENE_ESCALATION_MIN_BEATS,
   SCENE_ESCALATION_MAX_BEATS,
   ESCALATION_LADDER,
   clampSceneDuration,
@@ -85,9 +84,9 @@ const MAX_SCENES = EPISODE_MAX_SCENES;
 /** The escalation-ladder rungs, in order, as a readable arrow string for the prompt. */
 const ESCALATION_LADDER_TEXT = ESCALATION_LADDER.join(" → ");
 
-const SYSTEM = `You are a showrunner + dramatist writing the DRAMATIC BLUEPRINT of ONE episode of a short-form vertical drama series (9:16). You do NOT direct the camera: you write the DRAMA — who is where, what happens between the characters, and how the tension escalates. A separate shot planner turns your scenes into camera shots later, so write NO camera directions of any kind (no shot types, no wide / medium / close-up, no camera angles or movements, no "establishing shot", no lighting directions, no video prompts).
+const SYSTEM = `You are a showrunner + dramatist writing the DRAMATIC BLUEPRINT of ONE episode of a short-form vertical drama series (9:16). You do NOT direct the camera: you write the DRAMA — who is where, what happens between the characters, and how the tension moves. A separate shot planner turns your scenes into camera shots later, so write NO camera directions of any kind (no shot types, no wide / medium / close-up, no camera angles or movements, no "establishing shot", no lighting directions, no video prompts).
 
-A "scene" here is a UNIT OF DRAMA, NOT a camera shot: one continuous beat of the story in ONE place, built around an event that ESCALATES. Write ${MIN_SCENES}–${MAX_SCENES} scenes — as many as the story needs, never a fixed count. Dramatize ONLY this episode's description; do not borrow, foreshadow in detail or resolve events that belong to the other episodes.
+A "scene" here is a UNIT OF DRAMA, NOT a camera shot: one continuous beat of the story in ONE place, built around an event that CHANGES the situation. Write as many scenes as the story genuinely needs. The range ${MIN_SCENES}–${MAX_SCENES} is a PRODUCTION LIMIT (how many clips the episode can hold), NOT a quality target — never pad the episode to hit a number and never treat more scenes as "better". Dramatize ONLY this episode's description; do not borrow, foreshadow in detail or resolve events that belong to the other episodes.
 
 Given the project synopsis, this episode's description, the previous episode's cliffhanger and the characters, return ONLY valid JSON in this exact shape:
 
@@ -98,25 +97,23 @@ Given the project synopsis, this episode's description, the previous episode's c
       "durationSec": 12,
       "location": "A SHORT LOCATION NAME ONLY (e.g. \\"Kitchen, night\\" or \\"Rooftop, dawn\\") — the NAME of the place, NOT a description of how it looks or how the light falls.",
       "action": "2–4 sentences of PROSE describing the DRAMA of this scene: what the characters DO, the event that happens between them, and how it turns. Concrete, filmable, present tense. Describe the EVENTS fully here. Contains NO camera language whatsoever — no shot sizes, angles, cuts or lighting directions — only what happens.",
-      "keyProp": "ONE meaningful physical object that carries this scene's tension (a phone, a knife, a wedding ring, a letter) — a single prop the escalation can act on.",
+      "keyProp": "OPTIONAL — a meaningful physical object the scene's tension can turn on (a phone, a knife, a wedding ring, a letter), when one genuinely helps. Leave empty when the scene needs none; do not invent a prop just to fill this field.",
       "escalationBeats": [
-        "verbal: <the opening verbal jab / accusation>",
-        "physicalLight: <a small physical move — a step closer, a light snapped on>",
-        "symbolic: <a symbolic act on the keyProp — it is picked up, turned, revealed>",
-        "physicalHeavy: <a heavy physical act — a grab, a strike, a door slammed>",
-        "statusReveal: <a reveal that flips who holds power>"
+        "OPTIONAL — a few short beats tracing how the scene shifts. Use them when they help you think through the turn; leave the list empty when the scene works without them.",
+        "verbal: <an opening verbal jab / accusation, if apt>",
+        "symbolic: <a symbolic act on the keyProp, if the scene uses one>"
       ],
-      "dialogue": "a real back-and-forth EXCHANGE in ENGLISH, each line on its OWN row as SPEAKER (tone cue): \\"line\\" — the characters ANSWER each other:\\nYARA (low, guarded): \\"You shouldn't be here.\\"\\nDANE (a tired sigh): \\"Neither should you.\\""
+      "dialogue": "the spoken lines in ENGLISH, each line on its OWN row as SPEAKER (tone cue): \\"line\\". Usually a real back-and-forth where the characters ANSWER each other, but a scene may also turn on a refusal, a silence or a single loaded line:\\nYARA (low, guarded): \\"You shouldn't be here.\\"\\nDANE (a tired sigh): \\"Neither should you.\\""
     }
   ]
 }
 
 ============ HOW TO WRITE EACH FIELD ============
 
-- "action": the heart of the scene — full PROSE of the event and how it escalates. NO camera terms of any kind.
-- "keyProp": exactly ONE physical object per scene that the drama turns on; the escalation acts on it.
-- "escalationBeats": ${SCENE_ESCALATION_MIN_BEATS}–${SCENE_ESCALATION_MAX_BEATS} steps that climb ONE fixed ladder, in order, never sliding back down. Pick that many CONSECUTIVE rungs from this exact order and PREFIX each beat with its rung name: ${ESCALATION_LADDER_TEXT}. The "symbolic" rung is a symbolic act on THIS scene's keyProp.
-- "dialogue": a genuine two-way exchange between the named characters, STRICTLY ENGLISH, one line per row in the format SPEAKER (tone cue): "line". Give every line a short delivery cue in parentheses (HOW it is said). Tone cues are performance notes only — never spoken aloud, never shown as subtitles. Real story beats, subtext-rich — never a weak throwaway line.
+- "action": the heart of the scene — full PROSE of the event and how it turns. NO camera terms of any kind.
+- "keyProp": OPTIONAL. When a physical object genuinely anchors the scene's tension, name ONE; otherwise leave it empty. It is a storytelling tool, not a per-scene requirement.
+- "escalationBeats": OPTIONAL. A ladder of rungs (${ESCALATION_LADDER_TEXT}) is available as a TOOL to shape how a scene turns, but it is NOT mandatory: a scene need not climb a fixed ladder, hit a set number of rungs, or ever grow monotonically louder. Build tension however the drama calls for it — a refusal, a held pause, information withheld, a sudden goal-shift, or the stakes made plain can carry a scene as well as an escalation. When you do list beats, prefix each with a rung name and keep them in story order; when a scene turns on stillness or reversal instead, leave the list empty. Up to ${SCENE_ESCALATION_MAX_BEATS} beats.
+- "dialogue": the spoken lines, STRICTLY ENGLISH, one line per row in the format SPEAKER (tone cue): "line". A genuine two-way exchange is usually strongest, but a refusal, a one-sided confrontation, a withheld answer or a single loaded line is equally valid when the scene calls for it. Give each line a short delivery cue in parentheses (HOW it is said). Tone cues are performance notes only — never spoken aloud, never shown as subtitles. Real story beats, subtext-rich — never a weak throwaway line.
 - "location": the NAME of the place only. Put what HAPPENS there in "action", not here.
 - "number": 1-based, consecutive, in story order. "durationSec": an integer ${SCENE_MIN_SECONDS}–${SCENE_CLIP_MAX_SECONDS} — how long the scene's drama really takes.
 
@@ -223,7 +220,7 @@ ${prevContext}
 >>> GENERATE SCENES ONLY FOR THIS EPISODE <<<
 ${episodeBriefBlock(episode)}
 
-Write this episode as ${MIN_SCENES}–${MAX_SCENES} dramatic scenes (as many as the story needs, never a fixed count). For EACH scene fill: "action" (the PROSE drama of the event and how it escalates — NO camera terms), "keyProp" (one meaningful physical object the tension turns on), "escalationBeats" (${SCENE_ESCALATION_MIN_BEATS}–${SCENE_ESCALATION_MAX_BEATS} CONSECUTIVE rungs of the ladder ${ESCALATION_LADDER_TEXT}, each beat PREFIXED with its rung name, the "symbolic" rung acting on the keyProp), a real two-way ENGLISH "dialogue" exchange (SPEAKER (tone): "line" rows, the characters answering each other — never a weak throwaway line), a "location" NAME only, and an integer "durationSec" (${SCENE_MIN_SECONDS}–${SCENE_CLIP_MAX_SECONDS} s; the whole-episode total lands in ${EPISODE_MIN_TOTAL_SECONDS}–${EPISODE_MAX_TOTAL_SECONDS} s). Scene 1 opens on a HOOK — a conflict / threat / burning question in the first ~3 s (NO exposition, NO character merely arriving); the FINAL scene ends on this episode's cliffhanger as a concrete unresolved image. Dramatize ONLY this episode's description, opening by continuing naturally from the previous episode's cliffhanger. Write NO camera directions anywhere — the camera is planned later, one level below.`;
+Write this episode as however many dramatic scenes the story genuinely needs; the range ${MIN_SCENES}–${MAX_SCENES} is a PRODUCTION LIMIT on how many clips fit, NOT a quality target — do not pad to a number. For EACH scene fill: "action" (the PROSE drama of the event and how it turns — NO camera terms), "keyProp" (OPTIONAL — a physical object the tension turns on, only when one genuinely helps; leave empty otherwise), "escalationBeats" (OPTIONAL — the ladder ${ESCALATION_LADDER_TEXT} is a TOOL for shaping the turn, not a requirement: a scene need not climb a fixed ladder, hit a rung count, or grow monotonically louder — tension can come just as well from a refusal, a held pause, information withheld, a goal-shift, or the stakes made plain; when you do list beats, prefix each with its rung name and keep them in order, up to ${SCENE_ESCALATION_MAX_BEATS}, else leave empty), an ENGLISH "dialogue" (SPEAKER (tone): "line" rows — usually a two-way exchange where they answer each other, but a refusal, a one-sided confrontation or a single loaded line is equally valid; never a weak throwaway line), a "location" NAME only, and an integer "durationSec" (${SCENE_MIN_SECONDS}–${SCENE_CLIP_MAX_SECONDS} s; the whole-episode total lands in ${EPISODE_MIN_TOTAL_SECONDS}–${EPISODE_MAX_TOTAL_SECONDS} s). Scene 1 opens on a HOOK — a conflict / threat / burning question in the first ~3 s (NO exposition, NO character merely arriving); the FINAL scene ends on this episode's cliffhanger as a concrete unresolved image. Dramatize ONLY this episode's description, opening by continuing naturally from the previous episode's cliffhanger. Write NO camera directions anywhere — the camera is planned later, one level below.`;
 
   return { userMsg };
 }
@@ -276,12 +273,14 @@ async function persistScenes(episodeId: string, data: { scenes?: any[] }): Promi
     };
   });
 
-  const missingDrama = scenesOut.filter((s) => !s.action || !s.dialogue || !s.keyProp || s.escalationBeats.length < SCENE_ESCALATION_MIN_BEATS).length;
+  // A scene's only CORE content is its action + spoken lines. keyProp and escalationBeats are OPTIONAL
+  // storytelling tools (Stage P3), so their absence is NOT an incompleteness — logged for visibility only.
+  const missingCore = scenesOut.filter((s) => !s.action || !s.dialogue).length;
   console.log(
-    `[scenes] ${episodeId}: ${scenesOut.length} dramatic scenes (target ${MIN_SCENES}–${MAX_SCENES}), ` +
-      `incomplete-drama=${missingDrama}, ` +
+    `[scenes] ${episodeId}: ${scenesOut.length} dramatic scenes (production limit ${MIN_SCENES}–${MAX_SCENES}), ` +
+      `missing-core=${missingCore}, ` +
       `beats=[${scenesOut.map((s) => s.escalationBeats.length).join(",")}], ` +
-      `props=[${scenesOut.map((s) => s.keyProp.slice(0, 18)).join(" | ")}]`
+      `props=[${scenesOut.map((s) => (s.keyProp ? s.keyProp.slice(0, 18) : "—")).join(" | ")}]`
   );
 
   // Stage 105 — a rewritten script replaces ALL scenes of the episode (their videos, keyframes and last

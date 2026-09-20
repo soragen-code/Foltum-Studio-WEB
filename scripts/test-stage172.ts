@@ -19,6 +19,7 @@ import {
   critiqueCandidate,
   generateBestOfN,
   runCriticLoop,
+  hasBlockingDefect,
   type RubricScores,
   type Critique,
 } from "../lib/critic";
@@ -39,26 +40,31 @@ const mid = (): RubricScores => {
 };
 
 // ── version + rubric shape ────────────────────────────────────────────────
-ok(CRITIC_PROMPT_VERSION === "6.7.0", "CRITIC_PROMPT_VERSION is 6.7.0");
-ok(RUBRIC_AXES.length === 7, "7 rubric axes");
+ok(CRITIC_PROMPT_VERSION === "7.0.0", "CRITIC_PROMPT_VERSION is 7.0.0");
+ok(RUBRIC_AXES.length === 6, "6 rubric axes");
+// P6: the rubric is now VERIFIABLE craft axes, NOT subjective interestingness.
+ok(!(RUBRIC_AXES as readonly string[]).includes("hookStrength"), "no subjective hookStrength axis");
+ok(!(RUBRIC_AXES as readonly string[]).includes("cliffhangerPull"), "no subjective cliffhangerPull axis");
+ok((RUBRIC_AXES as readonly string[]).includes("causalLogic"), "has causalLogic axis");
+ok((RUBRIC_AXES as readonly string[]).includes("dialoguePurity"), "has dialoguePurity axis");
 ok(RISK_AXES.has("continuityRisk") && RISK_AXES.size === 1, "continuityRisk is the only risk axis");
 ok(DEFAULT_AXIS_SCORE === 5, "default axis score 5");
 
 // ── aggregateScore: risk inversion ────────────────────────────────────────
-// all mid (5): quality axes → 5, risk axis inverted → 11-5=6. mean = (6*5 + 1*6)/7 = 36/7 ≈ 5.14
-ok(Math.abs(aggregateScore(mid()) - 5.14) < 0.02, "all-mid aggregate ≈ 5.14 (risk inverted)");
+// all mid (5): quality axes → 5, risk axis inverted → 11-5=6. mean = (5*5 + 1*6)/6 = 31/6 ≈ 5.17
+ok(Math.abs(aggregateScore(mid()) - 5.17) < 0.02, "all-mid aggregate ≈ 5.17 (risk inverted)");
 
 // low continuityRisk RAISES overall; high continuityRisk LOWERS it
 const lowRisk = { ...mid(), continuityRisk: 1 };
 const highRisk = { ...mid(), continuityRisk: 10 };
 ok(aggregateScore(lowRisk) > aggregateScore(highRisk), "low continuityRisk beats high continuityRisk");
 // raising a quality axis raises overall
-const betterHook = { ...mid(), hookStrength: 10 };
-ok(aggregateScore(betterHook) > aggregateScore(mid()), "higher hookStrength raises overall");
+const betterLogic = { ...mid(), causalLogic: 10 };
+ok(aggregateScore(betterLogic) > aggregateScore(mid()), "higher causalLogic raises overall");
 // missing axes default to 5
 ok(Math.abs(aggregateScore({}) - aggregateScore(mid())) < 1e-9, "empty scores default to all-mid");
 // clamping: out-of-range values are clamped into 1..10
-ok(aggregateScore({ ...mid(), hookStrength: 999 } as any) <= aggregateScore({ ...mid(), hookStrength: 10 }) + 1e-9, "over-range clamps to 10");
+ok(aggregateScore({ ...mid(), causalLogic: 999 } as any) <= aggregateScore({ ...mid(), causalLogic: 10 }) + 1e-9, "over-range clamps to 10");
 
 // ── actionForOverall threshold ────────────────────────────────────────────
 ok(actionForOverall(ACCEPT_THRESHOLD) === "accept", "at threshold → accept");
@@ -67,8 +73,8 @@ ok(actionForOverall(10) === "accept", "10 → accept");
 
 // ── parseCriticResponse (defensive) ───────────────────────────────────────
 // valid object; overall recomputed, not trusted from model
-const p1 = parseCriticResponse({ scores: { ...mid(), hookStrength: 9, continuityRisk: 1 }, notes: ["a", "b"], overall: 0.1, action: "improve" });
-ok(Math.abs(p1.overall - aggregateScore({ ...mid(), hookStrength: 9, continuityRisk: 1 })) < 1e-9, "overall recomputed, model overall ignored");
+const p1 = parseCriticResponse({ scores: { ...mid(), causalLogic: 9, continuityRisk: 1 }, notes: ["a", "b"], overall: 0.1, action: "improve" });
+ok(Math.abs(p1.overall - aggregateScore({ ...mid(), causalLogic: 9, continuityRisk: 1 })) < 1e-9, "overall recomputed, model overall ignored");
 ok(p1.action === "improve", "explicit action honored");
 ok(p1.notes.length === 2, "notes preserved");
 
@@ -80,20 +86,56 @@ ok(p2.notes.length === 1 && p2.notes[0] === "x", "JSON string parsed");
 const p3 = parseCriticResponse("```json\n" + JSON.stringify({ scores: mid(), notes: [] }) + "\n```");
 ok(Math.abs(p3.overall - aggregateScore(mid())) < 1e-9, "fenced JSON parsed");
 
-// garbage → all defaults
+// garbage → all defaults, and (P6) unparseable → cautious "improve"
 const p4 = parseCriticResponse("not json at all");
 ok(RUBRIC_AXES.every((a) => p4.scores[a] === 5), "garbage → default mid scores");
 ok(p4.notes.length === 0, "garbage → no notes");
+ok(p4.action === "improve", "garbage → cautious improve");
+ok(Array.isArray(p4.defects) && p4.defects.length === 0, "garbage → no defects");
 
-// missing axes default to 5; notes trimmed to 3; action derived when absent
-const p5 = parseCriticResponse({ scores: { hookStrength: 8 }, notes: ["1", "2", "3", "4", "5"] });
-ok(p5.scores.stakesClarity === 5, "missing axis → 5");
+// missing axes default to 5; notes trimmed to 3
+const p5 = parseCriticResponse({ scores: { causalLogic: 8 }, notes: ["1", "2", "3", "4", "5"] });
+ok(p5.scores.clarity === 5, "missing axis → 5");
 ok(p5.notes.length === 3, "notes trimmed to 3");
-ok(p5.action === actionForOverall(p5.overall), "action derived from overall when not explicit");
+// P6: action is DEFECT-DRIVEN, no blocking defect here → accept (not score-threshold driven)
+ok(p5.action === "accept", "no blocking defect → accept (defect-driven gate)");
 
 // flat scores (no nested "scores") also accepted
-const p6 = parseCriticResponse({ ...mid(), hookStrength: 10 });
-ok(Math.abs(p6.overall - aggregateScore({ ...mid(), hookStrength: 10 })) < 1e-9, "flat score object accepted");
+const p6 = parseCriticResponse({ ...mid(), causalLogic: 10 });
+ok(Math.abs(p6.overall - aggregateScore({ ...mid(), causalLogic: 10 })) < 1e-9, "flat score object accepted");
+
+// ── P6: concrete defects + blocking/advisory gate ─────────────────────────
+const pd = parseCriticResponse({
+  scores: mid(),
+  defects: [
+    { fragment: "*he grabs the knife*", reason: "stage direction inside a spoken line", fix: "move it to [ACTION]", severity: "blocking" },
+    { fragment: "soft ending", reason: "cliffhanger is mild", fix: "sharpen it", severity: "advisory" },
+    { reason: "", fix: "", fragment: "" },
+  ],
+});
+ok(pd.defects.length === 2, "empty defect dropped, two kept");
+ok(pd.defects[0].fragment === "*he grabs the knife*" && pd.defects[0].severity === "blocking", "defect carries fragment + severity");
+ok(hasBlockingDefect(pd.defects), "hasBlockingDefect true when a blocking defect present");
+ok(pd.action === "improve", "blocking defect → improve");
+// notes derived from defects when notes absent
+ok(pd.notes.length >= 1 && pd.notes.some((n) => n.includes("move it to [ACTION]")), "notes derived from defects");
+
+// advisory-only defects do NOT block acceptance
+const pa = parseCriticResponse({ scores: mid(), defects: [{ fragment: "x", reason: "minor", fix: "polish", severity: "advisory" }] });
+ok(!hasBlockingDefect(pa.defects) && pa.action === "accept", "advisory-only → accept");
+
+// unknown severity defaults to advisory (not blocking)
+const pu = parseCriticResponse({ scores: mid(), defects: [{ fragment: "x", reason: "y", fix: "z", severity: "critical" }] });
+ok(pu.defects[0].severity === "advisory", "unknown severity → advisory");
+ok(pu.action === "accept", "unknown-severity defect does not block");
+
+// defects capped at 8
+const many = Array.from({ length: 20 }, (_, i) => ({ fragment: `f${i}`, reason: "r", fix: "x", severity: "advisory" }));
+ok(parseCriticResponse({ scores: mid(), defects: many }).defects.length === 8, "defects capped at 8");
+
+// explicit accept overrides even a blocking defect (model authority honored)
+const pe = parseCriticResponse({ scores: mid(), action: "accept", defects: [{ fragment: "x", reason: "y", fix: "z", severity: "blocking" }] });
+ok(pe.action === "accept", "explicit action overrides defect-driven gate");
 
 // ── pickBestVariant ───────────────────────────────────────────────────────
 ok(pickBestVariant([{ overall: 4 }, { overall: 9 }, { overall: 7 }]) === 1, "picks highest overall");
@@ -132,15 +174,23 @@ ok(log2.finalScore === null && log2.notes === null, "missing finalScore/notes �
 
 // ── async orchestrators (stubbed, no network) ─────────────────────────────
 const critiqueOverall = (overall: number): Critique => {
-  // craft scores whose aggregate ≈ overall by scaling all quality axes; risk stays mid
+  // craft scores whose aggregate ≈ overall by scaling all quality axes; risk stays mid.
+  // The orchestrators gate on `action`; below-threshold variants carry a blocking defect (drives "improve").
   const s = {} as RubricScores;
   for (const axis of RUBRIC_AXES) s[axis] = RISK_AXES.has(axis) ? 5 : overall;
-  return { scores: s, overall, notes: overall >= ACCEPT_THRESHOLD ? [] : ["fix it"], action: actionForOverall(overall) };
+  const accepted = overall >= ACCEPT_THRESHOLD;
+  return {
+    scores: s,
+    overall,
+    notes: accepted ? [] : ["fix it"],
+    defects: accepted ? [] : [{ fragment: "f", reason: "r", fix: "fix it", severity: "blocking" }],
+    action: actionForOverall(overall),
+  };
 };
 
 void (async () => {
   // critiqueCandidate: stub returns valid JSON → parsed
-  const c1 = await critiqueCandidate(async () => ({ scores: { ...mid(), hookStrength: 9 }, notes: ["n"] }), "synopsis", "cand");
+  const c1 = await critiqueCandidate(async () => ({ scores: { ...mid(), causalLogic: 9 }, notes: ["n"] }), "synopsis", "cand");
   ok(c1.notes.length === 1, "critiqueCandidate parses stub JSON");
   // critiqueCandidate: stub throws → defensive neutral critique (mid, improve, no notes)
   const c2 = await critiqueCandidate(async () => { throw new Error("boom"); }, "synopsis", "cand");

@@ -289,6 +289,23 @@ export const LOCATION_FIELD_RULES_TEXT_FOR_TESTS = LOCATION_FIELD_RULES;
 
 export const CAST_TARGETS = { MAIN: "3-5", SUPPORTING: "5-10", MINOR: "5-10", CROWD: "2-5" } as const;
 
+/**
+ * P4 — SYNOPSIS craft rules, shared by every synopsis prompt (from-idea / auto / upload).
+ * A synopsis must be CONCRETE and CAUSAL (who wants what, does what, leads to what), not an overloaded
+ * abstract pile-up of names and events. It also states the ARTIFACT LEVEL so prompts never blur the three
+ * levels: Project.synopsis (the whole-season arc, produced here) vs Episode.description (one episode's
+ * synopsis, produced later per episode) vs Episode.script (the shot-by-shot script, produced last).
+ */
+export const SYNOPSIS_CRAFT_RULES =
+  "CAUSAL & CONCRETE: write the season arc as cause and effect — for each major beat make clear WHO wants WHAT, " +
+  "WHAT they do to get it, and WHAT that leads to (the consequence that sets up the next beat). Name concrete " +
+  "subjects, motives and outcomes, not abstract themes or moods. Do NOT overload it: every character or event " +
+  "you mention must carry a consequence in the arc — drop anyone/anything that does not move the story. Keep it " +
+  "readable in one pass, no name-dumping.\n" +
+  "ARTIFACT LEVEL: this is the PROJECT-LEVEL season synopsis (the whole-season arc) — NOT a single episode's " +
+  "synopsis and NOT a scene-by-scene script. Describe the season's throughline; leave per-episode breakdowns and " +
+  "staged scenes to the later episode-synopsis and script steps.";
+
 export function ideaSystemPrompt(): string {
   return `You are a head writer for a short-form vertical drama series.
 
@@ -300,11 +317,12 @@ From the user's idea produce a season synopsis and the main characters. Return O
   "characters": [ { "name": "...", "age": "...", "gender": "male|female", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
   "locations": [ { "name": "...", "description": "...", "visualPrompt": "...", "setInventory": ["object — placement", "..."] } ]
 }
-Both arrays are REQUIRED ("locations" must contain 8-14 items).
+Both arrays are REQUIRED. Aim for roughly 8-14 locations as a production GUIDE, not a hard cap — use as many as the story genuinely needs and no filler; do not pad or trim the cast/locations just to hit a number.
 
 LANGUAGE: detect the language of the idea and write synopsis, name, age, role, personality, firstAppearance in THAT language. Only "appearance" is in English.
 
 SYNOPSIS: readable and compact (250-450 words). No headings, no markdown, no bullet lists, no labels like "Setup:". It must still convey the whole season arc: the setup (world, hero, hook), the development (rising stakes, relationships), the key turning points, and the finale of the season. Write it as prose a producer can read in one minute.
+${SYNOPSIS_CRAFT_RULES}
 
 CHARACTERS: ${CAST_TARGETS.MAIN} MAIN characters only (tier "MAIN"), each visually distinct. The supporting cast, minor characters and crowds are produced in a separate step — do NOT include them here.
 ${CHARACTER_FIELD_RULES}
@@ -392,7 +410,7 @@ From the season SYNOPSIS below produce the COMPLETE cast and the season's locati
   "characters": [ { "name": "...", "age": "...", "gender": "male|female", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "...", "tier": "MAIN" | "SUPPORTING" | "MINOR" | "CROWD", "groupSize": <int or null> } ],
   "locations": [ { "name": "...", "description": "...", "visualPrompt": "...", "setInventory": ["object — placement", "..."] } ]
 }
-Both arrays are REQUIRED ("locations" must contain 8-14 items).
+Both arrays are REQUIRED. Aim for roughly 8-14 locations as a production GUIDE, not a hard cap — use as many as the story genuinely needs and no filler; do not pad or trim the cast/locations just to hit a number.
 
 CAST: cover EVERY tier — ${CAST_TARGETS.MAIN} MAIN (the leads carrying the season arc), ${CAST_TARGETS.SUPPORTING} SUPPORTING (recurring characters close to the leads; MUST include the leads' family members with the kinship stated in "role"), ${CAST_TARGETS.MINOR} MINOR (episodic characters with a line or two) and ${CAST_TARGETS.CROWD} CROWD groups. Assign each character the correct "tier". Every character is grounded in the synopsis (a plausible reason to appear), has a unique name and is visually distinct.
 ${CHARACTER_FIELD_RULES}
@@ -473,13 +491,14 @@ export function ideaAutoSystemPrompt(language: IdeaLanguage): string {
   "characters": [ { "name": "...", "age": "...", "gender": "male|female", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
   "locations": [ { "name": "...", "description": "...", "visualPrompt": "...", "setInventory": ["object — placement", "..."] } ]
 }
-Both arrays are REQUIRED ("locations" must contain 8-14 items).
+Both arrays are REQUIRED. Aim for roughly 8-14 locations as a production GUIDE, not a hard cap — use as many as the story genuinely needs and no filler; do not pad or trim the cast/locations just to hit a number.
 
 INVENT A GRIPPING, ORIGINAL STORY: a fresh premise with a strong hook, a clear protagonist with a want and a fear, an escalating conflict, real turning points and a season finale with a twist. It must honour the chosen genre(s). AVOID clichés and predictable, generic plots — no "chosen one wakes with amnesia", no tired tropes; surprise the viewer while staying coherent. Combine the genres if more than one is given.
 
 LANGUAGE: write synopsis, name, age, role, personality, firstAppearance in ${lang}. Only "appearance" is in English. (The video model always voices the dialogue in English later — this is only the planning text.)
 
 SYNOPSIS: readable and compact (250-450 words). No headings, no markdown, no bullet lists, no labels. It must convey the whole season arc: the setup (world, hero, hook), the development (rising stakes, relationships), the key turning points, and the finale of the season. Write it as prose a producer can read in one minute.
+${SYNOPSIS_CRAFT_RULES}
 
 CHARACTERS: ${CAST_TARGETS.MAIN} MAIN characters only (tier "MAIN"), each visually distinct. The supporting cast, minor characters and crowds are produced in a separate step — do NOT include them here.
 ${CHARACTER_FIELD_RULES}
@@ -525,13 +544,14 @@ export function ideaFromStorySystemPrompt(language: IdeaLanguage): string {
   "characters": [ { "name": "...", "age": "...", "gender": "male|female", "role": "...", "appearance": "...", "personality": "...", "firstAppearance": "..." } ],
   "locations": [ { "name": "...", "description": "...", "visualPrompt": "...", "setInventory": ["object — placement", "..."] } ]
 }
-Both arrays are REQUIRED ("locations" must contain 8-14 items).
+Both arrays are REQUIRED. Aim for roughly 8-14 locations as a production GUIDE, not a hard cap — use as many as the story genuinely needs and no filler; do not pad or trim the cast/locations just to hit a number.
 
 CANON FIDELITY: do NOT change the story's plot, characters or ending. Keep the same names, relationships and events. If the uploaded story lacks a detail needed for production (a location's look, a character's age), invent it in the SAME spirit — never contradict the source. Do not add new major plot lines.
 
 LANGUAGE: write synopsis, name, age, role, personality, firstAppearance in ${lang} (the same language as the uploaded story). Only "appearance" is in English. (The video model always voices the dialogue in English later — this is only the planning text.)
 
 SYNOPSIS: readable and compact (250-450 words), faithful to the uploaded story. No headings, no markdown, no bullet lists, no labels. Convey the whole season arc: setup, development, key turning points and the finale, exactly as in the source.
+${SYNOPSIS_CRAFT_RULES}
 
 CHARACTERS: ${CAST_TARGETS.MAIN} MAIN characters (tier "MAIN") drawn from the uploaded story, each visually distinct. Supporting/minor cast and crowds are produced separately — do NOT include them here.
 ${CHARACTER_FIELD_RULES}

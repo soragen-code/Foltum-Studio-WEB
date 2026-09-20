@@ -119,7 +119,7 @@ export const SHOT_VARIETY_RULE =
   "VARIETY: two ADJACENT shots must never repeat the same size + camera combination — change the framing scale (CU / MCU / MS / WS) or the camera technique on every cut.";
 
 export const SHOT_ESCALATION_RULE =
-  "ESCALATION: every shot is tied to ONE step of its scene's escalation ladder (verbal → physicalLight → symbolic(keyProp) → physicalHeavy → statusReveal → thirdForce). Put that step in the shot's \"escalationBeat\". The scene climbs the ladder; it never slides back down.";
+  "TENSION (advisory, not a gate): label each shot's \"escalationBeat\" with the beat of its scene it serves. The ladder (verbal → physicalLight → symbolic(keyProp) → physicalHeavy → statusReveal → thirdForce) is a TOOL for naming beats, not a track every scene must climb: a scene need not use a keyProp, hit every rung, or grow monotonically louder. Tension can come just as well from a refusal, a held pause, information withheld, a goal-shift or the stakes made plain — a scene may hold, reverse or ease and still work. When a scene supplies escalation beats, follow their order; otherwise pick the beat label that best fits each shot.";
 
 export const SHOT_CLIFFHANGER_RULE =
   "LAST TWO SHOTS (cliffhanger): the final two shots form an EXPECTATION FLIP — the second-to-last shot shows a power / force ARRIVING (mark it cliffhangerRole \"arrival\"), and the last shot shows it STRIKING the heroine (mark it cliffhangerRole \"strike\"). " +
@@ -132,7 +132,7 @@ export const SHOT_FRAMING_RULE =
 
 export const SHOT_PLAN_SYSTEM =
   "You are a shot-list director for a short-form vertical (9:16) AI drama. You are given ONE episode's approved scenes " +
-  "(each with its dialogue, action, escalation ladder and key prop). Break them into an ordered SHOT LIST — the shots are " +
+  "(each with its dialogue and action, plus — when the scene provides them — tension beats and a key prop). Break them into an ordered SHOT LIST — the shots are " +
   "the atomic units that get generated one by one, in order. Apply ALL of these rules:\n" +
   `- ${SHOT_COUNT_RULE}\n` +
   `- ${SHOT_OPENING_RULE}\n` +
@@ -161,11 +161,11 @@ export function shotPlanUserPrompt(
 ): string {
   const body = scenes
     .map((s) => {
-      const ladder = (s.escalationBeats ?? []).filter(Boolean).join(" → ") || "(derive a 5–7 step ladder)";
+      const ladder = (s.escalationBeats ?? []).filter(Boolean).join(" → ") || "(none given — shape the tension however the scene calls for; no ladder required)";
       return [
         `SCENE ${s.number}:`,
-        `  KEY PROP: ${(s.keyProp ?? "").trim() || "(choose one meaningful prop)"}`,
-        `  ESCALATION LADDER: ${ladder}`,
+        `  KEY PROP: ${(s.keyProp ?? "").trim() || "(none — use one only if it genuinely helps)"}`,
+        `  TENSION BEATS: ${ladder}`,
         `  ACTION: ${(s.action ?? "").trim() || "(none)"}`,
         `  DIALOGUE:\n${(s.dialogue ?? "").trim() || "  [NO DIALOGUE]"}`,
       ].join("\n");
