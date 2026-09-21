@@ -86,7 +86,7 @@ function postToWayForPay(action: string, fields: Record<string, any>) {
   form.submit()
 }
 
-export function PricingClient() {
+export function PricingClient({ currentTier = null }: { currentTier?: string | null } = {}) {
   const [credits, setCredits] = useState(0)
   const [buying, setBuying] = useState<string | null>(null)
 
@@ -188,6 +188,7 @@ export function PricingClient() {
         <div className="mt-6 grid gap-6 md:grid-cols-3">
           {plans.map((plan, idx) => {
             const Icon = plan.icon
+            const isCurrent = currentTier === plan.id
             return (
               <motion.div
                 key={plan.id}
@@ -195,15 +196,20 @@ export function PricingClient() {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: idx * 0.1 }}
                 className={`relative rounded-xl border bg-card p-6 ${
-                  plan.popular ? plan.activeColor : plan.color
+                  isCurrent ? plan.activeColor : plan.popular ? plan.activeColor : plan.color
                 }`}
                 style={{ boxShadow: 'var(--shadow-md)' }}
+                data-testid={`plan-${plan.id}`}
               >
-                {plan.popular && (
+                {isCurrent ? (
+                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-green-500 px-3 py-0.5 text-xs font-bold text-white" data-testid={`plan-current-badge-${plan.id}`}>
+                    Ваш план
+                  </div>
+                ) : plan.popular ? (
                   <div className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-primary px-3 py-0.5 text-xs font-bold text-primary-foreground">
                     Most Popular
                   </div>
-                )}
+                ) : null}
                 <Icon className={`mb-3 h-8 w-8 ${plan.iconColor}`} />
                 <h3 className="font-display text-xl font-bold">{plan.name}</h3>
                 <div className="mt-2">
@@ -218,18 +224,29 @@ export function PricingClient() {
                     </li>
                   ))}
                 </ul>
-                <button
-                  onClick={() => handleSubscribe(plan.id)}
-                  disabled={buying === plan.id}
-                  className={`mt-6 flex w-full items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-semibold transition ${
-                    plan.popular
-                      ? 'bg-primary text-primary-foreground hover:brightness-110'
-                      : 'bg-muted hover:bg-muted/80'
-                  } disabled:opacity-50`}
-                >
-                  {buying === plan.id ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                  Подписаться
-                </button>
+                {isCurrent ? (
+                  <button
+                    disabled
+                    className="mt-6 flex w-full cursor-default items-center justify-center gap-2 rounded-lg bg-green-500/15 py-2.5 text-sm font-semibold text-green-500"
+                    data-testid={`plan-active-btn-${plan.id}`}
+                  >
+                    <Check className="h-4 w-4" />
+                    Активен
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleSubscribe(plan.id)}
+                    disabled={buying === plan.id}
+                    className={`mt-6 flex w-full items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-semibold transition ${
+                      plan.popular
+                        ? 'bg-primary text-primary-foreground hover:brightness-110'
+                        : 'bg-muted hover:bg-muted/80'
+                    } disabled:opacity-50`}
+                  >
+                    {buying === plan.id ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    Подписаться
+                  </button>
+                )}
               </motion.div>
             )
           })}

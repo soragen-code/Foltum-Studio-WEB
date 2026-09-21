@@ -34,6 +34,12 @@ export async function GET(request: Request) {
       credits: payment.credits,
       productName: payment.productName,
       balance: user.credits,
+      // Let the success page distinguish a subscription from a credit pack and
+      // render the right confirmation (subscription grants access, not credits).
+      kind: payment.kind,
+      tier: payment.tier,
+      subscriptionTier: user.subscriptionTier,
+      subscriptionExpiresAt: user.subscriptionExpiresAt,
     });
   } catch (err: any) {
     console.error("WayForPay status error:", err);

@@ -2,9 +2,10 @@
 
 import Link from 'next/link'
 import { useSession, signOut } from 'next-auth/react'
-import { Coins, Film, LogOut, Plus, User, CreditCard } from 'lucide-react'
+import { Coins, Film, LogOut, Plus, User, CreditCard, Crown } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
+import { hasActiveSubscription } from '@/lib/entitlements'
 
 // Stage 76: optional project context — when `projectName` is set, the sticky header shows
 // "Foltum Studio / <project name>" (the name links back to the project's main page).
@@ -12,6 +13,15 @@ export function Header({ showNewProject = true, projectName = null, projectId = 
   const { data: session, status } = useSession()
   const [credits, setCredits] = useState(0)
   const [menuOpen, setMenuOpen] = useState(false)
+
+  // Active subscription (tier + expiry come from the session — see auth.ts callbacks).
+  const sessionUser = session?.user as any
+  const activeSub = hasActiveSubscription({
+    subscriptionTier: sessionUser?.subscriptionTier,
+    subscriptionExpiresAt: sessionUser?.subscriptionExpiresAt,
+  })
+  const tierRaw = (sessionUser?.subscriptionTier as string | null | undefined) ?? ''
+  const tierLabel = tierRaw ? tierRaw.charAt(0).toUpperCase() + tierRaw.slice(1) : ''
 
   useEffect(() => {
     if (session?.user) {
@@ -58,6 +68,25 @@ export function Header({ showNewProject = true, projectName = null, projectId = 
               >
                 <Plus className="h-4 w-4" />
                 New Project
+              </Link>
+            )}
+            {activeSub ? (
+              <Link
+                href="/pricing"
+                title={`Активная подписка: ${tierLabel}`}
+                className="flex items-center gap-1.5 rounded-full bg-primary/15 px-3 py-1.5 text-sm font-semibold text-primary transition hover:bg-primary/25"
+                data-testid="header-plan-badge"
+              >
+                <Crown className="h-4 w-4" />
+                {tierLabel}
+              </Link>
+            ) : (
+              <Link
+                href="/pricing"
+                className="hidden items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-sm font-medium text-muted-foreground transition hover:text-foreground sm:flex"
+                data-testid="header-subscribe-link"
+              >
+                Оформить подписку
               </Link>
             )}
             <Link

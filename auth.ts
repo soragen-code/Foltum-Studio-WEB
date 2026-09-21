@@ -47,11 +47,40 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (user) {
         token.id = user.id
       }
+      // Keep subscription tier / expiry / credits fresh in the token by re-reading them
+      // from the DB (lightweight, selected columns only). This is what lets the header,
+      // pricing page and success page reflect an active plan right after payment.
+      const id = token.id as string | undefined
+      if (id) {
+        try {
+          const dbUser = await prisma.user.findUnique({
+            where: { id },
+            select: {
+              subscriptionTier: true,
+              subscriptionExpiresAt: true,
+              credits: true,
+            },
+          })
+          if (dbUser) {
+            ;(token as any).subscriptionTier = dbUser.subscriptionTier ?? null
+            ;(token as any).subscriptionExpiresAt = dbUser.subscriptionExpiresAt
+              ? dbUser.subscriptionExpiresAt.toISOString()
+              : null
+            ;(token as any).credits = dbUser.credits ?? 0
+          }
+        } catch {
+          // Never break auth if the read fails — the session keeps its previous values.
+        }
+      }
       return token
     },
     async session({ session, token }) {
       if (session?.user && token?.id) {
-        (session.user as any).id = token.id as string
+        const u = session.user as any
+        u.id = token.id as string
+        u.subscriptionTier = (token as any).subscriptionTier ?? null
+        u.subscriptionExpiresAt = (token as any).subscriptionExpiresAt ?? null
+        u.credits = (token as any).credits ?? 0
       }
       return session
     },
