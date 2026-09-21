@@ -98,7 +98,7 @@ function sceneLocName(locationDesc?: string | null): string {
   let t = (locationDesc ?? '').replace(/\s+/g, ' ').trim()
   if (!t) return ''
   // Drop a leading "СЦЕНА N."/"SCENE N." heading prefix that can leak from the readable heading format.
-  t = t.replace(/^(сцена|scene)\s+\d+\s*[.:—–-]?\s*/i, '').trim()
+  t = t.replace(/^(сцена|scene)\s*\d+\s*[.:·•—–-]?\s*/i, '').trim()
   if (!t) return ''
   const stripIntExt = (s: string) => s.replace(/^(int\.?\/ext\.?|int\.?|ext\.?|i\/e|инт\.?|нат\.?)\s+/i, '').trim()
   const parts = t.split(/\s+[—–-]\s+/).map((p) => p.trim()).filter(Boolean)

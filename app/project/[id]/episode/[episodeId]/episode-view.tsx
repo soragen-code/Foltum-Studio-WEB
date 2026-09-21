@@ -11,7 +11,7 @@ import { FeatureLockBadge } from '@/app/project/[id]/_components/feature-lock'
 import { referenceFileName } from '@/lib/download-name'
 import { DownloadVideoButton } from '@/app/project/[id]/_components/download-video-button'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
-import { BookScript } from '../../_components/season-stage'
+import { BookScript, bookScriptToText } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
 import { EpisodeFootage } from '../../_components/episode-footage'
 import { JobProgressBar, SmoothProgress, useJobPolling, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
@@ -160,6 +160,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [promptHasOverride, setPromptHasOverride] = useState(false) // scene currently uses a manual override
   const [promptSaving, setPromptSaving] = useState(false)   // PUT in flight (save or reset)
   const [promptCopied, setPromptCopied] = useState(false)   // flashed «"Copied" inside the modal
+  const [scriptCopied, setScriptCopied] = useState(false)   // flashed «Скопировано» on the whole-script copy button
   const [promptSaved, setPromptSaved] = useState(false)     // flashed «"Saved" inside the modal
   // Reference strategy the builder resolved for this scene (character_references | new_scene_reference | text_only).
   const [promptRefKind, setPromptRefKind] = useState<string | null>(null)
@@ -1046,6 +1047,15 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     }
   }
 
+  // Copy the ENTIRE episode script (all scenes: heading, action, every dialogue turn) and flash «Скопировано».
+  const copyScript = async () => {
+    try {
+      await navigator.clipboard.writeText(bookScriptToText(scenes as any, episode.script))
+      setScriptCopied(true)
+      setTimeout(() => setScriptCopied(false), 1500)
+    } catch {}
+  }
+
   // Copy the current textarea contents (so a hand-edited prompt is copied as shown) and flash «Copied.
   const copyPromptModal = async () => {
     try {
@@ -1182,7 +1192,14 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         {/* Step 1 — episode script in book format (D1/D2) */}
         {phase === 'script' && (
           <div className="mt-4 rounded-xl border border-border bg-card p-5 sm:p-8" data-testid="phase-script">
-            <h2 className="mb-5 font-display text-xl font-bold">Episode script</h2>
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="font-display text-xl font-bold">Episode script</h2>
+              {hasScript && rewriteViewState(revising, revisePoll.job?.status) !== 'placeholder' && (
+                <button type="button" onClick={copyScript} className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-1.5 text-sm font-medium text-muted-foreground transition hover:text-foreground" data-testid="copy-script">
+                  {scriptCopied ? <><Check className="h-4 w-4 text-primary" /> Скопировано</> : <><Copy className="h-4 w-4" /> Копировать</>}
+                </button>
+              )}
+            </div>
             {/* Stage 77: while the rewrite job runs the OLD script is hidden behind a placeholder. */}
             {rewriteViewState(revising, revisePoll.job?.status) === 'placeholder' ? (
               <RewritePlaceholder job={revisePoll.job} expectedTotalSec={EPISODE_REVISE_EXPECTED_SEC} label={hasScript ? 'Rewriting episode script…' : 'Writing the episode script…'} testId="episode-revise-progress" />

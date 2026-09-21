@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, Wand2, ArrowRight, BookOpen } from 'lucide-react'
+import { Loader2, Wand2, ArrowRight, BookOpen, Copy, Check } from 'lucide-react'
 import { JOB_POLL_INTERVAL_MS, useJobPolling } from './use-job-polling'
 import { RewritePlaceholder } from './rewrite-placeholder'
 import { rewriteViewState } from '@/lib/rewrite-view-state'
@@ -82,6 +82,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
   const [storyText, setStoryText] = useState('')
   const [storyBusy, setStoryBusy] = useState(false)
   const [storyNotice, setStoryNotice] = useState('')
+  const [storyCopied, setStoryCopied] = useState(false) // flashed «Скопировано» on the story copy button
   const [openingEpisode, setOpeningEpisode] = useState<string | null>(null) // episodeId being navigated to
   // Stage 155 — "bring your own plot file": before the plot exists the author chooses to auto-generate it
   // or to upload their own plot file (.txt/.md/.docx/.pdf), which becomes the authoritative source for scripts.
@@ -262,6 +263,17 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id])
 
+  // Copy the ENTIRE season story (Сюжет) to the clipboard and flash «Скопировано».
+  const copyStory = async () => {
+    const text = (season?.fullStory ?? '').trim()
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setStoryCopied(true)
+      setTimeout(() => setStoryCopied(false), 1500)
+    } catch {}
+  }
+
   if (loading) return <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
 
   return (
@@ -393,6 +405,11 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
           <>
             {season?.fullStory && (
               <div className="mt-5 rounded-lg border border-border/60 bg-muted/10 p-4" data-testid="story-body">
+                <div className="mb-3 flex justify-end">
+                  <button type="button" onClick={copyStory} className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-1.5 text-sm font-medium text-muted-foreground transition hover:text-foreground" data-testid="copy-story">
+                    {storyCopied ? <><Check className="h-4 w-4 text-primary" /> Скопировано</> : <><Copy className="h-4 w-4" /> Копировать</>}
+                  </button>
+                </div>
                 <FullStoryView text={season.fullStory} />
               </div>
             )}

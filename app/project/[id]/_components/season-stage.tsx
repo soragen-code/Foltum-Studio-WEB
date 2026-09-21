@@ -242,6 +242,42 @@ function SceneProse({ s }: { s: BookScene }) {
 // Stage 170 — the episode script is ALWAYS shown in full (every scene, all action & dialogue). No
 // collapse / "show full" toggle and no height/overflow truncation: the reader sees the whole script
 // immediately. `keyCount` is kept only for backward compatibility and is intentionally unused.
+/**
+ * Plain-text of the whole episode script, mirroring exactly what BookScript / SceneProse show on screen
+ * (Scene heading + place header, short location slug, action, then each dialogue turn as its own paragraph).
+ * Used by the «Копировать» button so the clipboard holds the ENTIRE readable script. Falls back to the raw
+ * stored text for legacy episodes without structured scenes.
+ */
+export function bookScriptToText(scenes?: BookScene[], fallbackText?: string | null): string {
+  if (scenes && scenes.length) {
+    const parts: string[] = []
+    for (const s of scenes) {
+      const header = scenePlaceHeader(s)
+      parts.push(`Scene ${s.number}${header ? ` · ${header}` : ''}`)
+      const rawLocation = (s.locationDesc || '').trim()
+      const shortLocation = rawLocation && !rawLocation.includes('\n') && rawLocation.length <= 80 ? rawLocation : ''
+      if (shortLocation) parts.push(shortLocation)
+      const action = (s.action || '').trim()
+      if (action) parts.push(action)
+      const isNarration = s.sceneKind === 'narration'
+      const narration = (s.voiceoverLocal || s.voiceover || '').trim()
+      const speech = (s.dialogue || '').trim()
+      if (isNarration && narration) {
+        parts.push(`Narrator (V.O.)\n${narration}`)
+      } else if (!isNarration && speech && speech !== '[NO DIALOGUE]') {
+        for (const row of splitTurns(speech)) {
+          const d = parseDialogueLine(row)
+          if (!d) { parts.push(row); continue }
+          parts.push(`${d.name}${d.cue ? ` (${d.cue})` : ''}\n${d.text}`)
+        }
+      }
+      parts.push('') // blank line between scenes
+    }
+    return parts.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+  }
+  return (fallbackText ?? '').trim()
+}
+
 export function BookScript({ text, scenes }: { text?: string | null; scenes?: BookScene[]; keyCount?: number }) {
   if (scenes && scenes.length) {
     return (

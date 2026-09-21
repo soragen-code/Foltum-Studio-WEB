@@ -9,6 +9,7 @@ import { POWER_TIER_CONFIG, SEEDANCE_MAX_DURATION, sceneTierConfig, type PowerTi
 import { LOCATION_DETAIL_LEVELS } from "@/lib/location-scale";
 import { DIRECTING_RULES } from "@/lib/directing-rules";
 import { dialogueLanguageDirective } from "@/lib/dialogue-language";
+import { normalizeManualScript } from "@/lib/manual-script";
 // Stage 166 — episode-script prompt strings + pure helpers live in a LEAF module (no runtime import of this
 // file) so referencing them at season.ts module top-level (STATE_SIZE_TEXT, START/END_STATE_RULE) is cycle-safe.
 import {
@@ -1581,9 +1582,12 @@ export function episodeScriptUserPrompt(input: {
   // Stage 158 — the author pasted a COMPLETE episode script. This is the STRONGEST source: the model must only
   // STRUCTURE it into the required shooting-script JSON, preserving the author's scenes/order/action and every
   // dialogue line EXACTLY as written, and synthesize ONLY the technical fields. It wins over plotSource + outline.
-  const userScript = (input.userScript ?? "").trim();
+  // The author's pasted script is deterministically pre-split into scenes (lib/manual-script.ts): each scene
+  // becomes an unambiguous "=== SCENE N ===" block with explicit LOCATION / SUB-LOCATION lines so the model
+  // cannot merge or miss a scene (a "Scene 1·" middle-dot header previously collapsed 5 scenes into 1).
+  const userScript = normalizeManualScript((input.userScript ?? "").trim());
   const userScriptBlock = userScript
-    ? `\n\nAUTHOR-PROVIDED FULL EPISODE SCRIPT (AUTHORITATIVE — this is the finished script for THIS episode ${input.episode.number}, written by the author). Your job is ONLY to STRUCTURE it into the required shooting-script JSON: keep the author's scenes, their order, their on-screen action and EVERY line of dialogue EXACTLY as written (do NOT rewrite, add, remove, shorten, translate away or invent any dialogue or plot beat). Split the author's script into the required consecutive shots and, for each shot, synthesize ONLY the technical fields the JSON needs (shotType, camera, videoPrompt, startState, endState, durationSec, continuity metadata) so the clips can be generated — never change WHAT happens or WHAT is said. Where this author script differs from the outline/synopsis/season plot above, THIS SCRIPT WINS. PRESERVE THE AUTHOR'S LOCATIONS: use the location the author gives each scene — set each scene's "locationDesc" to that scene's own place ("INT/EXT — place — time"), and DO NOT collapse every scene into a single location. When a scene's location differs from the previous scene's, set its "continuesFrom" to "location-change". Keep the author's scene order and their location headings. If the author's script contains a SILENT establishing/atmospheric scene with NO spoken lines (e.g. an opening city/skyline shot marked "без диалогов"/"no dialogue"), KEEP IT SILENT — do NOT invent any dialogue for it: set that scene's "dialogue" field to exactly "[NO DIALOGUE]", but STILL give it a COMPLETE videoPrompt with all nine tags describing the atmosphere, ambience and camera move plus a full startState and endState so the clip can be generated.\n${userScript}`
+    ? `\n\nAUTHOR-PROVIDED FULL EPISODE SCRIPT (AUTHORITATIVE — this is the finished script for THIS episode ${input.episode.number}, written by the author). Your job is ONLY to STRUCTURE it into the required shooting-script JSON: keep the author's scenes, their order, their on-screen action and EVERY line of dialogue EXACTLY as written (do NOT rewrite, add, remove, shorten, translate away or invent any dialogue or plot beat). The script below is PRE-SPLIT into scenes by explicit "=== SCENE N ===" marker lines, each followed by a "LOCATION:" line and (usually) a "SUB-LOCATION:" line, then that scene's action and dialogue. Produce EXACTLY ONE JSON scene per "=== SCENE N ===" marker, in the same order — NEVER merge two markers into one scene and NEVER drop a marker. For each scene, set "locationDesc" to "INT/EXT — <LOCATION> — <time of day>" using that block's LOCATION value, and set "title" to "<LOCATION> — <SUB-LOCATION>" (or just "<LOCATION>" when there is no SUB-LOCATION line). You may still split a single over-long authored scene into consecutive shots, and for each shot synthesize ONLY the technical fields the JSON needs (shotType, camera, videoPrompt, startState, endState, durationSec, continuity metadata) so the clips can be generated — never change WHAT happens or WHAT is said. Where this author script differs from the outline/synopsis/season plot above, THIS SCRIPT WINS. PRESERVE THE AUTHOR'S LOCATIONS: DO NOT collapse every scene into a single location. When a scene's location differs from the previous scene's, set its "continuesFrom" to "location-change". If the author's script contains a SILENT establishing/atmospheric scene with NO spoken lines (e.g. an opening city/skyline shot marked "без диалогов"/"no dialogue"), KEEP IT SILENT — do NOT invent any dialogue for it: set that scene's "dialogue" field to exactly "[NO DIALOGUE]", but STILL give it a COMPLETE videoPrompt with all nine tags describing the atmosphere, ambience and camera move plus a full startState and endState so the clip can be generated.\n${userScript}`
     : "";
   // Stage 3 (seasonMap) — the assigned season-map cell brief for this episode (already rendered by the
   // worker). Appended defensively: absent/empty for old map-less seasons ⇒ the prompt is unchanged.
@@ -1660,7 +1664,7 @@ export function sceneLocationName(locationDesc?: string | null): string {
   if (!t) return "";
   // Stage 169 — drop a leading "СЦЕНА N."/"SCENE N." heading prefix that can leak from the readable heading
   // format (base-prompt §4) so the extracted name is the place, not the scene number.
-  t = t.replace(/^(сцена|scene)\s+\d+\s*[.:—–-]?\s*/i, "").trim();
+  t = t.replace(/^(сцена|scene)\s*\d+\s*[.:·•—–-]?\s*/i, "").trim();
   if (!t) return "";
   // Stage 169 — strip a leading NON-spaced INT/EXT token from a place candidate ("ИНТ. Храм" → "Храм").
   const stripIntExt = (s: string) => s.replace(/^(int\.?\/ext\.?|int\.?|ext\.?|i\/e|инт\.?|нат\.?)\s+/i, "").trim();
