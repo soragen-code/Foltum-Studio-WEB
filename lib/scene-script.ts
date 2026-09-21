@@ -29,6 +29,8 @@ export function isContinuousSeam(continuesFrom?: string | null): boolean {
 /** Every scene field the reader script is assembled from (all already stored on the Scene row). */
 export interface SceneScriptFields {
   number: number;
+  /** Short human-readable scene title (2–6 words) shown in the SCENE header; null on legacy / manual scripts. */
+  title?: string | null;
   sceneKind?: string | null;
   durationSec?: number | null;
   continuesFrom?: string | null;
@@ -56,6 +58,20 @@ export interface PreviousSceneEnding {
 }
 
 const clean = (s?: string | null): string => (s ?? "").toString().trim();
+
+/**
+ * First sentence only (used to keep the script's LOCATION line short — never a full paragraph). Splits on the
+ * first sentence-ending punctuation; if the text has none (or the first sentence is very long) it is clamped to
+ * a single line of ~160 chars so the location never reads like a long scene title.
+ */
+function firstSentence(s: string): string {
+  const src = clean(s).replace(/\s+/g, " ");
+  if (!src) return "";
+  const m = src.match(/^.*?[.!?](?=\s|$)/);
+  let out = (m ? m[0] : src).trim();
+  if (out.length > 160) out = out.slice(0, 160).replace(/\s+\S*$/, "").trim() + "…";
+  return out;
+}
 
 /**
  * Stage 102 — the vision description of the real last frame, ready for the script: a refusal-looking
@@ -94,7 +110,9 @@ export function assembleSceneScript(scene: SceneScriptFields, previous?: Previou
   const lines: string[] = [];
 
   // ── Header ────────────────────────────────────────────────────────────────
-  const header = [`SCENE ${scene.number}`, sceneKindLabel(scene.sceneKind)];
+  // Short scene title (when present) rides in the SCENE header — e.g. "SCENE 3 — The Challenge".
+  const title = clean(scene.title);
+  const header = [title ? `SCENE ${scene.number} — ${title}` : `SCENE ${scene.number}`, sceneKindLabel(scene.sceneKind)];
   const dur = durationLabel(scene.durationSec);
   if (dur) header.push(dur);
   lines.push(header.join("  •  "));
@@ -118,7 +136,10 @@ export function assembleSceneScript(scene: SceneScriptFields, previous?: Previou
   }
 
   // ── LOCATION ────────────────────────────────────────────────────────────────
-  const loc = clean(scene.locationDesc);
+  // Keep the location to ONE short sentence — the readable script must never repeat a full location
+  // paragraph (the exhaustive look lives in the startState/endState blocks), and the location line must
+  // never read like a long scene title.
+  const loc = firstSentence(clean(scene.locationDesc));
   if (loc) {
     lines.push("LOCATION:");
     lines.push(loc);

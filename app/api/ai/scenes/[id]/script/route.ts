@@ -49,6 +49,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
   const script = assembleSceneScript(
     {
       number: scene.number,
+      title: scene.title,
       sceneKind: scene.sceneKind,
       durationSec: scene.durationSec,
       continuesFrom: scene.continuesFrom,

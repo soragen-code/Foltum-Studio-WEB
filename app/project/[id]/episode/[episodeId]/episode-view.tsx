@@ -92,7 +92,7 @@ const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.ima
 // Stage 167 — a persisted Shot of a scene (the atomic unit of generation). The episode card shows each
 // shot's per-shot status / videoUrl so producers can watch the shot chain progress.
 type Shot = { id: string; index: number; shotType?: string | null; size?: string | null; duration?: number | null; line?: string | null; status: string; videoUrl?: string | null; error?: string | null }
-type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; lookStale?: boolean | null; videoModel?: string | null; status: string; hasUndo?: boolean | null; shots?: Shot[]; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
+type Scene = { id: string; number: number; title?: string | null; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; lookStale?: boolean | null; videoModel?: string | null; status: string; hasUndo?: boolean | null; shots?: Shot[]; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null; hasScript?: boolean }
 
 export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits, entitlements }: { episode: any; project: any; siblings?: Sibling[]; credits: number; entitlements?: import('@/lib/entitlements').Entitlements }) {
@@ -114,6 +114,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // Stage 83 — the episode-wide rewrite RESETS all scenes; ask before that destructive step when
   // scenes already exist (per-scene «"Edit"/"Regenerate" stay instant, not gated here).
   const [resetAsk, setResetAsk] = useState(false)
+  // Regenerate the whole episode script from scratch (same server route as the first generation, which
+  // resets the scenes/clips). Guard with a confirm when scenes already exist so the reset is not accidental.
+  const [regenAsk, setRegenAsk] = useState(false)
   // Stage 77 — the episode rewrite is a background season_script job; poll it and swap the old
   // script for a placeholder until the job is terminal (see RewritePlaceholder).
   const revisePoll = useJobPolling({
@@ -725,6 +728,14 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       await reloadEpisode(); setRevising(false)
     } catch (e) { setError(e instanceof Error ? e.message : 'Failed to start the script job'); setRevising(false) }
   }
+  // Regenerate the existing script: when scenes already exist this wipes them (and their clips), so confirm
+  // first — otherwise (no scenes yet) run immediately. On confirm we reuse the same generateScript() flow.
+  const askRegenerate = () => {
+    if (revising) return
+    if (needsSceneResetConfirm(scenes.length)) { setRegenAsk(true); return }
+    void generateScript()
+  }
+  const confirmRegenerate = () => { setRegenAsk(false); void generateScript() }
   // Stage 158 — submit the author's pasted full episode script. Mirrors generateScript exactly, but POSTs the
   // text to the manual route; the season job structures it into scenes (resetting any existing scenes/clips).
   const useMyScript = async () => {
@@ -1070,6 +1081,12 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               /* Stage 110 — the script re-generation button was removed; the script is generated once when missing. */
               <>
                 <BookScript text={episode.script} scenes={scenes} />
+                {/* Regenerate the whole script from scratch (wipes scenes/clips → confirm first), next to the manual paste option. */}
+                <div className="mt-4 rounded-lg border border-border bg-background p-3">
+                  <button type="button" onClick={askRegenerate} disabled={revising} className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground disabled:opacity-50" data-testid="regenerate-script">
+                    {revising ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Regenerate script
+                  </button>
+                </div>
                 {/* Stage 158 — replace the existing script with your own pasted one (rebuilds all scenes). */}
                 <div className="mt-4 rounded-lg border border-border bg-background p-3">
                   {!showManual ? (
@@ -1724,6 +1741,19 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             <div className="mt-4 flex justify-end gap-2">
               <button onClick={() => setResetAsk(false)} className="rounded-lg border border-border px-4 py-2 text-sm" data-testid="scene-reset-cancel">Cancel</button>
               <button onClick={confirmReviseReset} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" data-testid="scene-reset-yes">Yes</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm the destructive scene reset before regenerating the whole episode script (only when scenes exist). */}
+      {phase === 'script' && regenAsk && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" data-testid="regen-confirm" role="dialog" aria-modal="true">
+          <div className="w-full max-w-md rounded-xl border border-border bg-background p-5 shadow-lg">
+            <p className="text-sm leading-relaxed">{SCENE_RESET_CONFIRM_MESSAGE}</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => setRegenAsk(false)} className="rounded-lg border border-border px-4 py-2 text-sm" data-testid="regen-cancel">Cancel</button>
+              <button onClick={confirmRegenerate} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" data-testid="regen-yes">Yes</button>
             </div>
           </div>
         </div>

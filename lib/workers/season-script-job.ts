@@ -312,6 +312,9 @@ export async function persistEpisodeScript(
         data: {
           episodeId,
           number: s.number,
+          // Short human-readable scene title (2–6 words) for the readable script heading. Additive & nullable:
+          // legacy / manual scripts that carry no title store null and the UI falls back to "Scene N".
+          title: (s.title ?? "").trim() || null,
           // `dialogue` = story-language text (UI display only; subtitles removed); `dialogueEn` = the English lines the model voices.
           dialogue: silent ? "[NO DIALOGUE]" : (s.dialogueLocal ?? s.dialogue),
           dialogueEn: silent ? "" : s.dialogue,

@@ -131,6 +131,8 @@ export function ScriptView({ text, scenes }: { text?: string | null; scenes?: { 
  */
 type BookScene = {
   number: number
+  // Short human-readable scene title (2–6 words) shown next to "Scene N"; null on legacy / manual scripts.
+  title?: string | null
   locationDesc?: string | null
   action?: string | null
   dialogue?: string | null
@@ -178,13 +180,19 @@ function SceneProse({ s }: { s: BookScene }) {
   const narration = (s.voiceoverLocal || s.voiceover || '').trim()
   const speech = (s.dialogue || '').trim()
   const hasSpeech = !isNarration && speech && speech !== '[NO DIALOGUE]'
-  const location = (s.locationDesc || '').trim()
+  // Short scene title shown next to "Scene N" (never the long location paragraph).
+  const title = (s.title || '').trim()
+  // Optional short location line UNDER the heading — only when it is genuinely short (a slug like
+  // "INT — kitchen — night"), never a full descriptive paragraph, and never used as the heading itself.
+  const rawLocation = (s.locationDesc || '').trim()
+  const shortLocation = rawLocation && !rawLocation.includes('\n') && rawLocation.length <= 80 ? rawLocation : ''
   return (
     <section className="space-y-4 pt-2 first:pt-0" data-testid="book-scene">
       <h3 className="mt-6 text-sm font-semibold uppercase tracking-wide text-foreground first:mt-0">
         Scene {s.number}
-        {location && <span className="ml-2 font-medium normal-case tracking-normal text-muted-foreground">· {location}</span>}
+        {title && <span className="ml-2 font-medium normal-case tracking-normal text-foreground">· {title}</span>}
       </h3>
+      {shortLocation && <p className="-mt-2 text-xs font-medium normal-case tracking-normal text-muted-foreground">{shortLocation}</p>}
       {s.action && <p className="whitespace-pre-wrap">{s.action}</p>}
       {isNarration && narration && (
         <div>

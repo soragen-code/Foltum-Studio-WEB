@@ -374,6 +374,9 @@ model Scene {
   id            String   @id @default(cuid())
   episodeId     String
   number        Int
+  // Short human-readable scene title (2-6 words, no location dump) captured from the script writer.
+  // Additive & nullable — legacy / manual scripts leave it null and the UI falls back to "Scene N".
+  title         String?
   dialogue      String?  @db.Text
   dialogueEn    String?  @db.Text // stage 4: English lines actually spoken by Seedance (dialogue = story-language text for UI display)
   // DEPRECATED (subtitles removed from the product): no longer read or written by product code.

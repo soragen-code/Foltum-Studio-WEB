@@ -534,3 +534,8 @@ ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "subLocationRefs" TEXT;
 -- credits — the default starting balance is 0 (was 100). Idempotent; existing rows are untouched
 -- by this DDL (their balances are handled separately by the admin zero-out).
 ALTER TABLE "User" ALTER COLUMN "credits" SET DEFAULT 0;
+
+-- Short human-readable scene title (2-6 words, no location dump) produced by the script writer and shown
+-- as the scene heading in the readable script. Additive, nullable & idempotent; legacy / manual scripts
+-- leave it NULL and the UI falls back to "Scene N".
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "title" TEXT;
