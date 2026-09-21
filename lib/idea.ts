@@ -205,13 +205,46 @@ export function stripMarkup(text: string): string {
 }
 
 /**
+ * ПРАВКА 4 — имена персонажей ВСЕГДА на английском (латиница), независимо от сеттинга/языка.
+ * Deterministic English fallbacks used when the model returns a non-Latin name despite the prompt rule.
+ */
+const LATIN_NAME_FALLBACKS = [
+  "Alex Carter", "Emma Brooks", "Daniel Reed", "Olivia Hayes", "Michael Turner",
+  "Sophia Bennett", "James Morgan", "Grace Palmer", "Ethan Cole", "Chloe Foster",
+  "Nathan Reeves", "Ava Sinclair", "Lucas Grant", "Isabella Ward", "Owen Fletcher", "Hannah Cross",
+] as const;
+
+/** True when the name is empty or contains any character outside plain English Latin (letters A-Z plus spaces/-/'/. ). */
+export function hasNonLatinName(name: string | null | undefined): boolean {
+  const n = (name ?? "").trim();
+  if (!n) return true;
+  // Any non-ASCII character (Cyrillic, CJK, Arabic, accented Latin, etc.) → not plain English Latin.
+  if (/[^\x00-\x7F]/.test(n)) return true;
+  // Must contain at least one Latin letter.
+  if (!/[A-Za-z]/.test(n)) return true;
+  return false;
+}
+
+/** Return the name unchanged when it is already plain English Latin; otherwise a deterministic English fallback. */
+export function toLatinName(name: string | null | undefined): string {
+  const n = (name ?? "").trim();
+  if (!hasNonLatinName(n)) return n;
+  let h = 0;
+  const src = n || "character";
+  for (let i = 0; i < src.length; i++) h = (h * 31 + src.charCodeAt(i)) >>> 0;
+  return LATIN_NAME_FALLBACKS[h % LATIN_NAME_FALLBACKS.length];
+}
+
+/**
  * Sanitize a character card for originality: no real people / brands /
- * franchises in appearance; keep the character's own name.
+ * franchises in appearance; force the character's name to English Latin.
  */
 export function sanitizeCharacterCard(card: CharacterCard, keepNames: string[] = []): CharacterCard {
-  const keep = [card.name, ...keepNames];
+  const name = toLatinName(card.name);
+  const keep = [name, ...keepNames];
   return {
     ...card,
+    name,
     appearance: sanitizeVideoPrompt(card.appearance, { keep }).prompt.trim() || card.appearance,
   };
 }
@@ -258,11 +291,11 @@ export function normalizeCastExpansion(raw: unknown, existingNames: string[]): C
 
 const ORIGINALITY_RULES = `ORIGINALITY (strict):
 - All characters are ORIGINAL. Never use or reference real people, celebrities, public figures, existing franchises, brands, trademarks or well-known fictional characters. Do not write "looks like <celebrity>".
-- Names must be invented and plausible for the story's setting.
-- NAMES FOLLOW THE STORY (Stage 2 rework): give every character a first name and surname that are CULTURALLY CONSISTENT with the story's setting, region-plate and the project's dialogue language — a story set in Japan gets Japanese names, one set in Georgia gets Georgian names, one set in an English-speaking world gets English names. Do NOT force Western / Latin-only names. When no explicit setting or dialogue language is given, default to English-language names. Whatever naming culture you pick, keep it consistent across the whole cast.`;
+- Names must be invented and original (never a real, recognisable person).
+- NAMES ARE ALWAYS ENGLISH IN THE LATIN ALPHABET (hard rule): give EVERY character a first name and surname written in ENGLISH using ONLY Latin letters (A-Z), no matter the story's setting, region, era or the project's dialogue language. Never use Cyrillic, Chinese, Japanese, Korean, Arabic, Hebrew or any other non-Latin script for a name, and never transliterate a name into a non-English form. Use natural, common English names (e.g. "Emma Carter", "Daniel Brooks", "Grace Palmer"). Keep this consistent across the whole cast — this applies even when the synopsis, roles and dialogue are written in another language.`;
 
 const CHARACTER_FIELD_RULES = `Character card fields (all REQUIRED, non-empty):
-- "name": full name (first name + surname) culturally consistent with the story's setting and dialogue language, see ORIGINALITY
+- "name": full name (first name + surname) ALWAYS in ENGLISH using only Latin letters (A-Z), regardless of the story's setting or dialogue language, see ORIGINALITY
 - "age": age as text (e.g. "34" or "late 40s"), in the story language
 - "gender": the character's sex, EXACTLY one of "male" | "female" (lowercase English). REQUIRED for every character. It MUST agree with the role/kinship and the name: a mother/wife/sister/daughter/actress/queen → "female"; a father/husband/brother/son/king → "male". This field is the single source of truth for the character's sex and drives the reference image, so it must never contradict "role" or "appearance". For a CROWD group, set the group's predominant sex ("female", "male"), or "female" for a mixed group led by women / "male" for a mixed group led by men.
 - "role": role in the story (protagonist, antagonist, ally, mentor, etc.), in the story language
@@ -306,6 +339,17 @@ export const SYNOPSIS_CRAFT_RULES =
   "synopsis and NOT a scene-by-scene script. Describe the season's throughline; leave per-episode breakdowns and " +
   "staged scenes to the later episode-synopsis and script steps.";
 
+/**
+ * Genre diversity — shared by the invent-from-scratch prompts (idea / auto / logline).
+ * Forces a WIDE spread of genres and explicitly bans the model's habit of defaulting to
+ * post-apocalyptic / survival / water-shortage / dystopian premises unless the producer asks.
+ * NOT applied to the upload/from-story prompt, which must preserve the uploaded canon.
+ */
+export const GENRE_DIVERSITY_RULES = `GENRE DIVERSITY (strict):
+- Draw from the FULL range of popular vertical-drama genres and pick whatever best fits the producer's material: melodrama / romance, family drama, marriage & relationship drama, thriller, detective / crime, mystery & the supernatural, comedy, historical / period drama, rich-family & inheritance saga, workplace & medical drama, revenge story. Combine two when it strengthens the hook.
+- Ground the story in RECOGNISABLE, human, everyday worlds and relationships (family, love, money, secrets, ambition, betrayal) unless the producer's material clearly calls for something else.
+- HARD BAN (unless the producer EXPLICITLY asks for it): do NOT default to a post-apocalyptic, dystopian, survival, wasteland, "last resource" / water-shortage / drought, pandemic-collapse or end-of-the-world premise. These are overused fallbacks — never reach for them on your own. If the producer did not ask for such a setting, choose a grounded, human-scale genre instead.`;
+
 export function ideaSystemPrompt(): string {
   return `You are a head writer for a short-form vertical drama series.
 
@@ -329,6 +373,8 @@ ${CHARACTER_FIELD_RULES}
 
 LOCATIONS: 8-14 distinct locations across the season (the leads' homes, workplaces, the central place of the story, transitional public places like streets, cafes, transport, and the finale's place). Diverse in type, scale and time of day; each visually distinct.
 ${LOCATION_FIELD_RULES}
+
+${GENRE_DIVERSITY_RULES}
 
 ${ORIGINALITY_RULES}`;
 }
@@ -506,6 +552,8 @@ ${CHARACTER_FIELD_RULES}
 LOCATIONS: 8-14 distinct locations across the season (the leads' homes, workplaces, the central place of the story, transitional public places like streets, cafes, transport, and the finale's place). Diverse in type, scale and time of day; each visually distinct.
 ${LOCATION_FIELD_RULES}
 
+${GENRE_DIVERSITY_RULES}
+
 ${ORIGINALITY_RULES}`;
 }
 
@@ -675,22 +723,24 @@ export function characterCardToData(c: CharacterCard) {
 /* ------------------------------------------------------------------ */
 
 /**
- * The logline is a 2-3 sentence "story idea" pitch shown FIRST, before any
- * synopsis work. It is cheap (one plain-text `chat` call) so the route can run
- * synchronously. The producer approves it (or edits it) before the season
- * synopsis is generated from it. When `correction` is present it is applied
+ * The "story idea" is a rich multi-sentence pitch (at least 7-10 sentences) shown
+ * FIRST, before any full synopsis work. It is cheap (one plain-text `chat` call) so
+ * the route can run synchronously. The producer approves it (or edits it) before the
+ * season synopsis is generated from it. When `correction` is present it is applied
  * VERBATIM — it may be either a re-generation instruction ("make it darker") or
- * a direct replacement of the logline text.
+ * a direct replacement of the idea text.
  */
 export function loglineSystemPrompt(language: IdeaLanguage): string {
   const lang = LANGUAGE_NAMES[language] ?? "Russian";
-  return `You are an award-winning head writer for a short-form vertical drama series. From the producer's raw material below, write a single compelling LOGLINE — the core "story idea" pitch for the whole season.
+  return `You are an award-winning head writer for a short-form vertical drama series. From the producer's raw material below, write a compelling STORY IDEA — the core season pitch that the producer will approve before the full synopsis is written.
 
 RULES:
-- Output ONLY the logline text: 2-3 sentences, roughly 25-70 words. No headings, no markdown, no labels, no quotes, no bullet points.
+- Output ONLY the story-idea text: at least 7-10 sentences, roughly 120-220 words, as a coherent season pitch (1-2 short paragraphs of prose). No headings, no markdown, no labels, no quotes, no bullet points.
 - Write it in ${lang}.
-- It must convey the hook: the protagonist, their want/goal, the central conflict or antagonist force, and the stakes. Make it specific and gripping — no generic clichés.
-- Do not write the full synopsis or list episodes. This is the elevator pitch only.`;
+- It must convey: the world and setup, the protagonist and their want/goal, the central conflict or antagonist force, the rising stakes, and a hint of where the season is heading. Make it specific and gripping — no generic clichés.
+- Do not write the full formal synopsis or list individual episodes. This is a rich pitch of the whole-season idea, not a scene-by-scene breakdown.
+
+${GENRE_DIVERSITY_RULES}`;
 }
 
 /**

@@ -3,82 +3,100 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Header } from '@/components/header'
-import { MonitorPlay, ArrowRight, Loader2 } from 'lucide-react'
+import { Sparkles, Upload, ArrowRight, Loader2 } from 'lucide-react'
 import { motion } from 'framer-motion'
-import { SEEDANCE_MAX_DURATION, SCENE_RESOLUTION } from '@/lib/power-tier'
-import { sceneClipCost } from '@/lib/season'
 
 /**
- * Stage 46B: no quality choice any more — every scene clip is rendered at a fixed 480p
- * (`SCENE_RESOLUTION`); the production quality (480p/720p/1080p, 30/60 fps) is picked later,
- * when the finished episode is assembled. Projects are created with powerTier LOW, which is the
- * 480p pricing. Episode count, scene count and clip length are never asked here: the script
- * decides them.
+ * ПРАВКА 1 — экран нового проекта: вместо блока о качестве сцен предлагаем два пути:
+ *  (а) «Создать с нуля» — придумать идею/сюжет внутри редактора;
+ *  (б) «Загрузить готовый сценарий» — загрузить свой текст сюжета файлом (или вставить его).
+ * Оба варианта создают проект одинаково (POST /api/projects, powerTier LOW) — различается только
+ * начальный режим на экране идеи: путь «с нуля» открывает /project/{id}, путь «загрузить готовый
+ * сценарий» открывает /project/{id}?source=upload, где сразу активен режим загрузки сюжета.
  */
 export function NewProjectForm() {
-  const [loading, setLoading] = useState(false)
+  const [loading, setLoading] = useState<null | 'scratch' | 'upload'>(null)
   const [error, setError] = useState('')
   const router = useRouter()
-  const perScene = sceneClipCost('LOW', SEEDANCE_MAX_DURATION)
-  const perSecond = (perScene / SEEDANCE_MAX_DURATION).toFixed(1).replace(/\.0$/, '')
 
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const createProject = async (source: 'scratch' | 'upload') => {
+    if (loading) return
     setError('')
-    setLoading(true)
+    setLoading(source)
     try {
       const res = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // Stage 40: no name — it is generated automatically from the plot once the idea / test scene exists.
+        // Название генерируется автоматически из сюжета; качество/длина сезона определяются сценарием.
         body: JSON.stringify({ powerTier: 'LOW' }),
       })
       const data = await res.json()
-      if (!res.ok) { setError(data?.error ?? "Couldn't create the project"); setLoading(false); return }
-      router.push(`/project/${data?.project?.id}`)
+      if (!res.ok) { setError(data?.error ?? 'Не удалось создать проект'); setLoading(null); return }
+      const id = data?.project?.id
+      router.push(source === 'upload' ? `/project/${id}?source=upload` : `/project/${id}`)
     } catch {
-      setError('Something went wrong')
-      setLoading(false)
+      setError('Что-то пошло не так')
+      setLoading(null)
     }
   }
 
   return (
     <div className="min-h-screen bg-background">
       <Header />
-      <main className="mx-auto max-w-[600px] px-4 py-12">
+      <main className="mx-auto max-w-[720px] px-4 py-12">
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
           <h1 className="font-display text-3xl font-bold tracking-tight">
-            New <span className="text-primary">project</span>
+            Новый <span className="text-primary">проект</span>
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            The project title will be generated automatically — short and based on the plot; the season length, number of scenes, and runtime will be determined by the script.
+            Выберите, с чего начать. Название проекта сгенерируется автоматически по сюжету, а длина сезона, число сцен и хронометраж определятся сценарием.
           </p>
 
-          <form onSubmit={handleCreate} className="mt-8 space-y-6">
-            {error && (
-              <div className="rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>
-            )}
+          {error && (
+            <div className="mt-6 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>
+          )}
 
-            <div className="rounded-xl border border-border bg-card p-4" data-testid="scene-quality-info">
-              <div className="flex items-center gap-2 font-semibold"><MonitorPlay className="h-5 w-5 text-green-400" /> Scenes are rendered in {SCENE_RESOLUTION}</div>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {perSecond} cr./sec · up to {perScene} cr. per scene ({SEEDANCE_MAX_DURATION} s). Cost is calculated based on each scene's actual length and shown before confirmation.
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                The finished episode quality (480p / 720p / 1080p, 30 or 60 fps) is selected during episode assembly.
-              </p>
-            </div>
-
+          <div className="mt-8 grid gap-4 sm:grid-cols-2">
+            {/* (а) Создать с нуля */}
             <button
-              type="submit"
-              disabled={loading}
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary py-3 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
-              data-testid="project-create"
+              type="button"
+              onClick={() => createProject('scratch')}
+              disabled={!!loading}
+              className="group flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-5 text-left transition hover:border-primary/60 disabled:opacity-50"
+              data-testid="project-create-scratch"
             >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />}
-              Create
+              <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                {loading === 'scratch' ? <Loader2 className="h-6 w-6 animate-spin" /> : <Sparkles className="h-6 w-6" />}
+              </div>
+              <div className="font-display text-lg font-semibold">Создать с нуля</div>
+              <p className="text-sm text-muted-foreground">
+                Опишите идею сами или доверьте её ИИ по выбранному жанру. Мы придумаем короткую идею, синопсис, персонажей, локации и сценарий.
+              </p>
+              <span className="mt-1 inline-flex items-center gap-1 text-sm font-semibold text-primary">
+                Начать <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" />
+              </span>
             </button>
-          </form>
+
+            {/* (б) Загрузить готовый сценарий */}
+            <button
+              type="button"
+              onClick={() => createProject('upload')}
+              disabled={!!loading}
+              className="group flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-5 text-left transition hover:border-primary/60 disabled:opacity-50"
+              data-testid="project-create-upload"
+            >
+              <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                {loading === 'upload' ? <Loader2 className="h-6 w-6 animate-spin" /> : <Upload className="h-6 w-6" />}
+              </div>
+              <div className="font-display text-lg font-semibold">Загрузить готовый сценарий</div>
+              <p className="text-sm text-muted-foreground">
+                Уже есть готовый сюжет? Загрузите его файлом (.txt, .md, .docx, .pdf) или вставьте текстом — ИИ структурирует его в сезон с сериями, локациями и персонажами.
+              </p>
+              <span className="mt-1 inline-flex items-center gap-1 text-sm font-semibold text-primary">
+                Загрузить <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" />
+              </span>
+            </button>
+          </div>
         </motion.div>
       </main>
     </div>

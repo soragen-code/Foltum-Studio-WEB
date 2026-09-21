@@ -1,15 +1,15 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { Loader2, Wand2, Check, Pencil, User, X, Lightbulb, MessageSquareText, UserPlus, ChevronRight, Upload, FileText, FlaskConical, Undo2 } from 'lucide-react'
+import { useSearchParams } from 'next/navigation'
+import { Loader2, Wand2, Check, Pencil, User, X, Lightbulb, MessageSquareText, UserPlus, ChevronRight, Upload, FileText, Undo2 } from 'lucide-react'
 import { LocationCard, AddLocationForm, TierBadge, TIER_LABELS, groupByTier, type LocationCardData } from './cast-and-locations'
 import { parseStoredShortSynopsis, type ShortSynopsis } from '@/lib/short-synopsis'
 import { CancelButton } from './cancel-button'
 import { useJobPolling, SmoothProgress } from './use-job-polling'
 
 /** Roughly how long the synopsis step takes — drives the smooth 0→100 % progress bar. */
-const SYNOPSIS_EXPECTED_SEC = 45
+const SYNOPSIS_EXPECTED_SEC = 60
 
 export interface CharacterCardData {
   id: string
@@ -493,14 +493,12 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id])
   // Idea source: 'manual' = producer writes the idea; 'auto' = the AI invents it from a genre;
-  // 'upload' = the producer uploads a finished story file (Stage 12).
-  // 'test' (Stage 40) = «Test episode: one hand-written scene prompt → one-scene episode, no story pipeline.
-  const [mode, setMode] = useState<'manual' | 'auto' | 'upload' | 'test'>('manual')
-  const router = useRouter()
-  // Stage 46A: the test form is ONE «"Idea" field — the scene prompt / dialogue are invented by the model
-  // and every test scene is a fixed 30 s clip (server-enforced).
-  const [testIdea, setTestIdea] = useState('')
-  const [creatingTest, setCreatingTest] = useState(false)
+  // 'upload' = the producer uploads / pastes a finished story (Stage 12).
+  // ПРАВКА 1: путь «Загрузить готовый сценарий» открывает экран с ?source=upload — сразу активен режим загрузки.
+  const searchParams = useSearchParams()
+  const [mode, setMode] = useState<'manual' | 'auto' | 'upload'>(
+    searchParams?.get('source') === 'upload' ? 'upload' : 'manual'
+  )
   // Stage 46A: short synopsis shown between the idea and the season script (approve / rework).
   const [shortSynopsis, setShortSynopsis] = useState<ShortSynopsis | null>(() => parseStoredShortSynopsis(project?.shortSynopsis))
   const [synopsisLoading, setSynopsisLoading] = useState(false)
@@ -519,41 +517,10 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   const fileInput = useRef<HTMLInputElement | null>(null)
 
   const hasResult = !!result
-  const busy = generating || approving || chaining || parsing || creatingTest || synopsisLoading
+  const busy = generating || approving || chaining || parsing || synopsisLoading
   const toggleGenre = (id: string) =>
     setGenres((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]))
   const canGenerate = mode === 'auto' ? genres.length > 0 : mode === 'upload' ? storyText.trim().length >= 20 : idea.trim().length >= 10
-  const canCreateTest = testIdea.trim().length >= 5
-
-  // Stage 40/46A — «"Create a test episode": the model invents the whole scene from the one-line idea
-  // (prompt, dialogue, meta), then the one-scene 30 s test episode is created and opened. Nothing to edit by hand.
-  const createTestEpisode = async () => {
-    setError(''); setNotice(''); setCreatingTest(true)
-    try {
-      const inv = await fetch('/api/ai/test-scene', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idea: testIdea.trim(), durationSec: 30 }),
-      })
-      const d = await inv.json().catch(() => ({}))
-      if (!inv.ok) throw new Error(d?.error || "Couldn't come up with a scene")
-      const res = await fetch(`/api/projects/${project.id}/test-episode`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: d.videoPrompt ?? '',
-          dialogue: (d.dialogue ?? '').trim() || undefined,
-          durationSec: 30,
-          projectTitle: d.projectTitle ?? undefined,
-          title: d.title, locationDesc: d.locationDesc, action: d.action, sceneKind: d.sceneKind, startState: d.startState, endState: d.endState,
-        }),
-      })
-      const cd = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(cd?.error || "Couldn't create a test episode")
-      router.push(`/project/${project.id}/episode/${cd.episodeId}`)
-    } catch (e: any) {
-      setError(e?.message || "Couldn't create a test episode")
-      setCreatingTest(false)
-    }
-  }
 
   // Stage 12 — parse the chosen story file into text on the server (no LLM here).
   const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -659,7 +626,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
           <Lightbulb className="h-5 w-5 text-primary" /> Step 1 — Idea
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Describe your idea — or choose Auto mode, and AI will come up with an original story in the selected genre. First we'll create a short story idea (a logline): you'll review and approve it, then we'll generate the synopsis, and the episode breakdown, characters, locations and script later.
+          Опишите свою идею — или выберите режим «Авто», и ИИ придумает оригинальную историю в выбранном жанре. Сначала мы создадим развёрнутую идею сезона (питч на 7–10 предложений): вы просмотрите и одобрите её, а затем сгенерируем синопсис, а позже — разбивку по эпизодам, персонажей, локации и сценарий.
         </p>
 
         {/* Mode toggle: own idea / auto */}
@@ -691,15 +658,6 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
           >
             Upload your own plot as a file
           </button>
-          <button
-            type="button"
-            onClick={() => setMode('test')}
-            disabled={busy}
-            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${mode === 'test' ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}
-            data-testid="idea-mode-test"
-          >
-            Test episode
-          </button>
         </div>
 
         {error && <div className="mt-4 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
@@ -715,30 +673,6 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
             className="mt-4 w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
             data-testid="idea-input"
           />
-        ) : mode === 'test' ? (
-          <div className="mt-4 space-y-3" data-testid="idea-test-panel">
-            <p className="text-xs text-muted-foreground">
-              One scene instead of a full season: describe the idea in one phrase — AI will come up with the scene, prompt, and lines. Each test scene is a 30-second video. Character references aren't needed: the model works from text only. The project title will be chosen automatically based on the scene's plot. After creation, you'll go to the episode page, where you can view the prompt and generate the video.
-            </p>
-            <input
-              value={testIdea}
-              onChange={(e) => setTestIdea(e.target.value)}
-              placeholder="Scene idea, for example: two fishermen argue on a pier about a missing boat"
-              disabled={busy}
-              className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
-              data-testid="test-scene-idea"
-            />
-            <button
-              type="button"
-              onClick={createTestEpisode}
-              disabled={busy || !canCreateTest}
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50 sm:w-auto"
-              data-testid="test-episode-create"
-            >
-              {creatingTest ? <Loader2 className="h-4 w-4 animate-spin" /> : <FlaskConical className="h-4 w-4" />}
-              {creatingTest ? 'Coming up with a scene and creating a series...' : 'Create a test episode (30 s)'}
-            </button>
-          </div>
         ) : mode === 'upload' ? (
           <div className="mt-4 space-y-3" data-testid="idea-upload-panel">
             <p className="text-xs text-muted-foreground">
@@ -773,6 +707,19 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
                 <p className="mt-2 line-clamp-4 whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{storyText.slice(0, 400)}{storyText.length > 400 ? '…' : ''}</p>
               </div>
             )}
+            {/* ПРАВКА 1: помимо файла можно вставить готовый сценарий текстом. */}
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              <span className="h-px flex-1 bg-border" /> или вставьте текст <span className="h-px flex-1 bg-border" />
+            </div>
+            <textarea
+              value={storyMeta ? '' : storyText}
+              onChange={(e) => { setStoryText(e.target.value); setStoryMeta(null) }}
+              placeholder="Вставьте готовый сюжет / сценарий сюда (минимум несколько абзацев). ИИ примет его за основу и структурирует в сезон."
+              rows={6}
+              disabled={busy}
+              className="w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
+              data-testid="idea-paste-input"
+            />
           </div>
         ) : (
           <div className="mt-4 space-y-3" data-testid="idea-auto-panel">
@@ -808,7 +755,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
             />
           </div>
         )}
-        {mode !== 'upload' && mode !== 'test' && (
+        {mode !== 'upload' && (
           <div className="mt-4 flex flex-wrap items-center gap-3" data-testid="episode-count-field">
             <label htmlFor="episode-count" className="text-sm font-medium text-foreground">Number of episodes</label>
             <div className="inline-flex items-center overflow-hidden rounded-lg border border-border">
@@ -850,7 +797,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
             <span className="text-xs text-muted-foreground">AI will build the dramatic structure (intro → inciting incident → climax → resolution) for exactly {episodeCount} episodes (1–100).</span>
           </div>
         )}
-        {mode !== 'test' && <button
+        <button
           onClick={generate}
           disabled={busy || !canGenerate}
           className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50 sm:w-auto"
@@ -858,7 +805,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
         >
           {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
           {mode === 'auto' ? 'Come up with a story idea' : mode === 'upload' ? 'Create an idea from the plot' : 'Create idea'}
-        </button>}
+        </button>
         {generating && !chaining && (
           <div className="mt-3 space-y-2" data-testid="idea-progress">
             {synopsisJob ? (
@@ -867,7 +814,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
               <p className="inline-flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin text-primary" /> Starting generation…</p>
             )}
             <div className="flex items-center justify-between gap-2">
-              <p className="min-w-0 text-xs text-muted-foreground">Step 1 · coming up with a short story idea. This is quick — you'll review and approve it before the synopsis is generated.</p>
+              <p className="min-w-0 text-xs text-muted-foreground">Шаг 1 · придумываем идею истории. Это быстро — вы просмотрите и одобрите её перед генерацией синопсиса.</p>
               <CancelButton onCancel={cancelIdea} testId="idea-cancel" className="flex-shrink-0" />
             </div>
           </div>

@@ -462,7 +462,10 @@ export const sceneScriptSchema = z.object({
   characters: z.array(z.string()).default([]),
   action: z.string().min(5),
   /** ENGLISH spoken lines — this is what Seedance voices (always English, whatever the story language). */
-  dialogue: z.string().min(1),
+  // Stage 166 — a SILENT scene may return an empty dialogue; it is normalized to "[NO DIALOGUE]" downstream
+  // (normalizeEpisodeScript) and validated by validateSeasonScript (requires visualBeat + at least one speaking scene).
+  // So parse-time must NOT reject an empty string, or a single silent scene throws out the whole episode.
+  dialogue: z.string(),
   /** Same lines in the story language for the UI display (subtitles removed); equals `dialogue` for English projects. */
   dialogueLocal: z.string().optional(),
   // Stage 12 (Commit D) — optional off-screen NARRATOR voice-over (backstory / catch-up).
@@ -1833,7 +1836,8 @@ export const sceneReviseSchema = z.object({
   /** Short, stable machine key for the distinct SPOT within the location (season.ts S16); optional so it stays absent when unchanged. */
   subLocation: z.string().optional(),
   action: z.string().min(3),
-  dialogue: z.string().min(1),
+  // Silent scenes may return an empty dialogue (normalized to "[NO DIALOGUE]" downstream); do not reject at parse time.
+  dialogue: z.string(),
   dialogueLocal: z.string().optional(),
   videoPrompt: z.string().min(40),
   // Stage 11 — continuity metadata (optional; kept in step with the neighbouring shots).

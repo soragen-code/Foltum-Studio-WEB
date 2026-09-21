@@ -168,12 +168,15 @@ export function SmoothProgress({
 }) {
   const shownRef = useRef(0)
   const jobIdRef = useRef<string | null>(null)
+  const mountAtRef = useRef(0)
   const [, setTick] = useState(0)
 
-  // Reset the monotonic floor whenever a new job starts.
+  // Reset the monotonic floor whenever a new job starts, and capture a CLIENT-side
+  // timestamp for it. The client mount time is used as a skew-proof fallback below.
   if (jobIdRef.current !== job.id) {
     jobIdRef.current = job.id
     shownRef.current = 0
+    mountAtRef.current = Date.now()
   }
 
   useEffect(() => {
@@ -185,7 +188,15 @@ export function SmoothProgress({
   const done = job.status === 'completed'
   const failed = job.status === 'failed'
   const canceled = job.status === 'canceled'
-  const elapsedSec = Math.max(0, (Date.now() - new Date(job.createdAt).getTime()) / 1000)
+  // Elapsed time drives the "creep" of the bar. Deriving it ONLY from job.createdAt
+  // (server time) breaks when the server clock is ahead of the client's: createdElapsed
+  // clamps to 0, creep stays 0 and the bar freezes near the initial server progress (~2%).
+  // Guard against skew by also tracking a client-side mount time, and take whichever is
+  // larger — this preserves resume (large createdElapsed for a pre-existing job) while
+  // still advancing for a fresh job even under clock skew.
+  const createdElapsed = (Date.now() - new Date(job.createdAt).getTime()) / 1000
+  const mountElapsed = mountAtRef.current ? (Date.now() - mountAtRef.current) / 1000 : 0
+  const elapsedSec = Math.max(0, mountElapsed, createdElapsed > 0 ? createdElapsed : 0)
   const pct = smoothedProgress({
     serverProgress: job.progress,
     status: job.status,

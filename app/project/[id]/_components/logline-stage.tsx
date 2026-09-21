@@ -5,7 +5,7 @@ import { Wand2, Loader2, Check, RefreshCw, MessageSquareText, Lightbulb } from '
 import { useJobPolling, SmoothProgress } from './use-job-polling'
 
 /** Roughly how long the synopsis job (kicked on approval) takes — drives the smooth 0→100 % bar. */
-const SYNOPSIS_EXPECTED_SEC = 45
+const SYNOPSIS_EXPECTED_SEC = 60
 
 /**
  * STEP 1 of the 3-step approval flow — the story IDEA (logline).
@@ -127,7 +127,7 @@ export function LoglineStage({ project, onRefresh }: { project: any; onRefresh: 
           <Lightbulb className="h-5 w-5 text-primary" /> Шаг 1 — Идея
         </h2>
         <p className="mb-4 text-sm text-muted-foreground">
-          Это короткая идея сезона (логлайн) в 2–3 предложениях. Отредактируйте её прямо в тексте, попросите
+          Это развёрнутая идея сезона — питч на 7–10 предложений. Отредактируйте её прямо в тексте, попросите
           ИИ переписать по промпту или сгенерируйте заново. Когда идея вас устроит — нажмите «Аппрув / Далее»,
           и мы создадим по ней синопсис сезона.
         </p>
@@ -139,7 +139,7 @@ export function LoglineStage({ project, onRefresh }: { project: any; onRefresh: 
           value={logline}
           onChange={(e) => setLogline(e.target.value)}
           disabled={busy}
-          placeholder="Короткая идея сезона…"
+          placeholder="Идея сезона…"
           className="mb-4 w-full rounded-lg border border-input bg-background p-3 text-sm leading-relaxed outline-none transition focus:border-primary focus:ring-1 focus:ring-primary disabled:opacity-60"
           data-testid="logline-text"
         />

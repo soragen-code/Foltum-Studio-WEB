@@ -91,13 +91,17 @@ export function ProjectWizard({ project: initialProject, entitlements }: { proje
           {!referencesTab && currentStage === 'synopsis' && !isNewFlow(project) && (
             <SynopsisStage project={project} onRefresh={refreshProject} />
           )}
-          {/* ПРАВКА 2 — новый флоу: синопсис и сюжет на ОДНОЙ странице. Синопсис сверху; после его
-             аппрува ниже раскрывается сюжет по сериям. Покрывает и стадию 'synopsis', и 'structure',
-             поэтому после аппрува навигация не нужна — сюжет появляется на той же странице. */}
-          {!referencesTab && (currentStage === 'synopsis' || currentStage === 'structure') && isNewFlow(project) && (
-            <div className="space-y-6" data-testid="synopsis-story-combined">
+          {/* ПРАВКА 2 — новый флоу: Шаг 2 (синопсис) и Шаг 3 (сюжет) теперь на ОТДЕЛЬНЫХ страницах.
+             На стадии 'synopsis' показываем только синопсис; после его аппрува проект переходит на
+             стадию 'structure' (см. approve-synopsis), и тогда открывается отдельная страница сюжета. */}
+          {!referencesTab && currentStage === 'synopsis' && isNewFlow(project) && (
+            <div className="space-y-6" data-testid="synopsis-page">
               <SynopsisStage project={project} onRefresh={refreshProject} />
-              {project.synopsisApproved && <StoryStage project={project} onRefresh={refreshProject} />}
+            </div>
+          )}
+          {!referencesTab && currentStage === 'structure' && isNewFlow(project) && (
+            <div className="space-y-6" data-testid="story-page">
+              <StoryStage project={project} onRefresh={refreshProject} />
             </div>
           )}
           {!referencesTab && currentStage === 'characters' && (
