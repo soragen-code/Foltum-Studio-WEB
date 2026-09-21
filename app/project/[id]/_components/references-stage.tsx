@@ -454,7 +454,7 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                         /* Stage 46E: angle frames as full tiles with an always-visible toolbar (regen / download / delete). */
                         <div className="mb-3 flex flex-wrap gap-2" data-testid="location-angles">
                           {[{ url: loc.imageReverse, label: 'Layout (mandatory)', slot: 'layout' }, { url: loc.imageDetail, label: 'Medium shot', slot: 'detail' }].filter((a) => validUrl(a.url)).map((a) => (
-                            <span key={a.label} className="relative block h-40 w-24 overflow-hidden rounded bg-muted" title={a.label}>
+                            <span key={a.label} className="relative block aspect-[9/16] w-24 overflow-hidden rounded bg-muted" title={a.label}>
                               {/* eslint-disable-next-line @next/next/no-img-element */}
                               <img src={a.url as string} alt={`${loc.name} — ${a.label}`} className="h-full w-full object-cover" />
                               <FrameToolbar
@@ -504,7 +504,7 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                             {extras.length > 0 && (
                               <div className="mb-2 flex flex-wrap gap-2" data-testid="location-extra-thumbs">
                                 {extras.map((url, i) => (
-                                  <span key={url} className="relative block h-40 w-24 overflow-hidden rounded bg-muted" title={`${i + 1}. ${locationExtraLabel(i)}`}>
+                                  <span key={url} className="relative block aspect-[9/16] w-24 overflow-hidden rounded bg-muted" title={`${i + 1}. ${locationExtraLabel(i)}`}>
                                     {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img src={url} alt={`${loc.name} — ${locationExtraLabel(i)}`} className="h-full w-full object-cover" />
                                     <FrameToolbar
