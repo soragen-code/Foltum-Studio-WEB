@@ -41,6 +41,10 @@ export function episodeBatches(total: number, size: number): { from: number; to:
   return out;
 }
 export const SEASON_DEFAULT_EPISODES = 8;
+/** Stage 210 — the per-episode season story (synopses) is generated in batches of this many episodes per
+ * "generate next N" action, so the producer can approve and start creation on the first 3 without waiting
+ * for the whole season. */
+export const STORY_EPISODE_BATCH = 3;
 /**
  * Stage 166 — an episode is now CONTENT-DRIVEN: 5–8 scenes, each a VARIABLE 3–15 s clip, totalling
  * 70–100 s. (Stage 114 fixed it at exactly 9 × 10 s = 90 s.) Older 9-scene / 4-scene episodes in the DB
@@ -1301,38 +1305,96 @@ export const LOCATION_DETAIL_RULE =
 export const PACING_RULE =
   "PACING (slow burn, like an hour-long TV drama): the story moves only SLIGHTLY faster than a one-hour television drama — NEVER like a compressed short film. Characters do NOT get acquainted, fall in love, become allies or turn into enemies within ONE episode — relationships are built over SEVERAL episodes through repeated meetings, doubts and small steps. Each episode contains EXACTLY ONE major plot turn (plus a few small beats around it) and ends on its cliffhanger; it is FORBIDDEN to compress what would naturally be two episodes into one — if the material overflows, leave it for the next episode. Episode 1 is EXPOSITION ONLY: it introduces the world and the characters and lands ONE inciting conflict — no resolutions, no alliances, no romance yet. Spread the arc EVENLY across ALL episodes: the first third of the season must not rush ahead of the rest.";
 
-export function seasonStructureSystemPrompt(language: IdeaLanguage, episodeCount = SEASON_DEFAULT_EPISODES): string {
+export function seasonStructureSystemPrompt(
+  language: IdeaLanguage,
+  episodeCount = SEASON_DEFAULT_EPISODES,
+  batch?: { from: number; to: number; total: number },
+): string {
+  // Stage 210 — when a batch is given, this call produces ONLY episodes [from..to] of a season that has
+  // `total` episodes in all (the four-act arc is planned across `total`, not across this batch). Without a
+  // batch the call produces all `episodeCount` episodes exactly as before.
+  const total = batch ? batch.total : episodeCount;
+  const from = batch ? batch.from : 1;
+  const to = batch ? batch.to : episodeCount;
+  const expectedCount = to - from + 1;
+  const batchRule = batch
+    ? `- BATCH: this SEASON has EXACTLY ${total} episodes in total. In THIS response produce ONLY episodes ${from}..${to} (${expectedCount} episode${expectedCount === 1 ? "" : "s"}) — numbered ${from}..${to} contiguously, no more, no fewer. Plan the four-act arc below across ALL ${total} episodes of the season and output only this slice of it; the other episodes are generated in separate calls. Keep the SAME title/logline the season already has (see PREVIOUS EPISODES if given).`
+    : `- NUMBER OF EPISODES: produce EXACTLY ${total} episodes — no more, no fewer — numbered 1..${total} contiguously. This count is set by the producer; do NOT change it, do NOT pad and do NOT compress the story into a different number.`;
   return `You are a showrunner planning ONE season of a short-form vertical drama series (9:16 video, each episode = a piece of up to ${EPISODE_TOTAL_LABEL} (at most ${EPISODE_MAX_TOTAL_SECONDS} s), later shot as ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES} short clips of ${SCENE_MIN_SECONDS}–${SCENE_CLIP_MAX_SECONDS} s each). At THIS planning stage you describe each episode as ONE detailed, continuous synopsis ending on a cliffhanger — NOT a shot-by-shot list and NOT split into timed halves; the full ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES}-clip shooting script is written later from this synopsis.
 - EPISODE SHAPE (a single continuous synopsis, ${EPISODE_TOTAL_LABEL}): tell the whole episode in order as one flowing account — the set-up (it carries the episode's continuation straight out of the previous episode's cliffhanger; episode 1: the season opening), the development, ONE concrete central dramatic turn, and how it ends on this episode's cliffhanger. No subplots, no montage, no shot/beat/timing division.
 - ${EPISODE_SYNOPSIS_RULE}
 Return STRICT JSON: {"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string, "description": string (a detailed continuous episode synopsis in prose, ~4–7 sentences, then a final "CLIFFHANGER: ..." line — NO shot/beat split, NO timings)}]}.
 RULES:
-- NUMBER OF EPISODES: produce EXACTLY ${episodeCount} episodes — no more, no fewer — numbered 1..${episodeCount} contiguously. This count is set by the producer; do NOT change it, do NOT pad and do NOT compress the story into a different number.
-- DRAMATURGY across the whole season (spread these four acts over the ${episodeCount} episodes, in order): ВСТУПЛЕНИЕ → ЗАВЯЗКА → КУЛЬМИНАЦИЯ → РАЗВЯЗКА.
+${batchRule}
+- DRAMATURGY across the whole season (spread these four acts over the ${total} episodes, in order): ВСТУПЛЕНИЕ → ЗАВЯЗКА → КУЛЬМИНАЦИЯ → РАЗВЯЗКА.
   • ВСТУПЛЕНИЕ (episode 1, arcRole "завязка"): expose the world and the main characters through ONE concrete on-camera situation (the "description" is pure on-camera action, no backstory retelling). Introduce the central want and the first disturbance.
   • ЗАВЯЗКА → развитие (early-middle episodes, arcRole "развитие"): rising action — the conflict escalates step by step, stakes grow, complications and reversals ("поворот") appear, at least one strong поворот in the second half.
   • КУЛЬМИНАЦИЯ (the episode just before the finale, or the finale's first half — mark it arcRole "поворот"): the highest-tension confrontation the whole season built toward — the decisive clash where everything is on the line.
   • РАЗВЯЗКА (the LAST episode, arcRole "финал"): the aftermath and resolution — consequences land, the main dramatic question is answered, threads close (a final hook is allowed but the arc resolves).
-  Distribute these beats proportionally to ${episodeCount}: the more episodes, the more развитие episodes between завязка and the кульминация; with few episodes, compress развитие but NEVER drop вступление, кульминация or развязка.
-- ${PACING_RULE} Give every one of the ${episodeCount} episodes a comparable share of the story: ONE major turn per episode, evenly distributed — never spend the whole plot in the first third and pad the rest.
+  Distribute these beats proportionally to ${total}: the more episodes, the more развитие episodes between завязка and the кульминация; with few episodes, compress развитие but NEVER drop вступление, кульминация or развязка.
+- ${PACING_RULE} Give every one of the ${total} episodes a comparable share of the story: ONE major turn per episode, evenly distributed — never spend the whole plot in the first third and pad the rest.
 - Each episode has ONE key location. "locationName" MUST be one of the given LOCATIONS, copied verbatim (they already have reference images). Only if the story truly needs a place that is not in the list may you invent a new one (then give it a new name) — at most 2 new locations per season. "locationDesc" is a DETAILED English visual description (2–4 sentences: architecture, materials, textures, props, weather, light, color palette, time of day) usable verbatim by an image/video model — for a listed location, expand its given description. "locationName" is in ${langName(language)}.
 - ${LOCATION_DETAIL_RULE}
 - Use ONLY the given character names (verbatim; a CROWD group name counts as a character). Every episode lists 2–6 characters actually present: the MAIN characters carrying it plus the SUPPORTING characters (family, colleagues, rivals) involved. Across the season EVERY SUPPORTING character appears in at least one episode, MINOR characters and CROWD groups are used where the story plausibly gathers people (family dinners, workplaces, hospitals, streets, court, celebrations).
 - "logline" is ONE sentence (who wants what, what goes wrong); the events themselves live in the detailed "description". "cliffhanger" = the CLIFFHANGER line — a concrete final IMAGE that forces the viewer into the next episode. No summaries like "tension rises".
-- CLIFFHANGER CHAIN (each episode's synopsis opens on the previous episode's cliffhanger): episode 1 opens the season; every later episode's description MUST OPEN by picking up DIRECTLY from where the immediately preceding episode ended — the same moment, same place, the same unresolved situation of that episode's cliffhanger — and only then advance. The opening of episode N+1 = the direct consequence/continuation of episode N's cliffhanger: no time-skips, no resets, no re-introducing the premise that would drop the thread. The chain of cliffhanger → next episode's opening stays UNBROKEN across all ${episodeCount} episodes; consequences carry over episode to episode and nothing repeats.
+- CLIFFHANGER CHAIN (each episode's synopsis opens on the previous episode's cliffhanger): episode 1 opens the season; every later episode's description MUST OPEN by picking up DIRECTLY from where the immediately preceding episode ended — the same moment, same place, the same unresolved situation of that episode's cliffhanger — and only then advance. The opening of episode N+1 = the direct consequence/continuation of episode N's cliffhanger: no time-skips, no resets, no re-introducing the premise that would drop the thread. The chain of cliffhanger → next episode's opening stays UNBROKEN across all ${total} episodes; consequences carry over episode to episode and nothing repeats.
 - ${CREATIVE_RULE}
 - ${MODERATION_SAFE_RULE}
 - Locations are LARGE, LIVING spaces to be used physically: describe in "locationDesc" a place with several distinct zones the characters move between and the concrete objects, furniture, surfaces and corners they interact with, plus the natural background life of the place (who else is around, what moves, the weather) so it never reads as a flat backdrop. Pick VARIED key locations across the season — interiors and exteriors, private and public, different scales and times of day.
 - All text except "locationDesc" is in ${langName(language)}. Character names stay exactly as given (Western names in Latin letters). Original content: never reuse names, plots or lines of existing films/series.`;
 }
-export function seasonStructureUserPrompt(synopsis: string, characters: CharacterCard[], locations: LocationRef[] = [], shortSynopsis?: string | null): string {
+export function seasonStructureUserPrompt(
+  synopsis: string,
+  characters: CharacterCard[],
+  locations: LocationRef[] = [],
+  shortSynopsis?: string | null,
+  previousEpisodes?: { number: number; title?: string | null; description?: string | null; cliffhanger?: string | null }[],
+): string {
   // Stage 46A: the author-approved short synopsis is a MANDATORY outline — the structure must follow its
   // episode loglines one-to-one (same order, same events), only expanding them into full episodes.
   const outline = shortSynopsis?.trim()
     ? `APPROVED SHORT SYNOPSIS (MANDATORY OUTLINE — the author signed this off: keep the premise and make episode N of the structure expand logline N exactly, same order, same central events; do not merge, reorder or replace episodes):\n${shortSynopsis.trim()}\n\n`
     : "";
-  return `${outline}SYNOPSIS:\n${synopsis}\n\nCHARACTERS (with tiers):\n${charactersBlock(characters)}\n\nLOCATIONS (use these names verbatim):\n${locations.length ? locationsBlock(locations) : "(none defined — invent 8–14 diverse locations and reuse them across episodes)"}`;
+  // Stage 210: when generating a later batch, the already-generated episodes are passed as continuity
+  // context so the new batch logically continues the story (same characters, unbroken cliffhanger chain).
+  const prev = previousEpisodes && previousEpisodes.length
+    ? `PREVIOUS EPISODES ALREADY WRITTEN (continue the SAME story from here — do NOT repeat, reset or re-introduce the premise; the first NEW episode must open directly from the LAST previous episode's cliffhanger, keeping characters, events and the unbroken cliffhanger chain consistent):\n${previousEpisodes
+        .slice()
+        .sort((a, b) => a.number - b.number)
+        .map(
+          (e) =>
+            `Episode ${e.number}${e.title ? ` — ${e.title}` : ""}: ${(e.description || "").trim()}${
+              e.cliffhanger ? `\nCLIFFHANGER: ${e.cliffhanger.trim()}` : ""
+            }`,
+        )
+        .join("\n\n")}\n\n`
+    : "";
+  return `${outline}${prev}SYNOPSIS:\n${synopsis}\n\nCHARACTERS (with tiers):\n${charactersBlock(characters)}\n\nLOCATIONS (use these names verbatim):\n${locations.length ? locationsBlock(locations) : "(none defined — invent 8–14 diverse locations and reuse them across episodes)"}`;
 }
+
+/**
+ * Stage 220 — the base director/screenwriter instruction (VERBATIM, in Russian) that governs how an
+ * episode synopsis is turned into a shot-by-shot script: keep the story & causal chain, respect the
+ * ~1.5-minute runtime, describe concrete locations, split scenes vs. shots correctly, describe only the
+ * observable, and write substantive dialogue. Embedded as-is (not filtered) ahead of the technical
+ * DIRECTING_RULES / JSON contract. The "исходный синопсис" it references is the episode text already
+ * passed through episodeScriptUserPrompt, so no placeholder substitution is needed.
+ */
+export const EPISODE_DIRECTOR_BASE_PROMPT = `Ты — сценарист и режиссёр раскадровки. Твоя задача — превращать исходный поэпизодный синопсис в подробный сценарий, пригодный для последующей покадровой генерации видео. Исправь текущий подход: вместо набора коротких абстрактных сцен создавай последовательную историю с конкретными локациями, понятной постановкой камеры, наблюдаемыми действиями и содержательными диалогами.
+
+ИСХОДНЫЙ СИНОПСИС: используй текст эпизода, переданный вместе с этим промптом.
+
+1. СОХРАНЯЙ ИСТОРИЮ И ПРИЧИННО-СЛЕДСТВЕННЫЕ СВЯЗИ. Не меняй: персонажей и их цели; ключевые предметы и их функции; установленные способности и ограничения; порядок сюжетно значимых событий; причину возникновения опасности; финальный клиффхэнгер. Не заменяй осознанное решение героя случайностью. Каждый поворот: персонаж чего-то хочет → сталкивается с препятствием → принимает решение → действует → получает последствие. Не придумывай новые правила магии/технологии/мира, чтобы закрыть пробелы; сохраняй только установленное исходником. Критические вопросы перечисли после сценария.
+
+2. УЧИТЫВАЙ ПРОДОЛЖИТЕЛЬНОСТЬ. Ориентир — около полутора минут на эпизод. Не указывай секунды и таймкоды, но учитывай время на диалоги, действия, паузы и переходы. Пиши более развёрнутые реплики в ключевых местах, но не превращай эпизод в длинный разговор. Если обязательные события не вмещаются — укажи это после сценария, не удаляй важные события молча.
+
+3. КОНКРЕТНО ОПИСЫВАЙ ЛОКАЦИИ. При первом появлении места опиши: что это за пространство; входы/выходы/окна; расположение ключевых предметов; источники света; значимые фоновые звуки; положение персонажей относительно друг друга. Детали должны помогать постановке. Минимальные постановочные допущения помечай после сценария. Сохраняй географию пространства.
+
+4. ПРАВИЛЬНО РАЗДЕЛЯЙ СЦЕНЫ И КАДРЫ. Сцена — непрерывное действие в конкретном месте и времени. Кадр — отдельное визуальное решение внутри сцены. Не создавай новую сцену только потому, что персонаж испугался или заговорил. Заголовок сцены: СЦЕНА N. ИНТ./ЭКСТ. КОНКРЕТНОЕ МЕСТО — ВРЕМЯ СУТОК. Для каждого кадра: КАМЕРА (где установлена, куда направлена, крупность, высота, движение); ДЕЙСТВИЕ (что видно и слышно, настоящее время); ДИАЛОГ (имя, короткая ремарка при необходимости, полная реплика). Один кадр — одна постановка; не объединяй несовместимые ракурсы.
+
+5. ОПИСЫВАЙ НАБЛЮДАЕМОЕ. Избегай формулировок вроде «осознаёт опасность», «понимает, что обнаружена», «замечает изменение», «чувствует предательство». Показывай через конкретные действия и признаки. Магический эффект: понятное начало, видимое развитие, последствие.
+
+6. ДОБАВЛЯЙ СОДЕРЖАТЕЛЬНЫЕ ДИАЛОГИ. Вместо коротких восклицаний — разговор, раскрывающий происходящее. Ключевые реплики 1–3 предложения; короткие реплики — для моментов непосредственной опасности. Через диалог объясняй: цель персонажа, конкретный запрет, причину спора, выбор героя, изменение ситуации. Не пиши «Будь осторожна», если можно назвать запрещённое действие. Персонажи разговаривают друг с другом, а не комментируют фильм зрителю. У каждого своя задача.`;
 
 export function episodeScriptSystemPrompt(language: IdeaLanguage, episodeNumber = 1): string {
   const L = langName(language);
@@ -1342,6 +1404,9 @@ export function episodeScriptSystemPrompt(language: IdeaLanguage, episodeNumber 
   // talking (or an action scene with lines in the pauses). The former R7 (narration scene 1) is removed.
   void isFirst;
   return `You are a film director + cinematographer writing the FULL shooting script of ONE episode (EPISODE ${episodeNumber}) of a short-form VERTICAL drama (9:16). The episode is ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES} consecutive shots ("scenes") — as many as the story needs, NEVER a fixed count: every scene is a short clip whose length is VARIABLE (${SCENE_MIN_SECONDS}–${SCENE_CLIP_MAX_SECONDS} s) — each clip lasts only as long as its own action and lines really take, never padded — so that ALL of them together run between ${EPISODE_MIN_TOTAL_SECONDS} and ${EPISODE_MAX_TOTAL_SECONDS} s (the sum of durationSec must land inside that band, aiming for its middle). Scene 1 opens on a HOOK (see R-HOOK) that continues the previous episode's cliffhanger (episode 1: the season opening); the conflict escalates toward a single emotional PEAK (see R-PEAK) and the LAST scene ends on this episode's cliffhanger (see R-CLIFF). The clips are generated by an AI video model WITH native speech: characters really speak their lines out loud, so the DIALOGUE IS THE PRODUCT and the BACKBONE of every scene. Like a TV series, the story is told mostly THROUGH what the characters SAY — the spoken lines carry the bulk of each scene and are BRAIDED TOGETHER with the characters' actions (a line, a piece of business, a reaction, the reply), never sparse, terse or merely decorative. Almost every scene has characters talking ON CAMERA; at most ${MAX_SILENT_SCENES} scenes may be silent, and only when they carry a "visualBeat" (see R2). There are NO narrator scenes, NO voice-over-only scenes, NO "previously on" recaps.
+
+BASE DIRECTOR INSTRUCTION (follow this verbatim — it is the primary brief; the technical rules and JSON contract below tell you how to express it in the required output format):
+${EPISODE_DIRECTOR_BASE_PROMPT}
 
 ${DIRECTING_RULES}
 

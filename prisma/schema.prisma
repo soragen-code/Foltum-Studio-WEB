@@ -81,6 +81,9 @@ model Project {
   idea        String?  @db.Text
   // New flow (Stage 14 B): producer-chosen number of episodes for the season. Null = let the AI decide.
   episodeCount Int?
+  // Stage 210 (batched story generation): how many per-episode synopses have been generated so far for the
+  // season story, generated in batches of STORY_EPISODE_BATCH (=3). Null = legacy/all-at-once flow (unchanged).
+  storyEpisodesGenerated Int?
   // Stage 200 (3-step approval flow): the short "story idea" logline (2–3 sentences) — the FIRST
   // approval gate, generated before the synopsis. Additive + optional: legacy rows keep NULL and
   // skip straight to the synopsis step exactly as before.

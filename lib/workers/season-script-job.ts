@@ -118,6 +118,10 @@ export type SeasonJobState = {
   // Stage 158 — `userScript` carries the author's pasted full episode script (manual-script choice); when
   // present the episode step feeds it as the AUTHORITATIVE source to episodeScriptUserPrompt.
   revise?: { episodeIds: string[]; instruction: string; force?: boolean; userScript?: string };
+  /** Stage 210 — when set, the structure step generates ONLY episodes [from..to] of a `total`-episode
+   * season (batched story generation) and APPENDS them, instead of (re)generating all episodes at once.
+   * Cleared after the batch is applied. Absent = legacy all-at-once behaviour (unchanged). */
+  storyBatch?: { from: number; to: number; total: number };
   /** Stage 45 — advisory notes shown with the final job message (e.g. an episode over the 1:30 budget). */
   warnings?: string[];
   /** Stage 105 — why the previous attempt of the current step failed (appended to the retry prompt; cleared on success). */
@@ -172,8 +176,11 @@ export type PlannedStep =
 /** Decide the next step from what is in the DB (pure). */
 export function planNextStep(
   season: { fullStory: string | null; episodes: PlannerEpisode[] } | null,
-  state: Pick<SeasonJobState, "revise" | "skipFullStory">
+  state: Pick<SeasonJobState, "revise" | "skipFullStory" | "storyBatch">
 ): PlannedStep {
+  // Stage 210 — a pending storyBatch that is not yet fully written forces another structure step so the
+  // batch's episodes get appended (even when earlier episodes already exist).
+  if (state.storyBatch && (!season || season.episodes.length < state.storyBatch.to)) return { step: "structure" };
   if (!season || season.episodes.length === 0) return { step: "structure" };
   if (!season.fullStory && !state.skipFullStory) return { step: "fullStory" };
   const queue = state.revise?.episodeIds ?? [];
@@ -215,11 +222,13 @@ const defaultDeps: SeasonJobDeps = { start: startBackgroundJSON, poll: pollBackg
 // Step result validation (pure — schema + business rules)
 // ---------------------------------------------------------------------------
 
-export function validateStructure(raw: unknown, episodeCount: number, attempt = 0): SeasonStructure {
+export function validateStructure(raw: unknown, episodeCount: number, attempt = 0, startNumber = 1): SeasonStructure {
   const parsed = seasonStructureSchema.parse(raw);
   // Stage 14 (B2): the producer sets the episode count — enforce it exactly (retry if the model drifts).
+  // Stage 210: for a batch, episodeCount is the batch size and startNumber is the first episode number, so
+  // the appended episodes are renumbered startNumber..startNumber+count-1 (not always from 1).
   if (parsed.episodes.length !== episodeCount) throw new Error(`structure returned ${parsed.episodes.length} episodes, expected exactly ${episodeCount}`);
-  const structure = { ...parsed, episodes: parsed.episodes.map((e, i) => ({ ...e, number: i + 1 })) };
+  const structure = { ...parsed, episodes: parsed.episodes.map((e, i) => ({ ...e, number: startNumber + i })) };
   // Stage 128 — every description is ONE detailed continuous synopsis + a closing CLIFFHANGER line (no shot split).
   // Problems on the FIRST attempt → throw (one cheap retry with EPISODE_SYNOPSIS_RETRY_NOTE); on the retry the
   // caller repairs the failing episodes (repairEpisodeSynopses) instead of failing the job.
@@ -468,11 +477,14 @@ async function saveState(jobId: string, state: SeasonJobState, extra: { status?:
  * done) and/or start the next step. Safe to call from every poll request — a CAS lock on resultData
  * makes concurrent pollers no-ops. Returns the refreshed job (or the same job when nothing was done).
  */
-export async function advanceSeasonJob(job: GenerationJob, deps: SeasonJobDeps = defaultDeps, init?: { episodeCount?: number }): Promise<GenerationJob | null> {
+export async function advanceSeasonJob(job: GenerationJob, deps: SeasonJobDeps = defaultDeps, init?: { episodeCount?: number; storyBatch?: SeasonJobState["storyBatch"] }): Promise<GenerationJob | null> {
   if (job.type !== SEASON_JOB_TYPE || !ACTIVE_STATUSES.includes(job.status)) return job;
   const prevRaw = job.resultData;
   const state = parseSeasonState(prevRaw, init?.episodeCount);
   if (init?.episodeCount) { state.episodeCount = init.episodeCount; if (state.step === "structure" && !state.responseId) { state.total = init.episodeCount; state.remaining = init.episodeCount; } }
+  // Stage 210 — a fresh "generate next N" request carries the batch bounds; apply them before the structure
+  // step starts so tick() generates and appends only that slice.
+  if (init?.storyBatch && state.step === "structure" && !state.responseId) { state.storyBatch = init.storyBatch; }
   if (isAdvanceLocked(state)) return job;
   // CAS lock: only the poller that sees exactly the previous resultData wins.
   const lock = await prisma.generationJob.updateMany({ where: { id: job.id, resultData: prevRaw }, data: { resultData: JSON.stringify({ ...state, lockedAt: new Date().toISOString() }) } });
@@ -583,6 +595,9 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
       }
     } else {
       state = { ...state, attempt: 0, lastFailure: undefined };
+      // Stage 210 — a batch's structure step succeeded: the slice is written, clear the batch so planNextStep
+      // moves on (rebuild fullStory over all episodes, then done).
+      if (state.step === "structure" && state.storyBatch) state = { ...state, storyBatch: undefined };
       if (state.step === "episode" && state.episodeId && state.revise?.episodeIds.includes(state.episodeId)) {
         state = { ...state, revise: { ...state.revise, episodeIds: state.revise.episodeIds.filter((id) => id !== state.episodeId) } };
       }
@@ -622,8 +637,15 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
   if (planned.step === "structure") {
     // Stage 105 — the single retry after a rejected structure gets an explicit format instruction (plus the exact problems).
     const retryNote = state.attempt > 0 ? `\n\n${EPISODE_SYNOPSIS_RETRY_NOTE}${state.lastFailure ? ` Problems found: ${state.lastFailure}` : ""}` : "";
-    responseId = await deps.start(seasonStructureSystemPrompt(language, state.episodeCount), seasonStructureUserPrompt(project.synopsis ?? "", cards, project.locations, shortSynopsisOutline(project.shortSynopsis)) + retryNote, { model: SCRIPT_MODEL, maxTokens: Math.min(64000, 4000 + 800 * state.episodeCount) });
-    message = "Building the season structure..."; progress = 3;
+    // Stage 210 — batched story generation: when a storyBatch is pending, generate ONLY that slice and pass
+    // the already-written episodes as continuity context so the new batch continues the same story.
+    const batch = state.storyBatch;
+    const prevEpisodes = batch && season
+      ? season.episodes.map((e) => ({ number: e.number, title: e.title, description: e.description ?? null, cliffhanger: e.cliffhanger ?? null }))
+      : undefined;
+    const batchTokens = batch ? batch.to - batch.from + 1 : state.episodeCount;
+    responseId = await deps.start(seasonStructureSystemPrompt(language, state.episodeCount, batch), seasonStructureUserPrompt(project.synopsis ?? "", cards, project.locations, shortSynopsisOutline(project.shortSynopsis), prevEpisodes) + retryNote, { model: SCRIPT_MODEL, maxTokens: Math.min(64000, 4000 + 800 * batchTokens) });
+    message = batch ? `Writing episodes ${batch.from}–${batch.to}...` : "Building the season structure..."; progress = 3;
   } else if (planned.step === "fullStory") {
     // Unreachable since Stage 106 (handled deterministically above); kept so the state machine stays exhaustive.
     throw new Error("fullStory step is built from the structure, not generated");
@@ -706,16 +728,27 @@ type LoadedProject = NonNullable<Awaited<ReturnType<typeof loadProject>>>;
 async function applyStepResult(project: LoadedProject, season: LoadedSeason | null, state: SeasonJobState, raw: unknown, language: IdeaLanguage, cards: CharacterCard[], deps: SeasonJobDeps): Promise<LoadedSeason | null> {
   const projectId = project.id;
   if (state.step === "structure") {
-    const validated = validateStructure(raw, state.episodeCount, state.attempt);
+    // Stage 210 — batched story generation: a storyBatch means we produced only episodes [from..to] of a
+    // `total`-episode season and must APPEND them; without a batch it is the legacy all-at-once structure.
+    const batch = state.storyBatch;
+    const expectedCount = batch ? batch.to - batch.from + 1 : state.episodeCount;
+    const startNumber = batch ? batch.from : 1;
+    const isAppend = Boolean(batch && season); // appending onto an existing season (2nd+ batch)
+    const isFinalBatch = !batch || batch.to >= batch.total;
+    const validated = validateStructure(raw, expectedCount, state.attempt, startNumber);
     // Stage 128 — never fail on synopsis format: targeted repair passes + deterministic clamp (always valid).
     const fixed = await repairEpisodeSynopses(validated.episodes, language, (sys, usr) => deps.chatJSON(sys, usr, { temperature: 0.3, maxTokens: 6000 }));
     if (fixed.repaired.length || fixed.clamped.length) console.warn(`[season-job] synopsis repaired for episodes ${fixed.repaired.join(", ") || "-"}; clamped ${fixed.clamped.join(", ") || "-"}`);
     const structure: SeasonStructure = { ...validated, episodes: fixed.episodes };
     const byName = new Map(project.characters.map((c) => [c.name.toLowerCase(), c.id]));
     await prisma.$transaction(async (tx) => {
+      // On append keep the season's existing title/logline (only the first batch / legacy call sets them);
+      // creating the season records the producer-chosen total episode count so the UI can show progress.
       const s = season
-        ? await tx.season.update({ where: { id: season.id }, data: { title: structure.title, logline: structure.logline } })
-        : await tx.season.create({ data: { projectId, number: 1, title: structure.title, logline: structure.logline } });
+        ? isAppend
+          ? season
+          : await tx.season.update({ where: { id: season.id }, data: { title: structure.title, logline: structure.logline } })
+        : await tx.season.create({ data: { projectId, number: 1, title: structure.title, logline: structure.logline, episodeCount: batch ? batch.total : state.episodeCount } });
       for (const e of structure.episodes) {
         // Stage 162: keep the structure's location NAME/DESCRIPTION text on the episode, but do NOT create a
         // Location card here (locationId stays null). Location rows are created PER EPISODE later, from that
@@ -724,9 +757,15 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
         const ids = Array.from(new Set(e.characters.map((n) => byName.get(n.toLowerCase())).filter((x): x is string => !!x)));
         if (ids.length) await tx.episodeCharacter.createMany({ data: ids.map((characterId) => ({ episodeId: ep.id, characterId })) });
       }
+      // Appending new episodes invalidates the deterministic season plot — clear it so planNextStep rebuilds
+      // fullStory over ALL episodes once this batch's episodes exist.
+      if (isAppend) await tx.season.update({ where: { id: s.id }, data: { fullStory: null } });
     }, { timeout: 30_000 });
-    await prisma.project.update({ where: { id: projectId }, data: { stage: "structure" } });
+    // Track batch progress so "generate next N" knows where to continue (legacy flow leaves it untouched).
+    await prisma.project.update({ where: { id: projectId }, data: { stage: "structure", ...(batch ? { storyEpisodesGenerated: batch.to } : {}) } });
     const reloaded = await loadSeason(projectId);
+    // Stage 210 — the season map is designed once, over the WHOLE season, only after the final batch lands.
+    if (!isFinalBatch) return reloaded;
     // Stage 3 (seasonMap) — once the episodes exist, design a validated per-episode SEASON MAP that will
     // constrain each episode's outline (beat variety, cliffhanger spacing, escalation, secrets, finale).
     // Best-effort: any failure (LLM/transport/validation) is swallowed and the season simply carries no map
@@ -734,18 +773,21 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
     // secrets / finale question drive the map; without one the generator/validators degrade to the documented
     // structural fallbacks (escalationStep from episode position; no scheduled secrets).
     if (reloaded) {
+      // Stage 210 — build the map over the WHOLE season (all episodes now in the DB), not just this batch's
+      // slice, so batched and all-at-once flows produce the same full-season map.
+      const mapEpisodes = reloaded.episodes.map((e) => ({ number: e.number, title: e.title, logline: e.logline, locationName: e.locationName }));
       try {
         const result = await generateSeasonMap(
           {
-            episodes: structure.episodes.map((e) => ({ number: e.number, title: e.title, logline: e.logline, locationName: e.locationName })),
-            episodeCount: structure.episodes.length,
-            seasonLogline: structure.logline,
+            episodes: mapEpisodes,
+            episodeCount: mapEpisodes.length,
+            seasonLogline: reloaded.logline ?? structure.logline,
             locations: project.locations.map((l) => l.name).filter(Boolean),
             // Stage 1 (dramaBible) — pass the REAL escalation ladder / scheduled secrets / finale question when
             // the project has a bible; toDramaBibleForMap returns null when absent → structural fallback (old behavior).
             bible: toDramaBibleForMap(readDramaBible(project)),
           },
-          (sys, usr, o) => deps.chatJSON(sys, usr, { ...o, maxTokens: Math.min(16000, 2000 + 500 * structure.episodes.length) }),
+          (sys, usr, o) => deps.chatJSON(sys, usr, { ...o, maxTokens: Math.min(16000, 2000 + 500 * mapEpisodes.length) }),
           { model: SCRIPT_MODEL, maxRetries: 3 }
         );
         if (!result.valid) console.warn(`[season-job] season map persisted as advisory after ${result.attempts} attempt(s); outstanding: ${result.errors.map((e) => e.rule).join(", ")}`);
@@ -919,8 +961,8 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
 }
 
 /** Entry point used by the routes that create a job: records the episode count and performs the first advance. */
-export async function runSeasonScriptJob(jobId: string, projectId: string, episodeCount = SEASON_DEFAULT_EPISODES): Promise<void> {
+export async function runSeasonScriptJob(jobId: string, projectId: string, episodeCount = SEASON_DEFAULT_EPISODES, storyBatch?: SeasonJobState["storyBatch"]): Promise<void> {
   const job = await prisma.generationJob.findUnique({ where: { id: jobId } });
   if (!job) return;
-  await advanceSeasonJob(job, defaultDeps, { episodeCount });
+  await advanceSeasonJob(job, defaultDeps, { episodeCount, storyBatch });
 }

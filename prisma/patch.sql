@@ -547,3 +547,11 @@ ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "title" TEXT;
 -- legacy rows keep NULL / false and skip straight to the synopsis step exactly as before.
 ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "logline" TEXT;
 ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "loglineApproved" BOOLEAN NOT NULL DEFAULT false;
+
+
+
+-- Stage 210 (batched story generation): how many per-episode synopses have been generated so far for the
+-- season story. The story is now generated in batches of 3 episodes; this counter tracks progress so the
+-- "generate next 3" action knows where to continue. Additive, nullable & idempotent; legacy rows keep NULL
+-- and behave exactly as the previous all-at-once flow.
+ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "storyEpisodesGenerated" INTEGER;

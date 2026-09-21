@@ -24,7 +24,7 @@ const SEASON_REWRITE_EXPECTED_SEC = 480 // affected-episode script rewrite phase
 const START_MARK = '═══'
 const END_MARK = '───'
 
-type SeasonData = { id: string; title?: string | null; logline?: string | null; status: string; fullStory?: string | null; episodes: SeasonEpisode[] } | null
+type SeasonData = { id: string; title?: string | null; logline?: string | null; status: string; fullStory?: string | null; episodeCount?: number | null; episodes: SeasonEpisode[] } | null
 type Job = { id: string; status: string; progress: number; message?: string | null; error?: string | null; resultData?: string | null } | null
 
 /**
@@ -104,6 +104,10 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
   const jobActive = !!job && (job.status === 'pending' || job.status === 'processing')
   const total = season?.episodes.length ?? 0
   const episodeCount = total
+  // ПРАВКА 1 — сюжет генерируется пачками по 3 эпизода. seasonTotal — итоговое число серий сезона;
+  // canGenMore — есть ещё серии, которые не сгенерированы (можно продолжить следующей пачкой).
+  const seasonTotal = season?.episodeCount ?? total
+  const canGenMore = !!season && !jobActive && seasonTotal > total
   // Percentage shown on the season-build bar. Uses the same monotonic helper as season-stage
   // (floors by written-episode count so the optimistic "Starting..." 1% reset never jumps backwards;
   // capped at 99 so a false 100% never appears before the job actually completes).
@@ -124,6 +128,18 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
     setStarting(true); setError(null)
     try {
       const res = await fetch('/api/ai/season', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, ...(typeof project.episodeCount === 'number' ? { episodeCount: project.episodeCount } : {}) }) })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error ?? 'Failed to start generation')
+      setJob({ id: data.jobId, status: 'processing', progress: 1, message: 'Starting...' })
+    } catch (e: any) { setError(e?.message ?? 'Error') }
+    finally { setStarting(false) }
+  }
+
+  // ПРАВКА 1 — продолжить сюжет следующей пачкой из 3 эпизодов (с учётом контекста уже написанных серий).
+  const nextBatch = async () => {
+    setStarting(true); setError(null)
+    try {
+      const res = await fetch('/api/ai/season', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, action: 'next-batch' }) })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error ?? 'Failed to start generation')
       setJob({ id: data.jobId, status: 'processing', progress: 1, message: 'Starting...' })
@@ -253,7 +269,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
       <div className="rounded-xl border border-border bg-card p-4 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="font-display text-xl font-bold">Шаг 3 — Сюжет по сериям</h2>
-          {episodeCount > 0 && <span className="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-sm" data-testid="episode-count"><BookOpen className="h-4 w-4" /> {episodeCount} серий</span>}
+          {episodeCount > 0 && <span className="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-sm" data-testid="episode-count"><BookOpen className="h-4 w-4" /> {seasonTotal > total ? `${total} / ${seasonTotal}` : episodeCount} серий</span>}
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
           Сезон по сериям: каждая серия — подробный связный синопсис, завершающийся клиффхэнгером. Отредактируйте в панели ниже или нажмите «Регенерировать сюжет». Когда всё устраивает — нажмите «Аппрув / Далее», чтобы перейти к работе над сериями. Перегенерация очищает сгенерированные сцены и видео затронутых серий.
@@ -382,16 +398,33 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
             )}
             {season?.fullStory && !jobActive && (
               <div className="mt-3 space-y-3" data-testid="plot-ready">
-                <p className="text-sm text-muted-foreground">Сюжет сезона готов. Откройте серию, чтобы написать её сценарий.</p>
-                <button
-                  onClick={start}
-                  disabled={starting || storyBusy}
-                  className="inline-flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
-                  data-testid="season-regenerate"
-                >
-                  {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-                  Регенерировать сюжет
-                </button>
+                <p className="text-sm text-muted-foreground">
+                  {canGenMore
+                    ? `Готово серий: ${total} из ${seasonTotal}. Первые серии уже можно взять в работу, либо сгенерируйте следующие 3 эпизода.`
+                    : 'Сюжет сезона готов. Откройте серию, чтобы написать её сценарий.'}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {canGenMore && (
+                    <button
+                      onClick={nextBatch}
+                      disabled={starting || storyBusy}
+                      className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
+                      data-testid="season-next-batch"
+                    >
+                      {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+                      Сгенерировать следующие 3 эпизода
+                    </button>
+                  )}
+                  <button
+                    onClick={start}
+                    disabled={starting || storyBusy}
+                    className="inline-flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
+                    data-testid="season-regenerate"
+                  >
+                    {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+                    Регенерировать сюжет
+                  </button>
+                </div>
               </div>
             )}
             {season && !season.fullStory && !jobActive && (

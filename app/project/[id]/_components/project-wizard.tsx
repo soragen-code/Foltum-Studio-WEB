@@ -87,14 +87,21 @@ export function ProjectWizard({ project: initialProject, entitlements }: { proje
           {!referencesTab && currentStage === 'references' && (
             <ReferencesStage project={project} onRefresh={refreshProject} />
           )}
-          {!referencesTab && currentStage === 'synopsis' && (
+          {/* Legacy flow: synopsis is its own screen (synopsis → characters). */}
+          {!referencesTab && currentStage === 'synopsis' && !isNewFlow(project) && (
             <SynopsisStage project={project} onRefresh={refreshProject} />
+          )}
+          {/* ПРАВКА 2 — новый флоу: синопсис и сюжет на ОДНОЙ странице. Синопсис сверху; после его
+             аппрува ниже раскрывается сюжет по сериям. Покрывает и стадию 'synopsis', и 'structure',
+             поэтому после аппрува навигация не нужна — сюжет появляется на той же странице. */}
+          {!referencesTab && (currentStage === 'synopsis' || currentStage === 'structure') && isNewFlow(project) && (
+            <div className="space-y-6" data-testid="synopsis-story-combined">
+              <SynopsisStage project={project} onRefresh={refreshProject} />
+              {project.synopsisApproved && <StoryStage project={project} onRefresh={refreshProject} />}
+            </div>
           )}
           {!referencesTab && currentStage === 'characters' && (
             <CharactersStage project={project} onRefresh={refreshProject} entitlements={entitlements} />
-          )}
-          {!referencesTab && currentStage === 'structure' && isNewFlow(project) && (
-            <StoryStage project={project} onRefresh={refreshProject} />
           )}
           {!referencesTab && currentStage === 'structure' && !isNewFlow(project) && (
             <StructureStage project={project} onRefresh={refreshProject} />
