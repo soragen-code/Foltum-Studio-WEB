@@ -45,7 +45,11 @@ export const POWER_TIER_CONFIG: Record<PowerTier, PowerTierConfig> = {
     description: "Draft quality — quick tests and previews, the lowest price.",
     resolution: "480p",
     baseDuration: 5,
-    costPerScene: 1,
+    // Pricing model: 1 credit = 1 second of video. baseDuration=5 and costPerScene=5
+    // make sceneClipCost() charge exactly the clip length in seconds (5 s clip = 5 credits,
+    // 10 s = 10 credits …). Every scene renders at this 480p (LOW) config (see sceneTierConfig),
+    // so this is the effective per-second rate for ALL tiers.
+    costPerScene: 5,
     maxDuration: SEEDANCE_MAX_DURATION,
   },
   MEDIUM: {

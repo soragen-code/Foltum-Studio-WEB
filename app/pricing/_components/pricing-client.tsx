@@ -6,50 +6,51 @@ import { Check, Coins, Crown, Sparkles, Zap, ShoppingCart, Loader2 } from 'lucid
 import { motion } from 'framer-motion'
 import { toast } from 'sonner'
 
+// Paid-only credit model: 1 credit = 1 second of video = $1.
 const plans = [
   {
     id: 'basic',
     name: 'Basic',
-    price: '$9.99',
+    price: '$29',
     period: '/month',
-    credits: 100,
+    credits: 40,
     icon: Zap,
     color: 'border-green-500/30',
     activeColor: 'border-green-500 ring-2 ring-green-500/20',
     iconColor: 'text-green-400',
-    features: ['100 credits/month', 'All quality tiers', 'Up to 3 projects', 'Basic support'],
+    features: ['40 credits/month', '40 seconds of video/month', 'All quality tiers', 'Up to 3 projects', 'Basic support'],
   },
   {
     id: 'pro',
     name: 'Pro',
-    price: '$29.99',
+    price: '$99',
     period: '/month',
-    credits: 400,
+    credits: 150,
     icon: Sparkles,
     color: 'border-primary/30',
     activeColor: 'border-primary ring-2 ring-primary/20',
     iconColor: 'text-primary',
-    features: ['400 credits/month', 'All quality tiers', 'Unlimited projects', 'Priority support', 'Early access to features'],
+    features: ['150 credits/month', '150 seconds of video/month', 'All quality tiers', 'Unlimited projects', 'Priority support', 'Early access to features'],
     popular: true,
   },
   {
     id: 'studio',
     name: 'Studio',
-    price: '$79.99',
+    price: '$299',
     period: '/month',
-    credits: 1500,
+    credits: 500,
     icon: Crown,
     color: 'border-red-500/30',
     activeColor: 'border-red-500 ring-2 ring-red-500/20',
     iconColor: 'text-red-400',
-    features: ['1500 credits/month', 'All quality tiers', 'Unlimited projects', 'Dedicated support', 'Custom AI models', 'Commercial license'],
+    features: ['500 credits/month', '500 seconds of video/month', 'All quality tiers', 'Unlimited projects', 'Dedicated support', 'Custom AI models', 'Commercial license'],
   },
 ]
 
 const creditPacks = [
-  { id: 'pack50', credits: 50, price: '$4.99' },
-  { id: 'pack200', credits: 200, price: '$14.99' },
-  { id: 'pack500', credits: 500, price: '$29.99' },
+  { id: 'mini', credits: 20, price: '$20' },
+  { id: 'plus', credits: 60, price: '$54' },
+  { id: 'max', credits: 150, price: '$120' },
 ]
 
 function postToWayForPay(action: string, fields: Record<string, any>) {
@@ -160,7 +161,7 @@ export function PricingClient() {
             Plans & <span className="text-primary">Credits</span>
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Choose a plan or buy credits to power your AI film production
+            Choose a plan or buy credits to power your AI film production — 1 credit = 1 second of video
           </p>
           <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-muted px-4 py-2">
             <Coins className="h-4 w-4 text-primary" />
