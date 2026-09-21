@@ -17,7 +17,8 @@ import { characterShotPrompt, characterExtraShotPrompt } from "@/lib/full-body-p
 import { parseImageArray } from "@/lib/reference-counts";
 import { CHARACTER_REFERENCE_COST } from "@/lib/power-tier";
 // Stage 75: user-uploaded photo references — transport only (prepended to image_input).
-import { parseUserRefs, mergeImageInput } from "@/lib/character-user-refs";
+// combineFaceAndUserRefs also prepends the optional single "face photo" (Character.faceImageUrl) FIRST.
+import { combineFaceAndUserRefs, mergeImageInput } from "@/lib/character-user-refs";
 
 /** Job type of a single-shot regeneration — distinct from "characters" so the full-set polling ignores it. */
 export const CHARACTER_SHOT_JOB_TYPE = "character_shot";
@@ -112,7 +113,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         const front = char.imageFront;
         const full = char.imageFull;
         const ctx = { jobId: job.id, characterId, imageModel };
-        const userRefs = parseUserRefs(char.userRefs); // Stage 75: user photos go first in image_input
+        const userRefs = combineFaceAndUserRefs((char as any).faceImageUrl, char.userRefs); // face photo + user photos go first in image_input
         let remote: string;
         let s3Key: string;
         if (shot === "extra") {

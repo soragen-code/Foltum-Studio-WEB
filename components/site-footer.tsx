@@ -30,8 +30,6 @@ export function SiteFooter() {
           </nav>
         </div>
         <div className="flex flex-col gap-1 text-center text-xs text-muted-foreground sm:text-left">
-          <p>Individual Entrepreneur Moshkivskyi Vitalii (ФОП / FOP)</p>
-          <p>Kharkiv, vul. Svitla 6, Ukraine</p>
           <p>
             © {new Date().getFullYear()} Foltum Studio. Payments are securely processed by
             WayForPay.

@@ -511,6 +511,11 @@ ALTER TABLE "SeasonState" ADD COLUMN IF NOT EXISTS "stale" BOOLEAN NOT NULL DEFA
 
 
 
+-- Optional single "face photo" per character (public S3 URL). Uploaded at character creation and fed FIRST
+-- into every character reference generation so a user can cast their own face in the lead role. Additive,
+-- nullable & idempotent; legacy rows stay NULL and generate exactly as before.
+ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "faceImageUrl" TEXT;
+
 -- Generation unit per episode (additive + idempotent). "scene" (DEFAULT: 1 scene = 1 clip) | "shots" («Шоты» mode).
 -- Existing episodes default to "scene" so the restored default scene pipeline is used unless the producer opts into «Шоты».
 ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "generationMode" TEXT NOT NULL DEFAULT 'scene';

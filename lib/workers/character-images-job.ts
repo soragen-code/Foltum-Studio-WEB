@@ -10,7 +10,8 @@ import { detectC2paFromUrl } from "@/lib/c2pa";
 import { checkFullBodyImage, fullBodyPasses, fullBodyScore, fullBodyCorrectionSuffix, evaluateProportions, type FullBodyCheck, type ProportionDefect } from "@/lib/full-body-check";
 import { REF_BATCH_CONCURRENCY, runWithConcurrency } from "@/lib/reference-counts";
 // Stage 75: user-uploaded photo references — transport only (prepended to image_input).
-import { parseUserRefs, mergeImageInput } from "@/lib/character-user-refs";
+// combineFaceAndUserRefs also prepends the optional single "face photo" (Character.faceImageUrl) FIRST.
+import { combineFaceAndUserRefs, mergeImageInput } from "@/lib/character-user-refs";
 
 // Stage 53: a character reference is a SINGLE photo — the full-body FRONT shot (imageFull). The front
 // portrait, the profile and the extra angles are no longer auto-generated; they are only produced when
@@ -121,7 +122,7 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
     // treated as chained so the EXISTING identity-lock prompt path applies (no new prompt text).
     const genBaseShot = async (char: (typeof characters)[number], shot: BaseShot, ref: string | null, refKind: CharacterRefKind = "face") => {
       if (await canceled()) return;
-      const userRefs = parseUserRefs((char as any).userRefs);
+      const userRefs = combineFaceAndUserRefs((char as any).faceImageUrl, (char as any).userRefs);
       const imageInput = mergeImageInput(userRefs, ref ? [ref] : [], 10);
       const chained = imageInput.length > 0;
       if (userRefs.length) userRefUse.push({ characterId: char.id, shot, userRefCount: userRefs.length });

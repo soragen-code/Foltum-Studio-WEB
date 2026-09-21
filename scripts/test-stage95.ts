@@ -84,12 +84,11 @@ const all = terms + refund + contacts + legal;
   ok(/support@foltum-studio\.com/.test(contacts), "Contacts shows support email");
 }
 
-// ── Footer links all three legal pages + merchant name ──
+// ── Footer links all three legal pages (merchant requisites live on the legal/contacts pages) ──
 {
   ok(/href="\/terms"/.test(footer), "footer links /terms");
   ok(/href="\/refund-policy"/.test(footer), "footer links /refund-policy");
   ok(/href="\/contacts"/.test(footer), "footer links /contacts");
-  ok(/Moshkivskyi Vitalii/.test(footer), "footer shows merchant name");
 }
 
 // ── Footer reaches the public login page ──

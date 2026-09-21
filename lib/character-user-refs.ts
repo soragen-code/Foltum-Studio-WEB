@@ -47,6 +47,27 @@ export function parseUserRefs(json: string | null | undefined): string[] {
 }
 
 /**
+ * Combine the optional single "face photo" (Character.faceImageUrl) with the userRefs list so the
+ * uploaded face is fed FIRST into image_input (highest identity priority), followed by the extra photo
+ * references. Deduped, capped at USER_REFS_MAX. Pure helper — accepts the raw faceImageUrl value and the
+ * userRefs JSON (or an already-parsed list).
+ */
+export function combineFaceAndUserRefs(
+  faceImageUrl: string | null | undefined,
+  userRefs: string | string[] | null | undefined,
+): string[] {
+  const refs = Array.isArray(userRefs) ? userRefs.filter(isHttpUrl) : parseUserRefs(userRefs);
+  const out: string[] = [];
+  if (isHttpUrl(faceImageUrl)) out.push(faceImageUrl.trim());
+  for (const u of refs) {
+    if (out.includes(u)) continue;
+    out.push(u);
+    if (out.length >= USER_REFS_MAX) break;
+  }
+  return out;
+}
+
+/**
  * Build the final image_input list: user refs FIRST, then the existing (generated) refs; deduped and
  * capped at `cap` (default IMAGE_INPUT_CAP). Empty entries are dropped.
  */

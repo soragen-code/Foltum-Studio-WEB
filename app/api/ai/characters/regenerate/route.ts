@@ -11,7 +11,8 @@ import { uploadRemoteToS3 } from "@/lib/s3-upload";
 
 import { characterImagePrompt, VISUAL_STYLE_ID, REFERENCE_ASPECT_RATIO } from "@/lib/visual-style";
 // Stage 75: user-uploaded photo references — transport only (fed as image_input, existing chained path).
-import { parseUserRefs, mergeImageInput } from "@/lib/character-user-refs";
+// combineFaceAndUserRefs also prepends the optional single "face photo" (Character.faceImageUrl) FIRST.
+import { combineFaceAndUserRefs, mergeImageInput } from "@/lib/character-user-refs";
 
 const SYSTEM = `You are a character designer. Given a character's current data and the project synopsis, regenerate a fresh take on their appearance and personality while keeping their name and role.
 
@@ -68,7 +69,7 @@ Generate a fresh, different take on this character's appearance and personality.
     const aspectRatios = { front: REFERENCE_ASPECT_RATIO, profile: REFERENCE_ASPECT_RATIO, full: REFERENCE_ASPECT_RATIO };
     const pid = existing.projectId;
 
-    const userRefs = parseUserRefs(existing.userRefs); // Stage 75
+    const userRefs = combineFaceAndUserRefs((existing as any).faceImageUrl, existing.userRefs); // face photo + user photos
     const userInput = mergeImageInput(userRefs, [], 10);
     const imgResults = await Promise.all(
       shots.map(async (shot) => {

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useJobPolling, JobProgressBar } from './use-job-polling'
 import { Loader2, RefreshCw, Lock, Check, User, Wand2, ImageOff } from 'lucide-react'
 import { CharacterUserRefs } from './character-user-refs'
+import { CharacterFacePhoto } from './character-face-photo'
 
 /** Renders the 3 character image slots with proper fallback */
 function CharacterImages({
@@ -213,6 +214,8 @@ export function CharactersStage({ project, onRefresh }: { project: any; onRefres
                   <p><span className="font-medium text-foreground">Personality:</span> {char?.personality ?? 'N/A'}</p>
                 </div>
                 <CharacterImages char={char} ImagePlaceholder={ImagePlaceholder} pending={generating} />
+                {/* Optional single "face photo": cast your own face in the role — fed FIRST into character generation. */}
+                {char?.id && <CharacterFacePhoto characterId={char.id} faceImageUrl={(char as any).faceImageUrl} disabled={isLocked || !!(char as any).refLocked} />}
                 {/* Stage 75: user-uploaded photo references (shared component; replaces the old dead "Upload Photo" placeholder) */}
                 {char?.id && <CharacterUserRefs characterId={char.id} userRefs={(char as any).userRefs} disabled={isLocked || !!(char as any).refLocked} />}
                 {!isLocked && (
