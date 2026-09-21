@@ -16,6 +16,8 @@ import {
   FULL_BODY_FRAMING,
   FULL_BODY_PROPORTIONS,
   FULL_BODY_PROPORTIONS_CHILD,
+  CHARACTER_EXPRESSION_NOTE,
+  FULL_BODY_CLOTHING_RULE,
   isChildAppearance,
   type CharacterRefKind,
 } from "@/lib/visual-style";
@@ -275,6 +277,8 @@ const WRAPPER_FRAGMENTS = [
   FULL_BODY_PROPORTIONS_RULE,
   FULL_BODY_PROPORTIONS,
   FULL_BODY_PROPORTIONS_CHILD,
+  CHARACTER_EXPRESSION_NOTE,
+  FULL_BODY_CLOTHING_RULE,
   "Neutral unobtrusive background. No text or logos.",
 ];
 
@@ -288,7 +292,7 @@ export function overrideToCharacterDescription(override: string): string {
   let s = override;
   for (const frag of WRAPPER_FRAGMENTS) s = s.split(frag).join(" ");
   s = s
-    .replace(/(^|\n)\s*Character:\s*/g, "$1")
+    .replace(/(^|\n)\s*(?:CHARACTER|Character|CLOTHING):\s*/gi, "$1")
     .replace(/[ \t]+/g, " ")
     .replace(/\s*\n\s*/g, "\n")
     .replace(/(^|\n)[\s.]+(?=\n|$)/g, "$1")

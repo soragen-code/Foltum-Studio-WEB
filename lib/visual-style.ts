@@ -68,7 +68,10 @@ export function characterImagePrompt(appearance: string, shot: "front" | "profil
     : "";
   // Full-body: the framing comes FIRST and dominates the prompt — the description of the person follows.
   if (shot === "full") {
-    return `${framing}\n${VISUAL_STYLE}\nCharacter: ${who}.${identityLock} ${fullBodyProportionsFor(appearance)} Neutral unobtrusive background. No text or logos.`;
+    // The template's own LIGHT/BACKGROUND/QUALITY block defines the neutral technical-reference look, so the
+    // cinematic VISUAL_STYLE (film grain + colour grading) is deliberately omitted here: it would both
+    // contradict that block and waste ~560 chars of the provider's 4000-character budget.
+    return `${framing}\nCHARACTER: ${who}. ${CHARACTER_EXPRESSION_NOTE}${identityLock}\n${FULL_BODY_CLOTHING_RULE}\n${fullBodyProportionsFor(appearance)}\nNeutral unobtrusive background. No text or logos.`;
   }
   return `${VISUAL_STYLE}\nCharacter: ${who}. ${framing}${identityLock} Neutral unobtrusive background. No text or logos.`;
 }
@@ -78,12 +81,19 @@ export function characterImagePrompt(appearance: string, shot: "front" | "profil
  * full-length figure with visible floor and headroom, never a medium shot cropped at the hips.
  */
 export const FULL_BODY_FRAMING =
-  "FULL-BODY FULL-LENGTH SHOT, head to toe: a distant full-length standing figure photographed from the FRONT, facing the camera. " +
-  "Camera at hip height about 4–5 metres away, 50mm lens, perfectly level and strictly frontal — no low angle, no high angle, no wide-angle distortion and no perspective foreshortening or compression of the legs. " +
-  "The ENTIRE body from the top of the hair to the soles of the shoes is inside the frame, with a little floor below the feet and a little empty space above the head; " +
-  "the standing figure fills about 85–90% of the frame height (tall vertical 9:16 frame — the whole figure occupies almost the full frame height, WITHOUT stretching or distorting the body's natural proportions). " +
-  "NOT a close-up, NOT a medium shot, NOT a portrait — no cropping at the waist, hips or knees; both feet and shoes fully visible standing flat on the floor. " +
-  "Standing straight, symmetric shoulders, relaxed arms at the sides, all clothing and the full silhouette visible.";
+  "Photorealistic FULL-LENGTH, head-to-toe reference of ONE fictional adult character — a technical appearance-and-wardrobe reference, NOT an artistic poster. " +
+  "FRAMING & CAMERA: one single character, vertical 9:16, strictly frontal (face, chest, hips and knees turned toward the camera). " +
+  "The ENTIRE figure, from the top of the hair to the soles of the shoes, is inside the frame, with a little space above the head and a visible strip of floor below the shoes; the standing figure fills about 85–90% of the frame height WITHOUT stretching or squashing its natural proportions, nothing cropped. " +
+  "Camera at hip height, optical axis horizontal (no tilt, no low or high angle), about a 50mm full-frame lens — no wide-angle distortion and no perspective foreshortening or compression of the legs. Choose the camera distance for this framing, do not stretch the figure. " +
+  "NOT a close-up, waist-up, portrait, three-quarter, top-down or bottom-up view — no cropping at the waist, hips or knees; both feet and shoes fully visible flat on the floor.";
+
+/** Fixed neutral facial expression for the full-length reference (template: нейтральное, спокойное, взгляд в камеру). */
+export const CHARACTER_EXPRESSION_NOTE =
+  "Facial expression neutral and calm, looking straight into the camera.";
+
+/** Wardrobe rule for the full-length reference: only the described clothing, nothing extra, no branding (template CLOTHING block). */
+export const FULL_BODY_CLOTHING_RULE =
+  "CLOTHING: wear only the garments described above — do NOT add any accessories, jewellery or extra clothing layers that were not described; no text, no logos, no recognisable brands.";
 
 /**
  * Realistic ADULT anatomy / proportions for the full-body shot (added after the character description).
@@ -91,25 +101,29 @@ export const FULL_BODY_FRAMING =
  * (lib/full-body-prompt.ts) is an alias of this constant, so the earlier DUPLICATE block (the inline
  * proportions PLUS a near-identical appended "rule") that pushed the composed prompt past the image
  * provider's 4000-character hard limit (HTTP 422) is gone — the idempotent wrapper now appends nothing when
- * this block is already present. It merges both former blocks losslessly: ≈7–7.5 heads, natural-size head,
- * legs = exactly half the height with the hip line at the vertical midpoint (long clothing must not shorten
- * the legs), ~3-head torso, one consistent build, correct anatomy, a strictly frontal hip-height camera with
- * no foreshortening, and the explicit negatives against short/stubby legs, a high hip line and stretching.
+ * this block is already present. Session 16: restructured to the user's character-reference template
+ * (POSE & ANATOMY, LIGHT/BACKGROUND/QUALITY, EXCLUDE, PRIORITIES). ≈7–7.5 heads, natural-size head, long
+ * adult legs roughly half the standing height (the hard "exactly half / vertical midpoint / high hip line"
+ * wording was softened; long clothing must not shorten the legs), ~3-head torso, one consistent build,
+ * correct anatomy, and the explicit negatives against short/stubby legs and stretching. Kept concise so the
+ * composed full-body prompt stays under the provider's 4000-character limit.
  */
 export const FULL_BODY_PROPORTIONS =
-  "ANATOMY / PROPORTIONS (critical, natural realistic adult human anatomy): the figure is about 7 to 7.5 heads tall (never 8 or more — the head must NOT be undersized) and the head is a NATURAL size for the body; " +
-  "the legs (hip joint / crotch to the soles) are EXACTLY HALF of the total height — long adult legs, so the hip / crotch line sits at the vertical MIDPOINT of the whole figure (never higher), and a long coat, dress or robe must NOT make the legs look short or raise the apparent hip line above the midpoint; " +
-  "the torso is NOT elongated (shoulders to hip about 3 head-heights), ONE consistent build across the whole body — torso, arms and legs share the same volume (no bloated midsection with thin arms or shins); " +
-  "correct human anatomy — two arms, two legs, five fingers per hand, no extra, missing, fused, duplicated or warped limbs; " +
-  "the person stands straight and upright in a neutral frontal pose, arms relaxed at the sides, feet flat on the floor, the ENTIRE figure head to toe inside the frame with nothing cropped; " +
-  "camera at hip height, neutral 50mm-equivalent lens, perfectly level and straight-on — no low angle, no high angle, no wide-angle distortion and no perspective foreshortening or compression of the legs, no vertical stretching or squashing of the figure. " +
-  "NO short stubby legs, NO legs shorter than half the height, NO high hip line, NO squat / dwarfish build, NO oversized OR undersized head, NOT chibi, NOT child-like, NOT a caricature — a real, naturally proportioned adult with long legs photographed head to toe.";
+  "POSE & ANATOMY (natural realistic adult anatomy): stands straight and upright in a calm, neutral frontal pose — shoulders level, head not tilted; arms relaxed and slightly away from the torso, hands open and in view; feet slightly apart, both soles flat on the floor, weight even, no contrapposto. " +
+  "Balanced proportions: a NATURAL-size head (about 7 to 7.5 heads tall, never 8 or more, not undersized), torso about 3 head-heights, long adult legs roughly half the standing height — but do NOT force the crotch / hip line to sit at exactly half the height, and a long coat, dress or robe must NOT make the legs look short. " +
+  "ONE consistent build; clothing must not distort the proportions. Correct anatomy — two arms, two legs, five fingers per hand, no extra, missing, fused or warped limbs; the whole figure head to toe in frame, nothing cropped. " +
+  "LIGHT & QUALITY: plain neutral-grey background, matte floor, soft even lighting; the whole figure including face and shoes in sharp focus; realistic skin, believable fabrics and colours; no heavy grain, colour grading, fog or dramatic backlight; a fictional person, not any real celebrity. " +
+  "EXCLUDE: close-up or waist-up framing, cropped figure, three-quarter, top-down or bottom-up view, wide-angle distortion, NO short stubby legs, NO squat or dwarfish build, NO oversized or undersized head, NOT chibi, NOT a caricature, extra or fused limbs, objects covering the hands, text, logos, collages, extra people. " +
+  "PRIORITIES on conflict: (1) whole figure in frame with correct anatomy; (2) match appearance, sex and clothing; (3) frontal neutral pose; (4) readable detail and true colours; (5) frame fill.";
 
 /** Child / young-teen variant — a child character keeps age-appropriate proportions instead of adult ones. */
 export const FULL_BODY_PROPORTIONS_CHILD =
-  "ANATOMY / PROPORTIONS (critical): realistic proportions for a child of the stated age (about 6–7 heads tall, naturally larger head-to-body ratio than an adult, legs a bit under half of the total height), feet flat on the ground. " +
-  "Standing straight in a neutral frontal pose, the whole figure head-to-toe inside the frame with nothing cropped and correct human anatomy (two arms, two legs, no extra, missing, fused or warped limbs). " +
-  "NO vertical stretching or squashing, NOT chibi, NOT a caricature, NO grotesquely oversized head, NO stubby legs, NO distorted or extra limbs — a real child photographed head to toe.";
+  "POSE & ANATOMY (child): realistic proportions for a child of the stated age (about 6–7 heads tall, naturally larger head-to-body ratio than an adult, legs a bit under half of the total height). " +
+  "The child stands straight and upright in a calm, neutral frontal pose — shoulders level and head not tilted, arms relaxed and held slightly away from the body with hands open and in view, feet slightly apart and both soles flat on the floor. " +
+  "The whole figure head-to-toe inside the frame with nothing cropped and correct human anatomy (two arms, two legs, five fingers per hand, no extra, missing, fused or warped limbs); clothing must not distort the perceived proportions. " +
+  "LIGHT, BACKGROUND & QUALITY: a plain, uniform neutral-grey background and a simple matte floor; soft, even lighting with gentle, natural shadows; the whole figure including the face and shoes in sharp focus; realistic skin texture and believable fabric colours; no heavy grain, strong colour grading, fog or dramatic backlight; a completely fictional child, not based on any real person. " +
+  "EXCLUDE: close-up or waist-up framing, a cropped figure, three-quarter angle, top-down or bottom-up view, wide-angle distortion, extra or fused limbs, objects covering the hands, text, logos, collages and additional people. " +
+  "NO vertical stretching or squashing, NOT chibi, NOT a caricature, NO grotesquely oversized head, NO stubby legs — a real child photographed head to toe.";
 
 /**
  * Heuristic: does the appearance text describe a child / young teen (≤ 14)? Adults get the adult
