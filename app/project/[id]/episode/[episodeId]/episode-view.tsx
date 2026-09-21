@@ -206,6 +206,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [refLocs, setRefLocs] = useState<any[]>(episodeLocations(initial, project.locations ?? []))
   const [refSession, setRefSession] = useState(false) // polling active while refs are generating
   const [refStarting, setRefStarting] = useState(false)
+  // «Перегенерировать референсы по сценарию»: re-parse the CURRENT script → rebuild the reference SET
+  // (characters + locations) and regenerate them via the existing pipelines. Busy while the request runs.
+  const [regenRefsBusy, setRegenRefsBusy] = useState(false)
+  const [regenRefsNotice, setRegenRefsNotice] = useState('')
   // Scope of the running reference session (Stage 46A): «Generate characters" (characters only —
   // locations are never touched) or a locations session started from ONE location card («Generate
   // master frame" / "+ Angle") — characters are never touched there.
@@ -541,6 +545,33 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     if (initiated) { autoResumedRef.current = true; refCanceled.current = false; refScopeRef.current = 'characters'; setRefScope('characters'); setTickSeen(false); setRefSession(true) }
   }, [refSession, refStarting, refsCharsReady, refChars])
 
+  // «Перегенерировать референсы по сценарию» resume: the regeneration button lives on the /script page and
+  // navigates here, which remounts the component (state is lost) — and it NULLS every reference image, so the
+  // char self-heal above (which needs an existing image) won't fire. On mount of the references surface, ask
+  // the server whether a reference job is actually running and, if so, start the polling session so the fresh
+  // references stream into the 9:16 slots as they land. Runs once per mount.
+  const activeResumedRef = useRef(false)
+  useEffect(() => {
+    if (view === 'script' || activeResumedRef.current) return
+    activeResumedRef.current = true
+    let cancelled = false
+    ;(async () => {
+      try {
+        const res = await fetch(`/api/jobs?projectId=${project.id}&active=1`, { cache: 'no-store' })
+        if (!res.ok) return
+        const d = await res.json().catch(() => ({}))
+        const jobs: any[] = Array.isArray(d?.jobs) ? d.jobs : []
+        const refJobActive = jobs.some((j) => ['characters', 'location_image', 'location_extra_image'].includes(j?.type) && ['pending', 'processing'].includes(j?.status))
+        if (cancelled || !refJobActive) return
+        if (refSession || refStarting) return
+        refCanceled.current = false; autoResumedRef.current = true
+        refScopeRef.current = 'characters'; setRefScope('characters'); setTickSeen(false); setRefSession(true)
+      } catch { /* transient — the poll loop / self-heal cover the rest */ }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   /** «Generate characters" (Stage 46A): generate every missing photo of this episode's CHARACTERS only.
    *  Locations are never touched here. The AI image model chosen in the picker is threaded into the request. */
   const generateCharacterRefs = async () => {
@@ -658,6 +689,31 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     setLocActive((p) => { const n = new Set(p); n.delete(locationId); return n })
     if (refScopeRef.current === 'locations') { setRefSession(false); refJobs.current = { loc: {}, extra: {} } }
     void refreshRefs(); void refreshCredits()
+  }
+
+  /**
+   * «Перегенерировать референсы по сценарию» — re-parse the CURRENT episode script and regenerate the
+   * whole reference SET so it matches the script exactly: the server re-extracts the cast + locations from
+   * the current scenes (adds missing / drops extra), clears their reference images and re-runs the SAME
+   * character full-body + location pipelines used for the first-time generation. On success we go to the
+   * references page and start the polling session so the fresh references stream into the 9:16 slots.
+   */
+  const regenerateRefsFromScript = async () => {
+    if (regenRefsBusy) return
+    setRegenRefsBusy(true); setError(''); setRegenRefsNotice('')
+    try {
+      const res = await fetch(`/api/ai/episodes/${episode.id}/references/regenerate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) { setError(d?.error ?? 'Не удалось перегенерировать референсы'); return }
+      setRegenRefsNotice('Референсы перестраиваются по текущему сценарию…')
+      // Start the polling session so the regenerated references appear as they complete, then open the
+      // references/scenes page (the resume effect there keeps polling if we navigate across pages).
+      refCanceled.current = false; autoResumedRef.current = true
+      refScopeRef.current = 'characters'; setRefScope('characters'); setTickSeen(false); setRefSession(true)
+      router.push(episodeBase)
+    } catch { setError('Ошибка сети') } finally { setRegenRefsBusy(false) }
   }
 
   /** Prompt-edit a character's appearance (regenerates its references; C2PA preserved in the worker). */
@@ -1139,6 +1195,15 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   <button type="button" onClick={askRegenerate} disabled={revising} className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground disabled:opacity-50" data-testid="regenerate-script">
                     {revising ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Regenerate script
                   </button>
+                </div>
+                {/* Rebuild the reference SET (characters + locations) strictly from the CURRENT script and
+                    regenerate them via the existing pipelines — adds missing, removes extra, updates changed. */}
+                <div className="mt-4 rounded-lg border border-border bg-background p-3">
+                  <button type="button" onClick={regenerateRefsFromScript} disabled={regenRefsBusy || revising} className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground disabled:opacity-50" data-testid="regenerate-refs-from-script">
+                    {regenRefsBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} Перегенерировать референсы по сценарию
+                  </button>
+                  <p className="mt-1.5 text-xs text-muted-foreground">Заново разбирает текущий сценарий и пересоздаёт референсы персонажей и локаций строго по нему.</p>
+                  {regenRefsNotice && <p className="mt-1.5 text-xs text-primary" data-testid="regenerate-refs-notice">{regenRefsNotice}</p>}
                 </div>
                 {/* Stage 158 — replace the existing script with your own pasted one (rebuilds all scenes). */}
                 <div className="mt-4 rounded-lg border border-border bg-background p-3">
