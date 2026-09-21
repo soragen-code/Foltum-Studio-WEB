@@ -51,7 +51,17 @@ export async function POST(request: Request) {
 
     const merchantAccount = getMerchantAccount();
     const merchantDomainName = getMerchantDomain();
-    const base = process.env.NEXTAUTH_URL ?? "https://foltum-studio-web.vercel.app";
+    // Build the base URL from the INCOMING request's origin so returnUrl/serviceUrl always point at
+    // the exact domain the user is on (e.g. https://www.foltum-studio.com) — that is where the session
+    // cookie lives and where WayForPay must send the browser back. This replaces the old NEXTAUTH_URL
+    // default (which pointed at a stale *.vercel.app host and produced the "server not found" screen).
+    // NOTE: this does NOT affect merchantSignature (returnUrl/serviceUrl are not part of the signed
+    // fields) and does NOT touch WAYFORPAY_MERCHANT_DOMAIN (getMerchantDomain stays as-is).
+    const fwdHost = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
+    const fwdProto = request.headers.get("x-forwarded-proto") ?? "https";
+    const base = fwdHost
+      ? `${fwdProto}://${fwdHost}`
+      : (process.env.NEXTAUTH_URL ?? "https://www.foltum-studio.com");
 
     const productNames = [product.name];
     const productCounts = [1];
@@ -85,12 +95,14 @@ export async function POST(request: Request) {
       clientFirstName: user.name ?? "",
       language: "AUTO",
       serviceUrl: `${base}/api/payment/wayforpay/callback`,
-      // Stage 88: after a successful purchase the browser returns to the app's MAIN screen
-      // (the dashboard), NOT back to the pricing page. The order ref is carried so the dashboard
-      // can poll the payment status and confirm the credits were granted. This returnUrl is the
-      // user-facing browser redirect only — the server-to-server credit callback (serviceUrl above)
-      // is untouched and still grants credits idempotently.
-      returnUrl: `${base}/dashboard?order=${encodeURIComponent(orderReference)}`,
+      // After payment WayForPay POSTs the browser back to returnUrl. It is sent to our dedicated
+      // return handler (which accepts POST+GET) instead of a page.tsx (GET-only) — that handler
+      // 303-redirects the browser to the GET success page (/payment/success), which shows the
+      // "Покупка успешна" screen with a "На главную" button. The order ref is carried so the success
+      // page can poll payment status and confirm the credits were granted. This is the user-facing
+      // browser redirect only — the server-to-server credit callback (serviceUrl above) is untouched
+      // and still grants credits idempotently.
+      returnUrl: `${base}/api/payment/wayforpay/return?order=${encodeURIComponent(orderReference)}`,
       merchantSignature,
     };
 
