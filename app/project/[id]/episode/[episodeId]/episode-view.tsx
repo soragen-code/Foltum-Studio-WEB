@@ -1580,8 +1580,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
 
                 {/* Stage 167 — per-shot generation progress. The shot is the atomic unit: the shot chain
                     generates one clip per shot (status / videoUrl below), then the assembly job stitches
-                    them into the final Episode.videoUrl shown at the top of the page. */}
-                {(scene.shots?.length ?? 0) > 0 && (
+                    them into the final Episode.videoUrl shown at the top of the page.
+                    Stage 196 — only relevant in the «Шоты» mode. In the default SCENE mode (1 scene = 1
+                    clip) the shot list must NOT be shown even if shot rows still exist from a prior visit. */}
+                {genMode === 'shots' && (scene.shots?.length ?? 0) > 0 && (
                   <div className="mt-3 rounded-lg border border-border bg-muted/30 p-2" data-testid="scene-shots">
                     <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Shots ({scene.shots!.filter((sh) => validUrl(sh.videoUrl)).length}/{scene.shots!.length})</div>
                     <ul className="space-y-1">
