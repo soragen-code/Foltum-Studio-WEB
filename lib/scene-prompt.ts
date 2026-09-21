@@ -31,6 +31,12 @@ export const REANGLE_REFERENCE_NOTE = "the OPENING FRAME: the actual previous vi
  *  camera), and the camera stays free. This is what removes the environment's dependence on the fragile re-angle. */
 export const REGION_PLATE_NOTE =
   "REGION PLATE — the authoritative ENVIRONMENT and GEOMETRY for THIS scene's part of the location (a controlled re-frame of the master plates onto this region). Reproduce its walls, floor, columns, fixtures and the fixed furniture EXACTLY as shown, at the same places, with any wall-adjacent furniture kept flush against its wall; match its architecture, materials, colours and lighting. Do NOT add, remove or rearrange furniture and do NOT replace walls with columns, pillars, openings or open space. This plate defines the BACKGROUND and LAYOUT ONLY — it does NOT dictate any character's pose, and it is NOT the camera angle of this shot: the camera is free to move anywhere within this same environment.";
+/** Stage 123 — the note attached to the pre-generated SUB-LOCATION angle reference: the environment of the exact
+ *  SPOT within the location where this scene happens (a controlled re-frame of the master plates onto that spot,
+ *  reused across every scene at the same spot). It is a LOCATION VISUAL reference (background/layout only, never a
+ *  pose or the shot's camera); when a region plate is also present that plate stays the primary geometry authority. */
+export const SUB_LOCATION_REF_NOTE =
+  "SUB-LOCATION REFERENCE — the ENVIRONMENT of the exact SPOT within the location where THIS scene happens (a controlled re-frame of the master plates onto that spot, shared by every scene set there). Keep the walls, floor, fixtures and fixed furniture EXACTLY as shown, at the same places, matching architecture, materials, colours and lighting; do NOT add, remove or rearrange anything and do NOT replace walls with columns, openings or open space. This defines the BACKGROUND and LAYOUT of this spot ONLY — it does NOT dictate any character's pose and it is NOT the camera angle of this shot: the camera is free to move within this same environment.";
 
 export interface ScenePromptScene {
   id: string;
@@ -575,6 +581,15 @@ export interface BuildScenePromptInput {
    * Omitted / null → the scene falls back to the master wide/layout plates exactly as before (no auto-migration).
    */
   regionPlateUrl?: string | null;
+  /**
+   * Stage 123 — the pre-generated SUB-LOCATION angle reference for this scene: an environment plate (Seedream edit
+   * of the master plates) of the exact SPOT within the location this scene happens at (Scene.subLocation), reused
+   * across every scene at that spot. When present it is sent as an additional non-droppable LOCATION VISUAL
+   * reference, after the region plate (which stays the primary geometry authority) and ahead of the master plates.
+   * It is NOT a keyframe and never a first frame; it imposes no pose and no camera. Skipped when it would duplicate
+   * the region plate or re-angle frame. Omitted / null → the scene falls back to the region plate / master plates.
+   */
+  subLocationRefUrl?: string | null;
   /** URLs forbidden from video, even if accidentally assigned to cast/location. */
   forbiddenReferenceUrls?: string[];
 }
@@ -699,6 +714,19 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const regionPlateRefs: Ref[] = hasRegionPlate && effectiveLocation
     ? [{ url: regionPlateUrl, kind: "location", id: effectiveLocation.id, note: REGION_PLATE_NOTE }]
     : [];
+  // Stage 123 — the pre-generated SUB-LOCATION angle reference (when present) is an additional non-droppable
+  // LOCATION VISUAL reference for the exact spot of this scene, placed AFTER the region plate (which stays the
+  // primary geometry authority) and ahead of the master plates. Skipped when it duplicates the region plate or the
+  // re-angle frame, or is forbidden — so the same environment image is never attached twice.
+  const subLocationRefUrl = (input.subLocationRefUrl ?? "").trim();
+  const hasSubLocationRef =
+    !!subLocationRefUrl &&
+    !forbidden.has(subLocationRefUrl) &&
+    subLocationRefUrl !== reangleUrl &&
+    subLocationRefUrl !== regionPlateUrl;
+  const subLocationRefs: Ref[] = hasSubLocationRef && effectiveLocation
+    ? [{ url: subLocationRefUrl, kind: "location", id: effectiveLocation.id, note: SUB_LOCATION_REF_NOTE }]
+    : [];
   // Stage 116 — combat crowds sit right after the leads (ahead of the location plates) so they are treated as
   // fighters and are never the first refs dropped at the cap; passive background crowds stay last as extras.
   // Stage 119 — reference priority tiers for the cap. The master location plates (wide + layout) join the
@@ -707,7 +735,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // any extra location angles) are trimmed to fit REFERENCE_IMAGE_CAP — instead of failing the whole build.
   // Stage 122 — the region plate (if any) leads the location tier, ahead of the master wide/layout plates, and is
   // itself non-droppable: it is the primary environment authority, the masters remain as backing geometry truth.
-  const anchorRefs = [...openingRefs, ...characterRefs, ...combatCrowdRefs, ...regionPlateRefs, ...baseLocationRefs].filter(r => !forbidden.has(r.url));
+  const anchorRefs = [...openingRefs, ...characterRefs, ...combatCrowdRefs, ...regionPlateRefs, ...subLocationRefs, ...baseLocationRefs].filter(r => !forbidden.has(r.url));
   const droppableRefs = [...backgroundCrowdRefs, ...extraLocationRefs].filter(r => !forbidden.has(r.url));
   if (anchorRefs.length > REFERENCE_IMAGE_CAP) throw new Error("Too many required video references. Reduce the scene cast.");
   const room = Math.max(0, REFERENCE_IMAGE_CAP - anchorRefs.length);

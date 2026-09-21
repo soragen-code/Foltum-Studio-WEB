@@ -73,6 +73,7 @@ import { anchorSceneLocation } from "@/lib/location-anchor";
 import { startLocationImageJob } from "@/lib/location-refs";
 import { selectPlotSource } from "@/lib/plot-import";
 import { deriveRegionKey } from "@/lib/region-plate";
+import { normalizeSubLocation } from "@/lib/sub-location";
 import { translateDialogue } from "@/lib/voiceover";
 import { episodeCastFromScenes } from "@/lib/episode-cast";
 // Stage 3 (seasonMap) — validated per-episode season map: the generate→validate→retry loop (season-map.ts)
@@ -340,6 +341,10 @@ export async function persistEpisodeScript(
           regionDesc: (s.region ?? "").trim() || null,
           regionKey: deriveRegionKey(s.region) || null,
           regionPlateUrl: null,
+          // Sub-location: the scripted machine-readable SPOT key within the location (season.ts S16). The
+          // unique sub-locations per location are extracted and their 9:16 angle references pre-generated later;
+          // a freshly scripted scene stores just the normalized key here (null when the model left it empty).
+          subLocation: normalizeSubLocation(s.subLocation) || null,
           // Stage 12 (Commit D) — off-screen narration: `voiceover` = English narration voiced by the model,
           // `voiceoverLocal` = the same narration translated for the UI. `sceneKind` distinguishes narration from dialogue.
           sceneKind: s.sceneKind ?? "dialogue",

@@ -519,3 +519,12 @@ ALTER TABLE "Character" ADD COLUMN IF NOT EXISTS "faceImageUrl" TEXT;
 -- Generation unit per episode (additive + idempotent). "scene" (DEFAULT: 1 scene = 1 clip) | "shots" («Шоты» mode).
 -- Existing episodes default to "scene" so the restored default scene pipeline is used unless the producer opts into «Шоты».
 ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "generationMode" TEXT NOT NULL DEFAULT 'scene';
+
+
+
+-- Sub-locations (distinct spots / angles WITHIN a single location). The script marks the spot of every scene
+-- with a machine-readable [SPOT: ...] tag; the backend extracts the unique sub-locations per location and
+-- generates ONE reusable 9:16 angle reference for each, cached on the Location and reused across every scene at
+-- that spot. Additive, nullable & idempotent; legacy rows stay NULL and fall back to the base location reference.
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "subLocation" TEXT;
+ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "subLocationRefs" TEXT;

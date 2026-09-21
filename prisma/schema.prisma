@@ -303,6 +303,7 @@ model Location {
   visualPromptAuto String? @db.Text // stage 46E: the LLM-written visual prompt as first produced — «reset to auto» restores it; null for legacy rows
   setInventory     String? @db.Text // stage 113: full physical set inventory ("object — placement" per line) written at idea stage; null for legacy rows
   regionPlates String?  @db.Text // stage 122: JSON cache { regionKey: plateUrl } — pre-generated region plates (Seedream edits of the master layout) reused across scenes in the same region of this location; null for legacy rows
+  subLocationRefs String? @db.Text // JSON cache { normalizedSubLocation: s3Url } — one generated 9:16 angle reference per unique sub-location (spot) within this location, reused across every scene set at that spot; null for legacy rows
   imageUrl     String?  // PNG reference — wide establishing angle
   imageReverse String?  // same place, reverse angle (generated from imageUrl as reference → identical light)
   imageDetail  String?  // same place, medium/detail angle
@@ -417,6 +418,11 @@ model Scene {
   regionKey      String?          // normalized cache key of the region (locationId + regionKey → shared plate)
   regionDesc     String? @db.Text // English description of WHICH part / vantage of the location this scene occupies (drives the plate edit)
   regionPlateUrl String?          // S3 URL of the pre-generated region plate for this scene
+  // Sub-location: a short, stable spot/angle key WITHIN the scene's location (e.g. "by the tall window",
+  // "at the front door"), parsed from the script's machine-readable "subLocation" JSON field (season.ts S16).
+  // Distinct from regionDesc (Seedream plate geometry) — this drives a single reusable 9:16 angle reference per
+  // unique sub-location. Null/"" = no distinct spot → fall back to the base location reference (additive, nullable).
+  subLocation   String?  @db.Text
   locationId    String?  // Stage 162: the Location this scene was bound to (derived per-episode from the finished script); null = fall back to the episode location
   promptBlocks  Json?    // Stage 165: the block-assembled prompt for debugging { version, prompt, blocks{...}, cameraMove } (null on legacy rows / before first assembly)
   promptVersion String?  // Stage 165: PROMPT_VERSION that produced promptBlocks (traces a stored prompt back to its block rules)

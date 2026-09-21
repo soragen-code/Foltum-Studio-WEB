@@ -7,6 +7,9 @@ import { resolveVideoPredecessor, assertPredecessorReady, buildReangleRequest } 
 // Stage 122: lazily resolve/generate the scene's REGION PLATE (env plate of this part of the location),
 // reused across scenes in the same region via the Location.regionPlates cache; non-blocking (null on failure).
 import { ensureSceneRegionPlate } from "@/lib/workers/region-plate-job";
+// Stage 123: lazily resolve/generate the scene's SUB-LOCATION angle reference (env plate of the exact spot within
+// the location), reused across scenes at the same spot via the Location.subLocationRefs cache; non-blocking (null).
+import { ensureSceneSubLocationRef } from "@/lib/workers/sub-location-ref-job";
 import { ensureReangle } from "@/lib/reangle-store";
 import { translateDialogue, detectSpokenLanguage } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
@@ -267,6 +270,8 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
       forbiddenReferenceUrls }).retryRefs;
     // Stage 122: resolve (or lazily generate once) this scene's REGION PLATE. Non-blocking.
     const regionPlateUrl = await ensureSceneRegionPlate({ sceneId, jobId, imageModel: undefined }).catch(() => null);
+    // Stage 123: resolve (or lazily generate once) this scene's SUB-LOCATION angle reference. Non-blocking.
+    const subLocationRefUrl = await ensureSceneSubLocationRef({ sceneId, jobId, imageModel: undefined }).catch(() => null);
     let reangleUrl: string | null = null;
     let reangleInfo: VideoJobState["reangle"];
     let reangleRequest: ReturnType<typeof buildReangleRequest> | null = null;
@@ -283,7 +288,7 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
     }
     const built = buildScenePrompt({
       scene: lookScene,
-      reangleUrl, regionPlateUrl, forbiddenReferenceUrls,
+      reangleUrl, regionPlateUrl, subLocationRefUrl, forbiddenReferenceUrls,
       characters: links.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront, imageProfile: l.character.imageProfile, imageFull: l.character.imageFull, imageExtra: l.character.imageExtra, appearance: l.character.appearance, age: l.character.age })),
       location: scene.location ?? episodeLoc?.location ?? null,
       previous,
