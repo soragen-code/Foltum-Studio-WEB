@@ -59,8 +59,10 @@ export function seedreamImageSize(aspect?: string): string {
 /** Pure body/slug builder for the WaveSpeed Seedream request (exported for tests). */
 export function buildWaveSpeedImageRequest(input: ImageGenerationInput): { slug: string; body: Record<string, unknown> } {
   const refs = (input.image_input ?? []).filter((u) => typeof u === "string" && u.length > 0).slice(0, WAVESPEED_IMAGE_MAX_REFS);
-  const size = seedreamImageSize(input.aspect_ratio);
-  const body: Record<string, unknown> = { prompt: input.prompt, size, output_format: "png", enable_sync_mode: false };
+  // Seedream v5.0 Pro (and Pro/edit) take `aspect_ratio` + `resolution`, NOT `size`.
+  // (`size` is a v5.0 Lite parameter; Pro silently ignores it and falls back to 1:1 → square.)
+  const aspect_ratio = (input.aspect_ratio ?? "9:16").trim() || "9:16";
+  const body: Record<string, unknown> = { prompt: input.prompt, aspect_ratio, resolution: "2k", output_format: "png", enable_sync_mode: false };
   if (refs.length) {
     body.images = refs;
     return { slug: WAVESPEED_SEEDREAM_EDIT, body };

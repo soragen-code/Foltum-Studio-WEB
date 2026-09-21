@@ -43,12 +43,17 @@ ok(!isVertical(seedreamImageSize('16:9')), 'sanity: 16:9 maps to landscape (not 
 // ── (2) WaveSpeed request builder honours 9:16 (text-to-image + edit) ────────────────────────────────
 const t2i = buildWaveSpeedImageRequest({ prompt: 'a character full-body reference', aspect_ratio: REFERENCE_ASPECT_RATIO });
 ok(t2i.slug === WAVESPEED_SEEDREAM_T2I, 't2i (no refs) uses the text-to-image slug');
-ok(t2i.body.size === '1440*2560', 't2i body.size is vertical 1440*2560');
+// Seedream v5.0 Pro takes aspect_ratio + resolution (NOT size — that's a Lite param the Pro model ignores → square).
+ok(t2i.body.aspect_ratio === '9:16', 't2i body.aspect_ratio is vertical 9:16');
+ok(t2i.body.resolution === '2k', 't2i body.resolution is 2k');
+ok(t2i.body.size === undefined, 't2i body no longer sends size');
 
 const REF_URL = 'https' + '://media.invalid/master.png';
 const edit = buildWaveSpeedImageRequest({ prompt: 'region plate edit', aspect_ratio: REFERENCE_ASPECT_RATIO, image_input: [REF_URL] });
 ok(edit.slug === WAVESPEED_SEEDREAM_EDIT, 'edit (with refs) uses the edit slug');
-ok(edit.body.size === '1440*2560', 'edit body.size is vertical 1440*2560 (region plate / chained refs)');
+ok(edit.body.aspect_ratio === '9:16', 'edit body.aspect_ratio is vertical 9:16 (region plate / chained refs)');
+ok(edit.body.resolution === '2k', 'edit body.resolution is 2k');
+ok(edit.body.size === undefined, 'edit body no longer sends size');
 
 // ── (3) Region plate builds an EDIT request whose call site generates in 9:16 ─────────────────────────
 const url = (s: string) => 'https' + '://media.invalid/' + VISUAL_STYLE_ID + '/' + s + '.png';
@@ -57,7 +62,7 @@ const rp = buildRegionPlateRequest({ location, regionDesc: 'the far corner by th
 ok(Array.isArray(rp.image_input) && rp.image_input.length > 0, 'region plate request carries master image_input (an EDIT)');
 // The edit of a 9:16 master, submitted with aspect_ratio 9:16 at the job call site, yields a 9:16 plate.
 const rpReq = buildWaveSpeedImageRequest({ prompt: rp.prompt, aspect_ratio: REFERENCE_ASPECT_RATIO, image_input: rp.image_input });
-ok(rpReq.body.size === '1440*2560', 'region plate resolves to vertical 1440*2560');
+ok(rpReq.body.aspect_ratio === '9:16' && rpReq.body.resolution === '2k', 'region plate resolves to vertical 9:16 @ 2k');
 
 // ── (4) Source-level guard: NO reference generation path passes a non-9:16 aspect ────────────────────
 // Every point that calls generateImage for a REFERENCE (characters, locations, region plates, artifacts).
