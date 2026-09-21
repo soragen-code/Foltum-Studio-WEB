@@ -93,10 +93,14 @@ const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.ima
 // Stage 167 — a persisted Shot of a scene (the atomic unit of generation). The episode card shows each
 // shot's per-shot status / videoUrl so producers can watch the shot chain progress.
 type Shot = { id: string; index: number; shotType?: string | null; size?: string | null; duration?: number | null; line?: string | null; status: string; videoUrl?: string | null; error?: string | null }
-type Scene = { id: string; number: number; title?: string | null; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; lookStale?: boolean | null; videoModel?: string | null; status: string; hasUndo?: boolean | null; shots?: Shot[]; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
+type Scene = { id: string; number: number; title?: string | null; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; subLocation?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; lookStale?: boolean | null; videoModel?: string | null; status: string; hasUndo?: boolean | null; shots?: Shot[]; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null; hasScript?: boolean }
 
-export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits, entitlements }: { episode: any; project: any; siblings?: Sibling[]; credits: number; entitlements?: import('@/lib/entitlements').Entitlements }) {
+export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits, entitlements, view = 'production' }: { episode: any; project: any; siblings?: Sibling[]; credits: number; entitlements?: import('@/lib/entitlements').Entitlements; view?: 'production' | 'script' }) {
+  // Stage 172 — the episode SCRIPT lives on its own page (/script), separate from references + scenes.
+  // `view` selects which surface this instance renders; the nav links the two pages together.
+  const episodeBase = `/project/${project.id}/episode/${initial.id}`
+  const scriptHref = `${episodeBase}/script`
   const canScenePromptEdit = entitlements ? entitlements.scene_prompt_edit : true
   const canManualPromptEdit = entitlements ? entitlements.manual_prompt_edit : true
   const canPremiumQuality = entitlements ? entitlements.premium_quality : true
@@ -239,11 +243,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // Stage 14 (D4): the episode is a guided flow — script → (confirm) → references → (ready) → scenes.
   // Old episodes that already have generated scenes open straight on the scenes step.
   const [phase, setPhase] = useState<EpisodePhase>(() => {
+    // Stage 172 — the script page always shows the script; the production page never opens on the script
+    // step (the script lives on its own route), so it opens on References (or Scenes when video exists).
+    if (view === 'script') return 'script'
     const anyScene = ((initial.scenes ?? []) as Scene[]).some((s) => validUrl(s.videoUrl))
-    // Stage 59 (step 4): tabs are ordered Script → References → Scenes, so an unfilled episode opens on
-    // «Script by default; only jump straight to Scenes when the episode already has generated video.
-    if (!initial.script) return 'script' // Stage 107 — no script yet: everything else is locked
-    return anyScene || validUrl(initial.videoUrl) ? 'scenes' : 'script'
+    return anyScene || validUrl(initial.videoUrl) ? 'scenes' : 'references'
   })
   const goPhase = (p: EpisodePhase) => { setPhase(p); if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' }) }
 
@@ -1073,31 +1077,51 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <div className="text-sm text-muted-foreground">Credits: <span className="font-semibold text-foreground" data-testid="credits">{credits}</span></div>
         </div>
 
-        {/* Stage 14 (D): guided steps — script → references → scenes */}
+        {/* Stage 14 (D): guided steps — script → references → scenes. Stage 172: the Script step lives on its
+            own page (/script); steps that belong to the OTHER page render as links that navigate between the two. */}
         <div className="mt-4 flex flex-wrap items-center gap-2 text-xs" data-testid="phase-steps">
-          {(([['script', '1 · Script'], ['references', '2 · References'], ['scenes', '3 · Scenes']]) as [EpisodePhase, string][]).map(([key, label]) => {
+          {(([['script', '1 · Сценарий'], ['references', '2 · Референсы'], ['scenes', '3 · Сцены']]) as [EpisodePhase, string][]).map(([key, label]) => {
             // Stage 107 — References and Scenes are locked until the episode has a script.
             // Stage 129 — the Scenes step is also locked until references are ready AND a production mode is
             // chosen (canEnterProduction); legacy episodes that already have generated scenes stay reachable.
             const reached = key === 'script'
               || (hasScript && key === 'references')
               || (hasScript && key === 'scenes' && (canEnterProduction(refsReady, mode) || scenes.some((s) => validUrl(s.videoUrl))))
-            const active = phase === key
-            return (
-              <button
-                key={key}
-                type="button"
-                onClick={() => reached && goPhase(key)}
-                disabled={!reached}
-                data-testid={`phase-step-${key}`}
-                data-active={active}
-                className={`rounded-full border px-3 py-1 font-medium transition ${active ? 'border-primary bg-primary text-primary-foreground' : reached ? 'border-border hover:bg-muted' : 'border-border/50 text-muted-foreground/50'}`}
-              >
-                {label}
-              </button>
-            )
+            // Which page does this step belong to? Script → the /script page; References/Scenes → the production page.
+            const onThisPage = view === 'script' ? key === 'script' : key !== 'script'
+            const active = onThisPage && phase === key
+            const cls = `rounded-full border px-3 py-1 font-medium transition ${active ? 'border-primary bg-primary text-primary-foreground' : reached ? 'border-border hover:bg-muted' : 'border-border/50 text-muted-foreground/50'}`
+            if (onThisPage) {
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => reached && goPhase(key)}
+                  disabled={!reached}
+                  data-testid={`phase-step-${key}`}
+                  data-active={active}
+                  className={cls}
+                >
+                  {label}
+                </button>
+              )
+            }
+            // Step lives on the other page → a link (or a disabled-looking span when not yet reachable).
+            const href = key === 'script' ? scriptHref : episodeBase
+            if (!reached) return <span key={key} data-testid={`phase-step-${key}`} aria-disabled="true" className={cls}>{label}</span>
+            return <Link key={key} href={href} data-testid={`phase-step-${key}`} className={cls}>{label}</Link>
           })}
         </div>
+
+        {/* Stage 172 — production page opened without a script yet: point the user to the script page. */}
+        {view === 'production' && !hasScript && (
+          <div className="mt-4 rounded-xl border border-dashed border-border bg-card p-6 text-center" data-testid="no-script-production">
+            <p className="text-sm text-muted-foreground">У этого эпизода ещё нет сценария. Референсы и сцены станут доступны после его создания.</p>
+            <Link href={scriptHref} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:brightness-110" data-testid="go-to-script">
+              Перейти к сценарию <ArrowRight className="h-4 w-4" />
+            </Link>
+          </div>
+        )}
 
         {/* Step 1 — episode script in book format (D1/D2) */}
         {phase === 'script' && (
@@ -1167,17 +1191,23 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               </div>
             )}
             {reviseNotice && <p className="mt-3 text-sm text-primary" data-testid="episode-revise-notice">{reviseNotice}</p>}
-            {/* Stage 59 navigation — Script is step 1: single forward button to references. */}
+            {/* Stage 172 — Script is on its own page: the forward step links to the references/scenes page. */}
             <div className="mt-5 flex flex-wrap items-center justify-end gap-3 border-t border-border pt-4">
-              <button onClick={() => goPhase('references')} disabled={revising || !hasScript} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:brightness-110 disabled:opacity-50" data-testid="script-to-references">
-                To references <ArrowRight className="h-4 w-4" />
-              </button>
+              {hasScript ? (
+                <Link href={episodeBase} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:brightness-110" data-testid="script-to-references">
+                  К референсам и сценам <ArrowRight className="h-4 w-4" />
+                </Link>
+              ) : (
+                <span className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground opacity-50" data-testid="script-to-references" aria-disabled="true">
+                  К референсам и сценам <ArrowRight className="h-4 w-4" />
+                </span>
+              )}
             </div>
           </div>
         )}
 
         {/* Step 2 — Stage 12: references of THIS episode + single "generate all" */}
-        {phase === 'references' && (
+        {phase === 'references' && hasScript && (
         <section className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="episode-references">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="inline-flex items-center gap-2 font-display text-xl font-bold"><Images className="h-5 w-5 text-primary" /> Episode references</h2>
@@ -1442,9 +1472,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           {/* Stage 59 navigation — References is step 2: back to script · forward to scenes.
               Stage 129 — the forward button unlocks only once references are ready AND a mode is chosen. */}
           <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-            <button onClick={() => goPhase('script')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="refs-to-script">
-              <ArrowLeft className="h-4 w-4" /> Script
-            </button>
+            <Link href={scriptHref} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="refs-to-script">
+              <ArrowLeft className="h-4 w-4" /> Сценарий
+            </Link>
             <button onClick={() => goPhase('scenes')} disabled={!canEnterProduction(refsReady, mode)} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="refs-to-scenes" title={!refsReady ? 'Generate all episode references first' : !mode ? 'Choose a production mode to continue' : ''}>
               To production <ArrowRight className="h-4 w-4" />
             </button>
@@ -1453,7 +1483,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         )}
 
         {/* Step 3 — scenes: per-scene generation + «Generate all scenes" (parallel, Stage 39) + assemble */}
-        {phase === 'scenes' && (
+        {phase === 'scenes' && hasScript && (
         <>
         {/* Stage 129 — the production mode is first CHOSEN in the References step (that is where the gate lives).
             Stage 130 — the author asked to keep the choice EDITABLE here too, so this is a live selector (not a

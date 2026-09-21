@@ -48,31 +48,33 @@ export async function ensureSceneSubLocationRef(input: {
 }): Promise<string | null> {
   const { sceneId, jobId, imageModel } = input;
   try {
+    const locationSelect = {
+      id: true,
+      projectId: true,
+      name: true,
+      imageUrl: true,
+      imageReverse: true,
+      setInventory: true,
+      subLocationRefs: true,
+    } as const;
     const scene = await prisma.scene.findUnique({
       where: { id: sceneId },
-      select: { id: true, episodeId: true, subLocation: true },
+      select: { id: true, episodeId: true, subLocation: true, location: { select: locationSelect } },
     });
     if (!scene) return null;
     const subLocation = (scene.subLocation ?? "").trim();
     if (!subLocation) return null; // no spot marked — fall back (no auto-migration of legacy scenes)
 
-    const episode = await prisma.episode.findUnique({
-      where: { id: scene.episodeId },
-      select: {
-        location: {
-          select: {
-            id: true,
-            projectId: true,
-            name: true,
-            imageUrl: true,
-            imageReverse: true,
-            setInventory: true,
-            subLocationRefs: true,
-          },
-        },
-      },
-    });
-    const loc = episode?.location as LocationRow | null | undefined;
+    // Prefer the scene's OWN bound location (correct for multi-location episodes); fall back to the
+    // episode's primary location only when the scene has no location of its own.
+    let loc = (scene.location as LocationRow | null | undefined) ?? null;
+    if (!loc) {
+      const episode = await prisma.episode.findUnique({
+        where: { id: scene.episodeId },
+        select: { location: { select: locationSelect } },
+      });
+      loc = (episode?.location as LocationRow | null | undefined) ?? null;
+    }
     // No master plates to edit from → cannot build a controlled re-frame; fall back.
     if (!loc || (!loc.imageUrl && !loc.imageReverse)) return null;
 

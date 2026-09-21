@@ -29,7 +29,7 @@ export function isContinuousSeam(continuesFrom?: string | null): boolean {
 /** Every scene field the reader script is assembled from (all already stored on the Scene row). */
 export interface SceneScriptFields {
   number: number;
-  /** Short human-readable scene title (2–6 words) shown in the SCENE header; null on legacy / manual scripts. */
+  /** Human-readable scene HEADER "LOCATION — SUB-LOCATION" (story language) shown in the SCENE header; null on legacy / manual scripts. */
   title?: string | null;
   sceneKind?: string | null;
   durationSec?: number | null;
@@ -110,7 +110,7 @@ export function assembleSceneScript(scene: SceneScriptFields, previous?: Previou
   const lines: string[] = [];
 
   // ── Header ────────────────────────────────────────────────────────────────
-  // Short scene title (when present) rides in the SCENE header — e.g. "SCENE 3 — The Challenge".
+  // The scene HEADER (when present) rides in the SCENE line — a "LOCATION — SUB-LOCATION" place header, e.g. "SCENE 3 — Квартира Анны — Кухня".
   const title = clean(scene.title);
   const header = [title ? `SCENE ${scene.number} — ${title}` : `SCENE ${scene.number}`, sceneKindLabel(scene.sceneKind)];
   const dur = durationLabel(scene.durationSec);

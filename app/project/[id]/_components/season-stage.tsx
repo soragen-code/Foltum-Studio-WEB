@@ -131,14 +131,33 @@ export function ScriptView({ text, scenes }: { text?: string | null; scenes?: { 
  */
 type BookScene = {
   number: number
-  // Short human-readable scene title (2–6 words) shown next to "Scene N"; null on legacy / manual scripts.
+  // Human-readable scene HEADER "LOCATION — SUB-LOCATION" (story language) shown next to "Scene N"; null on legacy / manual scripts.
   title?: string | null
   locationDesc?: string | null
+  // Machine key for the spot within the location; used to derive the header when `title` is absent (legacy scripts).
+  subLocation?: string | null
   action?: string | null
   dialogue?: string | null
   sceneKind?: string | null
   voiceover?: string | null
   voiceoverLocal?: string | null
+}
+
+/**
+ * The readable "LOCATION — SUB-LOCATION" header shown next to "Scene N". Prefers the model-written `title`
+ * (already story-language "place — spot"); for legacy / manual scenes with no such header it derives one from
+ * the machine fields: the middle place of `locationDesc` ("INT/EXT — place — time") plus the `subLocation` key.
+ */
+export function scenePlaceHeader(s: { title?: string | null; locationDesc?: string | null; subLocation?: string | null }): string {
+  const title = (s.title || '').trim()
+  if (title) return title
+  const loc = (s.locationDesc || '').trim()
+  // Middle token of "INT/EXT — place — time"; fall back to the whole string when it is not the machine format.
+  const parts = loc.split(' — ').map((p) => p.trim()).filter(Boolean)
+  const place = parts.length >= 3 ? parts[1] : loc
+  const spot = (s.subLocation || '').trim()
+  if (place && spot) return `${place} — ${spot}`
+  return place || spot || ''
 }
 
 /** Stage 108 — one dialogue row `NAME (tone cue): "line"` → speaker name + line (no slant, weight/colour only). */
@@ -180,8 +199,8 @@ function SceneProse({ s }: { s: BookScene }) {
   const narration = (s.voiceoverLocal || s.voiceover || '').trim()
   const speech = (s.dialogue || '').trim()
   const hasSpeech = !isNarration && speech && speech !== '[NO DIALOGUE]'
-  // Short scene title shown next to "Scene N" (never the long location paragraph).
-  const title = (s.title || '').trim()
+  // "LOCATION — SUB-LOCATION" place header shown next to "Scene N".
+  const header = scenePlaceHeader(s)
   // Optional short location line UNDER the heading — only when it is genuinely short (a slug like
   // "INT — kitchen — night"), never a full descriptive paragraph, and never used as the heading itself.
   const rawLocation = (s.locationDesc || '').trim()
@@ -190,7 +209,7 @@ function SceneProse({ s }: { s: BookScene }) {
     <section className="space-y-4 pt-2 first:pt-0" data-testid="book-scene">
       <h3 className="mt-6 text-sm font-semibold uppercase tracking-wide text-foreground first:mt-0">
         Scene {s.number}
-        {title && <span className="ml-2 font-medium normal-case tracking-normal text-foreground">· {title}</span>}
+        {header && <span className="ml-2 font-medium normal-case tracking-normal text-foreground">· {header}</span>}
       </h3>
       {shortLocation && <p className="-mt-2 text-xs font-medium normal-case tracking-normal text-muted-foreground">{shortLocation}</p>}
       {s.action && <p className="whitespace-pre-wrap">{s.action}</p>}

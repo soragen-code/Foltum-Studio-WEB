@@ -82,7 +82,10 @@ const loc = (name: string) => ({ name, description: "a place", visualPrompt: "a 
   const iRefs = ev.indexOf("'2 · Референсы'");
   const iScenes = ev.indexOf("'3 · Сцены'");
   ok(iScript > 0 && iRefs > iScript && iScenes > iRefs, "episode tabs ordered Script → References → Scenes");
-  ok(/anyScene \|\| validUrl\(initial\.videoUrl\) \? 'scenes' : 'script'/.test(ev), "episode default phase falls back to 'script'");
+  // Stage 172 — the script moved to its own /script page, so the production page's default phase falls back to
+  // 'references' (never 'script'); the script step is a link to the /script route.
+  ok(/anyScene \|\| validUrl\(initial\.videoUrl\) \? 'scenes' : 'references'/.test(ev), "production page default phase falls back to 'references'");
+  ok(/view === 'script'/.test(ev), "episode-view supports a dedicated script view");
 
   const job = read("lib/workers/season-script-job.ts");
   ok(/generateSeasonCast/.test(job), "season job defines/uses generateSeasonCast");
