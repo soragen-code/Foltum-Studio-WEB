@@ -10,6 +10,7 @@ import { chatJSON, EPISODE_SCRIPT_MODEL } from "@/lib/ai";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { normalizeLanguage } from "@/lib/idea";
 import { sceneReviseSchema, sceneReviseSystemPrompt, renderScriptFromScenes, clampSceneDuration, ensureEnglishDialogue } from "@/lib/season";
+import { requireFeature } from "@/lib/entitlements";
 
 /**
  * POST /api/ai/scenes/[id]/revise { instruction }
@@ -21,6 +22,15 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const limited = rateLimitByUser(request, "ai:scene-revise", session.user.email ?? session.user.id, RATE_LIMITS.ai);
   if (limited) return limited;
+
+  // Feature gate: revising a scene by instruction ("scene_prompt_edit") requires an active Basic+ subscription.
+  const gateUser = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { subscriptionTier: true, subscriptionExpiresAt: true },
+  });
+  const denied = requireFeature(gateUser, "scene_prompt_edit");
+  if (denied) return NextResponse.json(denied, { status: 403 });
+
   const { id } = await ctx.params;
   const body = await request.json().catch(() => ({}));
   const instruction = String(body?.instruction ?? "").trim();

@@ -6,6 +6,7 @@ import { Header } from '@/components/header'
 import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Copy, Check, FileText, RotateCcw, Save, Plus, Undo2, AlertTriangle } from 'lucide-react'
 import { FrameToolbar, DownloadAllButton } from '@/app/project/[id]/_components/frame-toolbar'
 import { PromptModal, CHARACTER_PROMPT_DESCRIPTION, LOCATION_PROMPT_DESCRIPTION } from '@/app/project/[id]/_components/prompt-modal'
+import { FeatureLockBadge } from '@/app/project/[id]/_components/feature-lock'
 import { referenceFileName } from '@/lib/download-name'
 import { DownloadVideoButton } from '@/app/project/[id]/_components/download-video-button'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
@@ -94,7 +95,10 @@ type Shot = { id: string; index: number; shotType?: string | null; size?: string
 type Scene = { id: string; number: number; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; lookStale?: boolean | null; videoModel?: string | null; status: string; hasUndo?: boolean | null; shots?: Shot[]; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null; hasScript?: boolean }
 
-export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits }: { episode: any; project: any; siblings?: Sibling[]; credits: number }) {
+export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits, entitlements }: { episode: any; project: any; siblings?: Sibling[]; credits: number; entitlements?: import('@/lib/entitlements').Entitlements }) {
+  const canScenePromptEdit = entitlements ? entitlements.scene_prompt_edit : true
+  const canManualPromptEdit = entitlements ? entitlements.manual_prompt_edit : true
+  const canPremiumQuality = entitlements ? entitlements.premium_quality : true
   const [episode, setEpisode] = useState<any>(initial)
   const [scenes, setScenes] = useState<Scene[]>(initial.scenes ?? [])
   const [credits, setCredits] = useState(initialCredits)
@@ -1679,8 +1683,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                     </button>
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row">
-                    <input value={sceneEdit[scene.id] ?? ''} onChange={(e) => setSceneEdit((t) => ({ ...t, [scene.id]: e.target.value }))} placeholder="Edit scene: what to adjust…" className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-sm" data-testid="scene-revise-input" disabled={gen} />
-                    <button onClick={() => reviseScene(scene)} disabled={gen || !!sceneBusy[scene.id] || !(sceneEdit[scene.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-50" data-testid="scene-revise-submit">
+                    <input value={sceneEdit[scene.id] ?? ''} onChange={(e) => setSceneEdit((t) => ({ ...t, [scene.id]: e.target.value }))} placeholder={canScenePromptEdit ? "Edit scene: what to adjust…" : "Редактирование сцен промптом доступно по подписке"} className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-sm" data-testid="scene-revise-input" disabled={gen || !canScenePromptEdit} />
+                    <button onClick={() => reviseScene(scene)} disabled={gen || !canScenePromptEdit || !!sceneBusy[scene.id] || !(sceneEdit[scene.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-50" data-testid="scene-revise-submit">
                       {sceneBusy[scene.id] ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Edit
                     </button>
                     {scene.hasUndo && (
@@ -1689,6 +1693,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       </button>
                     )}
                   </div>
+                  {!canScenePromptEdit && (
+                    <FeatureLockBadge text="Доступно по подписке Basic" className="mt-1" />
+                  )}
                   {cancelAsk === scene.id && gen && (
                     <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm" data-testid="cancel-confirm">
                       Stop generating this scene? Charged credits will be refunded.
@@ -1822,8 +1829,15 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             <p className="mt-1 text-sm text-muted-foreground">Scenes are rendered in 480p. Select the finished episode quality here: only the assembled file is upscaled. 480p / 30 — no transcoding, fastest.</p>
             <label className="mt-4 block text-sm font-medium" htmlFor="assemble-quality">Production episode quality</label>
             <select id="assemble-quality" data-testid="assemble-quality" value={assembleQuality} onChange={(e) => setAssembleQuality(e.target.value as AssembleQuality)} className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
-              {ASSEMBLE_QUALITIES.map((q) => (<option key={q} value={q}>{q}</option>))}
+              {ASSEMBLE_QUALITIES.map((q) => {
+                const premium = q !== DEFAULT_ASSEMBLE_QUALITY
+                const disabledOpt = premium && !canPremiumQuality
+                return (<option key={q} value={q} disabled={disabledOpt}>{q}{disabledOpt ? ' — по подписке Pro' : ''}</option>)
+              })}
             </select>
+            {!canPremiumQuality && (
+              <FeatureLockBadge text="Премиум-качество (720p / 1080p) — по подписке Pro" className="mt-1" />
+            )}
             <label className="mt-3 block text-sm font-medium" htmlFor="assemble-fps">Frame rate</label>
             <select id="assemble-fps" data-testid="assemble-fps" value={assembleFps} onChange={(e) => setAssembleFps(Number(e.target.value) as AssembleFps)} className="mt-1 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
               {ASSEMBLE_FPS.map((f) => (<option key={f} value={f}>{f} fps</option>))}
@@ -1889,10 +1903,14 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                     value={promptText}
                     onChange={(e) => setPromptText(e.target.value)}
                     spellCheck={false}
+                    readOnly={!canManualPromptEdit}
                     className="h-[45vh] w-full resize-none whitespace-pre-wrap rounded-lg border border-border bg-background px-3 py-2 font-mono text-xs leading-relaxed"
                     data-testid="scene-prompt-text"
                     placeholder="Scene prompt…"
                   />
+                  {!canManualPromptEdit && (
+                    <FeatureLockBadge text="Ручная правка промпта доступна по подписке Basic" className="mt-2" />
+                  )}
                 </>
               )}
             </div>
@@ -1900,7 +1918,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-5 py-4">
               <button
                 onClick={() => savePromptOverride(true)}
-                disabled={promptSaving || promptLoading}
+                disabled={promptSaving || promptLoading || !canManualPromptEdit}
                 className="mr-auto inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground disabled:opacity-50"
                 data-testid="scene-reset-prompt"
                 title="Rewrite the prompt from scratch based on the current rules and script"
@@ -1917,7 +1935,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               </button>
               <button
                 onClick={() => savePromptOverride(false)}
-                disabled={promptSaving || promptLoading}
+                disabled={promptSaving || promptLoading || !canManualPromptEdit}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50"
                 data-testid="scene-save-prompt"
               >

@@ -65,7 +65,7 @@ interface CharacterData {
 
 const CHARACTERS_EXPECTED_SEC = 180 // ~9 FLUX images sequentially
 
-export function CharactersStage({ project, onRefresh }: { project: any; onRefresh: () => void }) {
+export function CharactersStage({ project, onRefresh, entitlements }: { project: any; onRefresh: () => void; entitlements?: import('@/lib/entitlements').Entitlements }) {
   const [characters, setCharacters] = useState<CharacterData[]>(project?.characters ?? [])
   const [starting, setStarting] = useState(false)
   const [locking, setLocking] = useState(false)
@@ -215,7 +215,7 @@ export function CharactersStage({ project, onRefresh }: { project: any; onRefres
                 </div>
                 <CharacterImages char={char} ImagePlaceholder={ImagePlaceholder} pending={generating} />
                 {/* Optional single "face photo": cast your own face in the role — fed FIRST into character generation. */}
-                {char?.id && <CharacterFacePhoto characterId={char.id} faceImageUrl={(char as any).faceImageUrl} disabled={isLocked || !!(char as any).refLocked} />}
+                {char?.id && <CharacterFacePhoto characterId={char.id} faceImageUrl={(char as any).faceImageUrl} disabled={isLocked || !!(char as any).refLocked} locked={entitlements ? !entitlements.own_face : false} />}
                 {/* Stage 75: user-uploaded photo references (shared component; replaces the old dead "Upload Photo" placeholder) */}
                 {char?.id && <CharacterUserRefs characterId={char.id} userRefs={(char as any).userRefs} disabled={isLocked || !!(char as any).refLocked} />}
                 {!isLocked && (

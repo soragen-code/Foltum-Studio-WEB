@@ -13,6 +13,7 @@ import {
   assembleScenePrompt,
   type SceneBlockInput,
 } from "@/lib/prompts";
+import { requireFeature } from "@/lib/entitlements";
 
 /**
  * GET /api/ai/scenes/[id]/prompt
@@ -84,6 +85,15 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
 
   const limited = rateLimitByUser(request, "ai:scene-prompt", session.user.email ?? session.user.id, RATE_LIMITS.ai);
   if (limited) return limited;
+
+  // Feature gate: manually saving a final-prompt override ("manual_prompt_edit") requires an active
+  // Basic+ subscription. The access check runs FIRST; the save/reset logic below is unchanged.
+  const gateUser = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { subscriptionTier: true, subscriptionExpiresAt: true },
+  });
+  const denied = requireFeature(gateUser, "manual_prompt_edit");
+  if (denied) return NextResponse.json(denied, { status: 403 });
 
   const { id } = await ctx.params;
 

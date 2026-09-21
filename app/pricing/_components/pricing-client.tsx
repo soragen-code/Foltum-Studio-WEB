@@ -6,44 +6,51 @@ import { Check, Coins, Crown, Sparkles, Zap, ShoppingCart, Loader2 } from 'lucid
 import { motion } from 'framer-motion'
 import { toast } from 'sonner'
 
-// Paid-only credit model: 1 credit = 1 second of video = $1.
+// Подписки открывают ДОСТУП К ФУНКЦИЯМ и НЕ дают кредиты — кредиты покупаются отдельными пакетами.
 const plans = [
   {
     id: 'basic',
     name: 'Basic',
     price: '$29',
-    period: '/month',
-    credits: 40,
+    period: '/мес',
     icon: Zap,
     color: 'border-green-500/30',
     activeColor: 'border-green-500 ring-2 ring-green-500/20',
     iconColor: 'text-green-400',
-    features: ['40 credits/month', '40 seconds of video/month', 'All quality tiers', 'Up to 3 projects', 'Basic support'],
+    features: [
+      'Своё лицо персонажа',
+      'Редактирование сцен промптом',
+      'Ручная правка промпта',
+    ],
   },
   {
     id: 'pro',
     name: 'Pro',
     price: '$99',
-    period: '/month',
-    credits: 150,
+    period: '/мес',
     icon: Sparkles,
     color: 'border-primary/30',
     activeColor: 'border-primary ring-2 ring-primary/20',
     iconColor: 'text-primary',
-    features: ['150 credits/month', '150 seconds of video/month', 'All quality tiers', 'Unlimited projects', 'Priority support', 'Early access to features'],
+    features: [
+      'Всё из Basic',
+      'Премиум-качество (720p / 1080p)',
+    ],
     popular: true,
   },
   {
     id: 'studio',
     name: 'Studio',
     price: '$299',
-    period: '/month',
-    credits: 500,
+    period: '/мес',
     icon: Crown,
     color: 'border-red-500/30',
     activeColor: 'border-red-500 ring-2 ring-red-500/20',
     iconColor: 'text-red-400',
-    features: ['500 credits/month', '500 seconds of video/month', 'All quality tiers', 'Unlimited projects', 'Dedicated support', 'Custom AI models', 'Commercial license'],
+    features: [
+      'Всё из Pro',
+      'Максимальный уровень доступа',
+    ],
   },
 ]
 
@@ -108,13 +115,17 @@ export function PricingClient() {
         if (res.ok) {
           const d = await res.json()
           if (d.status === 'approved') {
-            toast.success(`Payment successful! +${d.credits} credits added.`)
+            toast.success(
+              d?.credits > 0
+                ? `Оплата прошла успешно! Зачислено +${d.credits} кредитов.`
+                : 'Оплата прошла успешно! Подписка активирована.'
+            )
             await refreshCredits()
             window.history.replaceState({}, '', '/pricing')
             return
           }
           if (d.status === 'declined') {
-            toast.error('Payment was declined.')
+            toast.error('Платёж отклонён.')
             window.history.replaceState({}, '', '/pricing')
             return
           }
@@ -136,7 +147,7 @@ export function PricingClient() {
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        toast.error(err?.error ?? 'Could not start payment')
+        toast.error(err?.error ?? 'Не удалось начать оплату')
         setBuying(null)
         return
       }
@@ -144,7 +155,7 @@ export function PricingClient() {
       // Redirects the browser to the WayForPay secure checkout.
       postToWayForPay(action, fields)
     } catch {
-      toast.error('Payment error. Please try again.')
+      toast.error('Ошибка оплаты. Попробуйте ещё раз.')
       setBuying(null)
     }
   }
@@ -158,19 +169,23 @@ export function PricingClient() {
       <main className="mx-auto max-w-[1200px] px-4 py-8">
         <div className="mb-4 text-center">
           <h1 className="font-display text-3xl font-bold tracking-tight">
-            Plans & <span className="text-primary">Credits</span>
+            Подписки и <span className="text-primary">кредиты</span>
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            Choose a plan or buy credits to power your AI film production — 1 credit = 1 second of video
+            Подписка открывает функции, но не даёт кредиты. Кредиты для генерации видео покупаются отдельно.
           </p>
           <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-muted px-4 py-2">
             <Coins className="h-4 w-4 text-primary" />
-            <span className="text-sm">Current balance: <span className="font-mono font-bold text-primary">{credits}</span> credits</span>
+            <span className="text-sm">Текущий баланс: <span className="font-mono font-bold text-primary">{credits}</span> кредитов</span>
           </div>
         </div>
 
-        {/* Subscription Plans */}
-        <div className="mt-8 grid gap-6 md:grid-cols-3">
+        {/* Подписки — доступ к функциям */}
+        <div className="mt-8 text-center">
+          <h2 className="font-display text-xl font-bold">Подписки — доступ к функциям</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Открывают функции редактора. Кредиты не начисляются.</p>
+        </div>
+        <div className="mt-6 grid gap-6 md:grid-cols-3">
           {plans.map((plan, idx) => {
             const Icon = plan.icon
             return (
@@ -213,18 +228,21 @@ export function PricingClient() {
                   } disabled:opacity-50`}
                 >
                   {buying === plan.id ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                  Subscribe
+                  Подписаться
                 </button>
               </motion.div>
             )
           })}
         </div>
 
-        {/* Credit Packs */}
+        {/* Кредиты — оплата генерации */}
         <div className="mt-12">
-          <h2 className="mb-4 text-center font-display text-xl font-bold">
-            Buy <span className="text-primary">Credits</span>
+          <h2 className="mb-1 text-center font-display text-xl font-bold">
+            Кредиты — <span className="text-primary">оплата генерации</span>
           </h2>
+          <p className="mb-4 text-center text-sm text-muted-foreground">
+            1 кредит = 1 секунда видео. Например: 20 кредитов = 20 секунд.
+          </p>
           <div className="mx-auto grid max-w-[600px] gap-4 sm:grid-cols-3">
             {creditPacks.map((pack) => (
               <button
@@ -235,7 +253,7 @@ export function PricingClient() {
                 style={{ boxShadow: 'var(--shadow-sm)' }}
               >
                 <div className="mb-1 font-mono text-2xl font-bold text-primary">{pack.credits}</div>
-                <div className="text-xs text-muted-foreground">credits</div>
+                <div className="text-xs text-muted-foreground">{pack.credits} кредитов = {pack.credits} секунд</div>
                 <div className="mt-2 flex items-center justify-center gap-1 text-sm font-semibold">
                   {buying === pack.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShoppingCart className="h-3 w-3" />}
                   {pack.price}
@@ -243,6 +261,9 @@ export function PricingClient() {
               </button>
             ))}
           </div>
+          <p className="mx-auto mt-4 max-w-[600px] text-center text-xs text-muted-foreground">
+            Подписка открывает функции, но не даёт кредиты. Кредиты для генерации видео покупаются отдельно.
+          </p>
         </div>
       </main>
     </div>

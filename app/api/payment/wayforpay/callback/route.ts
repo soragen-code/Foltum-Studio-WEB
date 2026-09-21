@@ -74,31 +74,51 @@ export async function POST(request: Request) {
     });
 
     if (txStatus === "Approved" && !payment.processed) {
-      await prisma.$transaction([
-        prisma.user.update({
-          where: { id: payment.userId },
-          data: {
-            credits: { increment: payment.credits },
-            ...(payment.kind === "subscription" && payment.tier
-              ? {
-                  subscriptionTier: payment.tier,
-                  subscriptionExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-                }
-              : {}),
-          },
-        }),
-        prisma.creditTransaction.create({
-          data: {
-            userId: payment.userId,
-            amount: payment.credits,
-            description: `WayForPay: ${payment.productName} (${payment.orderReference})`,
-          },
-        }),
-        prisma.payment.update({
-          where: { orderReference: payment.orderReference },
-          data: { processed: true },
-        }),
-      ]);
+      // Subscriptions grant FEATURE ACCESS only (tier + 30-day expiry) and do NOT increment credits —
+      // credits are pack-only. Credit packs increment the balance as before. `processed` keeps this idempotent.
+      if (payment.kind === "subscription" && payment.tier) {
+        await prisma.$transaction([
+          prisma.user.update({
+            where: { id: payment.userId },
+            data: {
+              // No credits increment for subscriptions.
+              subscriptionTier: payment.tier,
+              subscriptionExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+            },
+          }),
+          prisma.creditTransaction.create({
+            data: {
+              userId: payment.userId,
+              amount: 0,
+              description: `WayForPay subscription: ${payment.productName}`,
+            },
+          }),
+          prisma.payment.update({
+            where: { orderReference: payment.orderReference },
+            data: { processed: true },
+          }),
+        ]);
+      } else {
+        await prisma.$transaction([
+          prisma.user.update({
+            where: { id: payment.userId },
+            data: {
+              credits: { increment: payment.credits },
+            },
+          }),
+          prisma.creditTransaction.create({
+            data: {
+              userId: payment.userId,
+              amount: payment.credits,
+              description: `WayForPay: ${payment.productName} (${payment.orderReference})`,
+            },
+          }),
+          prisma.payment.update({
+            where: { orderReference: payment.orderReference },
+            data: { processed: true },
+          }),
+        ]);
+      }
     }
 
     return NextResponse.json(acceptResponse);

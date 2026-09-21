@@ -2,6 +2,7 @@
 
 import { useRef, useState } from 'react'
 import { Loader2, Upload, X, UserRound } from 'lucide-react'
+import { FeatureLockBadge } from './feature-lock'
 
 /**
  * Optional single «фото лица» for a character. The user attaches their own face so the character is
@@ -15,11 +16,14 @@ export function CharacterFacePhoto({
   characterId,
   faceImageUrl,
   disabled,
+  locked,
   onChange,
 }: {
   characterId: string
   faceImageUrl?: string | null
   disabled?: boolean
+  /** When true the feature is closed (no active subscription) — inputs are disabled and a hint links to /pricing. */
+  locked?: boolean
   onChange?: (faceImageUrl: string | null) => void
 }) {
   const [face, setFace] = useState<string | null>(faceImageUrl ?? null)
@@ -86,6 +90,7 @@ export function CharacterFacePhoto({
       <div className="mb-1.5 flex items-center gap-1.5">
         <UserRound className="h-3.5 w-3.5 text-muted-foreground" />
         <span className="text-xs font-medium">Фото лица (необязательно)</span>
+        {locked && <FeatureLockBadge text="Доступно по подписке Basic" className="ml-auto" />}
       </div>
       <div className="flex items-center gap-1.5">
         {face && (
@@ -111,13 +116,13 @@ export function CharacterFacePhoto({
           accept="image/*"
           className="hidden"
           onChange={(e) => upload(e.target.files)}
-          disabled={disabled || busy}
+          disabled={disabled || busy || locked}
         />
         {!face && (
           <button
             type="button"
             onClick={() => inputRef.current?.click()}
-            disabled={disabled || busy}
+            disabled={disabled || busy || locked}
             className="inline-flex h-14 items-center gap-1 rounded-md border border-dashed border-border px-2 text-xs transition hover:bg-muted disabled:opacity-50"
             title="Загрузить фото лица (JPEG, PNG, WebP до 8 МБ)"
             data-testid="char-face-photo-upload"
@@ -130,6 +135,7 @@ export function CharacterFacePhoto({
       <p className="mt-1.5 text-[11px] text-muted-foreground">
         Прикрепите фото лица — персонаж будет сгенерирован похожим на него (например, чтобы поставить себя в главную роль).
       </p>
+      {locked && <p className="mt-0.5 text-[11px] text-amber-500">Загрузка своего фото лица доступна по подписке Basic и выше.</p>}
       {disabled && <p className="mt-0.5 text-[11px] text-muted-foreground">Референс зафиксирован — фото изменить нельзя.</p>}
       {error && <p className="mt-1 text-[11px] text-destructive" data-testid="char-face-photo-error">{error}</p>}
     </div>

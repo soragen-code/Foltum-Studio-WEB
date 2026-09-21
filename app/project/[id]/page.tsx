@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation'
 import { prisma } from '@/lib/db'
 import { Suspense } from 'react'
 import { ProjectWizard } from './_components/project-wizard'
+import { computeEntitlements } from '@/lib/entitlements'
 
 export default async function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const session = await auth()
@@ -36,6 +37,9 @@ export default async function ProjectPage({ params }: { params: Promise<{ id: st
 
   if (!project) redirect('/dashboard')
 
+  // Feature access is computed server-side from the user's subscription and passed to the client wizard.
+  const entitlements = computeEntitlements(user)
+
   // Suspense: the wizard reads `?tab=references` via useSearchParams.
-  return <Suspense><ProjectWizard project={JSON.parse(JSON.stringify(project))} /></Suspense>
+  return <Suspense><ProjectWizard project={JSON.parse(JSON.stringify(project))} entitlements={entitlements} /></Suspense>
 }

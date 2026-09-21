@@ -10,6 +10,7 @@ import { getBucketConfig } from "@/lib/aws-config";
 import { uploadBufferToS3 } from "@/lib/s3-upload";
 import { deleteFile } from "@/lib/s3";
 import { USER_REF_MIME_EXT, USER_REF_MAX_BYTES } from "@/lib/character-user-refs";
+import { requireFeature } from "@/lib/entitlements";
 
 /**
  * Optional single "face photo" for a character — uploaded at character creation so the user can cast
@@ -48,6 +49,14 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     if (!session?.user?.id) return NextResponse.json({ error: "Login required" }, { status: 401 });
     const limited = rateLimitByUser(request, "ai:character-face", session.user.email ?? session.user.id, RATE_LIMITS.ai);
     if (limited) return limited;
+
+    // Feature gate: uploading a real face photo ("own_face") requires an active Basic+ subscription.
+    const gateUser = await prisma.user.findUnique({
+      where: { id: session.user.id },
+      select: { subscriptionTier: true, subscriptionExpiresAt: true },
+    });
+    const denied = requireFeature(gateUser, "own_face");
+    if (denied) return NextResponse.json(denied, { status: 403 });
 
     const { id } = await ctx.params;
     const char = await loadOwned(id, session.user.id);

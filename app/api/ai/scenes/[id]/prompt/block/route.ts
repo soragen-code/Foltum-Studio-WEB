@@ -14,6 +14,7 @@ import {
   type SceneBlockInput,
   type SceneBlockName,
 } from "@/lib/prompts";
+import { requireFeature } from "@/lib/entitlements";
 
 /**
  * POST /api/ai/scenes/[id]/prompt/block
@@ -35,6 +36,15 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
 
   const limited = rateLimitByUser(request, "ai:scene-prompt", session.user.email ?? session.user.id, RATE_LIMITS.ai);
   if (limited) return limited;
+
+  // Feature gate: manually regenerating a single prompt block ("manual_prompt_edit") requires an active
+  // Basic+ subscription. The access check runs FIRST; the per-block regen logic below is unchanged.
+  const gateUser = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { subscriptionTier: true, subscriptionExpiresAt: true },
+  });
+  const denied = requireFeature(gateUser, "manual_prompt_edit");
+  if (denied) return NextResponse.json(denied, { status: 403 });
 
   const { id } = await ctx.params;
 

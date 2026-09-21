@@ -25,7 +25,7 @@ function isNewFlow(project: any): boolean {
   return Boolean(project.charactersApproved)
 }
 
-export function ProjectWizard({ project: initialProject }: { project: any }) {
+export function ProjectWizard({ project: initialProject, entitlements }: { project: any; entitlements?: import('@/lib/entitlements').Entitlements }) {
   const [project, setProject] = useState(initialProject)
   const currentStage = project?.stage ?? 'synopsis'
   // Optional «"References" tab (stage 5), opened via ?tab=references from the season/episode screens.
@@ -87,7 +87,7 @@ export function ProjectWizard({ project: initialProject }: { project: any }) {
             <SynopsisStage project={project} onRefresh={refreshProject} />
           )}
           {!referencesTab && currentStage === 'characters' && (
-            <CharactersStage project={project} onRefresh={refreshProject} />
+            <CharactersStage project={project} onRefresh={refreshProject} entitlements={entitlements} />
           )}
           {!referencesTab && currentStage === 'structure' && isNewFlow(project) && (
             <StoryStage project={project} onRefresh={refreshProject} />

@@ -2,6 +2,7 @@ import { auth } from '@/auth'
 import { redirect, notFound } from 'next/navigation'
 import { prisma } from '@/lib/db'
 import { EpisodeView } from './episode-view'
+import { computeEntitlements } from '@/lib/entitlements'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,5 +35,8 @@ export default async function EpisodePage({ params }: { params: Promise<{ id: st
     select: { id: true, number: true, title: true, status: true, videoUrl: true, script: true },
   })
 
-  return <EpisodeView episode={JSON.parse(JSON.stringify(episode))} project={JSON.parse(JSON.stringify(episode.season.project))} siblings={JSON.parse(JSON.stringify(siblings.map(({ script, ...s }) => ({ ...s, hasScript: !!script }))))} credits={user.credits ?? 0} />
+  // Feature access is computed server-side from the user's subscription and passed to the client view.
+  const entitlements = computeEntitlements(user)
+
+  return <EpisodeView episode={JSON.parse(JSON.stringify(episode))} project={JSON.parse(JSON.stringify(episode.season.project))} siblings={JSON.parse(JSON.stringify(siblings.map(({ script, ...s }) => ({ ...s, hasScript: !!script }))))} credits={user.credits ?? 0} entitlements={entitlements} />
 }

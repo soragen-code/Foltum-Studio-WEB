@@ -10,6 +10,7 @@ import { parseBody, assembleEpisodeSchema } from "@/lib/validations";
 import { assembleEpisodeVideo } from "@/lib/assemble";
 import { completeJob, failJob, heartbeatJob, runInBackground, updateJob } from "@/lib/jobs";
 import { DEFAULT_ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY } from "@/lib/assemble-options";
+import { canUse } from "@/lib/entitlements";
 
 /** GenerationJob.type of the plain "Assemble" stitch (Stage 46B: background job with real progress). */
 const STITCH_JOB_TYPE = "episode_stitch";
@@ -43,10 +44,23 @@ export async function POST(request: Request) {
     const parsed = await parseBody(request, assembleEpisodeSchema);
     if (!parsed.ok) return parsed.response;
     const { episodeId } = parsed.data;
-    const quality = parsed.data.quality ?? DEFAULT_ASSEMBLE_QUALITY;
+    const requestedQuality = parsed.data.quality ?? DEFAULT_ASSEMBLE_QUALITY;
     const fps = parsed.data.fps ?? DEFAULT_ASSEMBLE_FPS;
     if (!episodeId)
       return NextResponse.json({ error: "Episode ID required" }, { status: 400 });
+
+    // Premium quality (720p / 1080p) is a Pro+ feature. Quality is only a request PARAMETER of the
+    // final render (scenes are always 480p), so instead of failing the assemble we SILENTLY DOWNGRADE
+    // to the base quality when the user has no premium_quality access. This keeps the flow unbroken:
+    // anyone can still assemble in base 480p; the premium option is enforced server-side.
+    const gateUser = await prisma.user.findUnique({
+      where: { email: session.user.email },
+      select: { subscriptionTier: true, subscriptionExpiresAt: true },
+    });
+    const quality =
+      requestedQuality !== DEFAULT_ASSEMBLE_QUALITY && !canUse(gateUser, "premium_quality")
+        ? DEFAULT_ASSEMBLE_QUALITY
+        : requestedQuality;
 
     // Scope to the owner before stitching.
     const owned = await prisma.episode.findFirst({
