@@ -790,8 +790,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       const res = await fetch(`/api/ai/scenes/${scene.id}/revise`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ instruction }) })
       const data = await res.json(); if (!res.ok) throw new Error(data?.error ?? 'Failed to edit scene')
       patchScene(scene.id, { ...data.scene, hasUndo: true }); setSceneEdit((t) => ({ ...t, [scene.id]: '' }))
-      // Stage 79a: no confirmation — «"Edit" rewrites the scene AND re-renders the clip at once.
-      await regenScene(scene.id)
+      // Stage 196: «Edit» rewrites the scene TEXT ONLY — it updates the videoPrompt (visible under
+      // «View prompt») and does NOT re-render the clip. The user reviews the new prompt and then
+      // presses «Regenerate»/«Generate scene» explicitly (no paid generation without confirmation).
     } catch (e: any) { setError(e?.message ?? 'Error') } finally { setSceneBusy((b) => { const n = { ...b }; delete n[scene.id]; return n }) }
   }
 
