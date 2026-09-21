@@ -87,9 +87,46 @@ export function locationDetailLabel(level: LocationDetailLevel): string {
   return level === 'high' ? 'high' : level === 'low' ? 'low' : 'medium'
 }
 
+// An INT/EXT/ИНТ/НАТ opener or a "day/night/…"-style time-of-day tail (English + Russian). Kept a small
+// LOCAL copy (not imported from lib/season.ts) so this pure/client-safe module never depends on server code
+// and no import cycle forms (season.ts already imports from here). Keep in sync with season.ts sceneLocationName.
+const _LOC_INT_EXT_RE = /^(int|ext|int\.?\/ext\.?|i\/e|инт|нат)\.?$/i
+const _LOC_TIME_RE = /^(day|night|dawn|dusk|evening|morning|afternoon|noon|midnight|continuous|later|moments? later|sunset|sunrise|день|ночь|утро|вечер|рассвет|закат|сумерки|полдень|полночь|позже|продолжение)\.?$/i
+
+/** Extract a clean PLACE NAME from a scene's "INT/EXT — place — time"-style descriptor (display fallback). */
+function sceneLocName(locationDesc?: string | null): string {
+  let t = (locationDesc ?? '').replace(/\s+/g, ' ').trim()
+  if (!t) return ''
+  // Drop a leading "СЦЕНА N."/"SCENE N." heading prefix that can leak from the readable heading format.
+  t = t.replace(/^(сцена|scene)\s+\d+\s*[.:—–-]?\s*/i, '').trim()
+  if (!t) return ''
+  const stripIntExt = (s: string) => s.replace(/^(int\.?\/ext\.?|int\.?|ext\.?|i\/e|инт\.?|нат\.?)\s+/i, '').trim()
+  const parts = t.split(/\s+[—–-]\s+/).map((p) => p.trim()).filter(Boolean)
+  if (parts.length <= 1) return stripIntExt(t)
+  if (parts.length >= 3) {
+    let start = 0, end = parts.length
+    if (_LOC_INT_EXT_RE.test(parts[start])) start++
+    if (_LOC_TIME_RE.test(parts[end - 1])) end--
+    const middle = parts.slice(start, end).filter(Boolean)
+    return middle.length ? stripIntExt(middle.join(' — ')) : stripIntExt(parts[0])
+  }
+  return _LOC_INT_EXT_RE.test(parts[0]) ? stripIntExt(parts[1]) : stripIntExt(parts[0])
+}
+
+function _slug(s: string): string {
+  return s.toLowerCase().replace(/[^a-zа-я0-9]+/gi, '-').replace(/(^-|-$)/g, '').slice(0, 60) || 'loc'
+}
+
 /**
  * The locations that belong to an episode: its bound location first, then any project
  * location whose name is mentioned in the episode's location text or a scene's locationDesc.
+ *
+ * Safety net (Stage 169): when NOTHING matches a real project location but the episode's scenes carry
+ * location text, synthesize DISPLAY-ONLY entries (`derived: true`, id "derived:<slug>") from the distinct
+ * scene location names so the episode never shows "Locations (0)" while it actually has scene locations.
+ * This aggregates on the fly — no data migration — and covers older episodes whose Location rows were never
+ * derived, or a client reload whose project prop is stale. Derived entries carry no image controls (see the
+ * read-only card in episode-view.tsx). Real DB rows always win over synthetic ones.
  */
 export function episodeLocations(
   episode: { locationId?: string | null; locationName?: string | null; location?: any; scenes?: { locationDesc?: string | null }[] },
@@ -99,12 +136,20 @@ export function episodeLocations(
   const seen = new Set<string>()
   const add = (loc: any) => { if (loc && !seen.has(loc.id)) { seen.add(loc.id); out.push(loc) } }
   if (episode.location) add(episode.location)
-  else if (episode.locationId) add(projectLocations.find((l) => l.id === episode.locationId))
+  else if (episode.locationId) add((projectLocations ?? []).find((l) => l.id === episode.locationId))
   const haystack = `${episode.locationName ?? ''} ${(episode.scenes ?? []).map((s) => s.locationDesc ?? '').join(' ')}`.toLowerCase()
-  for (const loc of projectLocations) {
+  for (const loc of projectLocations ?? []) {
     if (seen.has(loc.id)) continue
     const name = (loc.name ?? '').toLowerCase().trim()
     if (name.length >= 3 && haystack.includes(name)) add(loc)
+  }
+  if (out.length === 0) {
+    const names = new Set<string>()
+    for (const s of episode.scenes ?? []) {
+      const n = sceneLocName(s.locationDesc)
+      const key = n.toLowerCase()
+      if (n && !names.has(key)) { names.add(key); out.push({ id: `derived:${_slug(n)}`, name: n, derived: true }) }
+    }
   }
   return out
 }

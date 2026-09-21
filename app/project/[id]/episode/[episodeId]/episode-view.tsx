@@ -715,9 +715,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       if (ep) setEpisode((prev: any) => ({ ...prev, ...ep, scenes: prev.scenes }))
       let freshScenes: Scene[] | null = null
       let freshEpisode: any = null
+      let freshLocations: any[] | null = null
       const r2 = await fetch(`/api/projects/${project.id}`, { cache: 'no-store' })
       if (r2.ok) {
         const d2 = await r2.json()
+        if (Array.isArray(d2?.project?.locations)) freshLocations = d2.project.locations
         const e2 = d2?.project?.seasons?.flatMap((s: any) => s.episodes)?.find((e: any) => e.id === episode.id)
         if (e2?.scenes) { freshScenes = e2.scenes; setScenes(e2.scenes) }
         if (e2) freshEpisode = e2
@@ -726,9 +728,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       // so the references (characters + locations, derived from the scenes' locationDesc) are now stale.
       // Recompute them from the fresh data so the References page reflects the current scenes. This is a
       // display/data refresh ONLY — it never triggers paid reference (image/video) regeneration.
+      // Stage 169 — use the FRESHLY fetched project locations (which include any Location rows created during
+      // this generation), NOT the stale `project` prop, so newly-derived locations resolve instead of showing 0.
       if (opts?.refreshRefs) {
         const epForRefs = { ...(freshEpisode ?? ep ?? episode), scenes: freshScenes ?? scenes }
-        setRefLocs(episodeLocations(epForRefs, project.locations ?? []))
+        setRefLocs(episodeLocations(epForRefs, freshLocations ?? project.locations ?? []))
         const chars = epForRefs?.characters?.length
           ? epForRefs.characters.map((ec: any) => ec.character)
           : (project.characters ?? [])
@@ -1207,6 +1211,18 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <h3 className="mt-4 flex items-center gap-2 text-sm font-semibold" data-testid="episode-location-block"><MapPin className="h-4 w-4" /> Locations ({refLocs.length})</h3>
           <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {refLocs.map((l) => {
+              // Stage 169 — a DERIVED (display-only) location has no DB row yet: it is aggregated on the fly from
+              // the scenes' location text so the episode never shows "Locations (0)". Render a compact read-only
+              // card WITHOUT image-generation controls (those need a real Location id); the real row with its
+              // reference frames appears here once the scene references are generated.
+              if (l.derived) {
+                return (
+                  <div key={l.id} className="rounded-lg border border-dashed border-border/60 p-3" data-testid="ref-location-derived">
+                    <div className="min-w-0 truncate text-sm font-medium">{l.name}</div>
+                    <p className="mt-1 text-xs text-muted-foreground">Локация из сцен эпизода. Референсные кадры появятся после генерации референсов сцен.</p>
+                  </div>
+                )
+              }
               const detail = locationDetailLevel(l)
               const base = [{ url: l.imageUrl, label: 'Wide shot', slot: 'master' }, { url: l.imageReverse, label: 'Layout (mandatory)', slot: 'layout' }, { url: l.imageDetail, label: 'Medium shot', slot: 'detail' }].filter((a) => validUrl(a.url))
               const extras = parseExtra(l.imageExtra)

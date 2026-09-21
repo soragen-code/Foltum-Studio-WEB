@@ -71,7 +71,7 @@ export async function GET(request: Request) {
   const [season, job] = await Promise.all([
     prisma.season.findFirst({
       where: { projectId, number: 1 },
-      include: { episodes: { orderBy: { number: "asc" }, include: { characters: { include: { character: { select: { id: true, name: true, imageFront: true } } } }, scenes: { orderBy: { number: "asc" }, select: { id: true, number: true, status: true, videoUrl: true, shotType: true, durationSec: true } } } } },
+      include: { episodes: { orderBy: { number: "asc" }, include: { location: true, characters: { include: { character: { select: { id: true, name: true, imageFront: true } } } }, scenes: { orderBy: { number: "asc" }, select: { id: true, number: true, status: true, videoUrl: true, shotType: true, durationSec: true, locationDesc: true } } } } },
     }),
     prisma.generationJob.findFirst({ where: { projectId, type: SEASON_JOB_TYPE }, orderBy: { createdAt: "desc" } }),
   ]);
