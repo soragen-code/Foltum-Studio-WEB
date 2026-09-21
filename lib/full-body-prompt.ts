@@ -142,6 +142,27 @@ export function genderLockClause(noun: "woman" | "man"): string {
   return `This person is unmistakably a ${noun}, clearly ${sex}; do NOT render as a ${opposite}.`;
 }
 
+// Stage 190 — a HARD, unmistakable sex assertion placed at the VERY START of the CHARACTER block (right
+// after "CHARACTER:"), before every optional block. The failure it fixes: a female character rendered as a
+// man because the sex, though present, sat too late in the prompt and could be lost to the 4000-char clamp
+// (which trims the description tail, never the head). Front-loading this fixed sentence means the sex is
+// stated three times, first of all: this assertion, then the leading adult-age noun ("A fully grown adult
+// woman, …"), then the trailing gender-lock. Kept as fixed strings so a saved manual override is normalised
+// back to a plain description (see WRAPPER_FRAGMENTS) instead of accumulating duplicate assertions.
+export const GENDER_ASSERT_ADULT_WOMAN = "This is an adult WOMAN (female).";
+export const GENDER_ASSERT_ADULT_MAN = "This is an adult MAN (male).";
+export const GENDER_ASSERT_CHILD_GIRL = "This is a female child (a girl).";
+export const GENDER_ASSERT_CHILD_BOY = "This is a male child (a boy).";
+/** All four fixed sex-assertion sentences — stripped from a saved override so they never duplicate. */
+export const GENDER_ASSERT_CLAUSES = [GENDER_ASSERT_ADULT_WOMAN, GENDER_ASSERT_ADULT_MAN, GENDER_ASSERT_CHILD_GIRL, GENDER_ASSERT_CHILD_BOY];
+
+/** The front-loaded sex assertion, age-aware so a minor is never labelled "adult" (keeps child-safety wording). */
+function genderAssertClause(noun: "woman" | "man", age: string | null | undefined, appearance: string): string {
+  const minor = childAgeClause(age, appearance) != null;
+  if (noun === "woman") return minor ? GENDER_ASSERT_CHILD_GIRL : GENDER_ASSERT_ADULT_WOMAN;
+  return minor ? GENDER_ASSERT_CHILD_BOY : GENDER_ASSERT_ADULT_MAN;
+}
+
 /**
  * Build the subject description with the sex forced to the front (and an emphatic exclusion of the
  * opposite sex). `gender` is the explicit Character.gender ("male"/"female"/null); `role` (and the
@@ -154,7 +175,10 @@ export function withForcedGender(who0: string, age: string | null | undefined, a
   // years old …") for adults, or an age-appropriate child/minor clause ("A child, 8 years old. …") for
   // minors — so every person-bearing reference prompt carries BOTH the sex (gender-lock below) and the age.
   const who = withExplicitAge(who0, age ?? null, appearance, noun);
-  return noun ? `${who} ${genderLockClause(noun)}` : who;
+  if (!noun) return who;
+  // Front-load a hard sex assertion so it sits right after "CHARACTER:" (survives the clamp, which only ever
+  // trims the description tail), in ADDITION to the leading adult-age noun and the trailing gender-lock.
+  return `${genderAssertClause(noun, age ?? null, appearance)} ${who} ${genderLockClause(noun)}`;
 }
 
 // Stage 58: the full-length proportion "rule" is now the SAME text as the inline adult proportions block
@@ -279,6 +303,8 @@ const WRAPPER_FRAGMENTS = [
   FULL_BODY_PROPORTIONS_CHILD,
   CHARACTER_EXPRESSION_NOTE,
   FULL_BODY_CLOTHING_RULE,
+  // Stage 190: the fixed sex-assertion sentences are re-added per shot, so strip them from a saved override.
+  ...GENDER_ASSERT_CLAUSES,
   "Neutral unobtrusive background. No text or logos.",
 ];
 

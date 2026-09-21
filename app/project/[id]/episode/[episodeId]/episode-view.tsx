@@ -1475,6 +1475,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               // per-shot regen/download target the right image; the 9:16 photo fills the slot with object-cover.
               const slots = characterPhotoSlots(c)
               const photos = slots.map((s) => s.url)
+              // Caption: «Имя · Пол · Возраст · Роль» (each optional field omitted when absent, so no empty « · · »).
+              const g = (c.gender ?? '').toString().trim().toLowerCase()
+              const genderRu = /^(f|ж)/.test(g) ? 'Женский' : /^(m|м)/.test(g) ? 'Мужской' : null
+              const captionMeta = [genderRu, c.age ? String(c.age).trim() : null, c.role ? String(c.role).trim() : null].filter(Boolean).join(' · ')
               return (
                 <div key={c.id} className="rounded-lg border border-border/60 p-3" data-testid="ref-character">
                   {slots.length > 0 ? (
@@ -1496,8 +1500,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       {busy ? <Loader2 className="h-4 w-4 animate-spin text-primary" /> : <ImageOff className="h-4 w-4 text-muted-foreground/40" />}
                     </div>
                   )}
-                  <div className="mt-2 truncate text-sm font-medium">{c.name} <span className="font-normal text-muted-foreground">· {photos.length} photo</span></div>
-                  {c.role && <div className="truncate text-xs text-muted-foreground">{c.role}</div>}
+                  <div className="mt-2 truncate text-sm font-medium">{c.name}{captionMeta && <span className="font-normal text-muted-foreground"> · {captionMeta}</span>}</div>
                       {/* Stage 46E: prompt view/edit + download all */}
                       <div className="mt-2 flex flex-wrap items-center gap-1.5">
                         <button type="button" onClick={() => setPromptFor({ kind: 'character', id: c.id, name: c.name })} className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-xs" data-testid="character-prompt" title="View, copy, or edit the character prompt">
