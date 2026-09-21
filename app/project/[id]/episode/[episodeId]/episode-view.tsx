@@ -1204,7 +1204,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               Ordering here is guaranteed by DOM/source order (Locations block is rendered before
               Characters), NOT by a Tailwind order-* class (those get purged from the compiled CSS).
               Stage 93: the location card now MATCHES the character card exactly in size and layout —
-              same heading style, same grid (sm:grid-cols-2 lg:grid-cols-3), same 9:16 object-contain
+              same heading style, same grid (sm:grid-cols-2 lg:grid-cols-3), same 9:16 object-cover
               photos and the same button rows — with NO oversized/highlighted wrapper and no "base
               scene layer" badge, while keeping every location-specific control (generate/regenerate
               master frame, "+ Angle", cancel-generation + confirm dialog). Locations stay FIRST. */}
@@ -1242,7 +1242,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                         {all.map((a, i) => (
                           <button key={a.url + i} type="button" onClick={() => openLightbox(urls, i, `${l.name} — ${a.label}`)} className={`group relative aspect-[9/16] overflow-hidden rounded bg-muted ${all.length === 1 ? 'mx-auto w-full max-w-[13rem]' : ''}`} title={a.label} data-testid="ref-image">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img src={a.url} alt={`${l.name} — ${a.label}`} className="h-full w-full object-contain" />
+                            <img src={a.url} alt={`${l.name} — ${a.label}`} className="h-full w-full object-cover" />
                             <span className="absolute right-1 top-1 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
                             <FrameToolbar
                               regen={{ testId: `regen-shot-${a.slot}${a.idx !== undefined ? `-${a.idx}` : ''}`, busy, spinning: shotIsBusy(l.id, a.slot, a.idx), onClick: () => regenShot('location', l.id, a.slot, a.idx) }}
@@ -1360,7 +1360,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               const busy = !!charBusy[c.id] || (refSession && refScope === 'characters' && !hasAllImages(c))
               // Stage 56: render ONLY the character's actual reference photos (usually one full-body imageFull),
               // with no padded empty placeholder slots. Each slot keeps its true url->shot mapping so
-              // per-shot regen/download target the right image; the 9:16 photo is shown object-contain (no crop).
+              // per-shot regen/download target the right image; the 9:16 photo fills the slot with object-cover.
               const slots = characterPhotoSlots(c)
               const photos = slots.map((s) => s.url)
               return (
@@ -1370,7 +1370,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       {slots.map((s, i) => (
                         <button key={`${s.shot}-${s.idx ?? 0}`} type="button" onClick={() => openLightbox(photos, i, `${c.name} — ${s.label}`)} className={`group relative aspect-[9/16] overflow-hidden rounded bg-muted ${slots.length === 1 ? 'mx-auto w-full max-w-[13rem]' : ''}`} title={s.label} data-testid="ref-image">
                           {/* eslint-disable-next-line @next/next/no-img-element */}
-                          <img src={s.url} alt={`${c.name} — ${s.label}`} className="h-full w-full object-contain" />
+                          <img src={s.url} alt={`${c.name} — ${s.label}`} className="h-full w-full object-cover" />
                           <span className="absolute right-1 top-1 rounded bg-black/50 p-0.5 opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3 text-white" /></span>
                           <FrameToolbar
                             regen={{ testId: `regen-shot-${s.shot}${s.idx !== undefined ? `-${s.idx}` : ''}`, busy, spinning: shotIsBusy(c.id, s.shot, s.idx), onClick: () => regenShot('character', c.id, s.shot, s.idx) }}

@@ -115,8 +115,8 @@ const script = {
 // ── 4: prompts ask for a bit more detailed action ───────────────────────────
 {
   const s3 = episodeScriptSystemPrompt("ru", 1);
-  ok(s3.includes('"action" (3–4 sentences'), "S3 prompt asks for a bit more detailed action (3–4 sentences)");
-  ok(!s3.includes('"action" (2–3 sentences'), "S3 prompt no longer says 2–3 sentences");
+  ok(s3.includes('"action" (4–6 rich sentences'), "S3 prompt asks for maximum-detail action (4–6 rich sentences)");
+  ok(!s3.includes('"action" (2–3 sentences') && !s3.includes('"action" (3–4 sentences'), "S3 prompt no longer says 2–3 or 3–4 sentences");
   // Existing constraints preserved.
   ok(s3.includes("ONE continuous beat of unbroken motion that runs until the cut"), "S3 keeps the continuous-beat constraint");
 

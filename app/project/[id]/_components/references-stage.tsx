@@ -704,7 +704,7 @@ function ReferenceImages({ char, generating, message, onRegen, shotBusy }: { cha
         {validUrl(img) ? (
           <>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={img as string} alt={`${char.name} — ${FULL_BODY_LABEL}`} className="h-full w-full object-contain" data-testid="reference-image" />
+            <img src={img as string} alt={`${char.name} — ${FULL_BODY_LABEL}`} className="h-full w-full object-cover" data-testid="reference-image" />
             <FrameToolbar
               regen={{ testId: 'regen-shot-full', busy: generating, spinning: !!shotBusy?.('full'), onClick: () => onRegen('full') }}
               download={{ url: img as string, name: referenceFileName('character', char.name, 'full', img as string) }}

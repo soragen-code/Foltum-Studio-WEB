@@ -205,48 +205,22 @@ function SceneProse({ s }: { s: BookScene }) {
   )
 }
 
-export function BookScript({ text, scenes, keyCount = 2 }: { text?: string | null; scenes?: BookScene[]; keyCount?: number }) {
-  const [full, setFull] = useState(false)
+// Stage 170 — the episode script is ALWAYS shown in full (every scene, all action & dialogue). No
+// collapse / "show full" toggle and no height/overflow truncation: the reader sees the whole script
+// immediately. `keyCount` is kept only for backward compatibility and is intentionally unused.
+export function BookScript({ text, scenes }: { text?: string | null; scenes?: BookScene[]; keyCount?: number }) {
   if (scenes && scenes.length) {
-    const key = scenes.slice(0, keyCount)
-    const rest = scenes.slice(keyCount)
     return (
       <div className="max-w-[70ch] space-y-4 font-sans text-base not-italic leading-relaxed text-foreground" data-testid="book-script">
-        {key.map((s) => <SceneProse key={s.number} s={s} />)}
-        {rest.length > 0 && full && rest.map((s) => <SceneProse key={s.number} s={s} />)}
-        {rest.length > 0 && (
-          <button
-            type="button"
-            onClick={() => setFull((f) => !f)}
-            className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
-            data-testid="script-toggle-full"
-            aria-expanded={full}
-          >
-            {full ? <><ChevronDown className="h-3.5 w-3.5 rotate-180" /> Collapse</> : <><ChevronDown className="h-3.5 w-3.5" /> Show full (more {rest.length})</>}
-          </button>
-        )}
+        {scenes.map((s) => <SceneProse key={s.number} s={s} />)}
       </div>
     )
   }
-  // Plain-text fallback for old episodes without structured scenes.
+  // Plain-text fallback for old episodes without structured scenes — shown in full.
   const t = (text ?? '').trim()
-  const LIMIT = 700
-  const long = t.length > LIMIT
-  const shown = full || !long ? t : t.slice(0, LIMIT).trimEnd() + '…'
   return (
     <div className="max-w-[70ch] space-y-4 font-sans text-base not-italic leading-relaxed text-foreground" data-testid="book-script">
-      <pre className="whitespace-pre-wrap break-words font-sans text-base not-italic leading-relaxed">{shown}</pre>
-      {long && (
-        <button
-          type="button"
-          onClick={() => setFull((f) => !f)}
-          className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted"
-          data-testid="script-toggle-full"
-          aria-expanded={full}
-        >
-          {full ? <><ChevronDown className="h-3.5 w-3.5 rotate-180" /> Collapse</> : <><ChevronDown className="h-3.5 w-3.5" /> Show full</>}
-        </button>
-      )}
+      <pre className="whitespace-pre-wrap break-words font-sans text-base not-italic leading-relaxed">{t}</pre>
     </div>
   )
 }
