@@ -1,13 +1,12 @@
 export const dynamic = "force-dynamic";
-// Stage 92: the scene rewrite (which writes a new videoPrompt) is written by gpt-6-astra — give the
-// route the long-job budget (a single small reasoning call still finishes well under the ~300 s
-// synchronous limit, but the extra headroom removes any risk).
+// The scene rewrite (which writes a new videoPrompt) is written by gpt-4o (the fast model) — give the
+// route generous headroom anyway; a single gpt-4o edit finishes well under the ~300 s synchronous limit.
 export const maxDuration = 800;
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { chatJSON, SCRIPT_MODEL } from "@/lib/ai";
+import { chatJSON, EPISODE_SCRIPT_MODEL } from "@/lib/ai";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { normalizeLanguage } from "@/lib/idea";
 import { sceneReviseSchema, sceneReviseSystemPrompt, renderScriptFromScenes, clampSceneDuration, ensureEnglishDialogue } from "@/lib/season";
@@ -42,12 +41,12 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   const nextCont = next ? `\n  presence(start): ${next.presence ?? "—"} | link: ${next.continuesFrom ?? "—"}` : "";
   const user = `EPISODE ${scene.episode.number} «${scene.episode.title}»: ${scene.episode.logline}\nLOCATION: ${scene.episode.locationName} — ${scene.episode.locationDesc}\nCHARACTERS IN SCENE: ${scene.characters.map((c) => `${c.character.name}: ${c.character.appearance ?? ""}`).join("; ")}\n\nPREVIOUS SHOT: ${prev ? `${prev.action}\n${prev.dialogue}${prevCont}` : "(none)"}\nNEXT SHOT: ${next ? `${next.action}\n${next.dialogue}${nextCont}` : "(none)"}\n\nCURRENT SCENE #${scene.number}\nshotType: ${scene.shotType}\ndurationSec: ${scene.durationSec ?? 15}\nlocationDesc: ${scene.locationDesc}\naction: ${scene.action}\npresence: ${scene.presence ?? "—"}\nentrances: ${scene.entrances ?? "—"}\ncontinuesFrom: ${scene.continuesFrom ?? "—"}\nstartState: ${scene.startState ?? "—"}\nendState: ${scene.endState ?? "—"}\ndialogue:\n${scene.dialogue}\nvideoPrompt:\n${scene.videoPrompt}\n\nINSTRUCTION: ${instruction}`;
   try {
-    // Stage 92: the scene rewrite (it produces the new videoPrompt) is written by gpt-6-astra
-    // (SCRIPT_MODEL) with reasoningEffort "low" — a single small reasoning call finishes well under the
-    // synchronous limit while writing a stronger prompt. maxTokens 8000 (was 4096): reasoning tokens
-    // count toward the output budget, so the extra room keeps the JSON from truncating
-    // ("Unterminated string …"). temperature is dropped — reasoning models ignore it.
-    const raw0 = sceneReviseSchema.parse(await chatJSON(sceneReviseSystemPrompt(language), user, { model: SCRIPT_MODEL, reasoningEffort: "low", maxTokens: 8000 }));
+    // Scene edit (it produces the new videoPrompt) is written by gpt-4o (EPISODE_SCRIPT_MODEL) — the
+    // FAST model: a scene rewrite is a small, well-shaped edit, so the reasoning model is unnecessary and
+    // much slower. gpt-4o is non-reasoning → temperature + max_tokens path (reasoningEffort is ignored).
+    // A LOW temperature (0.3) keeps the edit close to the author's text — minimal, verbatim changes with no
+    // drift/softening. maxTokens 8000 stays well under the gpt-4o 16 384 cap and keeps the JSON from truncating.
+    const raw0 = sceneReviseSchema.parse(await chatJSON(sceneReviseSystemPrompt(language), user, { model: EPISODE_SCRIPT_MODEL, temperature: 0.3, maxTokens: 8000 }));
     // Seedance voices `dialogue` → guarantee English (swap swapped fields / translate).
     // Stage 38: the model may switch the kind ("make this scene a fight" → "action"); a narration scene
     // never changes kind here, otherwise keep the stored kind when the model omits it.
