@@ -10,7 +10,7 @@ import { runVideoJob } from "@/lib/workers/video-job";
 import { resolvePowerTier, isPowerTier } from "@/lib/power-tier";
 import { sceneClipPlan, sceneClipSeconds, sceneClipCost } from "@/lib/season";
 import { normalizeVideoModel } from "@/lib/ai-models";
-import { chainOrder, nextSequentialShot } from "@/lib/chain-run";
+import { chainOrder, nextSequentialShot, nextSequentialChainScene } from "@/lib/chain-run";
 import { persistShotPlanForApprovedEpisode } from "@/lib/workers/shot-plan-persist";
 
 /**
@@ -93,6 +93,39 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     }
   }
   const tier = resolvePowerTier(project);
+
+  // Two generation modes (persisted per episode). Default SCENE mode runs a strict one-SCENE-at-a-time
+  // chain (1 scene = 1 clip); the worker charges/starts each following scene and assembles the episode
+  // after the last one. Optional «Шоты» mode runs the one-SHOT-at-a-time chain below.
+  const generationMode = (episode as { generationMode?: string | null }).generationMode === "shots" ? "shots" : "scene";
+  if (generationMode === "scene") {
+    for (const scene of episode.scenes) await failStaleJobs({ sceneId: scene.id, type: "video" });
+    const runningScene = await prisma.generationJob.findFirst({ where: { sceneId: { in: episode.scenes.map((s) => s.id) }, type: "video", status: { in: ["pending", "processing"] } }, orderBy: { createdAt: "desc" } });
+    if (runningScene) {
+      await prisma.episode.update({ where: { id: episode.id }, data: { chainRunActive: true, chainRunNote: null } });
+      return NextResponse.json({ chain: true, shot: false, jobs: [{ sceneId: runningScene.sceneId, jobId: runningScene.id, resumed: true }], started: 0, insufficient: [], plan: null, creditsRemaining: user.credits ?? 0 });
+    }
+    if (force) {
+      await prisma.scene.updateMany({ where: { episodeId: episode.id, status: { not: "generating" } }, data: { videoUrl: null, lastFrameUrl: null, status: "pending" } });
+      for (const s of episode.scenes) (s as { videoUrl: string | null }).videoUrl = null;
+    }
+    const firstScene = nextSequentialChainScene(episode.scenes);
+    if (!firstScene) return NextResponse.json({ error: "All episode scenes have already been generated" }, { status: 400 });
+    const duration = sceneClipSeconds(tier.id, Math.max(1, Math.round(Number(firstScene.durationSec ?? tier.baseDuration))));
+    const cost = sceneClipCost(tier.id, duration);
+    const chargedScene = await prisma.user.updateMany({ where: { id: user.id, credits: { gte: cost } }, data: { credits: { decrement: cost } } });
+    if (chargedScene.count !== 1) return NextResponse.json({ error: `Insufficient credits: for the next scene need ${cost}, balance ${user.credits ?? 0}` }, { status: 402 });
+    await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Episode ${episode.number}, scene ${firstScene.number} — video generation via chain (${tier.id})` } });
+    try { await prisma.scene.update({ where: { id: firstScene.id }, data: { language: spokenLang } }); } catch (e) { console.warn("Could not persist scene.language:", (e as any)?.message); }
+    await prisma.scene.update({ where: { id: firstScene.id }, data: { status: "generating", videoModel: provider } }).catch(() => {});
+    await prisma.episode.update({ where: { id: episode.id }, data: { chainRunActive: true, chainRunNote: null } });
+    const job = await prisma.generationJob.create({ data: { type: "video", status: "processing", progress: 2, message: "Chain: starting first scene...", projectId: project.id, sceneId: firstScene.id } });
+    // No shotId → the worker renders the whole scene as one clip (runSceneVideoJob).
+    runInBackground(() => runVideoJob({ jobId: job.id, sceneId: firstScene.id, projectId: project.id, userId: user.id, cost, duration, resolution: tier.resolution, provider }));
+    const fresh = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true } });
+    return NextResponse.json({ chain: true, shot: false, jobs: [{ sceneId: firstScene.id, jobId: job.id }], started: 1, insufficient: [], plan: { duration, costPerScene: cost, total: cost }, creditsRemaining: fresh?.credits ?? 0 });
+  }
+
   // Stage 167 — generation runs as a strict one-SHOT-at-a-time chain (the shot is the atomic unit).
   // Only the first ungenerated shot is charged and started here; the worker charges and starts each
   // following shot when the previous one is published, and triggers the assembly job after the last shot

@@ -52,6 +52,20 @@ export function nextChainScene<S extends ChainSceneLike>(scenes: readonly S[], a
 }
 
 /**
+ * Default scene-chain selector (restored): the earliest scene that still needs a video AND has a
+ * prompt, without ever skipping past it. If that earliest gap is already generating we return null so
+ * the chain waits for it, rather than starting a LATER scene in parallel. Strict prefix growth
+ * 1→2→3…, gaps always filled in order, nothing skipped.
+ */
+export function nextSequentialChainScene<S extends ChainSceneLike>(scenes: readonly S[]): S | null {
+  const sorted = [...scenes].sort((a, b) => a.number - b.number);
+  const target = sorted.find((s) => !s.videoUrl && (s.videoPrompt ?? "").trim().length > 0);
+  if (!target) return null; // every prompted scene has a video → chain is complete
+  if (target.status === "generating") return null; // earliest gap is in progress → do not skip ahead
+  return target;
+}
+
+/**
  * Stage 153 — a scene enriched with whether a video GenerationJob is currently in flight for it.
  * Used by the server-side sweeper to decide, from a fresh DB snapshot, what a stalled chain should do.
  */

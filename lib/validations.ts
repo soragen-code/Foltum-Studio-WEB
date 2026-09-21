@@ -166,6 +166,14 @@ export const episodeModeSchema = z.object({
   mode: z.enum(["SCENES", "STORYBOARD"]),
 });
 
+/**
+ * Choose an episode's VIDEO GENERATION MODE after the storyboard: "scene" (default — 1 scene = 1 clip)
+ * or "shots" (optional «Шоты» mode — the shot is the atomic unit). Writes Episode.generationMode only.
+ */
+export const generationModeSchema = z.object({
+  mode: z.enum(["scene", "shots"]),
+});
+
 /** Generate / re-generate the 12–15 boards of a STORYBOARD episode. */
 export const storyboardBoardsSchema = z.object({
   projectId: cuidSchema.optional().nullable(),

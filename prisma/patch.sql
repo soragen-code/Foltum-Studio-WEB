@@ -508,3 +508,9 @@ ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "dialogueLanguage" TEXT DEFAULT '
 --  SeasonState.stale — an earlier episode was reworked after this season-state was written.
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "stale" BOOLEAN NOT NULL DEFAULT false;
 ALTER TABLE "SeasonState" ADD COLUMN IF NOT EXISTS "stale" BOOLEAN NOT NULL DEFAULT false;
+
+
+
+-- Generation unit per episode (additive + idempotent). "scene" (DEFAULT: 1 scene = 1 clip) | "shots" («Шоты» mode).
+-- Existing episodes default to "scene" so the restored default scene pipeline is used unless the producer opts into «Шоты».
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "generationMode" TEXT NOT NULL DEFAULT 'scene';

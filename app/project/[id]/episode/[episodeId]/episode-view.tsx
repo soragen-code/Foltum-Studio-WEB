@@ -251,6 +251,29 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     finally { setModeSaving(false) }
   }
 
+  // Video generation mode (available AFTER the storyboard): "scene" (default — 1 scene = 1 clip) or the
+  // optional «Шоты» mode (the shot is the atomic unit). Switching to «Шоты» builds the shot plan up front
+  // (a FREE text-only LLM call) — it NEVER starts paid rendering; the producer generates video afterwards.
+  const [genMode, setGenMode] = useState<'scene' | 'shots'>(((initial.generationMode as any) === 'shots') ? 'shots' : 'scene')
+  const [genModeSaving, setGenModeSaving] = useState(false)
+  const [genModeNote, setGenModeNote] = useState<string | null>(null)
+  const chooseGenerationMode = async (m: 'scene' | 'shots') => {
+    if (m === genMode || genModeSaving) return
+    setGenModeSaving(true); setError(null); setGenModeNote(null)
+    try {
+      const res = await fetch(`/api/ai/episodes/${episode.id}/generation-mode`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: m }) })
+      const data = await res.json()
+      if (!res.ok) { setError(data?.error ?? 'Не удалось переключить режим'); return }
+      setGenMode(m); setEpisode((p: any) => ({ ...p, generationMode: m }))
+      if (m === 'shots') {
+        setGenModeNote(data?.shotPlan?.ok === false
+          ? 'Не удалось построить план шотов — попробуйте ещё раз.'
+          : 'План шотов построен. Отредактируйте его при необходимости, затем запустите генерацию.')
+      }
+    } catch (e: any) { setError(e?.message ?? 'Запрос не выполнен') }
+    finally { setGenModeSaving(false) }
+  }
+
   const patchScene = (sceneId: string, patch: Partial<Scene>) => setScenes((prev) => prev.map((s) => (s.id === sceneId ? { ...s, ...patch } : s)))
   const stopPolling = (sceneId: string) => { const t = pollTimers.current[sceneId]; if (t) clearTimeout(t); delete pollTimers.current[sceneId] }
   const clearGen = (sceneId: string) => setActiveGen((p) => { const n = { ...p }; delete n[sceneId]; return n })
@@ -1397,6 +1420,33 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <StoryboardPanel projectId={project.id} episodeId={episode.id} initialVideoUrl={episode.videoUrl} />
         ) : (
         <>
+        {/* Video generation mode — offered after the storyboard. Default «Сцены»: 1 сцена = 1 клип.
+            Optional «Шоты»: shot-by-shot control. Switching to «Шоты» only builds the (free) shot plan —
+            it never starts paid rendering; the producer runs generation with the buttons below. */}
+        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4" data-testid="generation-mode-indicator">
+          <span className="text-sm font-medium">Режим генерации видео:</span>
+          <div className="inline-flex overflow-hidden rounded-lg border border-border text-sm" role="group" aria-label="Режим генерации">
+            {([['scene', 'Сцены'], ['shots', 'Шоты']] as const).map(([val, label]) => {
+              const active = genMode === val
+              return (
+                <button key={val} type="button" onClick={() => chooseGenerationMode(val)} disabled={genModeSaving || chainRunActive} aria-pressed={active}
+                  className={`px-4 py-1.5 font-medium transition disabled:opacity-50 ${active ? 'bg-primary text-primary-foreground' : 'bg-card hover:bg-muted'}`}
+                  data-testid={`generation-mode-${val}`}
+                  title={val === 'shots' ? 'Покадровый контроль: эпизод разбивается на шоты (по одному шоту за раз)' : 'По умолчанию: одна сцена = один клип'}>
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+          {genModeSaving && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+          <span className="text-xs text-muted-foreground" data-testid="generation-mode-current" data-genmode={genMode}>
+            {genMode === 'shots'
+              ? 'Режим «Шоты»: эпизод генерируется по шотам. Единица генерации — шот.'
+              : 'Режим «Сцены» (по умолчанию): одна сцена = один клип.'}
+          </span>
+          {genModeNote && <span className="w-full text-xs text-muted-foreground" data-testid="generation-mode-note">{genModeNote}</span>}
+        </div>
+
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
           {/* Stage 59 navigation — Scenes is step 3: back to references. */}
           <button onClick={() => goPhase('references')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted" data-testid="back-to-references">

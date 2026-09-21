@@ -69,13 +69,60 @@ export async function POST(request: Request) {
     const tier = videoTierFor(project);
 
     const powerTierId = resolvePowerTier(project).id;
-    const sceneData = await prisma.scene.findUnique({ where: { id: sceneId }, select: { id: true, number: true, episodeId: true, videoModel: true } });
+    const sceneData = await prisma.scene.findUnique({ where: { id: sceneId }, select: { id: true, number: true, episodeId: true, videoModel: true, durationSec: true, videoUrl: true } });
     if (!sceneData) return NextResponse.json({ error: "Scene not found" }, { status: 404 });
     // Stage 33: Seedance 2.5 is the only video model. A legacy `provider` in the request body (or a
     // legacy value stored on the scene) is accepted and normalized to it — never an error.
     const provider = normalizeVideoModel(parsed.data.provider ?? sceneData.videoModel);
 
-    // Stage 167 — video is generated per SHOT, never per scene: a runtime job without a shotId belongs to
+    // Two generation modes (persisted per episode). Default SCENE mode renders the whole scene as ONE
+    // clip (1 scene = 1 prompt = 1 generation). Optional «Шоты» mode renders per shot. The mode gates
+    // which unit this endpoint charges for and enqueues.
+    const episodeMode = await prisma.episode.findUnique({ where: { id: sceneData.episodeId }, select: { generationMode: true } }).catch(() => null);
+    const generationMode = episodeMode?.generationMode === "shots" ? "shots" : "scene";
+
+    if (generationMode === "scene") {
+      // ── Default SCENE path: one job renders the whole scene (no shotId) ──
+      await failStaleJobs({ sceneId, type: "video" });
+      const activeScene = await prisma.generationJob.findFirst({
+        where: { sceneId, type: "video", status: { in: ["pending", "processing"] } },
+        orderBy: { createdAt: "desc" },
+      });
+      if (activeScene) return NextResponse.json({ jobId: activeScene.id, resumed: true });
+
+      const isRegen = Boolean(sceneData.videoUrl);
+      const duration = sceneClipSeconds(powerTierId, Math.max(1, Math.round(Number(sceneData.durationSec ?? tier.duration))));
+      const cost = sceneClipCost(powerTierId, duration);
+      if ((user.credits ?? 0) < cost) {
+        return NextResponse.json({ error: `Not enough credits. Need ${cost}, have ${user.credits ?? 0}` }, { status: 400 });
+      }
+      const chargedScene = await prisma.user.updateMany({ where: { id: user.id, credits: { gte: cost } }, data: { credits: { decrement: cost } } });
+      if (chargedScene.count !== 1) return NextResponse.json({ error: `Not enough credits. Need ${cost}, have ${user.credits ?? 0}` }, { status: 400 });
+      await prisma.creditTransaction.create({ data: {
+        userId: user.id, amount: -cost,
+        description: `Video generation for scene ${sceneData.number} (${powerTierId} power)`,
+      } });
+      try { await prisma.scene.update({ where: { id: sceneId }, data: { language: spokenLang } }); }
+      catch (e) { console.warn("Could not persist scene.language (column missing?):", (e as any)?.message); }
+      try { await prisma.scene.update({ where: { id: sceneId }, data: { videoModel: provider } }); }
+      catch (e) { console.warn("Could not persist scene.videoModel (column missing?):", (e as any)?.message); }
+      // Regenerate clears the stored clip + last frame so the scene is rebuilt from scratch.
+      if (isRegen) await prisma.scene.update({ where: { id: sceneId }, data: { videoUrl: null, lastFrameUrl: null } }).catch(() => {});
+      await prisma.scene.update({ where: { id: sceneId }, data: { status: "generating" } });
+
+      const sceneJob = await prisma.generationJob.create({ data: {
+        type: "video", status: "processing", progress: 2, message: "Queued — starting video model...",
+        projectId, sceneId,
+      } });
+      // No shotId → the worker renders the whole scene as one clip (runSceneVideoJob).
+      runInBackground(() => runVideoJob({
+        jobId: sceneJob.id, sceneId, projectId, userId: user.id, cost, duration,
+        resolution: tier.resolution, provider,
+      }));
+      return NextResponse.json({ jobId: sceneJob.id, creditsRemaining: (user.credits ?? 0) - cost });
+    }
+
+    // ── «Шоты» mode: video is generated per SHOT. A runtime job without a shotId belongs to
     // the removed legacy scene path and would be rejected by the worker ("Legacy scene video generation
     // has been removed"). Resolve the shots of THIS scene and start a real SHOT job. Self-heal for LEGACY
     // episodes (Scene rows, zero Shot rows): transparently BUILD the shot plan (a pure LLM planning call,

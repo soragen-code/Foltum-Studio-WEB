@@ -29,6 +29,7 @@ import {
   DEFAULT_ASSEMBLE_QUALITY,
 } from "@/lib/ffmpeg";
 import { uploadBufferToS3 } from "@/lib/s3-upload";
+import { assembleEpisodeVideo } from "@/lib/assemble";
 import { getOrCreateMusicTrack } from "@/lib/music";
 import {
   buildConcatPlan,
@@ -53,6 +54,19 @@ export interface AssemblyJobResult {
 export async function runAssemblyJob(episodeId: string): Promise<AssemblyJobResult> {
   let workDir: string | null = null;
   try {
+    // Default SCENE mode assembles from the per-scene clips (lib/assemble.ts). Optional «Шоты» mode
+    // assembles from the per-shot clips (the shot-pipeline logic below). Branch on the persisted mode.
+    const modeRow = await prisma.episode.findUnique({ where: { id: episodeId }, select: { generationMode: true } }).catch(() => null);
+    if ((modeRow?.generationMode ?? "scene") !== "shots") {
+      try {
+        const res = await assembleEpisodeVideo(episodeId);
+        await prisma.episode.update({ where: { id: episodeId }, data: { chainRunActive: false } }).catch(() => {});
+        return { ok: true, videoUrl: res.videoUrl, shotCount: 0 };
+      } catch (err: any) {
+        return { ok: false, shotCount: 0, reason: err?.message ?? "scene assembly failed" };
+      }
+    }
+
     const episode = await prisma.episode.findUnique({
       where: { id: episodeId },
       include: {

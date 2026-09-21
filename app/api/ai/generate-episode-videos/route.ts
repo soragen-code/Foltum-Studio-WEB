@@ -9,7 +9,7 @@ import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runVideoJob } from "@/lib/workers/video-job";
 import { resolvePowerTier } from "@/lib/power-tier";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
-import { nextSequentialShot } from "@/lib/chain-run";
+import { nextSequentialShot, nextSequentialChainScene } from "@/lib/chain-run";
 import { normalizeVideoModel } from "@/lib/ai-models";
 import { persistShotPlanForApprovedEpisode } from "@/lib/workers/shot-plan-persist";
 
@@ -62,12 +62,60 @@ export async function POST(request: Request) {
     const scenes = await prisma.scene.findMany({
       where: { episodeId },
       orderBy: { number: "asc" },
-      select: { id: true, number: true },
+      select: { id: true, number: true, durationSec: true, videoUrl: true, videoPrompt: true, status: true },
     });
     if (scenes.length === 0)
       return NextResponse.json({ error: "Episode has no scenes" }, { status: 400 });
 
-    // Stage 167 — generation runs as a strict one-SHOT-at-a-time chain (the shot is the atomic unit).
+    // Two generation modes (persisted per episode). Default SCENE mode runs a strict one-SCENE-at-a-time
+    // chain (1 scene = 1 clip). Optional «Шоты» mode runs a one-SHOT-at-a-time chain.
+    const episodeMode = await prisma.episode.findUnique({ where: { id: episodeId }, select: { generationMode: true } }).catch(() => null);
+    const generationMode = episodeMode?.generationMode === "shots" ? "shots" : "scene";
+
+    if (generationMode === "scene") {
+      // ── Default SCENE chain: charge + start the first pending scene, arm the chain run; the worker
+      // (continueChainRun) charges and starts each following scene and finally assembles the episode. ──
+      const creditsLeftScene = user.credits ?? 0;
+      for (const scene of scenes) await failStaleJobs({ sceneId: scene.id, type: "video" });
+      const runningScene = await prisma.generationJob.findFirst({
+        where: { sceneId: { in: scenes.map((s) => s.id) }, type: "video", status: { in: ["pending", "processing"] } },
+        orderBy: { createdAt: "desc" },
+      });
+      if (runningScene) {
+        await prisma.episode.update({ where: { id: episodeId }, data: { chainRunActive: true, chainRunNote: null } }).catch(() => {});
+        const rid = runningScene.sceneId ?? "";
+        return NextResponse.json({ jobs: [{ sceneId: rid, sceneNumber: scenes.find((s) => s.id === rid)?.number ?? 0, jobId: runningScene.id, resumed: true }], skipped: 0, creditsRemaining: creditsLeftScene });
+      }
+      const firstScene = nextSequentialChainScene(scenes);
+      if (!firstScene) return NextResponse.json({ error: "All episode scenes have already been generated" }, { status: 400 });
+      const sceneDuration = sceneClipSeconds(tier.id, Math.max(1, Math.round(Number(firstScene.durationSec ?? tier.baseDuration))));
+      const sceneCost = sceneClipCost(tier.id, sceneDuration);
+      if (creditsLeftScene < sceneCost)
+        return NextResponse.json({ error: `Insufficient credits: for the next scene need ${sceneCost}, balance ${creditsLeftScene}` }, { status: 402 });
+      const chargedScene = await prisma.user.updateMany({ where: { id: user.id, credits: { gte: sceneCost } }, data: { credits: { decrement: sceneCost } } });
+      if (chargedScene.count !== 1) return NextResponse.json({ error: `Insufficient credits: for the next scene need ${sceneCost}, balance ${creditsLeftScene}` }, { status: 402 });
+      await prisma.creditTransaction.create({ data: {
+        userId: user.id, amount: -sceneCost,
+        description: `Chain video generation — scene ${firstScene.number} (${tier.id} power)`,
+      } });
+      try { await prisma.scene.update({ where: { id: firstScene.id }, data: { language: spokenLang } }); }
+      catch (e) { console.warn("Could not persist scene.language:", (e as any)?.message); }
+      await prisma.scene.update({ where: { id: firstScene.id }, data: { status: "generating", videoModel: provider } }).catch(() => {});
+      await prisma.episode.update({ where: { id: episodeId }, data: { chainRunActive: true, chainRunNote: null } }).catch(() => {});
+      const sceneJob = await prisma.generationJob.create({ data: {
+        type: "video", status: "processing", progress: 2, message: "Chain: starting first scene...",
+        projectId, sceneId: firstScene.id,
+      } });
+      // No shotId → the worker renders the whole scene as one clip (runSceneVideoJob).
+      runInBackground(() => runVideoJob({
+        jobId: sceneJob.id, sceneId: firstScene.id, projectId, userId: user.id,
+        cost: sceneCost, duration: sceneDuration, resolution: tier.resolution, provider,
+      }));
+      const freshScene = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true } });
+      return NextResponse.json({ jobs: [{ sceneId: firstScene.id, sceneNumber: firstScene.number, jobId: sceneJob.id }], skipped: 0, creditsRemaining: freshScene?.credits ?? creditsLeftScene });
+    }
+
+    // ── «Шоты» mode — generation runs as a strict one-SHOT-at-a-time chain (the shot is the atomic unit).
     // Self-heal LEGACY episodes (Scene rows, zero Shot rows) by transparently BUILDING the shot plan
     // (a pure LLM planning call, not paid video generation) on the first click, then continue.
     const ep0 = await prisma.episode.findUnique({ where: { id: episodeId }, select: { status: true } });
