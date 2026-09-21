@@ -528,3 +528,9 @@ ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "generationMode" TEXT NOT NULL DE
 -- that spot. Additive, nullable & idempotent; legacy rows stay NULL and fall back to the base location reference.
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "subLocation" TEXT;
 ALTER TABLE "Location" ADD COLUMN IF NOT EXISTS "subLocationRefs" TEXT;
+
+
+-- Paid-only credit model: 1 credit = 1 second of video = $1. New accounts get NO free/welcome
+-- credits — the default starting balance is 0 (was 100). Idempotent; existing rows are untouched
+-- by this DDL (their balances are handled separately by the admin zero-out).
+ALTER TABLE "User" ALTER COLUMN "credits" SET DEFAULT 0;

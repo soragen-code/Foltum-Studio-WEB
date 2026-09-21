@@ -26,7 +26,8 @@ export async function POST(request: Request) {
         name: name?.trim() || 'User',
         email,
         password: hashed,
-        credits: 100,
+        // Paid-only model: no free/welcome credits. New accounts start at 0 and must purchase.
+        credits: 0,
       },
       select: { id: true, email: true },
     })

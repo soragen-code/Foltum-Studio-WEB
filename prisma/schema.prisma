@@ -15,7 +15,7 @@ model User {
   emailVerified DateTime?
   image         String?
   password      String?
-  credits       Int       @default(100)
+  credits       Int       @default(0)
   subscriptionTier String? @default("free")
   subscriptionExpiresAt DateTime?
   createdAt     DateTime  @default(now())
