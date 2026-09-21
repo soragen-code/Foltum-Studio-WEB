@@ -11,6 +11,7 @@ import { resolvePowerTier, isPowerTier } from "@/lib/power-tier";
 import { sceneClipPlan, sceneClipSeconds, sceneClipCost } from "@/lib/season";
 import { normalizeVideoModel } from "@/lib/ai-models";
 import { chainOrder, nextSequentialShot } from "@/lib/chain-run";
+import { persistShotPlanForApprovedEpisode } from "@/lib/workers/shot-plan-persist";
 
 /**
  * Stage 100: scenes are generated STRICTLY SEQUENTIALLY (chain) — parallel mode was removed entirely.
@@ -97,12 +98,27 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   // following shot when the previous one is published, and triggers the assembly job after the last shot
   // (lib/workers/video-job.ts → continueShotChain). The legacy scene generation path has been removed:
   // an episode with no Shot rows cannot be generated and must have its shot plan (re)built first.
-  const episodeShots = await prisma.shot.findMany({
+  let episodeShots = await prisma.shot.findMany({
     where: { scene: { episodeId: episode.id } },
     select: { id: true, index: true, sceneId: true, videoUrl: true, status: true, duration: true },
   });
+  // Self-heal for LEGACY episodes: older projects have Scene rows but were created before the shot plan
+  // became mandatory, so they carry ZERO Shot rows and would fail with a 409 forever. On the first
+  // "generate video" click we transparently BUILD the shot plan (a pure LLM planning call, not paid
+  // video generation) and continue. If the plan cannot be produced, `persistShotPlanForApprovedEpisode`
+  // marks the episode `shot_plan_failed`, and we surface the same 409 as before.
+  if (episodeShots.length === 0 && episode.status !== "shot_plan_failed") {
+    const planResult = await persistShotPlanForApprovedEpisode(episode.id);
+    if (planResult.ok) {
+      episodeShots = await prisma.shot.findMany({
+        where: { scene: { episodeId: episode.id } },
+        select: { id: true, index: true, sceneId: true, videoUrl: true, status: true, duration: true },
+      });
+    }
+  }
   if (episodeShots.length === 0) {
-    return NextResponse.json({ error: "Shot plan is not ready or failed. Regenerate the shot plan for this episode before generating video.", status: episode.status, chainRunNote: episode.chainRunNote ?? null }, { status: 409 });
+    const fresh = await prisma.episode.findUnique({ where: { id: episode.id }, select: { status: true, chainRunNote: true } });
+    return NextResponse.json({ error: "Shot plan is not ready or failed. Regenerate the shot plan for this episode before generating video.", status: fresh?.status ?? episode.status, chainRunNote: fresh?.chainRunNote ?? episode.chainRunNote ?? null }, { status: 409 });
   }
   {
     const sceneNumberById = new Map(episode.scenes.map((s) => [s.id, s.number]));

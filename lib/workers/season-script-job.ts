@@ -19,7 +19,8 @@ import { prisma } from "@/lib/db";
 import type { GenerationJob } from "@prisma/client";
 import { chatJSON, SCRIPT_MODEL, EPISODE_SCRIPT_MODEL, EPISODE_SCRIPT_MAX_TOKENS, EPISODE_SCRIPT_TEMPERATURE, startBackgroundJSON, pollBackgroundJSON, cancelBackgroundResponse, type BackgroundPollResult } from "@/lib/ai";
 import { maxDetailLevel, isLocationDetailLevel } from "@/lib/location-scale";
-import { completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
+import { completeJob, failJob, isCancelRequested, markCanceled, runInBackground } from "@/lib/jobs";
+import { runCharacterImagesJob } from "@/lib/workers/character-images-job";
 import { toCharacterCard, normalizeLanguage, seasonCastSystemPrompt, seasonCastUserPrompt, seasonCastResultSchema, characterCardToData, sanitizeCharacterCard, sanitizeLocationCard, dedupeCast, hasFullSetInventory, setInventoryRetryNote, serializeSetInventory, parseSetInventory, locationsFromSynopsisSystemPrompt, locationsResultSchema, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
 import { parseStoredShortSynopsis, renderShortSynopsis } from "@/lib/short-synopsis";
 
@@ -811,6 +812,31 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
     const epLoc = ep.locationId ? project.locations.find((l) => l.id === ep.locationId) : matchLocation(project.locations, ep.locationName ?? "");
     const invWarnings = checkSceneSetInventory(script.scenes, epLoc?.setInventory);
     if (invWarnings.length) console.warn(`[season-job] episode ${ep.number} set inventory: ${invWarnings.join(" | ")}`);
+    // Stage 168 — AUTO-CREATE missing CHARACTERS from the finished script (the cast-side mirror of the Stage
+    // 162 per-episode LOCATION derivation below). In the auto-chain flow the up-front cast (generateSeasonCast)
+    // can miss characters the episode script actually introduces; any scene character name that does not match
+    // an existing project character is created here as a minimal draft row BEFORE persistEpisodeScript, so the
+    // scenes are linked to it (persistEpisodeScript silently drops names with no matching character). Dedup is
+    // case-insensitive via matchCharacter; the block never throws — a cast problem must never fail the episode job.
+    const newCharacterIds: string[] = [];
+    try {
+      const sceneNames = Array.from(
+        new Set(
+          script.scenes
+            .flatMap((s) => s.characters ?? [])
+            .map((n) => (typeof n === "string" ? n.trim() : ""))
+            .filter(Boolean),
+        ),
+      );
+      for (const name of sceneNames) {
+        if (matchCharacter(project.characters, name)) continue;
+        const created = await prisma.character.create({ data: { projectId, name, status: "draft", tier: "MAIN" } });
+        project.characters.push(created); // keep the in-memory project in step so persistEpisodeScript links scenes
+        newCharacterIds.push(created.id);
+      }
+    } catch (err) {
+      console.warn(`[season-job] episode ${ep.number} auto-create characters failed:`, err instanceof Error ? err.message : String(err));
+    }
     await persistEpisodeScript(ep.id, outline, script, project.characters.map((c) => ({ id: c.id, name: c.name })), language, { preserveSceneLocations: manual });
     // Stage 162 — derive this episode's Location rows FROM the finished, persisted script (not all up front).
     // Reload the scenes with their final locationDesc, plan create/reuse against the project's existing locations,
@@ -857,6 +883,27 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
       }
     } catch (err) {
       console.warn(`[season-job] episode ${ep.number} per-episode location derivation failed:`, err instanceof Error ? err.message : String(err));
+    }
+    // Stage 168 — best-effort reference images for the NEWLY auto-created characters only (existing characters
+    // keep their images). Mirrors the location-image enqueue above: a "characters" GenerationJob is created and
+    // runCharacterImagesJob runs in the background (idempotent, skips characters that already have a photo).
+    // The auto MAIN reference is free; any failure here is logged and swallowed and never fails the episode job.
+    if (newCharacterIds.length && project.user) {
+      try {
+        const charJob = await prisma.generationJob.create({
+          data: {
+            type: "characters",
+            status: "processing",
+            progress: 5,
+            message: `Starting reference generation for ${newCharacterIds.length} character(s)...`,
+            projectId,
+            resultData: JSON.stringify({ characterIds: newCharacterIds }),
+          },
+        });
+        runInBackground(() => runCharacterImagesJob({ jobId: charJob.id, projectId, characterIds: newCharacterIds }));
+      } catch (err) {
+        console.warn(`[season-job] episode ${ep.number} character image job failed to start:`, err instanceof Error ? err.message : String(err));
+      }
     }
     return loadSeason(projectId);
   }

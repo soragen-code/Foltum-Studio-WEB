@@ -1510,12 +1510,35 @@ export function episodeScriptUserPrompt(input: {
 export const END_STATE_LINE_PREFIX = "Финал кадра: ";
 /** Stage 41 — the scripted start state as ONE dim line («Старт кадра: ...»), printed right above «Финал кадра». */
 export const START_STATE_LINE_PREFIX = "Старт кадра: ";
+/** First sentence of a block (up to the first . ! or ?), or the whole trimmed text when it has none. */
+function firstSentenceOf(s: string): string {
+  const t = s.trim();
+  if (!t) return "";
+  const m = t.match(/^[\s\S]*?[.!?](?=\s|$)/);
+  return (m ? m[0] : t).trim();
+}
+/**
+ * Stage 169 — shorten a scripted frame-state for the READER-facing script only. The stored WORLD block is an
+ * exhaustive, pixel-precise re-description of the whole set (the full LOCATION, its lighting, every prop) that
+ * the image/video generator needs; printed verbatim under every scene it repeats the entire location
+ * description scene after scene, which is exactly the noise the reader does not want. For the reader we keep
+ * ONLY the first sentence of the WORLD block (a short blocking cue) plus the first sentence of the CAMERA block
+ * (the per-scene framing). Generation is unaffected — it reads Scene.startState / Scene.endState from the DB,
+ * never this rendered text (renderEpisodeScriptText / renderScriptFromScenes → Episode.script display only).
+ */
+export function shortenStateForReader(text?: string | null): string {
+  const { world, camera } = splitState(text);
+  const w = firstSentenceOf(world);
+  const c = firstSentenceOf(camera);
+  if (!w && !c) return "";
+  return joinState(w, c);
+}
 export function renderEndStateLine(endState?: string | null): string {
-  const t = (endState ?? "").replace(/\s+/g, " ").trim();
+  const t = shortenStateForReader(endState).replace(/\s+/g, " ").trim();
   return t ? `\n${END_STATE_LINE_PREFIX}${t}` : "";
 }
 export function renderStartStateLine(startState?: string | null): string {
-  const t = (startState ?? "").replace(/\s+/g, " ").trim();
+  const t = shortenStateForReader(startState).replace(/\s+/g, " ").trim();
   return t ? `\n${START_STATE_LINE_PREFIX}${t}` : "";
 }
 /** Both dim state lines under a scene: «Старт кадра» then «Финал кадра» (each only when present). */
