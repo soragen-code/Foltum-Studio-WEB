@@ -284,7 +284,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
         {/* Stage 59 (step 3 → step 4): jump straight to the first ready episode. Identical to the bottom button. */}
         {firstEpisode && (
           <Link
-            href={`/project/${project.id}/episode/${firstEpisode.id}`}
+            href={`/project/${project.id}/episode/${firstEpisode.id}/script`}
             className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
             data-testid="go-first-episode-top"
           >

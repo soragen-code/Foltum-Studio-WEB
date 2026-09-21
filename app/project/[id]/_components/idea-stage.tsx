@@ -14,6 +14,7 @@ const SYNOPSIS_EXPECTED_SEC = 60
 export interface CharacterCardData {
   id: string
   name: string
+  gender?: string | null
   age?: string | null
   role?: string | null
   appearance?: string | null
@@ -136,6 +137,7 @@ export function CharacterCard({
       {extra}
 
       <dl className="space-y-1.5 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+        <div><dt className="inline font-medium text-foreground">Gender: </dt><dd className="inline">{char.gender === 'male' ? 'Male' : char.gender === 'female' ? 'Female' : '—'}</dd></div>
         <div><dt className="inline font-medium text-foreground">Age: </dt><dd className="inline">{char.age || '—'}</dd></div>
         <div><dt className="inline font-medium text-foreground">Role: </dt><dd className="inline">{char.role || '—'}</dd></div>
         <div><dt className="inline font-medium text-foreground">Appearance: </dt><dd className="inline">{char.appearance || '—'}</dd></div>

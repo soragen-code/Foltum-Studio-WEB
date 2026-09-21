@@ -8,6 +8,7 @@
  */
 import { z } from "zod";
 import { sanitizeVideoPrompt } from "@/lib/sanitize-prompt";
+import { resolveGenderNoun } from "@/lib/full-body-prompt";
 
 /* ------------------------------------------------------------------ */
 /*  Language                                                           */
@@ -242,9 +243,18 @@ export function toLatinName(name: string | null | undefined): string {
 export function sanitizeCharacterCard(card: CharacterCard, keepNames: string[] = []): CharacterCard {
   const name = toLatinName(card.name);
   const keep = [name, ...keepNames];
+  // Backfill gender only when the LLM omitted/garbled it (null) — never flip an explicit value.
+  // Uses the same heuristic (role/appearance/name) that drives the gender-locked reference image,
+  // so the card's shown sex and the generated image can never drift apart.
+  let gender = card.gender;
+  if (gender == null) {
+    const noun = resolveGenderNoun(card.gender, card.role, card.appearance, name);
+    gender = noun === "woman" ? "female" : noun === "man" ? "male" : null;
+  }
   return {
     ...card,
     name,
+    gender,
     appearance: sanitizeVideoPrompt(card.appearance, { keep }).prompt.trim() || card.appearance,
   };
 }

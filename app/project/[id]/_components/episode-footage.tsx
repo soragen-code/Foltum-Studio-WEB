@@ -30,7 +30,7 @@ export function EpisodeFootage({ description, className = '' }: { description?: 
       ['Cliffhanger', legacy.cliffhanger, undefined],
     ]
     return (
-      <div className={`space-y-1 text-xs text-muted-foreground ${className}`} data-testid="episode-footage">
+      <div className={`space-y-1 text-xs text-white ${className}`} data-testid="episode-footage">
         {rows.map(([label, body, opensOn]) => (
           <p key={label}>
             <span className="font-semibold text-foreground">{label}:</span>{' '}
@@ -49,7 +49,7 @@ export function EpisodeFootage({ description, className = '' }: { description?: 
   // New format: a continuous synopsis + a separate cliffhanger line.
   const { synopsis, cliffhanger } = parseEpisodeSynopsis(text)
   return (
-    <div className={`space-y-1.5 text-xs text-muted-foreground ${className}`} data-testid="episode-synopsis">
+    <div className={`space-y-1.5 text-xs text-white ${className}`} data-testid="episode-synopsis">
       {synopsis && <p className="leading-relaxed" data-testid="episode-synopsis-body">{synopsis}</p>}
       {cliffhanger && (
         <p data-testid="episode-synopsis-cliffhanger">

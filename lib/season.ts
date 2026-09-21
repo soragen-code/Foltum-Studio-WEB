@@ -183,11 +183,13 @@ export const STATE_MAX_SENTENCES = 60;
 export const STATE_MIN_WORDS = 150;
 /** Stage 166 — the state "size / shape" instruction is now the structured checklist text (5 items, ≥150 words). */
 const STATE_SIZE_TEXT = STATE_CHECKLIST_TEXT;
-/** Stage 115 — dialogue is the product, but a clip is a short VARIABLE length (3–15 s): every talking scene
- *  carries a SHORT exchange of 1–2 sentences sized to the clip (a single line for a short clip, a two-line
- *  exchange for a fuller one), with no dead air and no crammed speech; a longer conversation spans several clips. */
-export const TALK_MIN_SENTENCES = 1;
-export const TALK_MAX_SENTENCES = 2;
+/** Stage 115 (Stage 167 — fuller lines) — dialogue is the product, and a clip is a short VARIABLE length (3–15 s):
+ *  every talking scene carries a SUBSTANTIVE exchange of 2–3 sentences sized to the clip (a two-line exchange for a
+ *  shorter clip, a fuller 3-sentence exchange for a longer one), with no dead air and no crammed speech. A longer
+ *  conversation is NOT cut short — it runs across SEVERAL consecutive same-location clips (see MULTI_CLIP_DIALOGUE_RULE)
+ *  so the viewer is actually informed of what is going on before the location ever changes. */
+export const TALK_MIN_SENTENCES = 2;
+export const TALK_MAX_SENTENCES = 3;
 /** Stage 166 — up to 2 SILENT scenes are allowed per episode, BUT a silent scene is valid ONLY if it carries a
  *  `visualBeat` field (a short description of what the viewer reads with no dialogue). Stage 110 was ZERO. */
 export const MAX_SILENT_SCENES = 2;
@@ -607,7 +609,8 @@ export const CLIP_LENGTH_RULE =
  * per clip, a camera cut, the reply continues in the next scene. A dialogue scene need not be self-contained.
  */
 export const MULTI_CLIP_DIALOGUE_RULE =
-  "DIALOGUE ACROSS CLIPS: a conversation does NOT have to fit in one clip. A single clip carries ONE short line or a quick 1–2-line exchange plus visible action; a longer conversation is SPREAD across consecutive scenes — one line (or short exchange) here, then the NEXT scene cuts to a new angle / shot and the reply continues (two characters talk, a cut, the next phrase). A dialogue scene may end mid-conversation and the next scene picks it up; it need not be self-contained. Keep continuity (each scene opens on the previous scene's final frame) and ALWAYS change the camera on the cut. Prefer to KEEP a conversation going across several consecutive clips rather than cutting it short — the episode should be rich in dialogue overall.";
+  "DIALOGUE ACROSS CLIPS: a conversation does NOT have to fit in one clip — and it must NEVER be cut short. A single clip carries a substantive 2–3-sentence exchange plus visible action; a REAL conversation then RUNS ON across SEVERAL consecutive scenes IN THE SAME LOCATION — one exchange here, then the NEXT scene cuts to a new angle / shot in the same place and the reply continues, then the next, and the next (two characters keep talking, a camera cut between each beat). Deliberately spread a meaningful conversation over 3, 4, 5 or more consecutive same-location clips so the viewer is actually brought up to speed on WHAT IS HAPPENING — who wants what, what just changed, what they decide — before anything else. A dialogue scene may (and usually should) end mid-conversation and the next scene picks it right up; it need not be self-contained. " +
+  "STRICTLY FORBIDDEN: do NOT switch to a different location after only one or two lines of dialogue — finish the conversation (or reach a real turning point in it) in the current location first. Do NOT rapid-fire ping-pong back and forth between two locations (place A, place B, place A, place B): stay put and let the scene breathe. Keep continuity (each scene opens on the previous scene's final frame) and ALWAYS change the camera on the cut. The episode must be RICH and INFORMATIVE in dialogue — err on the side of MORE consecutive same-location dialogue clips, never fewer.";
 
 /**
  * Stage 38 — staging + choreography rule for sceneKind "action" (fight / duel / chase / physical struggle).
@@ -682,7 +685,8 @@ export const ONE_LOCATION_RULE =
   "ONE KEY LOCATION (ABSOLUTE): the episode has exactly ONE key location (the LOCATION given for this episode, which already has reference images). EVERY scene's \"locationDesc\" describes that SAME single place — the temple stays the temple, the workshop stays the workshop, across ALL scenes from first to last. " +
   "Only the ZONE within that location (a different corner, room, table, doorway, stretch of the same street) and the CAMERA ANGLE / distance may change from scene to scene — the PLACE itself never changes. " +
   "It is STRICTLY FORBIDDEN to invent a different setting: do NOT move an interior scene outdoors (no field, no yard, no street) and do NOT move an exterior scene indoors, do NOT introduce a new building, room type or landscape that is not part of the episode's one key location. If the location is an interior, all scenes are that interior; if it is an exterior, all scenes are that exterior. " +
-  "The ONLY exception is a DELIBERATELY SHOWN, MOTIVATED move to another place — and then that scene MUST have \"continuesFrom\": \"location-change\" and SHOW the travel on camera (a character walks out and we follow them to the new place). Absent that shown, motivated move, an unmotivated setting change is a HARD ERROR — treat it exactly like a character teleporting between frames (it breaks the same continuity rule).";
+  "The ONLY exception is a DELIBERATELY SHOWN, MOTIVATED move to another place — and then that scene MUST have \"continuesFrom\": \"location-change\" and SHOW the travel on camera (a character walks out and we follow them to the new place). Absent that shown, motivated move, an unmotivated setting change is a HARD ERROR — treat it exactly like a character teleporting between frames (it breaks the same continuity rule). " +
+  "NEVER INSTANT-JUMP, NEVER BOUNCE: a location change is NEVER an instant cut to a new place with people already standing there — it is always the shown, motivated travel above (continuesFrom=\"location-change\"). It is FORBIDDEN to change location after only one or two lines of dialogue, and FORBIDDEN to bounce back and forth between locations (A→B→A→B) as if characters teleport in a second with no travel shown. The episode should stay anchored: the VAST MAJORITY of consecutive scenes remain in the ONE key location and only a genuine, motivated, on-camera move ever leaves it. Keep conversations going in the current place across several clips before any change of setting.";
 
 /** Stage 40 — what a scripted "endState" must contain. Shared by the episode script, scene revise and continuity audit prompts. */
 // Stage 42 — the frame-state descriptions must be EXHAUSTIVE (≈5× the old detail): ~12–20 sentences / ≥150 words.
