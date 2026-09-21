@@ -56,7 +56,7 @@ const ok = (name: string, cond: boolean) => { assert.ok(cond, name); n++; };
 
 // ---------------------------------------------------------------- 2. prompt normalization for PUT
 {
-  ok("normalize: fenced text is unwrapped", normalizePromptOverride("```\nhello world\n```") === "hello world");
+  ok("normalize: content kept verbatim (fence NOT unwrapped)", normalizePromptOverride("```\nhello world\n```") === "```\nhello world\n```");
   ok("normalize: CRLF → LF", !normalizePromptOverride("a\r\nb").includes("\r"));
   ok("normalize: empty → empty (→ null override)", normalizePromptOverride("   ").trim() === "");
 }
