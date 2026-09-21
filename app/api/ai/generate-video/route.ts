@@ -8,10 +8,10 @@ import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, generateVideoSchema } from "@/lib/validations";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runVideoJob } from "@/lib/workers/video-job";
-import { sceneClipSeconds } from "@/lib/season";
+import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
 import { resolvePowerTier, isPowerTier } from "@/lib/power-tier";
-import { resolveVideoPredecessor, assertPredecessorReady } from "@/lib/reangle";
 import { normalizeVideoModel } from "@/lib/ai-models";
+import { persistShotPlanForApprovedEpisode } from "@/lib/workers/shot-plan-persist";
 
 /** Tier (power) determines credit cost AND video quality — single config in lib/power-tier.ts. */
 function videoTierFor(project: { powerTier?: string | null; tier?: string | null }) {
@@ -68,28 +68,41 @@ export async function POST(request: Request) {
     }
     const tier = videoTierFor(project);
 
-    const sceneData = await prisma.scene.findUnique({ where: { id: sceneId } });
+    const powerTierId = resolvePowerTier(project).id;
+    const sceneData = await prisma.scene.findUnique({ where: { id: sceneId }, select: { id: true, number: true, episodeId: true, videoModel: true } });
     if (!sceneData) return NextResponse.json({ error: "Scene not found" }, { status: 404 });
     // Stage 33: Seedance 2.5 is the only video model. A legacy `provider` in the request body (or a
     // legacy value stored on the scene) is accepted and normalized to it — never an error.
     const provider = normalizeVideoModel(parsed.data.provider ?? sceneData.videoModel);
-    if (!sceneData.videoPrompt)
-      return NextResponse.json({ error: "Scene has no video prompt" }, { status: 400 });
-    // Episode must run at least EPISODE_MIN_SECONDS in total → each scene gets its share,
-    // never shorter than the tier's base duration. Credits scale with the extra seconds.
-    const sceneCount = Math.max(1, await prisma.scene.count({ where: { episodeId: sceneData.episodeId } }));
-    // New-flow scenes carry a scripted durationSec (dialogue-driven, up to the model max) — same
-    // rule as generate-all so a single-scene regen costs exactly what the batch would.
-    const duration = sceneData.durationSec
-      ? sceneClipSeconds(tier.power, sceneData.durationSec)
-      : Math.min(SCENE_MAX_SECONDS, Math.max(SCENE_MIN_SECONDS, tier.duration, Math.ceil(EPISODE_MIN_SECONDS / sceneCount)));
-    // Seedance 2.5 renders the planned duration as-is (already ≤ SCENE_MAX_SECONDS upstream).
-    const effectiveDuration = duration;
-    const config = {
-      resolution: tier.resolution,
-      duration: effectiveDuration,
-      cost: Math.max(tier.cost, Math.ceil((tier.cost * effectiveDuration) / tier.duration)),
-    };
+
+    // Stage 167 — video is generated per SHOT, never per scene: a runtime job without a shotId belongs to
+    // the removed legacy scene path and would be rejected by the worker ("Legacy scene video generation
+    // has been removed"). Resolve the shots of THIS scene and start a real SHOT job. Self-heal for LEGACY
+    // episodes (Scene rows, zero Shot rows): transparently BUILD the shot plan (a pure LLM planning call,
+    // not paid video generation) on the first click, then continue.
+    let sceneShots = await prisma.shot.findMany({
+      where: { sceneId },
+      select: { id: true, index: true, videoUrl: true, status: true, duration: true },
+      orderBy: { index: "asc" },
+    });
+    if (sceneShots.length === 0) {
+      const ep = await prisma.episode.findUnique({ where: { id: sceneData.episodeId }, select: { status: true } });
+      const episodeShotCount = await prisma.shot.count({ where: { scene: { episodeId: sceneData.episodeId } } });
+      if (episodeShotCount === 0 && ep?.status !== "shot_plan_failed") {
+        const planResult = await persistShotPlanForApprovedEpisode(sceneData.episodeId);
+        if (planResult.ok) {
+          sceneShots = await prisma.shot.findMany({
+            where: { sceneId },
+            select: { id: true, index: true, videoUrl: true, status: true, duration: true },
+            orderBy: { index: "asc" },
+          });
+        }
+      }
+    }
+    if (sceneShots.length === 0) {
+      const fresh = await prisma.episode.findUnique({ where: { id: sceneData.episodeId }, select: { status: true, chainRunNote: true } });
+      return NextResponse.json({ error: "Shot plan is not ready or failed. Regenerate the shot plan for this episode before generating video.", status: fresh?.status ?? null, chainRunNote: fresh?.chainRunNote ?? null }, { status: 409 });
+    }
 
     // Dead jobs (killed function) must not block new generations
     await failStaleJobs({ sceneId, type: "video" });
@@ -101,22 +114,26 @@ export async function POST(request: Request) {
     });
     if (active) return NextResponse.json({ jobId: active.id, resumed: true });
 
-    if ((user.credits ?? 0) < config.cost) {
-      return NextResponse.json(
-        { error: `Not enough credits. Need ${config.cost}, have ${user.credits ?? 0}` },
-        { status: 400 }
-      );
-    }
+    // Shot = generation unit. Pick the first ungenerated shot of this scene; if every shot already has a
+    // clip this is a Regenerate — take the first shot and clear it so it is rebuilt from scratch.
+    let targetShot = sceneShots.find((s) => !s.videoUrl && s.status !== "generating");
+    const isRegen = !targetShot;
+    if (!targetShot) targetShot = sceneShots[0];
 
-    try { assertPredecessorReady(await resolveVideoPredecessor(prisma, sceneData)); }
-    catch (error: any) { return NextResponse.json({ error: error.message }, { status: 409 }); }
-    // Deduct credits (refunded by the worker if generation fails)
-    await prisma.user.update({ where: { id: user.id }, data: { credits: { decrement: config.cost } } });
+    const duration = sceneClipSeconds(powerTierId, Math.max(1, Math.round(Number(targetShot.duration ?? 3))));
+    const cost = sceneClipCost(powerTierId, duration);
+
+    if ((user.credits ?? 0) < cost) {
+      return NextResponse.json({ error: `Not enough credits. Need ${cost}, have ${user.credits ?? 0}` }, { status: 400 });
+    }
+    // Deduct credits atomically (refunded by the worker if generation fails).
+    const charged = await prisma.user.updateMany({ where: { id: user.id, credits: { gte: cost } }, data: { credits: { decrement: cost } } });
+    if (charged.count !== 1) return NextResponse.json({ error: `Not enough credits. Need ${cost}, have ${user.credits ?? 0}` }, { status: 400 });
     await prisma.creditTransaction.create({
       data: {
         userId: user.id,
-        amount: -config.cost,
-        description: `Video generation for scene ${sceneData.number} (${tier.power} power)`,
+        amount: -cost,
+        description: `Video generation for scene ${sceneData.number}, shot ${targetShot.index + 1} (${powerTierId} power)`,
       },
     });
 
@@ -134,6 +151,8 @@ export async function POST(request: Request) {
     } catch (e) {
       console.warn("Could not persist scene.videoModel (column missing?):", (e as any)?.message);
     }
+    if (isRegen) await prisma.shot.update({ where: { id: targetShot.id }, data: { videoUrl: null, lastFrameUrl: null } }).catch(() => {});
+    await prisma.shot.update({ where: { id: targetShot.id }, data: { status: "generating", error: null } });
     await prisma.scene.update({ where: { id: sceneId }, data: { status: "generating" } });
 
     const job = await prisma.generationJob.create({
@@ -147,21 +166,23 @@ export async function POST(request: Request) {
       },
     });
 
-    // Runs after the response is flushed; Vercel keeps this invocation alive up to maxDuration
+    // Runs after the response is flushed; Vercel keeps this invocation alive up to maxDuration.
+    // shotId is REQUIRED — the worker renders exactly this shot (never the removed legacy scene path).
     runInBackground(() =>
       runVideoJob({
         jobId: job.id,
         sceneId,
+        shotId: targetShot!.id,
         projectId,
         userId: user.id,
-        cost: config.cost,
-        duration: config.duration,
-        resolution: config.resolution,
+        cost,
+        duration,
+        resolution: tier.resolution,
         provider,
       })
     );
 
-    return NextResponse.json({ jobId: job.id, creditsRemaining: (user.credits ?? 0) - config.cost });
+    return NextResponse.json({ jobId: job.id, creditsRemaining: (user.credits ?? 0) - cost });
   } catch (err: any) {
     console.error("Video generation error:", err);
     return NextResponse.json(
