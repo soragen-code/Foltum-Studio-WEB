@@ -83,6 +83,29 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project?.id])
 
+  // Step 2 «Регенерировать»: build a completely fresh synopsis from the approved logline/idea
+  // (no correction, no current text) — mirrors the "Create a synopsis for this idea" path.
+  const regenerate = async () => {
+    const seed = (project?.logline ?? project?.idea ?? '').trim()
+    if (!seed) { setError('Нет идеи для регенерации'); return }
+    setGenerating(true)
+    setError('')
+    try {
+      const res = await fetch('/api/ai/synopsis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: project?.id, prompt: seed, correction: '', currentSynopsis: '' }),
+      })
+      const data = await res.json()
+      if (data?.jobId) {
+        poll.start(data.jobId)
+      } else {
+        setError(data?.error ?? 'Ошибка генерации')
+        setGenerating(false)
+      }
+    } catch { setError('Ошибка сети'); setGenerating(false) }
+  }
+
   const approve = async () => {
     if (!synopsis.trim()) return
     setApproving(true)
@@ -106,16 +129,16 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
     return (
       <div className="space-y-6">
         <div className="rounded-xl border border-border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
-          <h2 className="mb-2 font-display text-xl font-bold">Step 2 — Synopsis</h2>
+          <h2 className="mb-2 font-display text-xl font-bold">Шаг 2 — Синопсис</h2>
           <p className="mb-4 text-sm text-muted-foreground">
-            Review the season synopsis. You can edit it directly in the text or ask the AI to rewrite it with a note. When everything looks good — click "Approve synopsis", and we'll move on to the season plot (characters, locations, and script).
+            Проверьте синопсис сезона. Его можно отредактировать прямо в тексте, сгенерировать заново на основе идеи или попросить ИИ переписать по вашему замечанию. Когда всё устраивает — нажмите «Аппрув / Далее», и мы перейдём к сюжету по сериям.
           </p>
 
           {error && <div className="mb-4 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
 
           {/* Stage 77: while the rewrite job runs the OLD synopsis is hidden behind a placeholder. */}
           {rewriteViewState(generating, poll.job?.status) === 'placeholder' ? (
-            <RewritePlaceholder job={poll.job} expectedTotalSec={SYNOPSIS_CORRECTION_EXPECTED_SEC} label="Rewriting synopsis…" testId="synopsis-revise-progress" className="mb-4" />
+            <RewritePlaceholder job={poll.job} expectedTotalSec={SYNOPSIS_CORRECTION_EXPECTED_SEC} label="Генерация синопсиса…" testId="synopsis-revise-progress" className="mb-4" />
           ) : (
             <textarea
               rows={12}
@@ -128,10 +151,10 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
           )}
 
           <div className="mb-4">
-            <label className="mb-1 block text-sm font-medium">Rewrite note (optional)</label>
+            <label className="mb-1 block text-sm font-medium">Исправить промптом (необязательно)</label>
             <textarea
               rows={2}
-              placeholder="Make it more dramatic, remove the happy ending, add a family storyline..."
+              placeholder="Сделай драматичнее, убери счастливый финал, добавь семейную линию..."
               value={correctionPrompt}
               onChange={(e) => setCorrectionPrompt(e.target.value)}
               disabled={generating}
@@ -143,23 +166,34 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
                 onClick={generate}
                 disabled={generating}
                 className="mt-2 flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
-                data-testid="synopsis-regenerate"
+                data-testid="synopsis-fix"
               >
-                {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-                Rewrite synopsis
+                {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <PenLine className="h-4 w-4" />}
+                Исправить промптом
               </button>
             )}
           </div>
 
-          <button
-            onClick={approve}
-            disabled={approving || generating || !synopsis.trim()}
-            className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50 sm:w-auto"
-            data-testid="synopsis-approve"
-          >
-            {approving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-            Approve synopsis
-          </button>
+          <div className="flex flex-col gap-3 sm:flex-row">
+            <button
+              onClick={regenerate}
+              disabled={generating || approving}
+              className="flex items-center justify-center gap-2 rounded-lg bg-secondary px-6 py-3 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
+              data-testid="synopsis-regenerate"
+            >
+              {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+              Регенерировать
+            </button>
+            <button
+              onClick={approve}
+              disabled={approving || generating || !synopsis.trim()}
+              className="flex items-center justify-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
+              data-testid="synopsis-approve"
+            >
+              {approving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              Аппрув / Далее
+            </button>
+          </div>
         </div>
       </div>
     )

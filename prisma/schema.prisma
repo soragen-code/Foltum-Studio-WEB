@@ -81,6 +81,11 @@ model Project {
   idea        String?  @db.Text
   // New flow (Stage 14 B): producer-chosen number of episodes for the season. Null = let the AI decide.
   episodeCount Int?
+  // Stage 200 (3-step approval flow): the short "story idea" logline (2–3 sentences) — the FIRST
+  // approval gate, generated before the synopsis. Additive + optional: legacy rows keep NULL and
+  // skip straight to the synopsis step exactly as before.
+  logline     String?  @db.Text
+  loglineApproved Boolean @default(false)
   synopsis    String?  @db.Text
   synopsisApproved Boolean @default(false)
   // Stage 46A: approved SHORT synopsis (JSON {premise, episodes[{number, logline}]}) — mandatory outline for the season structure.

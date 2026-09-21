@@ -9,6 +9,7 @@ import { CharactersStage } from './characters-stage'
 import { StructureStage } from './structure-stage'
 import { ScenesStage } from './scenes-stage'
 import { IdeaStage } from './idea-stage'
+import { LoglineStage } from './logline-stage'
 import { ReferencesStage } from './references-stage'
 import { StoryStage } from './story-stage'
 import { SCENE_RESOLUTION } from '@/lib/power-tier'
@@ -79,6 +80,9 @@ export function ProjectWizard({ project: initialProject, entitlements }: { proje
           )}
           {!referencesTab && currentStage === 'idea' && (
             <IdeaStage project={project} onRefresh={refreshProject} />
+          )}
+          {!referencesTab && currentStage === 'logline' && (
+            <LoglineStage project={project} onRefresh={refreshProject} />
           )}
           {!referencesTab && currentStage === 'references' && (
             <ReferencesStage project={project} onRefresh={refreshProject} />

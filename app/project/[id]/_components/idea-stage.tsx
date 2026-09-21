@@ -606,16 +606,17 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
         : mode === 'upload'
         ? { projectId: project.id, fromStory: true, story: storyText }
         : { projectId: project.id, idea: idea.trim(), episodeCount }
-      // Stage 67: the route creates a background job and returns { jobId } immediately. We poll it, so
-      // the producer can leave the page — generation continues server-side and resumes on return.
-      const res = await fetch('/api/ai/idea', {
+      // Stage 200 (STEP 1): first produce a short story IDEA (logline) — a cheap synchronous call. The
+      // route advances the project to stage="logline"; onRefresh() then renders the idea-approval screen
+      // (LoglineStage). The synopsis is NOT generated yet — that happens only after the idea is approved.
+      const res = await fetch('/api/ai/logline', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) { setError(data?.error ?? "Couldn't generate"); return }
-      if (data?.jobId) { activeJobIdRef.current = data.jobId; startPolling(data.jobId) }
+      onRefresh()
     } catch {
       setError('Network error')
     }
@@ -658,7 +659,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
           <Lightbulb className="h-5 w-5 text-primary" /> Step 1 — Idea
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Describe your idea — or choose Auto mode, and AI will come up with an original story in the selected genre. In this step, we'll create only the season synopsis: you'll approve it in the next step, and we'll generate the characters, locations, and script later.
+          Describe your idea — or choose Auto mode, and AI will come up with an original story in the selected genre. First we'll create a short story idea (a logline): you'll review and approve it, then we'll generate the synopsis, and the episode breakdown, characters, locations and script later.
         </p>
 
         {/* Mode toggle: own idea / auto */}
@@ -856,7 +857,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
           data-testid="idea-generate"
         >
           {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-          {hasResult ? 'Regenerate' : mode === 'auto' ? 'Come up with a story and create a synopsis' : mode === 'upload' ? 'Structure the plot and create a synopsis' : 'Create synopsis'}
+          {mode === 'auto' ? 'Come up with a story idea' : mode === 'upload' ? 'Create an idea from the plot' : 'Create idea'}
         </button>}
         {generating && !chaining && (
           <div className="mt-3 space-y-2" data-testid="idea-progress">
@@ -866,7 +867,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
               <p className="inline-flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin text-primary" /> Starting generation…</p>
             )}
             <div className="flex items-center justify-between gap-2">
-              <p className="min-w-0 text-xs text-muted-foreground">Step 1 of 4 · usually 30–60 seconds: creating the season synopsis. You can close the page — generation will continue in the background, and progress will be restored when you return.</p>
+              <p className="min-w-0 text-xs text-muted-foreground">Step 1 · coming up with a short story idea. This is quick — you'll review and approve it before the synopsis is generated.</p>
               <CancelButton onCancel={cancelIdea} testId="idea-cancel" className="flex-shrink-0" />
             </div>
           </div>

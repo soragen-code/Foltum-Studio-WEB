@@ -539,3 +539,11 @@ ALTER TABLE "User" ALTER COLUMN "credits" SET DEFAULT 0;
 -- as the scene heading in the readable script. Additive, nullable & idempotent; legacy / manual scripts
 -- leave it NULL and the UI falls back to "Scene N".
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "title" TEXT;
+
+
+
+-- Stage 200 (3-step approval flow): the short "story idea" logline (2–3 sentences) and its approval
+-- flag — the FIRST approval gate, generated before the synopsis. Additive, nullable & idempotent;
+-- legacy rows keep NULL / false and skip straight to the synopsis step exactly as before.
+ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "logline" TEXT;
+ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "loglineApproved" BOOLEAN NOT NULL DEFAULT false;

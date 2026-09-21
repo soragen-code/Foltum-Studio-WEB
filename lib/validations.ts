@@ -111,6 +111,28 @@ export const ideaSchema = z
     }
   });
 
+/**
+ * Stage 200 — STEP 1 logline. Same source fields as the idea (manual / auto /
+ * from-story), plus a verbatim `correction` and the `currentLogline` used when
+ * refining an existing logline. All source fields are optional here because a
+ * regenerate/correction call may rely on the source already stored on the
+ * project; the route falls back to `project.idea` when none is provided.
+ */
+export const loglineSchema = z.object({
+  projectId: cuidSchema,
+  idea: z.string().trim().max(10_000).optional(),
+  auto: z.boolean().optional().default(false),
+  genres: z.array(z.string().trim().min(1).max(60)).max(10).optional().default([]),
+  extras: z.string().trim().max(2_000).optional().default(""),
+  fromStory: z.boolean().optional().default(false),
+  story: z.string().trim().max(60_000).optional(),
+  episodeCount: z.coerce.number().int().min(1).max(100).optional(),
+  // Verbatim producer instruction OR a direct text replacement for the logline.
+  correction: z.string().trim().max(10_000).optional(),
+  // The logline currently shown to the producer (basis for a correction).
+  currentLogline: z.string().trim().max(10_000).optional(),
+});
+
 export const ideaReviseSchema = z.object({
   projectId: cuidSchema,
   instruction: z.string().trim().min(2, "Instruction is required").max(4_000),

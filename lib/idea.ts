@@ -667,3 +667,51 @@ export function characterCardToData(c: CharacterCard) {
     groupSize: c.tier === "CROWD" ? c.groupSize ?? 12 : null,
   };
 }
+
+
+
+/* ------------------------------------------------------------------ */
+/*  Stage 200 — the logline (STEP 1 of the 3-step approval flow)       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The logline is a 2-3 sentence "story idea" pitch shown FIRST, before any
+ * synopsis work. It is cheap (one plain-text `chat` call) so the route can run
+ * synchronously. The producer approves it (or edits it) before the season
+ * synopsis is generated from it. When `correction` is present it is applied
+ * VERBATIM — it may be either a re-generation instruction ("make it darker") or
+ * a direct replacement of the logline text.
+ */
+export function loglineSystemPrompt(language: IdeaLanguage): string {
+  const lang = LANGUAGE_NAMES[language] ?? "Russian";
+  return `You are an award-winning head writer for a short-form vertical drama series. From the producer's raw material below, write a single compelling LOGLINE — the core "story idea" pitch for the whole season.
+
+RULES:
+- Output ONLY the logline text: 2-3 sentences, roughly 25-70 words. No headings, no markdown, no labels, no quotes, no bullet points.
+- Write it in ${lang}.
+- It must convey the hook: the protagonist, their want/goal, the central conflict or antagonist force, and the stakes. Make it specific and gripping — no generic clichés.
+- Do not write the full synopsis or list episodes. This is the elevator pitch only.`;
+}
+
+/**
+ * Build the logline user prompt from whatever source the producer gave.
+ * `sourceText` is the assembled raw material (a free idea, a genre brief, or an
+ * uploaded story). When `correction`/`currentLogline` are present, the producer
+ * is refining an existing logline and the instruction is applied verbatim.
+ */
+export function loglineUserPrompt(opts: {
+  sourceText: string;
+  correction?: string;
+  currentLogline?: string;
+}): string {
+  const source = (opts.sourceText ?? "").trim();
+  const correction = (opts.correction ?? "").trim();
+  const current = (opts.currentLogline ?? "").trim();
+  if (correction && current) {
+    return `SOURCE MATERIAL:\n${source || "(none — rely on the current logline and the instruction)"}\n\nCURRENT LOGLINE:\n${current}\n\nPRODUCER INSTRUCTION (apply exactly as written):\n${correction}\n\nRewrite the logline now, applying the instruction. Output only the new logline.`;
+  }
+  if (correction) {
+    return `SOURCE MATERIAL:\n${source}\n\nPRODUCER INSTRUCTION (apply exactly as written):\n${correction}\n\nWrite the logline now. Output only the logline.`;
+  }
+  return `SOURCE MATERIAL:\n${source}\n\nWrite the logline now. Output only the logline.`;
+}

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { Header } from '@/components/header'
 import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Copy, Check, FileText, RotateCcw, Save, Plus, Undo2, AlertTriangle } from 'lucide-react'
 import { FrameToolbar, DownloadAllButton } from '@/app/project/[id]/_components/frame-toolbar'
@@ -99,6 +100,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const canScenePromptEdit = entitlements ? entitlements.scene_prompt_edit : true
   const canManualPromptEdit = entitlements ? entitlements.manual_prompt_edit : true
   const canPremiumQuality = entitlements ? entitlements.premium_quality : true
+  const router = useRouter()
   const [episode, setEpisode] = useState<any>(initial)
   const [scenes, setScenes] = useState<Scene[]>(initial.scenes ?? [])
   const [credits, setCredits] = useState(initialCredits)
@@ -123,7 +125,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     onFinish: async (res) => {
       const j = res.job
       if (j.status === 'completed') {
-        await reloadEpisode()
+        // Part 2 — the script changed, so the episode's scenes were rebuilt. Refresh the references
+        // (characters + locations) from the fresh scenes and revalidate server components so the
+        // References tab/page reflects the current scenes. No paid reference regeneration is triggered.
+        await reloadEpisode({ refreshRefs: true })
+        router.refresh()
         setReviseText('')
         setRevising(false)
       } else if (j.status === 'failed') {
@@ -700,15 +706,34 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     } catch { setError('Network error') } finally { setLocBusy((b) => { const n = { ...b }; delete n[locationId]; return n }) }
   }
 
-  const reloadEpisode = async () => {
+  const reloadEpisode = async (opts?: { refreshRefs?: boolean }) => {
     try {
       const r = await fetch(`/api/ai/season?projectId=${project.id}`, { cache: 'no-store' })
       if (!r.ok) return
       const d = await r.json()
       const ep = d?.season?.episodes?.find((e: any) => e.id === episode.id)
       if (ep) setEpisode((prev: any) => ({ ...prev, ...ep, scenes: prev.scenes }))
+      let freshScenes: Scene[] | null = null
+      let freshEpisode: any = null
       const r2 = await fetch(`/api/projects/${project.id}`, { cache: 'no-store' })
-      if (r2.ok) { const d2 = await r2.json(); const e2 = d2?.project?.seasons?.flatMap((s: any) => s.episodes)?.find((e: any) => e.id === episode.id); if (e2?.scenes) setScenes(e2.scenes) }
+      if (r2.ok) {
+        const d2 = await r2.json()
+        const e2 = d2?.project?.seasons?.flatMap((s: any) => s.episodes)?.find((e: any) => e.id === episode.id)
+        if (e2?.scenes) { freshScenes = e2.scenes; setScenes(e2.scenes) }
+        if (e2) freshEpisode = e2
+      }
+      // Part 2 — when the episode script was regenerated/replaced the scenes were deleted and recreated,
+      // so the references (characters + locations, derived from the scenes' locationDesc) are now stale.
+      // Recompute them from the fresh data so the References page reflects the current scenes. This is a
+      // display/data refresh ONLY — it never triggers paid reference (image/video) regeneration.
+      if (opts?.refreshRefs) {
+        const epForRefs = { ...(freshEpisode ?? ep ?? episode), scenes: freshScenes ?? scenes }
+        setRefLocs(episodeLocations(epForRefs, project.locations ?? []))
+        const chars = epForRefs?.characters?.length
+          ? epForRefs.characters.map((ec: any) => ec.character)
+          : (project.characters ?? [])
+        setRefChars(chars)
+      }
     } catch {}
   }
 

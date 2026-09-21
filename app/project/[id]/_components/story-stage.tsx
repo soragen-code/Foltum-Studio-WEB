@@ -252,11 +252,11 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
     <div className="space-y-6 pb-40" data-testid="story-stage">
       <div className="rounded-xl border border-border bg-card p-4 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-display text-xl font-bold">Season plot</h2>
-          {episodeCount > 0 && <span className="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-sm" data-testid="episode-count"><BookOpen className="h-4 w-4" /> {episodeCount} episodes</span>}
+          <h2 className="font-display text-xl font-bold">Шаг 3 — Сюжет по сериям</h2>
+          {episodeCount > 0 && <span className="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-sm" data-testid="episode-count"><BookOpen className="h-4 w-4" /> {episodeCount} серий</span>}
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          The season, episode by episode: each episode is a detailed continuous synopsis ending on its cliffhanger. Edit in the panel below; rewriting clears the generated scenes and videos of the affected episodes.
+          Сезон по сериям: каждая серия — подробный связный синопсис, завершающийся клиффхэнгером. Отредактируйте в панели ниже или нажмите «Регенерировать сюжет». Когда всё устраивает — нажмите «Аппрув / Далее», чтобы перейти к работе над сериями. Перегенерация очищает сгенерированные сцены и видео затронутых серий.
         </p>
         {season?.title && (
           <div className="mt-3">
@@ -272,7 +272,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
             className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
             data-testid="go-first-episode-top"
           >
-            Go to first episode <ArrowRight className="h-4 w-4" />
+            Аппрув / Далее <ArrowRight className="h-4 w-4" />
           </Link>
         )}
 
@@ -381,10 +381,21 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
               </div>
             )}
             {season?.fullStory && !jobActive && (
-              <p className="mt-3 text-sm text-muted-foreground" data-testid="plot-ready">Season plot is ready. Open an episode to write its script.</p>
+              <div className="mt-3 space-y-3" data-testid="plot-ready">
+                <p className="text-sm text-muted-foreground">Сюжет сезона готов. Откройте серию, чтобы написать её сценарий.</p>
+                <button
+                  onClick={start}
+                  disabled={starting || storyBusy}
+                  className="inline-flex items-center gap-2 rounded-lg bg-secondary px-4 py-2 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
+                  data-testid="season-regenerate"
+                >
+                  {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+                  Регенерировать сюжет
+                </button>
+              </div>
             )}
             {season && !season.fullStory && !jobActive && (
-              <p className="mt-4 text-sm text-muted-foreground">The plot hasn't been written yet. Editing below will generate it.</p>
+              <p className="mt-4 text-sm text-muted-foreground">Сюжет ещё не написан. Правка в панели ниже сгенерирует его.</p>
             )}
           </>
         )}
@@ -399,11 +410,11 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
         onSubmit={() => reviseStory({ instruction: storyText })}
         busy={storyBusy}
         disabled={jobActive || starting}
-        label="What to change in the plot"
-        placeholder="For example: make the ending more dramatic"
-        submitLabel="Edit story"
+        label="Исправить промптом"
+        placeholder="Например: сделай финал драматичнее"
+        submitLabel="Исправить промптом"
         testId="story-revise"
-        hint="Rewriting clears the generated scenes and videos of the affected episodes."
+        hint="Перегенерация очищает сгенерированные сцены и видео затронутых серий."
       />
     </div>
   )
