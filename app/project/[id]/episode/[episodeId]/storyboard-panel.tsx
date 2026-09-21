@@ -12,9 +12,10 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { Loader2, Film, Wand2, ImageIcon, Play, Download } from 'lucide-react'
+import { Loader2, Film, Wand2, ImageIcon, Play } from 'lucide-react'
 import { JobProgressBar, SmoothProgress, useJobPolling } from '../../_components/use-job-polling'
 import { boardFramePrecondition } from '@/lib/board-anchor'
+import { DownloadVideoButton } from '@/app/project/[id]/_components/download-video-button'
 
 type Board = {
   id: string
@@ -189,7 +190,7 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
           <div className="mx-auto flex aspect-[9/16] max-h-[80vh] w-full max-w-sm items-center justify-center overflow-hidden rounded-lg bg-black">
             <video src={videoUrl} controls playsInline className="h-full w-full object-contain" />
           </div>
-          <div className="mt-2"><a href={videoUrl} download className="inline-flex items-center gap-1 text-sm text-primary"><Download className="h-4 w-4" /> Скачать mp4</a></div>
+          <div className="mt-2"><DownloadVideoButton videoUrl={videoUrl} fileStem="storyboard" label="Скачать mp4" /></div>
         </div>
       )}
 

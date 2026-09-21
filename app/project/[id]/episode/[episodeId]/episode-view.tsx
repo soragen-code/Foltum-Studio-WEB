@@ -7,6 +7,7 @@ import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshC
 import { FrameToolbar, DownloadAllButton } from '@/app/project/[id]/_components/frame-toolbar'
 import { PromptModal, CHARACTER_PROMPT_DESCRIPTION, LOCATION_PROMPT_DESCRIPTION } from '@/app/project/[id]/_components/prompt-modal'
 import { referenceFileName } from '@/lib/download-name'
+import { DownloadVideoButton } from '@/app/project/[id]/_components/download-video-button'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
 import { BookScript } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
@@ -1504,7 +1505,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             <h2 className="mb-2 inline-flex items-center gap-1 font-semibold"><Film className="h-4 w-4" /> Assembled episode{episode.assembleQuality ? <span className="ml-1 text-xs font-normal text-muted-foreground" data-testid="assembled-settings">· {episode.assembleQuality}{episode.assembleFps ? ` · ${episode.assembleFps} fps` : ''}</span> : null}</h2>
             <video src={episode.videoUrl} controls playsInline className="mx-auto max-h-[70vh] w-full max-w-sm rounded-lg bg-black" />
             <div className="mt-2 flex flex-wrap items-center gap-4">
-              <a href={episode.videoUrl} download className="inline-flex items-center gap-1 text-sm text-primary"><Download className="h-4 w-4" /> Download mp4</a>
+              <DownloadVideoButton videoUrl={episode.videoUrl} fileStem={`ep${episode.number}_${episode.title ?? 'episode'}`} label="Download mp4" />
               {nextEpisode && (
                 <Link href={`/project/${project.id}/episode/${nextEpisode.id}`} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" data-testid="go-to-next-episode">
                   Go to episode {nextEpisode.number} <ArrowRight className="h-4 w-4" />
