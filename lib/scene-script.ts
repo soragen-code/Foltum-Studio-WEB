@@ -60,6 +60,29 @@ export interface PreviousSceneEnding {
 const clean = (s?: string | null): string => (s ?? "").toString().trim();
 
 /**
+ * Split a dialogue blob into individual character turns, ONE per element. Speaker turns are normally on
+ * their own line ("NAME (cue): line"), but a model may glue several turns onto one line — so after the
+ * primary newline split we also break a line wherever a NEW speaker label ("Name:" / "Name (cue):")
+ * starts mid-line. Each returned turn becomes its OWN paragraph in the readable script.
+ */
+export function splitDialogueTurns(dialogue: string): string[] {
+  const raw = clean(dialogue);
+  if (!raw) return [];
+  const out: string[] = [];
+  for (const line of raw.split(/\r?\n/)) {
+    const row = line.trim();
+    if (!row) continue;
+    // Break "A: x  B: y" into two turns without touching a lone "Name: line".
+    const pieces = row.split(/(?<=[.!?»"”'])\s+(?=[A-Z\u00C0-\u024F][^:\n(]{0,48}?\s*(?:\([^)]*\))?\s*:)/u);
+    for (const p of pieces) {
+      const t = p.trim();
+      if (t) out.push(t);
+    }
+  }
+  return out;
+}
+
+/**
  * First sentence only (used to keep the script's LOCATION line short — never a full paragraph). Splits on the
  * first sentence-ending punctuation; if the text has none (or the first sentence is very long) it is clamped to
  * a single line of ~160 chars so the location never reads like a long scene title.
@@ -186,7 +209,12 @@ export function assembleSceneScript(scene: SceneScriptFields, previous?: Previou
     const dlg = clean(scene.dialogueEn) || clean(scene.dialogue);
     if (dlg && dlg !== "[NO DIALOGUE]") {
       lines.push("DIALOGUE:");
-      lines.push(dlg);
+      // Each character turn is its OWN paragraph — separated by a blank line, never glued together.
+      const turns = splitDialogueTurns(dlg);
+      turns.forEach((turn, i) => {
+        lines.push(turn);
+        if (i < turns.length - 1) lines.push("");
+      });
       lines.push("");
     }
   }

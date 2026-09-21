@@ -93,7 +93,7 @@ export function ScriptView({ text, scenes }: { text?: string | null; scenes?: { 
               <div className="font-semibold">Scene {s.number} · {s.shotType} · ~{s.durationSec ?? 15}s</div>
               <div className="text-xs text-muted-foreground">{s.locationDesc}</div>
               {s.action && <p className="mt-2 font-medium">{s.action}</p>}
-              <pre className="mt-2 whitespace-pre-wrap break-words font-sans">{s.dialogue}</pre>
+              <pre className="mt-2 whitespace-pre-wrap break-words font-sans">{splitTurns(s.dialogue ?? '').join('\n\n')}</pre>
               {s.dialogueEn && s.dialogueEn.trim() !== (s.dialogue ?? '').trim() && (
                 <details className="mt-2 text-xs text-muted-foreground">
                   <summary className="cursor-pointer">Voiceover (English) — scene text in the script language</summary>
@@ -168,8 +168,23 @@ export function parseDialogueLine(line: string): { name: string; cue: string | n
   return { name: m[1].trim(), cue: m[3]?.trim() || null, text }
 }
 
+// Split a dialogue blob into one turn per element: newline-separated first, then break any line that
+// glues several "Name (cue): line" turns together, so EACH reply renders as its own paragraph.
+function splitTurns(speech: string): string[] {
+  const out: string[] = []
+  for (const line of speech.split('\n')) {
+    const row = line.trim()
+    if (!row) continue
+    for (const p of row.split(/(?<=[.!?»"”'])\s+(?=[A-Z\u00C0-\u024F][^:\n(]{0,48}?\s*(?:\([^)]*\))?\s*:)/u)) {
+      const t = p.trim()
+      if (t) out.push(t)
+    }
+  }
+  return out
+}
+
 function DialogueBlock({ speech }: { speech: string }) {
-  const rows = speech.split('\n').map((l) => l.trim()).filter(Boolean)
+  const rows = splitTurns(speech)
   return (
     <div className="space-y-3" data-testid="book-dialogue">
       {rows.map((row, i) => {
