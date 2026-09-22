@@ -920,13 +920,14 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
       await handleFailure(job.id, state, new Error(reason), state);
       return true;
     }
-    // Succeeded, but the output file is already gone: the provider keeps outputs ~1 hour after completion and
-    // nobody polled this job in time (no server-side cron — polling runs only while the episode page is
-    // open). Retrying the GET forever is pointless — fail with a refund and a clear Russian explanation.
+    // Succeeded, but the output file is already gone. A server-side cron (/api/cron/advance-chains, every
+    // minute) now finalizes jobs even with no browser tab open, so this branch is only reachable if the
+    // sweeper could not retrieve the output within the provider's ~1 hour retention window. Retrying the GET
+    // forever is pointless — fail with a refund and a clear explanation.
     if (prediction.status === "succeeded" && !prediction.url) {
       const completedAt = prediction.completedAt ? Date.parse(prediction.completedAt) : NaN;
       if (!Number.isFinite(completedAt) || Date.now() - completedAt > EXPIRED_OUTPUT_GRACE_MS) {
-        await handleFailure(job.id, state, new Error("The finished video was not retrieved in time: the provider has already deleted the file (it is stored for about an hour after completion). Credits have been refunded. Keep the episode tab open until generation finishes or return to it within an hour."), state);
+        await handleFailure(job.id, state, new Error("The finished video could not be retrieved in time: the provider deletes the file about an hour after it is ready. Credits have been refunded — please start the generation again. You do not need to keep the tab open: generation is finalized automatically on the server."), state);
         return true;
       }
     }
