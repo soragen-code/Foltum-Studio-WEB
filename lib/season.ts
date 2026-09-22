@@ -191,7 +191,11 @@ const STATE_SIZE_TEXT = STATE_CHECKLIST_TEXT;
  *  conversation is NOT cut short — it runs across SEVERAL consecutive same-location clips (see MULTI_CLIP_DIALOGUE_RULE)
  *  so the viewer is actually informed of what is going on before the location ever changes. */
 export const TALK_MIN_SENTENCES = 3;
-export const TALK_MAX_SENTENCES = 4;
+// Stage 221 (CHANGE 3) — 4 → 5: the reader complaint was "почему так мало реплик". A fuller clip (up to
+// SCENE_CLIP_MAX_SECONDS s) can carry one more short spoken line without breaking clip length, so every fuller
+// talking scene now packs a denser exchange; combined with MULTI_CLIP_DIALOGUE_RULE (conversations that run on
+// across several consecutive same-sub-location clips) this makes the episode noticeably richer in dialogue.
+export const TALK_MAX_SENTENCES = 5;
 /** Stage 172 — at most 1 SILENT scene per episode: the story is driven FIRST by the characters talking to each
  *  other, so almost every scene is a talking scene. A silent scene is valid ONLY if it carries a `visualBeat`
  *  field (a short description of what the viewer reads with no dialogue). Stage 110 was ZERO; Stage 166 was 2. */
@@ -613,7 +617,8 @@ export const CLIP_LENGTH_RULE =
  */
 export const MULTI_CLIP_DIALOGUE_RULE =
   "DIALOGUE ACROSS CLIPS: a conversation does NOT have to fit in one clip — and it must NEVER be cut short. A single clip carries a substantive 2–3-sentence exchange plus visible action; a REAL conversation then RUNS ON across SEVERAL consecutive scenes IN THE SAME LOCATION — one exchange here, then the NEXT scene cuts to a new angle / shot in the same place and the reply continues, then the next, and the next (two characters keep talking, a camera cut between each beat). Deliberately spread a meaningful conversation over 3, 4, 5 or more consecutive same-location clips so the viewer is actually brought up to speed on WHAT IS HAPPENING — who wants what, what just changed, what they decide — before anything else. A dialogue scene may (and usually should) end mid-conversation and the next scene picks it right up; it need not be self-contained. " +
-  "STRICTLY FORBIDDEN: do NOT switch to a different location after only one or two lines of dialogue — finish the conversation (or reach a real turning point in it) in the current location first. Do NOT rapid-fire ping-pong back and forth between two locations (place A, place B, place A, place B): stay put and let the scene breathe. Keep continuity (each scene opens on the previous scene's final frame) and ALWAYS change the camera on the cut. The episode must be RICH and INFORMATIVE in dialogue — err on the side of MORE consecutive same-location dialogue clips, never fewer.";
+  "STRICTLY FORBIDDEN: do NOT switch to a different location after only one or two lines of dialogue — finish the conversation (or reach a real turning point in it) in the current location first. Do NOT rapid-fire ping-pong back and forth between two locations (place A, place B, place A, place B): stay put and let the scene breathe. Keep continuity (each scene opens on the previous scene's final frame) and ALWAYS change the camera on the cut. The episode must be RICH and INFORMATIVE in dialogue — err on the side of MORE consecutive same-location dialogue clips, never fewer. " +
+  "HARD REQUIREMENT — SUSTAINED CONVERSATIONS: whenever two (or three) characters are talking in one sub-location, the exchange MUST run across AT LEAST 2–3 CONSECUTIVE clips in that SAME sub-location — one clip is a beat of the exchange, the next clip (new camera on the same spot) carries the reply and RAISES the stakes, the next pushes it further — the interaction BUILDS and ESCALATES clip by clip (a question → a dodge → a demand → a reveal) instead of being resolved or dropped after a single line. It is FORBIDDEN to cut away, change sub-location or end the conversation after only one throwaway line, and it is FORBIDDEN to spawn a brand-new scene just to carry ONE line that belongs to the exchange already in progress. The DEFAULT shape of a dialogue beat is therefore a RUN of same-sub-location talking clips, not an isolated single-line clip; only end a conversation when it has reached a real turning point on screen.";
 
 /**
  * Stage 38 — staging + choreography rule for sceneKind "action" (fight / duel / chase / physical struggle).
@@ -1804,6 +1809,84 @@ export function renderStateLines(scene: { startState?: string | null; endState?:
   return renderStartStateLine(scene.startState) + renderEndStateLine(scene.endState);
 }
 
+// Stage 221 (CHANGE 1) — readable-script MOVEMENT / CAMERA block. The reader complaint was that the human
+// script did not say WHO is on camera, HOW characters enter / leave / cross, HOW they reach a new place, or
+// HOW the camera moves at the cut. This block surfaces exactly that, on SEPARATE labelled lines placed BETWEEN
+// the scene "action" and the dialogue paragraphs (so dialogue still reads as its own block). Labels are in
+// Russian; character names stay in Latin (they are authored that way in "characters"/"presence"/"entrances").
+export const MOVEMENT_IN_FRAME_PREFIX = "В кадре: ";
+export const MOVEMENT_ENTER_EXIT_PREFIX = "Входит/уходит: ";
+export const MOVEMENT_CAMERA_PREFIX = "Камера: ";
+export const MOVEMENT_TRANSITION_PREFIX = "Переход: ";
+
+/** Pull one "[TAG] ..." line out of an English videoPrompt (e.g. [TRANSITION]) as a single trimmed line. */
+function extractPromptTag(videoPrompt: string | null | undefined, tag: string): string {
+  const vp = (videoPrompt ?? "").trim();
+  if (!vp) return "";
+  const m = vp.match(new RegExp(`\\[${tag}\\]\\s*:?\\s*([^\\n]*)`, "i"));
+  return m ? m[1].replace(/\s+/g, " ").trim() : "";
+}
+
+/**
+ * Stage 221 (CHANGE 1) — the «В кадре / Входит-уходит / Камера / Переход» block for one scene. Only non-empty
+ * lines are emitted (no blank lines when a field is absent). `prev` is the previous scene so a cast change that
+ * carries no explicit "entrances" text can still be described in words ("входит X", "уходит Y").
+ */
+export function renderMovementLines(
+  scene: {
+    characters?: Array<string | { name?: string | null; character?: { name?: string | null } | null }> | null;
+    presence?: string | null;
+    entrances?: string | null;
+    continuesFrom?: string | null;
+    shotType?: string | null;
+    videoPrompt?: string | null;
+  },
+  prev: { characters?: Array<string | { name?: string | null; character?: { name?: string | null } | null }> | null } | undefined,
+  sceneLoc: string,
+): string {
+  // Defensive: "characters" may arrive as plain names (EpisodeScript scenes) or as SceneCharacter relation
+  // rows (persisted Scene rows, if a caller includes them) — coerce both to a clean name list.
+  const toNames = (list: typeof scene.characters): string[] =>
+    (list ?? [])
+      .map((c) => (typeof c === "string" ? c : c?.character?.name ?? c?.name ?? ""))
+      .map((n) => (n ?? "").trim())
+      .filter(Boolean);
+  const lines: string[] = [];
+  const cast = toNames(scene.characters);
+  const presence = (scene.presence ?? "").replace(/\s+/g, " ").trim();
+  // "В кадре" — prefer the richer authored "presence" (says WHERE each character is); fall back to the cast list.
+  const inFrame = presence || cast.join(", ");
+  if (inFrame) lines.push(`${MOVEMENT_IN_FRAME_PREFIX}${inFrame}`);
+  // "Входит/уходит" — prefer the authored "entrances" staging; when it is empty/"none" but the cast changed vs
+  // the previous scene, describe the change in words so the reader always learns where new faces came from and
+  // where the old ones went.
+  const ent = (scene.entrances ?? "").replace(/\s+/g, " ").trim();
+  if (ent && !/^none\.?$/i.test(ent)) {
+    lines.push(`${MOVEMENT_ENTER_EXIT_PREFIX}${ent}`);
+  } else if (prev) {
+    const prevCast = toNames(prev.characters);
+    const entered = cast.filter((c) => !prevCast.includes(c));
+    const left = prevCast.filter((c) => !cast.includes(c));
+    const parts: string[] = [];
+    if (entered.length) parts.push(`входит ${entered.join(", ")}`);
+    if (left.length) parts.push(`уходит ${left.join(", ")}`);
+    if (parts.length) lines.push(`${MOVEMENT_ENTER_EXIT_PREFIX}${parts.join("; ")}`);
+  }
+  // "Камера" — the shot type at the cut, plus the [TRANSITION] camera move from the videoPrompt when present.
+  const shot = (scene.shotType ?? "").replace(/\s+/g, " ").trim();
+  const transition = extractPromptTag(scene.videoPrompt, "TRANSITION");
+  const cam = [shot, transition].filter(Boolean).join(" — ");
+  if (cam) lines.push(`${MOVEMENT_CAMERA_PREFIX}${cam}`);
+  // "Переход" — a shown, on-camera move to a new place (the only way a scene may change location).
+  if ((scene.continuesFrom ?? "").trim().toLowerCase() === "location-change") {
+    const dest = (sceneLoc ?? "").trim();
+    lines.push(
+      `${MOVEMENT_TRANSITION_PREFIX}показанный на камеру переход${dest ? ` в «${dest}»` : ""} — персонажи переходят на новое место, камера следует за ними`,
+    );
+  }
+  return lines.length ? `\n${lines.join("\n")}` : "";
+}
+
 // Stage 160 — an INT/EXT/ИНТ/НАТ opener or a "day/night/…"-style time-of-day tail (English + Russian).
 const SCENE_LOC_INT_EXT_RE = /^(int|ext|int\.?\/ext\.?|i\/e|инт|нат)\.?$/i;
 const SCENE_LOC_TIME_RE = /^(day|night|dawn|dusk|evening|morning|afternoon|noon|midnight|continuous|later|moments? later|sunset|sunrise|день|ночь|утро|вечер|рассвет|закат|сумерки|полдень|полночь|позже|продолжение)\.?$/i;
@@ -1981,18 +2064,20 @@ export function renderEpisodeScriptText(ep: EpisodeOutline, script: EpisodeScrip
   const headLoc = multiLoc ? distinctSceneLocationNames(script.scenes).join(", ") : ep.locationName;
   const head = `ЭПИЗОД ${ep.number}. ${ep.title}\n${ep.logline}\nЛокация: ${headLoc}\nПерсонажи: ${ep.characters.join(", ")}\n`;
   const body = script.scenes
-    .map((s) => {
+    .map((s, i) => {
       // Stage 157 — the reader sees the episode's LOCATION NAME per scene, not the per-scene
       // "INT/EXT — place — time" descriptor (locationDesc stays for image/video generation).
       // Stage 160 — for a multi-location manual script show THIS scene's own place instead.
       const sceneLoc = multiLoc ? (sceneLocationName(s.locationDesc) || ep.locationName || s.locationDesc) : (ep.locationName || s.locationDesc);
       const head2 = `\nСЦЕНА ${s.number}${s.sceneKind === "narration" ? " · ЗАКАДРОВЫЙ ГОЛОС" : isActionKind(s.sceneKind) ? " · ЭКШЕН" : ""} · ${s.shotType} · ~${s.durationSec}с\n${sceneLoc}\n${s.action}${(s.set ?? "").trim() ? `\n${/^SET:/i.test(s.set!.trim()) ? "" : "SET: "}${s.set!.replace(/\s+/g, " ").trim()}` : ""}`;
+      // Stage 221 (CHANGE 1) — movement / camera block between the action and the dialogue paragraphs.
+      const moves = renderMovementLines(s, i > 0 ? script.scenes[i - 1] : undefined, sceneLoc || "");
       const tail = renderStateLines(s);
       if (s.sceneKind === "narration" && (s.voiceover ?? "").trim()) {
         const local = (s.voiceoverLocal ?? "").trim();
-        return `${head2}\nЗакадровый голос: ${local || s.voiceover}${local && local !== s.voiceover ? `\n[EN voiceover]\n${s.voiceover}` : ""}${tail}`;
+        return `${head2}${moves}\nЗакадровый голос: ${local || s.voiceover}${local && local !== s.voiceover ? `\n[EN voiceover]\n${s.voiceover}` : ""}${tail}`;
       }
-      return `${head2}\n${s.dialogueLocal ?? s.dialogue}${s.dialogueLocal && s.dialogueLocal !== s.dialogue ? `\n[EN speech]\n${s.dialogue}` : ""}${tail}`;
+      return `${head2}${moves}\n${s.dialogueLocal ?? s.dialogue}${s.dialogueLocal && s.dialogueLocal !== s.dialogue ? `\n[EN speech]\n${s.dialogue}` : ""}${tail}`;
     })
     .join("\n");
   return `${head}${body}\n\nКЛИФФХЭНГЕР: ${ep.cliffhanger}\n`;
@@ -2026,7 +2111,7 @@ export function sceneClipPlan(tier: PowerTier, scenes: number | Array<{ duration
 export function renderScriptFromScenes(
   ep: { number: number; title: string; logline?: string | null; locationName?: string | null; cliffhanger?: string | null },
   characterNames: string[],
-  scenes: { number: number; sceneKind?: string | null; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; startState?: string | null; endState?: string | null }[]
+  scenes: { number: number; sceneKind?: string | null; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; action?: string | null; dialogue?: string | null; startState?: string | null; endState?: string | null; characters?: string[] | null; presence?: string | null; entrances?: string | null; continuesFrom?: string | null; videoPrompt?: string | null }[]
 ): string {
   // Stage 160 — a manual author script may keep MULTIPLE per-scene locations (stored on the Scene rows);
   // when it does, show each scene's own place (and list them in the head) instead of the one episode location.
@@ -2036,7 +2121,12 @@ export function renderScriptFromScenes(
   const body = scenes
     // Stage 157 — show the episode's LOCATION NAME per scene, not the per-scene locationDesc descriptor.
     // Stage 160 — for a multi-location manual script show THIS scene's own place instead.
-    .map((s) => `\nСЦЕНА ${s.number}${s.sceneKind === "narration" ? " · ЗАКАДРОВЫЙ ГОЛОС" : isActionKind(s.sceneKind) ? " · ЭКШЕН" : ""} · ${s.shotType ?? ""} · ~${s.durationSec ?? SCENE_MAX_SECONDS}с\n${multiLoc ? (sceneLocationName(s.locationDesc) || ep.locationName || (s.locationDesc ?? "")) : (ep.locationName || (s.locationDesc ?? ""))}\n${s.action ?? ""}\n${s.dialogue ?? "[NO DIALOGUE]"}${renderStateLines(s)}`)
+    // Stage 221 (CHANGE 1) — movement / camera block between the action and the dialogue paragraphs.
+    .map((s, i) => {
+      const sceneLoc = multiLoc ? (sceneLocationName(s.locationDesc) || ep.locationName || (s.locationDesc ?? "")) : (ep.locationName || (s.locationDesc ?? ""));
+      const moves = renderMovementLines(s, i > 0 ? scenes[i - 1] : undefined, sceneLoc || "");
+      return `\nСЦЕНА ${s.number}${s.sceneKind === "narration" ? " · ЗАКАДРОВЫЙ ГОЛОС" : isActionKind(s.sceneKind) ? " · ЭКШЕН" : ""} · ${s.shotType ?? ""} · ~${s.durationSec ?? SCENE_MAX_SECONDS}с\n${sceneLoc}\n${s.action ?? ""}${moves}\n${s.dialogue ?? "[NO DIALOGUE]"}${renderStateLines(s)}`;
+    })
     .join("\n");
   return `${head}${body}\n\nКЛИФФХЭНГЕР: ${ep.cliffhanger ?? ""}\n`;
 }
