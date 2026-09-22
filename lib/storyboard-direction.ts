@@ -141,11 +141,20 @@ export function balanceBoardCount(raw: RawDirectedBoard[], segments: SpeechSegme
   // above what the content needs, so it only trims pathological LLM over-splitting via lossless merges.
   const { ceiling: contentMaxBoards } = contentBoardBounds(segments.map(s => estimatedSpeechSeconds(s)));
 
-  // Fast path: no board overflows its 4–6s budget AND the count is not a pathological over-split — leave
-  // the model's plan untouched. The count is content-derived, so ANY count at or below the ceiling passes,
-  // including a sparse scene well under 12 or a dialogue-heavy scene well over 15.
+  // Fast path: no board overflows its 4–6s budget AND the count is not a pathological over-split — keep
+  // the model's plan (no re-distribution or merges). The count is content-derived, so ANY count at or below
+  // the ceiling passes, including a sparse scene well under 12 or a dialogue-heavy scene well over 15.
+  // NOTE: we still NORMALISE each board's durationSec to at least ceil(speech) within [4,6]s — the model
+  // sometimes assigns a duration below its own board's spoken time (e.g. 5s for 5.3s of speech, which is not
+  // an "overflow" since it is ≤ MAX_BOARD_SEC), and finalizeDirectedBoards strictly requires speech ≤
+  // duration. Bumping the duration up (never speeding up or omitting a word) is what keeps a within-budget
+  // board from failing finalisation; the model's intended duration is preserved wherever it is already big enough.
   if (boards.length <= contentMaxBoards && !boards.some(overflows))
-    return boards;
+    return boards.map(b => {
+      const need = Math.ceil(speechSec(b));
+      const duration = Math.min(STORYBOARD_MAX_BOARD_SEC, Math.max(STORYBOARD_MIN_BOARD_SEC, need, b.durationSec ?? 0));
+      return { ...b, durationSec: duration };
+    });
 
   // ── PHASE 1 (Stage 137): distribute overflowing speech onto FOLLOWING boards ──
   // For any board whose lines exceed one board's 4–6s budget (or its two-line cap), keep the maximal
