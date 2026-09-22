@@ -29,14 +29,18 @@ const MODEL = "gpt-4o";
  */
 export const SCRIPT_MODEL = "gpt-6-astra";
 /**
- * Stage 108 — user decision: EPISODE SCRIPTS are written by gpt-4o (faster, follows the shooting-script
- * shape well); idea/synopsis, season structure, the season plot and the scene breakdown stay on SCRIPT_MODEL.
- * gpt-4o is not a reasoning model → `temperature` + `max_tokens` path; its completion cap is 16 384 tokens.
+ * Stage 108 → 220 — user decision: EPISODE SCRIPTS are written by gpt-5.5 (stronger reasoning; follows the
+ * shooting-script contract + continuity rules far more reliably than gpt-4o); idea/synopsis, season structure,
+ * the season plot and the scene breakdown stay on SCRIPT_MODEL.
+ * gpt-5.5 IS a reasoning model (isReasoningModel → true): the `chat()` and `startBackgroundJSON` paths omit
+ * `temperature`, send `max_completion_tokens` / `max_output_tokens`, and set `reasoning.effort`. The
+ * EPISODE_SCRIPT_TEMPERATURE below is therefore silently ignored for this model (kept for the fallback path).
+ * Reasoning tokens count toward the completion budget, so the budget is raised to keep the JSON from truncating.
  */
-export const EPISODE_SCRIPT_MODEL = "gpt-4o";
-/** Completion budget for one episode script on EPISODE_SCRIPT_MODEL (≤ the gpt-4o 16 384-token cap). */
-export const EPISODE_SCRIPT_MAX_TOKENS = 16000;
-/** Sampling temperature for episode scripts on EPISODE_SCRIPT_MODEL. */
+export const EPISODE_SCRIPT_MODEL = "gpt-5.5";
+/** Completion budget for one episode script on EPISODE_SCRIPT_MODEL (headroom for reasoning + JSON body). */
+export const EPISODE_SCRIPT_MAX_TOKENS = 32000;
+/** Sampling temperature for episode scripts — used only if EPISODE_SCRIPT_MODEL is switched to a non-reasoning model. */
 export const EPISODE_SCRIPT_TEMPERATURE = 0.7;
 
 /** Reasoning-family models (gpt-5*, gpt-6*, o*) use a different parameter set than gpt-4o. */

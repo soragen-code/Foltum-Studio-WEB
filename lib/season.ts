@@ -1140,6 +1140,47 @@ export function normalizeEpisodeScript(script: EpisodeScript, characters?: Chara
       timeSkipBefore: isTimeSkip(s.timeSkipBefore) ? s.timeSkipBefore : "none",
       };
     });
+  // Stage 220 (CHANGE A) — DETERMINISTIC SUB-LOCATION CONTINUITY (collapse to the active spot). Adjacent
+  // clips joined by a CONTINUOUS seam are a straight CUT and therefore MUST share the SAME sub-location:
+  // the place cannot jump between two clips shown back to back. A genuine move to a new spot is legal ONLY
+  // when the clip is a shown on-camera transition (continuesFrom="location-change") or a deliberate sequence
+  // break / time skip (continuesFrom="new-sequence"); those clips ADOPT their spot as the new active one and
+  // the next clip may legally continue there. Any other clip whose sub-location differs from the active spot
+  // is a VIOLATION (the model ignored the prompt rule): we deterministically COLLAPSE it back to the active
+  // sub-location (and its locationDesc), model-independently. The AUTO path only — a MANUAL (author) script
+  // may legitimately walk through several distinct spots (see planManualEpisodeLocations), so it is skipped.
+  if (!opts?.manual) {
+    const normSub = (s?: string | null) => (s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+    let activeSub = normSub(scenes[0]?.subLocation);
+    let activeSubText = (scenes[0]?.subLocation ?? "").trim();
+    let activeLocDesc = (scenes[0]?.locationDesc ?? "").trim();
+    for (let i = 1; i < scenes.length; i++) {
+      const cur = scenes[i];
+      const link = (cur.continuesFrom ?? "").trim().toLowerCase();
+      if (link === "location-change" || link === "new-sequence") {
+        // Legal place change: this clip legitimately travels to / opens at a new spot → it becomes active.
+        activeSub = normSub(cur.subLocation);
+        activeSubText = (cur.subLocation ?? "").trim();
+        activeLocDesc = (cur.locationDesc ?? "").trim() || activeLocDesc;
+        continue;
+      }
+      const cs = normSub(cur.subLocation);
+      if (cs && activeSub && cs !== activeSub) {
+        // VIOLATION: continuous seam but a different spot → collapse back to the active sub-location.
+        console.warn(`[normalizeEpisodeScript] scene ${cur.number}: sub-location "${(cur.subLocation ?? "").trim()}" differs from active "${activeSubText}" on a continuous seam (continuesFrom="${cur.continuesFrom ?? ""}") — collapsing to the active spot.`);
+        if (activeSubText) cur.subLocation = activeSubText;
+        if (activeLocDesc) cur.locationDesc = activeLocDesc;
+      } else if (!cs && activeSubText) {
+        // Missing spot on a continuous seam → inherit the active one (keeps grouping / references stable).
+        cur.subLocation = activeSubText;
+      } else if (cs && !activeSub) {
+        // No active spot yet (scene 1 had none) → adopt this scene's spot as the baseline.
+        activeSub = cs;
+        activeSubText = (cur.subLocation ?? "").trim();
+      }
+      if (!activeLocDesc && (cur.locationDesc ?? "").trim()) activeLocDesc = (cur.locationDesc ?? "").trim();
+    }
+  }
   // Stage 42/44 — deterministic frame hand-off as a MATCH CUT ON ACTION. On every continuous seam
   // (continuesFrom is not location-change / new-sequence) the WORLD block of scene N+1's startState is
   // scene N's endState WORLD verbatim (same instant of the same action, same place, same light), while
@@ -1580,6 +1621,7 @@ S6. Dramatize ONLY this episode's logline — a natural continuation of the prev
 S14. SET INVENTORY (when the user prompt gives a LOCATION SET INVENTORY): those entries are the ONLY physical objects that exist in this location — they are already drawn on the location reference images at exactly the listed positions. The "action", [BLOCKING], [ACTION] and props of every scene use ONLY objects from that list, at the listed placement; never invent furniture, doors, vehicles, machines or plot props that are not listed. For EVERY scene fill the ENGLISH field "set": ONE compact line "SET: <Location name> — <objects from the inventory that are in frame or used in this scene, each with its placement>" (1–2 lines, 3–8 objects, verbatim names from the list). When no inventory is given, omit "set".
 S15. REGION (which part of the ONE key location this scene occupies): for EVERY scene fill the ENGLISH field "region" — ONE short phrase (max 20 words) naming WHICH part / corner of the single key location the scene physically happens in and roughly from where we look, described STRICTLY with the location's own fixed set objects and architecture, e.g. "at the eastern bench against the rear wall, looking toward the columns" or "by the counter in the front-left corner, facing the entrance". It must NOT name any new furniture, add or move objects, or change the room — the location is constant (R-ONE-LOCATION); "region" only says where inside that constant room this scene sits. Scenes that stay in the SAME part of the room MUST use the SAME wording so they share one region plate; a scene that moves to a different corner gets a different "region". This is orthogonal to the camera: the camera still moves freely within the region.
 S16. SUB-LOCATION (machine-readable spot key): for EVERY scene fill the ENGLISH field "subLocation" — a SHORT, STABLE label (2–5 words, max 8, plain lowercase words, no punctuation) naming the distinct SPOT / vantage WITHIN the episode's one key location where this scene physically happens (e.g. "by the tall window", "at the front door", "behind the bar counter", "on the back staircase", "at the kitchen table"). It is a MACHINE KEY, not a description: name ONLY the spot — never re-describe the location, its architecture, light, weather or props (the full look stays the ONE short "locationDesc" sentence; R8/S3/S9 are NOT relaxed by this field). Whenever the action SHIFTS to a different spot inside the same location, give a DIFFERENT "subLocation"; scenes that stay at the SAME spot MUST repeat the SAME wording VERBATIM (identical characters) so the backend can group them into one unique sub-location and reuse a single angle reference. This is orthogonal to the camera and may align with "region", but "subLocation" is the compact stable key (region is the fuller vantage phrase). Always fill it; use the location's main/default spot wording (e.g. "main hall", "open floor") only when the scene truly has no distinct spot.
+    HARD SUB-LOCATION CONTINUITY BAN: two ADJACENT clips are a straight CUT and MUST carry the SAME "subLocation" — the place NEVER jumps from one clip to the very next one shown after it. A scene's "subLocation" may differ from the PREVIOUS scene's ONLY when the PREVIOUS scene is a shown on-camera transition marked "continuesFrom": "location-change" (the character physically WALKS from the old spot to the new one and the camera FOLLOWS, staged in that previous scene's [BLOCKING]/[ACTION]/[TRANSITION] and its "action"/videoPrompt) — or when THIS scene itself is a deliberate "new-sequence" time/place jump. In every other case the "subLocation" of this scene MUST be VERBATIM the same as the previous scene's. A move to a new spot is therefore NEVER a bare cut: the clip before it must be the "location-change" transition clip that shows the travel. Do NOT force a transition into every clip — most clips stay at the current spot and repeat its "subLocation" exactly; add a "location-change" clip ONLY when the plot really moves the characters to a new spot, and then the clip that arrives there continues seamlessly. A scene that silently switches "subLocation" across an ordinary seam ("same-location-continuation" / "character-moves") is REJECTED.
 
 Before answering, check: ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES} scenes (content-driven, never a fixed count); scene 1 carries a non-empty "hook" and does NOT open on exposition or on a character merely entering; exactly ONE "peakSceneIndex" (1-based) with every other scene building toward it; the LAST scene ends on an explicit unresolved cliffhanger image that LOGICALLY FOLLOWS from the events of THIS episode (a direct consequence of what the characters did and decided on screen — a causal pay-off, never an unrelated or arbitrary shock bolted on at the end); each scene's "durationSec" is set by its CONTENT to the clip's real length, an integer in ${SCENE_MIN_SECONDS}–${SCENE_CLIP_MAX_SECONDS} s (no scene shorter than ${SCENE_MIN_SECONDS} s or longer than ${SCENE_CLIP_MAX_SECONDS} s); at most ${MAX_SILENT_SCENES} silent scenes and each silent scene carries a "visualBeat" (every non-silent scene has on-camera English dialogue with cast names as speakers); each talking scene has ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} English dialogue sentences whose length MATCHES the clip (a single short line for a ${SCENE_MIN_SECONDS}–7 s clip, a two-line exchange for a fuller one — no dead air, no crammed speech), and a longer conversation is SPLIT across consecutive scenes (one line / short exchange per clip, a camera cut between them) rather than forced into one; every fight / physical confrontation promised by the logline is an "action" scene with face-to-face beat-by-beat choreography (R9); every videoPrompt has all 9 tags including [CHARACTER], a single continuous choreography beat in [ACTION] that runs until the cut (no frozen final pose) and a cut list in [SHOT TYPE] that opens wide and mixes shot scales across the space; [BLOCKING] moves characters between different zones and gives each speaker ordinary business; [ACTION] adds secondary background life so the place feels alive; and EACH scene continues seamlessly from the previous one — "presence"/"entrances"/"continuesFrom" are filled and every entrance/exit/move is shown in [BLOCKING]/[ACTION]/[TRANSITION] so nobody teleports or vanishes; the SUM of all "durationSec" lands between ${EPISODE_MIN_TOTAL_SECONDS} and ${EPISODE_MAX_TOTAL_SECONDS} s (never under ${EPISODE_MIN_TOTAL_SECONDS} s, never over ${EPISODE_MAX_TOTAL_SECONDS} s) and no scene exceeds ${SCENE_CLIP_MAX_SECONDS} s; EVERY scene has a non-empty English "endState" (${STATE_SIZE_TEXT}, opening with the IN FRAME / NOT IN FRAME inventory and exact placement of every character and prop: pose, wardrobe, camera, composition, depth, background, lighting, time/weather, colour palette and props of the final frame) AND a non-empty English "startState" (the same exhaustive description for frame 1), both written as labelled WORLD: / CAMERA: blocks; on every continuous seam (continuesFrom other than location-change / new-sequence) the startState WORLD equals the previous scene's endState WORLD exactly (same instant of the same action, same place, same light) while the startState CAMERA differs from the previous endState CAMERA in at least two of shot scale / height / angle; every scene's locationDesc on a continuous seam is identical to the previous scene's; and a line may end right on the cut, but is never split across two scenes; characters never fall silent or freeze before the cut.`;
 }

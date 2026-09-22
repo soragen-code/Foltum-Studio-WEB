@@ -12,7 +12,7 @@ import type { EpisodeScript, SceneScript } from "../season";
 // Prompt version — stamped onto Episode.promptVersion when a script is generated.
 // ---------------------------------------------------------------------------
 /** Bumped whenever the episode-script prompt CONTRACT changes; written to Episode.promptVersion. */
-export const EPISODE_SCRIPT_PROMPT_VERSION = "6.3.0";
+export const EPISODE_SCRIPT_PROMPT_VERSION = "6.4.0";
 
 // ---------------------------------------------------------------------------
 // Numeric bounds (LITERAL mirrors of the season.ts constants — kept in step by tests).
