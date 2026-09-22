@@ -24,6 +24,7 @@ import { desiredTotalFrames, locationDetailLevel, locationDetailLabel, episodeLo
 import { CHARACTER_PHOTO_COUNT } from '@/lib/reference-counts'
 import { CHARACTER_REFERENCE_COST, LOCATION_SET_COST, POWER_TIERS, POWER_TIER_CONFIG, DEFAULT_POWER_TIER, legacyTierToPower, isPowerTier, type PowerTier } from '@/lib/power-tier'
 import { IMAGE_MODELS, DEFAULT_IMAGE_MODEL, VIDEO_MODEL_LABEL, type ImageModelId } from '@/lib/ai-models'
+import { VIDEO_FAMILIES, DEFAULT_VIDEO_MODEL_ID, getVideoModel, normalizeVideoModelId } from '@/lib/video-models'
 import { EpisodeNavGrid } from './episode-nav-grid'
 import { StoryboardPanel } from './storyboard-panel'
 import { canChooseMode, canEnterProduction, productionSurface, type ProductionMode } from '@/lib/production-mode'
@@ -179,6 +180,23 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [powerTier, setPowerTier] = useState<PowerTier>(() => initialPowerTier(project))
   const powerTierRef = useRef<PowerTier>(powerTier)
   useEffect(() => { powerTierRef.current = powerTier }, [powerTier])
+  // Video-model selection (family + version), applied to scene generation, «Generate all» and the
+  // chain run. Sent as `videoModelId` in the generation request body; the server resolves the slug
+  // and per-provider body. Default = Seedance 2.5 (backward compatible). See lib/video-models.ts.
+  const [videoModelId, setVideoModelId] = useState<string>(() => {
+    const fromScene = (initial?.scenes ?? []).map((s: any) => s?.videoModel).find(Boolean)
+    return normalizeVideoModelId(fromScene ?? DEFAULT_VIDEO_MODEL_ID)
+  })
+  const videoModelIdRef = useRef<string>(videoModelId)
+  useEffect(() => { videoModelIdRef.current = videoModelId }, [videoModelId])
+  // Currently selected family id, derived from the selected model.
+  const selectedVideoFamily = getVideoModel(videoModelId).family
+  const onSelectVideoFamily = useCallback((familyId: string) => {
+    const fam = VIDEO_FAMILIES.find((f) => f.id === familyId)
+    if (!fam || fam.versions.length === 0) return
+    // If the current version already belongs to the chosen family keep it, else pick the family's first.
+    setVideoModelId((cur) => (getVideoModel(cur).family === familyId ? cur : fam.versions[0].id))
+  }, [])
   const stitchJob = useJobPolling({
     onFinish: (res) => {
       setStitching(false)
@@ -922,7 +940,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       // Stage 89: send the top-panel Quality & speed (power tier) so this generation — and per-frame
       // Edit/Regenerate, which call this same route — use exactly what the user picked.
-      const body: Record<string, unknown> = { projectId: project.id, sceneId, powerTier: powerTierRef.current }
+      const body: Record<string, unknown> = { projectId: project.id, sceneId, powerTier: powerTierRef.current, videoModelId: videoModelIdRef.current }
       const res = await postJobStart('/api/ai/generate-video', body)
       const data = await res.json(); if (!res.ok) throw new Error(data?.error ?? 'Failed to start generation')
       patchScene(sceneId, { status: 'generating' }); pollVideoJob(sceneId, data.jobId); void refreshCredits()
@@ -1005,7 +1023,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const generateAllScenes = async () => {
     setGenAllAsk(null); setGenAllStarting(true); setError(null)
     try {
-      const res = await postJobStart(`/api/ai/episodes/${episode.id}/generate-all`, { powerTier: powerTierRef.current })
+      const res = await postJobStart(`/api/ai/episodes/${episode.id}/generate-all`, { powerTier: powerTierRef.current, videoModelId: videoModelIdRef.current })
       const d = await res.json().catch(() => ({}))
       if (!res.ok || !Array.isArray(d?.jobs)) throw new Error(d?.error ?? 'Failed to start generation')
       if (d.chain) { setChainRunActive(true); setChainRunNote(null) }
@@ -1330,7 +1348,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               if (l.derived) {
                 return (
                   <div key={l.id} className="rounded-lg border border-dashed border-border/60 p-3" data-testid="ref-location-derived">
-                    <div className="min-w-0 truncate text-sm font-medium">{l.name}</div>
+                    <div className="min-w-0 break-words [overflow-wrap:anywhere] text-sm font-medium">{l.name}</div>
                     <p className="mt-1 text-xs text-muted-foreground">Локация из сцен эпизода. Референсные кадры появятся после генерации референсов сцен.</p>
                   </div>
                 )
@@ -1345,7 +1363,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               return (
                 <div key={l.id} className="rounded-lg border border-border/60 p-3" data-testid="ref-location">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0 truncate text-sm font-medium">{l.name} <span className="font-normal text-muted-foreground">· {locationFrames(l)} {locationFrames(l) === 1 ? 'frame' : 'frames'}</span></div>
+                    <div className="min-w-0 break-words [overflow-wrap:anywhere] text-sm font-medium">{l.name} <span className="font-normal text-muted-foreground">· {locationFrames(l)} {locationFrames(l) === 1 ? 'frame' : 'frames'}</span></div>
                     <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground" title="The recommended number of frames depends on the required location detail; add angles with '+' as needed" data-testid="location-detail-badge">detail: {locationDetailLabel(detail)} · recommended {desiredTotalFrames(l)}</span>
                   </div>
                   <div className="mt-2">
@@ -1660,6 +1678,34 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               })}
             </div>
           </div>
+          {/* Video-model selector (family + version). Applied to scene generation, «Generate all» and the
+              chain run via `videoModelId` in the request body; the server resolves the slug + per-provider
+              body (lib/video-models.ts). Default = Seedance 2.5. Model choice does NOT change the price. */}
+          <div className="inline-flex items-center gap-2" data-testid="video-model-picker">
+            <span className="text-xs text-muted-foreground">Модель видео:</span>
+            <select
+              value={selectedVideoFamily}
+              onChange={(e) => onSelectVideoFamily(e.target.value)}
+              className="rounded-lg border border-border bg-card px-2 py-1.5 text-xs font-medium"
+              aria-label="Семейство модели видео"
+              data-testid="video-model-family"
+            >
+              {VIDEO_FAMILIES.map((f) => (
+                <option key={f.id} value={f.id}>{f.label}</option>
+              ))}
+            </select>
+            <select
+              value={videoModelId}
+              onChange={(e) => setVideoModelId(normalizeVideoModelId(e.target.value))}
+              className="rounded-lg border border-border bg-card px-2 py-1.5 text-xs font-medium"
+              aria-label="Версия модели видео"
+              data-testid="video-model-version"
+            >
+              {(VIDEO_FAMILIES.find((f) => f.id === selectedVideoFamily)?.versions ?? []).map((v) => (
+                <option key={v.id} value={v.id}>{v.label}</option>
+              ))}
+            </select>
+          </div>
           {/* Stage 100: parallel mode removed — generation is always sequential (chain), so there is no
               mode selector anymore. Scenes always start one after another, each from the previous scene's final frame. */}
           {chainRunActive && <span className="inline-flex items-center gap-1 text-xs text-primary" data-testid="chain-run-active"><Loader2 className="h-3 w-3 animate-spin" /> The chain continues: scenes are generated in sequence</span>}
@@ -1727,7 +1773,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       {scene.sceneKind === 'narration' && <span className="ml-2 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary align-middle" data-testid="narration-badge">Voiceover</span>}
                       {scene.sceneKind === 'action' && <span className="ml-2 rounded bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-600 align-middle" data-testid="scene-kind-action">Action</span>}
                       <span className="text-xs font-normal text-muted-foreground"> · ~{scene.durationSec ?? 15}s</span>
-                      {(validUrl(scene.videoUrl) || gen) && <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground align-middle" data-testid="scene-provider-badge">{VIDEO_MODEL_LABEL}</span>}
+                      {(validUrl(scene.videoUrl) || gen) && <span className="ml-2 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground align-middle" data-testid="scene-provider-badge">{scene.videoModel ? getVideoModel(scene.videoModel).label : (gen ? getVideoModel(videoModelId).label : VIDEO_MODEL_LABEL)}</span>}
                     </div>
                     {scene.lookStale && validUrl(scene.videoUrl) && (
                       <div className="mt-1 inline-flex items-center rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-700" data-testid="scene-look-stale">Character appearance changed — regenerate</div>

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/db";
 // Stage 73: scene video and scene-still transports are routed through the per-project provider layer
 // (WaveSpeed only since Stage 104). Prompt building, refs and chain logic are unchanged.
-import { startVideoGeneration, getVideoGenerationState, cancelVideoGeneration } from "@/lib/providers/video-provider";
+import { getVideoGenerationState, cancelVideoGeneration } from "@/lib/providers/video-provider";
 import { resolveVideoPredecessor, assertPredecessorReady, buildReangleRequest } from "@/lib/reangle";
 // Stage 122: lazily resolve/generate the scene's REGION PLATE (env plate of this part of the location),
 // reused across scenes in the same region via the Location.regionPlates cache; non-blocking (null on failure).
@@ -14,7 +14,8 @@ import { ensureReangle } from "@/lib/reangle-store";
 import { translateDialogue, detectSpokenLanguage } from "@/lib/voiceover";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
 import { extractLastFrameBuffer, extractFirstFrameBuffer } from "@/lib/ffmpeg";
-import { normalizeVideoModel, videoModelSlug } from "@/lib/ai-models";
+import { normalizeVideoModelId, getVideoModel, buildVideoRequest } from "@/lib/video-models";
+import { wavespeedSubmit, SEEDANCE_T2V_SLUG } from "@/lib/wavespeed";
 import type { PredictionState } from "@/lib/wavespeed";
 import { getBucketConfig } from "@/lib/aws-config";
 import { VISUAL_STYLE_ID, VISUAL_STYLE } from "@/lib/visual-style";
@@ -53,6 +54,11 @@ export interface VideoJobParams {
   resolution?: string;
   /** Legacy field, accepted and ignored: every job renders on Seedance 2.5 (see normalizeVideoModel). */
   provider?: string | null;
+  /**
+   * Video model selector — catalog id from lib/video-models (e.g. "seedance-2.5", "kling-v2.6-pro",
+   * "hailuo-02-pro", "veo3.1"). Omitted / null / unknown → Seedance 2.5, so old callers behave as before.
+   */
+  videoModelId?: string | null;
   /**
    * Stage 167 — when set, this job renders ONE SHOT (the atomic unit of generation) instead of a whole
    * scene: the prompt is assembled from the Shot's blocks (assembleShotPrompt), the per-shot videoUrl is
@@ -314,8 +320,11 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
     let retryRefs: SceneReference[] = built.retryRefs;
     let reference = built.reference;
 
-    const provider = normalizeVideoModel(params.provider);
-    const modelSlug = videoModelSlug(provider);
+    // Stage 200 — resolve the selected video model (family + version) from the catalog. Legacy /
+    // missing / unknown ids fall back to Seedance 2.5, so pre-selector callers behave exactly as before.
+    const videoModelId = normalizeVideoModelId(params.videoModelId ?? params.provider);
+    const videoDef = getVideoModel(videoModelId);
+    const modelSlug = videoDef.slugT2V ?? videoDef.slugI2V ?? SEEDANCE_T2V_SLUG;
     let predictionId: string;
     let attempt: GenerationAttempt;
     let submitMessage: string;
@@ -325,7 +334,9 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
     // ~10 s for the default scene path). The provider floor of 4 s is enforced here.
     const clipDuration = Math.max(4, Math.round(Number(params.duration ?? 5)));
 
-    if (built.referenceKind === "text_only") {
+    // Families without multi-image reference support (Kling / MiniMax / Veo) degrade gracefully to a
+    // text-only scene clip — the prompt already fully describes the scene. Only Seedance sends refs.
+    if (built.referenceKind === "text_only" || !videoDef.refImages) {
       referenceImages = [];
       retryRefs = [];
     } else if (referenceImages.length) {
@@ -373,8 +384,17 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
       throw new Error("The previous video, camera or references changed during preprocessing. Retry this scene to use the current inputs.");
     if (await isCancelRequested(jobId)) throw new Error("Video generation canceled before submission");
     if (referenceImages.some(u => forbiddenReferenceUrls.includes(u))) throw new Error("Forbidden source frame in video references");
-    predictionId = await startVideoGeneration({ ...input, ...(referenceImages.length ? { reference_images: referenceImages } : {}) });
+    // Build the exact per-provider request body for the selected model and submit through the shared
+    // WaveSpeed transport (which also enforces the English-prompt guarantee). For Seedance this is
+    // byte-identical to the pre-selector body (reference_images[] + resolution/duration/aspect/audio).
+    const { slug: submitSlug, body: submitBody } = buildVideoRequest({
+      def: videoDef, mode: "t2v", prompt,
+      referenceImages, duration: clipDuration, resolution: SCENE_RESOLUTION,
+      aspectRatio: "9:16", generateAudio: true,
+    });
+    predictionId = await wavespeedSubmit(submitSlug, submitBody, "WaveSpeed");
     pipelineExtra.provider = "wavespeed";
+    pipelineExtra.videoModel = videoModelId;
     submitMessage = SCENE_STAGE_MESSAGE.queued;
     pipelineExtra.retry = {
       basePrompt, model: modelSlug, duration: input.duration, resolution: input.resolution, refs: retryRefs, fallbackRefs,
@@ -505,9 +525,13 @@ async function continueChainRun(episodeId: string, finishedSceneNumber: number):
     return;
   }
   await prisma.creditTransaction.create({ data: { userId: project.userId, amount: -cost, description: `Episode ${episode.number}, scene ${next.number} — video generation via chain (${tier.id})` } });
-  await prisma.scene.update({ where: { id: next.id }, data: { status: "generating", language: "en", videoModel: normalizeVideoModel(null) } });
+  // Stage 200 — inherit the video model (family + version) chosen for the scene that just finished, so
+  // the whole chain renders on one model instead of silently resetting to the Seedance default.
+  const finishedScene = episode.scenes.find(s => s.number === finishedSceneNumber);
+  const inheritedModelId = normalizeVideoModelId(finishedScene?.videoModel);
+  await prisma.scene.update({ where: { id: next.id }, data: { status: "generating", language: "en", videoModel: inheritedModelId } });
   const job = await prisma.generationJob.create({ data: { type: "video", status: "processing", progress: 2, message: "Chain: starting next scene...", projectId: project.id, sceneId: next.id } });
-  runInBackground(() => runVideoJob({ jobId: job.id, sceneId: next.id, projectId: project.id, userId: project.userId, cost, duration, resolution: tier.resolution }));
+  runInBackground(() => runVideoJob({ jobId: job.id, sceneId: next.id, projectId: project.id, userId: project.userId, cost, duration, resolution: tier.resolution, videoModelId: inheritedModelId }));
 }
 
 /** Stage 40 — chain mode: a failed/canceled scene stops the active chain run with a Russian note. */
@@ -655,12 +679,17 @@ async function runShotVideoJob(params: VideoJobParams): Promise<void> {
     let referenceImages = [...portraitUrls, ...(locationUrl ? [locationUrl] : [])]
       .filter((u, i, a) => a.indexOf(u) === i)
       .slice(0, SHOT_REFERENCE_IMAGE_CAP);
+    // Stage 200 — resolve the selected video model; families without multi-image reference support
+    // (Kling / MiniMax / Veo) render text-only, exactly like the scene path.
+    const videoModelId = normalizeVideoModelId(params.videoModelId ?? params.provider);
+    const videoDef = getVideoModel(videoModelId);
+    const modelSlug = videoDef.slugT2V ?? videoDef.slugI2V ?? SEEDANCE_T2V_SLUG;
+    if (!videoDef.refImages) referenceImages = [];
     if (referenceImages.length) referenceImages = await downscaleReferences(referenceImages, projectId);
 
-    const provider = normalizeVideoModel(params.provider);
-    const modelSlug = videoModelSlug(provider);
+    const shotClipDuration = Math.max(4, Math.round(Number(params.duration ?? shot.duration ?? 3)));
     const input = {
-      prompt, model: modelSlug, duration: Math.max(4, Math.round(Number(params.duration ?? shot.duration ?? 3))),
+      prompt, model: modelSlug, duration: shotClipDuration,
       resolution: SCENE_RESOLUTION, aspect_ratio: "9:16", generate_audio: true, watermark: false,
     };
     const attempt: GenerationAttempt = {
@@ -670,9 +699,14 @@ async function runShotVideoJob(params: VideoJobParams): Promise<void> {
     };
     diagnostics.push(attempt); await persist(); logAttempt(attempt);
     if (await isCancelRequested(jobId)) throw new Error("Shot generation canceled before submission");
-    const predictionId = await startVideoGeneration({ ...input, ...(referenceImages.length ? { reference_images: referenceImages } : {}) });
+    const { slug: submitSlug, body: submitBody } = buildVideoRequest({
+      def: videoDef, mode: "t2v", prompt,
+      referenceImages, duration: shotClipDuration, resolution: SCENE_RESOLUTION,
+      aspectRatio: "9:16", generateAudio: true,
+    });
+    const predictionId = await wavespeedSubmit(submitSlug, submitBody, "WaveSpeed");
     attempt.predictionId = predictionId; attempt.status = "processing";
-    state = { predictionId, sceneId, shotId: shot.id, projectId, userId, cost, startedAt: Date.now(), diagnostics, provider: "wavespeed", submittedPrompt: prompt, continuity: "none" };
+    state = { predictionId, sceneId, shotId: shot.id, projectId, userId, cost, startedAt: Date.now(), diagnostics, provider: "wavespeed", videoModel: videoModelId, submittedPrompt: prompt, continuity: "none" };
     // This checkpoint MUST succeed: never swallow the prediction ID write.
     await prisma.generationJob.update({ where: { id: jobId }, data: {
       resultData: JSON.stringify(state), message: SCENE_STAGE_MESSAGE.queued, progress: SCENE_STAGE_PROGRESS.queued,
@@ -789,8 +823,11 @@ async function continueShotChain(episodeId: string): Promise<void> {
   }
   await prisma.creditTransaction.create({ data: { userId: project.userId, amount: -cost, description: `Episode ${episode.number}, scene ${next.sceneNumber}, shot ${next.index + 1} — video generation via chain (${tier.id})` } });
   await prisma.shot.update({ where: { id: next.id }, data: { status: "generating", error: null } });
+  // Stage 200 — inherit the parent scene's selected video model so every shot renders on one model.
+  const parentScene = await prisma.scene.findUnique({ where: { id: nextShot.sceneId }, select: { videoModel: true } });
+  const inheritedModelId = normalizeVideoModelId(parentScene?.videoModel);
   const job = await prisma.generationJob.create({ data: { type: "video", status: "processing", progress: 2, message: "Chain: starting next shot...", projectId: project.id, sceneId: nextShot.sceneId } });
-  runInBackground(() => runVideoJob({ jobId: job.id, sceneId: nextShot.sceneId, shotId: next.id, projectId: project.id, userId: project.userId, cost, duration, resolution: tier.resolution }));
+  runInBackground(() => runVideoJob({ jobId: job.id, sceneId: nextShot.sceneId, shotId: next.id, projectId: project.id, userId: project.userId, cost, duration, resolution: tier.resolution, videoModelId: inheritedModelId }));
 }
 
 /**

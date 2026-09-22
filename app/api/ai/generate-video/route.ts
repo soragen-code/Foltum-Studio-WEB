@@ -11,6 +11,7 @@ import { runVideoJob } from "@/lib/workers/video-job";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
 import { resolvePowerTier, isPowerTier } from "@/lib/power-tier";
 import { normalizeVideoModel } from "@/lib/ai-models";
+import { normalizeVideoModelId } from "@/lib/video-models";
 import { persistShotPlanForApprovedEpisode } from "@/lib/workers/shot-plan-persist";
 
 /** Tier (power) determines credit cost AND video quality — single config in lib/power-tier.ts. */
@@ -74,6 +75,9 @@ export async function POST(request: Request) {
     // Stage 33: Seedance 2.5 is the only video model. A legacy `provider` in the request body (or a
     // legacy value stored on the scene) is accepted and normalized to it — never an error.
     const provider = normalizeVideoModel(parsed.data.provider ?? sceneData.videoModel);
+    // Video model selector (family + version). The chosen catalog id (or the scene's stored one, or the
+    // Seedance default) is what actually drives the worker and is persisted to Scene.videoModel.
+    const videoModelId = normalizeVideoModelId(parsed.data.videoModelId ?? sceneData.videoModel);
 
     // Two generation modes (persisted per episode). Default SCENE mode renders the whole scene as ONE
     // clip (1 scene = 1 prompt = 1 generation). Optional «Шоты» mode renders per shot. The mode gates
@@ -104,7 +108,7 @@ export async function POST(request: Request) {
       } });
       try { await prisma.scene.update({ where: { id: sceneId }, data: { language: spokenLang } }); }
       catch (e) { console.warn("Could not persist scene.language (column missing?):", (e as any)?.message); }
-      try { await prisma.scene.update({ where: { id: sceneId }, data: { videoModel: provider } }); }
+      try { await prisma.scene.update({ where: { id: sceneId }, data: { videoModel: videoModelId } }); }
       catch (e) { console.warn("Could not persist scene.videoModel (column missing?):", (e as any)?.message); }
       // Regenerate clears the stored clip + last frame so the scene is rebuilt from scratch.
       if (isRegen) await prisma.scene.update({ where: { id: sceneId }, data: { videoUrl: null, lastFrameUrl: null } }).catch(() => {});
@@ -117,7 +121,7 @@ export async function POST(request: Request) {
       // No shotId → the worker renders the whole scene as one clip (runSceneVideoJob).
       runInBackground(() => runVideoJob({
         jobId: sceneJob.id, sceneId, projectId, userId: user.id, cost, duration,
-        resolution: tier.resolution, provider,
+        resolution: tier.resolution, provider, videoModelId,
       }));
       return NextResponse.json({ jobId: sceneJob.id, creditsRemaining: (user.credits ?? 0) - cost });
     }
@@ -194,7 +198,7 @@ export async function POST(request: Request) {
     // Remember the video model chosen for this scene so a later background resume
     // (or single-scene regen) reuses the same one.
     try {
-      await prisma.scene.update({ where: { id: sceneId }, data: { videoModel: provider } });
+      await prisma.scene.update({ where: { id: sceneId }, data: { videoModel: videoModelId } });
     } catch (e) {
       console.warn("Could not persist scene.videoModel (column missing?):", (e as any)?.message);
     }
@@ -226,6 +230,7 @@ export async function POST(request: Request) {
         duration,
         resolution: tier.resolution,
         provider,
+        videoModelId,
       })
     );
 

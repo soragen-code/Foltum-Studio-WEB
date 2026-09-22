@@ -10,6 +10,7 @@ import { runVideoJob } from "@/lib/workers/video-job";
 import { resolvePowerTier, isPowerTier } from "@/lib/power-tier";
 import { sceneClipPlan, sceneClipSeconds, sceneClipCost } from "@/lib/season";
 import { normalizeVideoModel } from "@/lib/ai-models";
+import { normalizeVideoModelId } from "@/lib/video-models";
 import { chainOrder, nextSequentialShot, nextSequentialChainScene } from "@/lib/chain-run";
 import { persistShotPlanForApprovedEpisode } from "@/lib/workers/shot-plan-persist";
 
@@ -69,6 +70,9 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
   const force = Boolean(body?.force);
   // Stage 33: Seedance 2.5 only — a legacy `provider`/`videoModel` in the body is accepted and ignored.
   const provider = normalizeVideoModel(body?.provider ?? body?.videoModel);
+  // Video model selector (family + version): the catalog id chosen in the episode top panel drives the
+  // whole chain (persisted to Scene.videoModel; the worker inherits it scene-to-scene / shot-to-shot).
+  const videoModelId = normalizeVideoModelId(body?.videoModelId ?? body?.provider ?? body?.videoModel);
 
   const episode = await loadEpisode(id, session.user.id);
   if (!episode) return NextResponse.json({ error: "Episode not found" }, { status: 404 });
@@ -117,11 +121,11 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     if (chargedScene.count !== 1) return NextResponse.json({ error: `Insufficient credits: for the next scene need ${cost}, balance ${user.credits ?? 0}` }, { status: 402 });
     await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Episode ${episode.number}, scene ${firstScene.number} — video generation via chain (${tier.id})` } });
     try { await prisma.scene.update({ where: { id: firstScene.id }, data: { language: spokenLang } }); } catch (e) { console.warn("Could not persist scene.language:", (e as any)?.message); }
-    await prisma.scene.update({ where: { id: firstScene.id }, data: { status: "generating", videoModel: provider } }).catch(() => {});
+    await prisma.scene.update({ where: { id: firstScene.id }, data: { status: "generating", videoModel: videoModelId } }).catch(() => {});
     await prisma.episode.update({ where: { id: episode.id }, data: { chainRunActive: true, chainRunNote: null } });
     const job = await prisma.generationJob.create({ data: { type: "video", status: "processing", progress: 2, message: "Chain: starting first scene...", projectId: project.id, sceneId: firstScene.id } });
     // No shotId → the worker renders the whole scene as one clip (runSceneVideoJob).
-    runInBackground(() => runVideoJob({ jobId: job.id, sceneId: firstScene.id, projectId: project.id, userId: user.id, cost, duration, resolution: tier.resolution, provider }));
+    runInBackground(() => runVideoJob({ jobId: job.id, sceneId: firstScene.id, projectId: project.id, userId: user.id, cost, duration, resolution: tier.resolution, provider, videoModelId }));
     const fresh = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true } });
     return NextResponse.json({ chain: true, shot: false, jobs: [{ sceneId: firstScene.id, jobId: job.id }], started: 1, insufficient: [], plan: { duration, costPerScene: cost, total: cost }, creditsRemaining: fresh?.credits ?? 0 });
   }
@@ -177,9 +181,11 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     if (charged.count !== 1) return NextResponse.json({ error: `Insufficient credits: for the next shot need ${cost}, balance ${user.credits ?? 0}` }, { status: 402 });
     await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Episode ${episode.number}, scene ${firstShot.sceneNumber}, shot ${firstShot.index + 1} — video generation via chain (${tier.id})` } });
     await prisma.shot.update({ where: { id: firstShot.id }, data: { status: "generating", error: null } });
+    // Persist the selected model on the shot's parent scene so the shot chain inherits it shot-to-shot.
+    await prisma.scene.update({ where: { id: shotRow.sceneId }, data: { videoModel: videoModelId } }).catch(() => {});
     await prisma.episode.update({ where: { id: episode.id }, data: { chainRunActive: true, chainRunNote: null } });
     const job = await prisma.generationJob.create({ data: { type: "video", status: "processing", progress: 2, message: "Chain: starting first shot...", projectId: project.id, sceneId: shotRow.sceneId } });
-    runInBackground(() => runVideoJob({ jobId: job.id, sceneId: shotRow.sceneId, shotId: firstShot.id, projectId: project.id, userId: user.id, cost, duration, resolution: tier.resolution, provider }));
+    runInBackground(() => runVideoJob({ jobId: job.id, sceneId: shotRow.sceneId, shotId: firstShot.id, projectId: project.id, userId: user.id, cost, duration, resolution: tier.resolution, provider, videoModelId }));
     const fresh = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true } });
     return NextResponse.json({ chain: true, shot: true, jobs: [{ sceneId: shotRow.sceneId, shotId: firstShot.id, jobId: job.id }], started: 1, insufficient: [], plan: { duration, costPerScene: cost, total: cost }, creditsRemaining: fresh?.credits ?? 0 });
   }

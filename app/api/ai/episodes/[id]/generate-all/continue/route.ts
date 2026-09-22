@@ -8,6 +8,7 @@ import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, updateJob } from "@/lib/jobs";
 import { runVideoJob } from "@/lib/workers/video-job";
 import { normalizeVideoModel } from "@/lib/ai-models";
+import { normalizeVideoModelId } from "@/lib/video-models";
 import { resolvePowerTier } from "@/lib/power-tier";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
 import { planContinuation, type SceneJobSnapshot } from "@/lib/batch-continue";
@@ -118,7 +119,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     const duration = sceneClipSeconds(tier.id, scene.durationSec);
     const cost = sceneClipCost(tier.id, duration);
     await prisma.scene.update({ where: { id: scene.id }, data: { status: "generating" } }).catch(() => {});
-    runInBackground(() => runVideoJob({ jobId, sceneId: scene.id, projectId: project.id, userId: session.user.id, cost, duration, resolution: tier.resolution, provider: normalizeVideoModel(scene.videoModel) }));
+    runInBackground(() => runVideoJob({ jobId, sceneId: scene.id, projectId: project.id, userId: session.user.id, cost, duration, resolution: tier.resolution, provider: normalizeVideoModel(scene.videoModel), videoModelId: normalizeVideoModelId(scene.videoModel) }));
     started.push({ sceneId: scene.id, jobId, sceneNumber: scene.number });
   }
 
@@ -135,7 +136,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     await prisma.creditTransaction.create({ data: { userId: session.user.id, amount: -cost, description: `Episode ${episode.number}, scene ${scene.number} — regeneration (${tier.id})` } });
     await prisma.scene.update({ where: { id: scene.id }, data: { status: "generating", language: "en" } }).catch(() => {});
     const job = await prisma.generationJob.create({ data: { type: "video", status: "processing", progress: 2, message: "Starting video model…", projectId: project.id, sceneId: scene.id } });
-    runInBackground(() => runVideoJob({ jobId: job.id, sceneId: scene.id, projectId: project.id, userId: session.user.id, cost, duration, resolution: tier.resolution, provider: normalizeVideoModel(scene.videoModel) }));
+    runInBackground(() => runVideoJob({ jobId: job.id, sceneId: scene.id, projectId: project.id, userId: session.user.id, cost, duration, resolution: tier.resolution, provider: normalizeVideoModel(scene.videoModel), videoModelId: normalizeVideoModelId(scene.videoModel) }));
     started.push({ sceneId: scene.id, jobId: job.id, sceneNumber: scene.number });
   }
 

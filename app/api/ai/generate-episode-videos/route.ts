@@ -11,6 +11,7 @@ import { resolvePowerTier } from "@/lib/power-tier";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
 import { nextSequentialShot, nextSequentialChainScene } from "@/lib/chain-run";
 import { normalizeVideoModel } from "@/lib/ai-models";
+import { normalizeVideoModelId } from "@/lib/video-models";
 import { persistShotPlanForApprovedEpisode } from "@/lib/workers/shot-plan-persist";
 
 /** Tier (power) determines credit cost AND video quality — single config in lib/power-tier.ts. */
@@ -58,6 +59,9 @@ export async function POST(request: Request) {
 
     const tier = resolvePowerTier(project);
     const provider = normalizeVideoModel(null);
+    // Video-model selection (family + version). Falls back to the default (Seedance 2.5) when the
+    // client sends nothing, preserving legacy behavior. See lib/video-models.ts.
+    const videoModelId = normalizeVideoModelId((body as any)?.videoModelId ?? null);
 
     const scenes = await prisma.scene.findMany({
       where: { episodeId },
@@ -100,7 +104,7 @@ export async function POST(request: Request) {
       } });
       try { await prisma.scene.update({ where: { id: firstScene.id }, data: { language: spokenLang } }); }
       catch (e) { console.warn("Could not persist scene.language:", (e as any)?.message); }
-      await prisma.scene.update({ where: { id: firstScene.id }, data: { status: "generating", videoModel: provider } }).catch(() => {});
+      await prisma.scene.update({ where: { id: firstScene.id }, data: { status: "generating", videoModel: videoModelId } }).catch(() => {});
       await prisma.episode.update({ where: { id: episodeId }, data: { chainRunActive: true, chainRunNote: null } }).catch(() => {});
       const sceneJob = await prisma.generationJob.create({ data: {
         type: "video", status: "processing", progress: 2, message: "Chain: starting first scene...",
@@ -109,7 +113,7 @@ export async function POST(request: Request) {
       // No shotId → the worker renders the whole scene as one clip (runSceneVideoJob).
       runInBackground(() => runVideoJob({
         jobId: sceneJob.id, sceneId: firstScene.id, projectId, userId: user.id,
-        cost: sceneCost, duration: sceneDuration, resolution: tier.resolution, provider,
+        cost: sceneCost, duration: sceneDuration, resolution: tier.resolution, provider, videoModelId,
       }));
       const freshScene = await prisma.user.findUnique({ where: { id: user.id }, select: { credits: true } });
       return NextResponse.json({ jobs: [{ sceneId: firstScene.id, sceneNumber: firstScene.number, jobId: sceneJob.id }], skipped: 0, creditsRemaining: freshScene?.credits ?? creditsLeftScene });
@@ -177,6 +181,7 @@ export async function POST(request: Request) {
       console.warn("Could not persist scene.language:", (e as any)?.message);
     }
     await prisma.shot.update({ where: { id: firstShot.id }, data: { status: "generating", error: null } });
+    await prisma.scene.update({ where: { id: shotRow.sceneId }, data: { videoModel: videoModelId } }).catch(() => {});
     await prisma.episode.update({ where: { id: episodeId }, data: { chainRunActive: true, chainRunNote: null } }).catch(() => {});
 
     const job = await prisma.generationJob.create({
@@ -201,6 +206,7 @@ export async function POST(request: Request) {
         duration,
         resolution: tier.resolution,
         provider,
+        videoModelId,
       })
     );
 

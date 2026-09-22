@@ -51,6 +51,12 @@ export const generateVideoSchema = z.object({
    */
   provider: z.string().max(64).optional().nullable(),
   /**
+   * Video model selector (family + version). Catalog id from lib/video-models (e.g. "seedance-2.5",
+   * "kling-v2.6-pro", "hailuo-02-pro", "veo3.1"). Omitted / null / unknown → Seedance 2.5 (default),
+   * preserving pre-selector behaviour. The chosen id is persisted to Scene.videoModel.
+   */
+  videoModelId: z.string().max(64).optional().nullable(),
+  /**
    * Stage 89 — optional power-tier (quality & speed) override picked from the episode-page top panel.
    * When a valid tier is sent it overrides the project's stored tier for this generation (and is
    * persisted back to the project). Omitted / null → the project's current tier is used.
