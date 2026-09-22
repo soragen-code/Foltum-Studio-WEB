@@ -12,10 +12,13 @@
  */
 
 import { useCallback, useEffect, useState } from 'react'
-import { Loader2, Film, Wand2, ImageIcon, Play } from 'lucide-react'
+import { Loader2, Film, Wand2, ImageIcon, Play, ChevronDown, ChevronRight, Copy, Check } from 'lucide-react'
 import { JobProgressBar, SmoothProgress, useJobPolling } from '../../_components/use-job-polling'
 import { boardFramePrecondition } from '@/lib/board-anchor'
 import { DownloadVideoButton } from '@/app/project/[id]/_components/download-video-button'
+
+/** A reference image passed to a model, as persisted by the worker (label is already Russian). */
+type BoardRef = { index: number; url: string; kind: string; label: string }
 
 type Board = {
   id: string
@@ -27,16 +30,74 @@ type Board = {
   durationSec?: number | null
   status: string
   error?: string | null
+  // Group B — transparency fields (nullable; absent on legacy boards)
+  imagePrompt?: string | null
+  motionPromptEn?: string | null
+  frameRefs?: BoardRef[] | null
+  animateRefs?: BoardRef[] | null
+  frameSeed?: number | null
 }
 
 function validUrl(u?: string | null): u is string {
   return typeof u === 'string' && /^https?:\/\//.test(u)
 }
 
+/** Small copy-to-clipboard button with a transient "copied" tick. English prompt content is copied verbatim. */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500) } catch { /* clipboard unavailable */ }
+      }}
+      className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-foreground"
+    >
+      {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />} {copied ? 'Скопировано' : 'Копировать'}
+    </button>
+  )
+}
+
+/** One labelled prompt block: Russian heading + copy button + the verbatim (English) prompt text. */
+function PromptBlock({ title, text }: { title: string; text: string }) {
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold text-foreground">{title}</span>
+        <CopyButton text={text} />
+      </div>
+      <p className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/50 p-2 text-[11px] leading-snug text-muted-foreground">{text}</p>
+    </div>
+  )
+}
+
+/** A labelled list of the reference images that were actually passed to a model. */
+function RefList({ title, refs }: { title: string; refs: BoardRef[] }) {
+  return (
+    <div>
+      <span className="text-[11px] font-semibold text-foreground">{title}</span>
+      <div className="mt-1 flex flex-wrap gap-2">
+        {refs.map((r) => (
+          <div key={`${r.index}-${r.url}`} className="w-16">
+            <div className="flex aspect-[9/16] w-full items-center justify-center overflow-hidden rounded border border-border bg-black">
+              {validUrl(r.url)
+                // eslint-disable-next-line @next/next/no-img-element
+                ? <img src={r.url} alt={r.label} className="h-full w-full object-contain" />
+                : <ImageIcon className="h-4 w-4 opacity-40" />}
+            </div>
+            <p className="mt-0.5 text-center text-[9px] leading-tight text-muted-foreground">#{r.index} {r.label}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 /** One board card: keyframe still + action/dialogue text + per-board frame/animate controls. */
 function BoardCard({ board, onChanged, frameLocked }: { board: Board; onChanged: () => void; frameLocked: boolean }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  const [showDetails, setShowDetails] = useState(false)
 
   const framePoll = useJobPolling({
     onFinish: (res) => { setBusy(false); if (res.job.status === 'failed') setErr(res.job.error ?? 'Frame generation failed'); onChanged() },
@@ -93,6 +154,40 @@ function BoardCard({ board, onChanged, frameLocked }: { board: Board; onChanged:
           {busy && animatePoll.isActive ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} {validUrl(board.videoUrl) ? 'Переанимировать' : 'Оживить'}
         </button>
       </div>
+
+      {/* B2/B3 — collapsible "frame details": the actual prompts and the actual reference images the models received.
+          Prompt text is English (as sent to the providers); all headings/labels are Russian. */}
+      {(() => {
+        const framePrompt = (board.imagePrompt ?? '').trim()
+        const animatePrompt = (board.motionPromptEn ?? board.motionEn ?? '').trim()
+        const frameRefs = Array.isArray(board.frameRefs) ? board.frameRefs : []
+        const animateRefs = Array.isArray(board.animateRefs) ? board.animateRefs : []
+        const hasAny = framePrompt || animatePrompt || frameRefs.length || animateRefs.length || typeof board.frameSeed === 'number'
+        if (!hasAny) return null
+        return (
+          <div className="mt-2 border-t border-border pt-2">
+            <button
+              type="button"
+              onClick={() => setShowDetails((v) => !v)}
+              className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+              data-testid={`board-details-toggle-${board.index}`}
+            >
+              {showDetails ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />} Детали кадра
+            </button>
+            {showDetails && (
+              <div className="mt-2 space-y-3" data-testid={`board-details-${board.index}`}>
+                {framePrompt && <PromptBlock title="Промпт кадра (image, англ.)" text={framePrompt} />}
+                {animatePrompt && <PromptBlock title="Промпт оживления (i2v, англ.)" text={animatePrompt} />}
+                {frameRefs.length > 0 && <RefList title="Референсы кадра (переданы в image-модель)" refs={frameRefs} />}
+                {animateRefs.length > 0 && <RefList title="Референсы оживления (переданы в i2v)" refs={animateRefs} />}
+                {typeof board.frameSeed === 'number' && (
+                  <p className="text-[11px] text-muted-foreground">Seed кадра: <span className="font-mono text-foreground">{board.frameSeed}</span> <span className="opacity-70">(фиксирован для повторяемости; провайдер учитывает его приблизительно)</span></p>
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })()}
     </div>
   )
 }

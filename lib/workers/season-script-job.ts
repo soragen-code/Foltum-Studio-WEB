@@ -47,6 +47,7 @@ import {
   validateEpisodeScript,
   hardProblems,
   ensureEnglishDialogue,
+  attachMovementRu,
   nonEnglishScenes,
   isEnglishDialogue,
   isSilent,
@@ -308,7 +309,12 @@ export async function persistEpisodeScript(
   opts: { preserveSceneLocations?: boolean } = {}
 ) {
   const idOf = (n: string) => matchCharacter(characters, n)?.id;
-  const text = renderEpisodeScriptText(outline, script);
+  // Stage 222 (Variant B) — translate the readable-script movement/camera labels to Russian (names stay Latin)
+  // BEFORE rendering the human-readable text. Only the rendered `Episode.script` text uses the Russian staging;
+  // the DB Scene rows below are still written from the ORIGINAL `script` (English presence/entrances/videoPrompt
+  // feed the video prompt, untouched). attachMovementRu never throws — on failure the reader falls back to English.
+  const scriptForText = await attachMovementRu(script, chatJSON);
+  const text = renderEpisodeScriptText(outline, scriptForText);
   // Stage 20 (D1): the accurate episode cast is the UNION of characters that actually appear in the
   // generated scenes — collected here per scene, deduped below (not the declared outline.characters).
   const sceneCastIds: string[][] = [];

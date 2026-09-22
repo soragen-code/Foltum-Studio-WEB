@@ -354,6 +354,13 @@ ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "directionJson" TEXT;
 ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "anchorUrl" TEXT;
 ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "anchorBoardId" TEXT;
 
+-- Group B: transparency fields — the actual animate prompt, the actual references passed to each model, and the
+-- fixed frame seed. Additive & idempotent; legacy boards remain NULL. STORYBOARD only.
+ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "motionPromptEn" TEXT;
+ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "frameRefs"      JSONB;
+ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "animateRefs"    JSONB;
+ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "frameSeed"      INTEGER;
+
 
 -- Stage 155: mark a season whose fullStory is an author-uploaded plot file (drives the episode
 -- scripts as the authoritative source) rather than the deterministically built auto plot. Additive & idempotent.

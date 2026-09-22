@@ -540,6 +540,16 @@ export const sceneScriptSchema = z.object({
    * Optional so pre-existing scripts still validate; when absent the scene falls back to the base location reference.
    */
   subLocation: z.string().optional(),
+  /**
+   * Stage 222 (Variant B) — RUSSIAN human-readable staging strings for the readable-script movement/camera labels
+   * ("В кадре"/"Входит-уходит"/"Камера"). They are ADDITIVE and OPTIONAL — the main generation model does NOT emit
+   * them (they are filled by attachMovementRu after generation by translating the English presence/entrances/
+   * shotType, keeping character names in Latin). They NEVER feed the video prompt (the English source fields do).
+   * When absent, renderMovementLines falls back to the English source text.
+   */
+  presenceRu: z.string().optional(),
+  entrancesRu: z.string().optional(),
+  cameraRu: z.string().optional(),
 });
 export const episodeScriptSchema = z.object({
   visualIdentity: z.string().min(10),
@@ -609,7 +619,8 @@ export const CONFRONTATION_STAGING_SENTENCE =
  * to that real length and the clip ENDS the moment the shown beat ends — never padded, never held static.
  */
 export const CLIP_LENGTH_RULE =
-  `CLIP LENGTH (VARIABLE ${SCENE_MIN_SECONDS}–${SCENE_CLIP_MAX_SECONDS} s, NEVER PADDED): each scene's clip runs only as long as the action and lines it contains actually last — a short beat is ${SCENE_MIN_SECONDS}–7 s, a full beat up to ${SCENE_CLIP_MAX_SECONDS} s. Set "durationSec" to that real length (an integer ${SCENE_MIN_SECONDS}–${SCENE_CLIP_MAX_SECONDS}). The clip ENDS the instant the shown action / line finishes: a character must NOT hold a static pose, freeze, or stare into the camera to fill time — there is NO frozen final beat, only continuous natural motion. A short, alive clip is better than a ${SCENE_CLIP_MAX_SECONDS} s one padded with a held pose. Across the whole episode the SUM of all "durationSec" must stay AT OR UNDER ${EPISODE_MAX_TOTAL_SECONDS} s (up to ${EPISODE_TOTAL_LABEL}); it does NOT have to reach it.`;
+  `CLIP LENGTH (VARIABLE ${SCENE_MIN_SECONDS}–${SCENE_CLIP_MAX_SECONDS} s, NEVER PADDED): each scene's clip runs only as long as the action and lines it contains actually last — a short beat is ${SCENE_MIN_SECONDS}–7 s, a full beat up to ${SCENE_CLIP_MAX_SECONDS} s. Set "durationSec" to that real length (an integer ${SCENE_MIN_SECONDS}–${SCENE_CLIP_MAX_SECONDS}). The clip ENDS the instant the shown action / line finishes: a character must NOT hold a static pose, freeze, or stare into the camera to fill time — there is NO frozen final beat, only continuous natural motion. A short, alive clip is better than a ${SCENE_CLIP_MAX_SECONDS} s one padded with a held pose. Across the whole episode the SUM of all "durationSec" must stay AT OR UNDER ${EPISODE_MAX_TOTAL_SECONDS} s (up to ${EPISODE_TOTAL_LABEL}); it does NOT have to reach it.` +
+  " SYNC (action + lines FIT the clip): the action shown and the lines spoken must both fit inside this clip's own \"durationSec\" — write only as much action and as much dialogue as can really happen in that many seconds, and set \"durationSec\" long enough to contain them at a natural, unhurried pace. A spoken line lasts only as long as it takes to actually say it aloud: never write a line longer than what is really spoken within the clip, and never leave a line with no time to be said. The on-screen action runs SYNCHRONOUSLY with the speech — the movement and the lines happen together across the clip and finish together at the cut, neither the action overrunning the dialogue nor the dialogue overrunning the action.";
 
 /**
  * Stage 115 — a conversation may be split across CONSECUTIVE scenes (requirement B): one short line / exchange
@@ -729,7 +740,8 @@ export const END_STATE_RULE =
   "\"endState\" (REQUIRED, ENGLISH, present tense, " + STATE_SIZE_TEXT + ", WORLD + CAMERA blocks) = an exhaustive, pixel-precise description of the scene's FINAL FRAME at the cut — one instant of CONTINUING action (motion and sound go on through the cut; never a pause, a settled pose or a silent beat), written so the next scene can pick up the SAME WORLD instant from a NEW camera. " +
   FRAME_STATE_ASPECTS +
   MATCH_CUT_RULE +
-  " HAND-OFF: the WORLD block describes the exact phase of the ongoing movement and speech at the cut (a line may end right on it, but nobody has fallen silent or frozen). Scene N+1's [BLOCKING] / [SHOT TYPE] first beat continues this exact WORLD instant from a different shot scale / height / angle — unless its \"continuesFrom\" is \"location-change\" or \"new-sequence\".";
+  " HAND-OFF: the WORLD block describes the exact phase of the ongoing movement and speech at the cut (a line may end right on it, but nobody has fallen silent or frozen). Scene N+1's [BLOCKING] / [SHOT TYPE] first beat continues this exact WORLD instant from a different shot scale / height / angle — unless its \"continuesFrom\" is \"location-change\" or \"new-sequence\"." +
+  " NON-CONTRADICTION WITH THE NEXT START (continuous seams): the endState must be a state the NEXT scene can open on WITHOUT contradiction — the positions, poses, phase of motion, exactly who is in frame, wardrobe and every prop at this cut are precisely what scene N+1's startState WORLD will reproduce. Do NOT end on a state the next scene cannot continue: a character the next scene needs seated cannot be left mid-stride here, an object the next scene needs in a hand cannot be gone here, a person in the next scene's frame cannot have exited here. The end frame and the next start frame are the SAME WORLD instant seen from two cameras — resolve any conflict in favour of that single shared instant so the two never describe different worlds.";
 
 const PROMPT_LINES = ["[SHOT TYPE]", "[VISUAL STYLE]", "[LIGHTING]", "[BLOCKING]", "[GAZE]", "[NON-VERBAL]", "[ACTION]", "[CHARACTER]", "[TRANSITION]"];
 
@@ -1338,6 +1350,67 @@ export async function ensureEnglishDialogue(
   }
 }
 
+// Stage 222 (Variant B) — translate the readable-script MOVEMENT/CAMERA labels into Russian.
+export const movementRuSchema = z.object({
+  scenes: z.array(z.object({
+    number: z.number().int(),
+    presenceRu: z.string().optional().default(""),
+    entrancesRu: z.string().optional().default(""),
+    cameraRu: z.string().optional().default(""),
+  })),
+});
+export const TRANSLATE_MOVEMENT_SYSTEM =
+  `You translate FILM SHOOTING-SCRIPT staging notes from English into natural, concise Russian for a human-readable script reader.\n` +
+  `HARD RULE — NAMES STAY LATIN: keep EVERY character name in Latin letters EXACTLY as given (e.g. "Anna Sokolova", "Yuri Lebedev", "Saira Haddad", "Lev Orlov"). NEVER translate, transliterate or cyrillicize a name, and never invent names.\n` +
+  `Translate ONLY the surrounding staging prose: where people stand ("presence"), who enters/leaves and how ("entrances"), and the camera shot type + camera move ("camera"). Keep it short, clear, present tense, same meaning — do not add, drop or merge information.\n` +
+  `Use natural Russian film terms for the camera (e.g. "средний крупный план", "крупный план", "план через плечо", "общий план", "резкая склейка"). Leave the "camera" translation in the same "<shot> — <transition>" shape when the source has both.\n` +
+  `Return STRICT JSON: {"scenes":[{"number":int,"presenceRu":string,"entrancesRu":string,"cameraRu":string}]}. If a source field was empty, return an empty string for it.`;
+
+/**
+ * Stage 222 (Variant B) — translate each scene's movement/camera staging (presence, entrances, shotType +
+ * the [TRANSITION] camera move) into Russian for the READABLE script, KEEPING character names in Latin. The
+ * English source fields (presence / entrances / shotType / videoPrompt) are LEFT UNTOUCHED — they still feed the
+ * video prompt. Returns a NEW script whose scenes carry additive presenceRu / entrancesRu / cameraRu strings
+ * (renderMovementLines prefers them). Never throws: on ANY failure the script is returned unchanged and
+ * renderMovementLines falls back to the English source text.
+ */
+export async function attachMovementRu(
+  script: EpisodeScript,
+  chat: (system: string, user: string, opts?: { temperature?: number; maxTokens?: number }) => Promise<unknown>,
+): Promise<EpisodeScript> {
+  const src = script.scenes.map((s) => {
+    const presence = (s.presence ?? "").replace(/\s+/g, " ").trim();
+    const entRaw = (s.entrances ?? "").replace(/\s+/g, " ").trim();
+    const entrances = entRaw && !/^none\.?$/i.test(entRaw) ? entRaw : "";
+    const shot = (s.shotType ?? "").replace(/\s+/g, " ").trim();
+    const transition = extractPromptTag(s.videoPrompt, "TRANSITION");
+    const camera = [shot, transition].filter(Boolean).join(" — ");
+    return { number: s.number, presence, entrances, camera };
+  });
+  const payload = { scenes: src.filter((p) => p.presence || p.entrances || p.camera) };
+  if (!payload.scenes.length) return script;
+  try {
+    const raw = movementRuSchema.parse(await chat(TRANSLATE_MOVEMENT_SYSTEM, JSON.stringify(payload), { temperature: 0.2, maxTokens: 8000 }));
+    const map = new Map(raw.scenes.map((s) => [s.number, s]));
+    return {
+      ...script,
+      scenes: script.scenes.map((s) => {
+        const t = map.get(s.number);
+        if (!t) return s;
+        return {
+          ...s,
+          presenceRu: (t.presenceRu ?? "").trim() || undefined,
+          entrancesRu: (t.entrancesRu ?? "").trim() || undefined,
+          cameraRu: (t.cameraRu ?? "").trim() || undefined,
+        };
+      }),
+    };
+  } catch (err) {
+    console.error("[season] movement-line translation failed:", err);
+    return script;
+  }
+}
+
 function langName(language: IdeaLanguage) {
   return LANGUAGE_NAMES[language] ?? "English";
 }
@@ -1840,6 +1913,10 @@ export function renderMovementLines(
     continuesFrom?: string | null;
     shotType?: string | null;
     videoPrompt?: string | null;
+    // Stage 222 — Russian human-readable staging (names Latin) filled by attachMovementRu; preferred for the reader.
+    presenceRu?: string | null;
+    entrancesRu?: string | null;
+    cameraRu?: string | null;
   },
   prev: { characters?: Array<string | { name?: string | null; character?: { name?: string | null } | null }> | null } | undefined,
   sceneLoc: string,
@@ -1853,15 +1930,21 @@ export function renderMovementLines(
       .filter(Boolean);
   const lines: string[] = [];
   const cast = toNames(scene.characters);
+  // Stage 222 — the Russian staging (names Latin) filled by attachMovementRu is PREFERRED for the reader; the
+  // English source fields (presence/entrances/shotType) are the fallback when translation was absent/failed.
+  const presenceRu = (scene.presenceRu ?? "").replace(/\s+/g, " ").trim();
   const presence = (scene.presence ?? "").replace(/\s+/g, " ").trim();
-  // "В кадре" — prefer the richer authored "presence" (says WHERE each character is); fall back to the cast list.
-  const inFrame = presence || cast.join(", ");
+  // "В кадре" — prefer the Russian presence, then the richer authored English "presence", then the cast list.
+  const inFrame = presenceRu || presence || cast.join(", ");
   if (inFrame) lines.push(`${MOVEMENT_IN_FRAME_PREFIX}${inFrame}`);
-  // "Входит/уходит" — prefer the authored "entrances" staging; when it is empty/"none" but the cast changed vs
-  // the previous scene, describe the change in words so the reader always learns where new faces came from and
-  // where the old ones went.
+  // "Входит/уходит" — prefer the Russian entrances, then the authored English "entrances"; when both are
+  // empty/"none" but the cast changed vs the previous scene, describe the change in words (already Russian) so the
+  // reader always learns where new faces came from and where the old ones went.
+  const entRu = (scene.entrancesRu ?? "").replace(/\s+/g, " ").trim();
   const ent = (scene.entrances ?? "").replace(/\s+/g, " ").trim();
-  if (ent && !/^none\.?$/i.test(ent)) {
+  if (entRu) {
+    lines.push(`${MOVEMENT_ENTER_EXIT_PREFIX}${entRu}`);
+  } else if (ent && !/^none\.?$/i.test(ent)) {
     lines.push(`${MOVEMENT_ENTER_EXIT_PREFIX}${ent}`);
   } else if (prev) {
     const prevCast = toNames(prev.characters);
@@ -1872,10 +1955,11 @@ export function renderMovementLines(
     if (left.length) parts.push(`уходит ${left.join(", ")}`);
     if (parts.length) lines.push(`${MOVEMENT_ENTER_EXIT_PREFIX}${parts.join("; ")}`);
   }
-  // "Камера" — the shot type at the cut, plus the [TRANSITION] camera move from the videoPrompt when present.
+  // "Камера" — prefer the Russian camera translation; else the shot type at the cut plus the [TRANSITION] move.
+  const cameraRu = (scene.cameraRu ?? "").replace(/\s+/g, " ").trim();
   const shot = (scene.shotType ?? "").replace(/\s+/g, " ").trim();
   const transition = extractPromptTag(scene.videoPrompt, "TRANSITION");
-  const cam = [shot, transition].filter(Boolean).join(" — ");
+  const cam = cameraRu || [shot, transition].filter(Boolean).join(" — ");
   if (cam) lines.push(`${MOVEMENT_CAMERA_PREFIX}${cam}`);
   // "Переход" — a shown, on-camera move to a new place (the only way a scene may change location).
   if ((scene.continuesFrom ?? "").trim().toLowerCase() === "location-change") {

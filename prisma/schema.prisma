@@ -297,6 +297,12 @@ model Board {
   anchorBoardId    String?  // Board.id of that anchor board
   directionJson    String?  @db.Text // Stage 132: validated Storyboard-only speech ledger, camera mode and dialogue shot plan; null for legacy boards
   imagePrompt      String?  @db.Text // English Seedream FRAME prompt used to render the board still (9:16)
+  // Group B (transparency): the ACTUAL animate prompt + the ACTUAL reference images passed to each model, plus the
+  // fixed frame seed. All nullable / additive; legacy boards remain NULL. STORYBOARD only.
+  motionPromptEn   String?  @db.Text // English image-to-video prompt actually sent to Seedance (composed animate prompt)
+  frameRefs        Json?    // ordered references passed to the FRAME model: [{ index, url, kind, label(ru) }]
+  animateRefs      Json?    // ordered references passed to the i2v model (start frame only): [{ index, url, kind, label(ru) }]
+  frameSeed        Int?     // fixed seed forwarded to the frame model for reproducible re-renders (best-effort)
   imageUrl         String?  // S3 URL of the rendered board frame (9:16) — the clip's START frame
   videoUrl         String?  // S3 URL of the animated 3-6s clip (image-to-video)
   durationSec      Int?     // planned clip length in seconds (clamped to the i2v-supported 4-6s window)

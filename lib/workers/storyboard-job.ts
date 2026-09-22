@@ -46,6 +46,22 @@ export const STORYBOARD_ASSEMBLE_JOB_TYPE = "storyboard_assemble";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const validUrl = (u?: string | null) => typeof u === "string" && u.startsWith("http") && u.length > 10;
 
+/**
+ * Deterministic 31-bit seed derived from a board id (FNV-1a). Re-rendering the SAME board reuses the SAME seed,
+ * so with an unchanged prompt/refs the frame stays stable (best-effort — Seedream may honor `seed` loosely).
+ */
+function boardFrameSeed(boardId: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < boardId.length; i++) {
+    h ^= boardId.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0) % 2_147_483_647; // keep inside a positive signed 32-bit int
+}
+
+/** A single reference image passed to the model, with a Russian, user-facing role label for the UI. */
+type BoardRefEntry = { index: number; url: string; kind: string; label: string };
+
 /** Stage 142 — sequential render inside a scene: poll interval / max wait for a lower-index sibling still rendering. */
 const ANCHOR_WAIT_POLL_MS = Number(process.env.BOARD_ANCHOR_WAIT_POLL_MS ?? 4000);
 const ANCHOR_WAIT_MAX_POLLS = Number(process.env.BOARD_ANCHOR_WAIT_MAX_POLLS ?? 90); // ~6 min at 4s
@@ -196,6 +212,8 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
     const coverage = resolveVisibleCast(direction, board.index, links.map((l) => l.name), board.actionOrDialogue);
     const visibleLinks = links.filter((l) => coverage.visible.includes(l.name));
     const refImages = links.flatMap((l, i) => (coverage.visible.includes(l.name) && refs[i] ? [refs[i] as string] : []));
+    // Parallel to refImages: the character name behind each identity reference, for the UI "references passed" list.
+    const refImageNames = links.flatMap((l, i) => (coverage.visible.includes(l.name) && refs[i] ? [l.name] : []));
 
     // Stage 131 — resolve the board's GEOMETRY AUTHORITY from the episode's bound Location. The whole episode
     // plays in ONE location; every board of the same zone shares the same plate (region plate when a cached one
@@ -269,6 +287,31 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
       `[board-image] board ${board.index + 1}: anchor=${anchor ? `board ${anchor.anchorIndex + 1} (ref #${composed.anchorRefIndex})` : "none (becomes anchor)"}, continuity=${prevRow ? `board ${prevRow.index + 1} (ref #${composed.continuityRefIndex})` : "none (establishes action)"}, shot=${coverage.shotSize}, visible=[${coverage.visible.join(", ")}], offScreen=[${coverage.offScreen.join(", ")}], charRefs=${refImages.length}/${links.length}, plates=${composed.platesAttached.length}/${authority.plateUrls.length}, refs=${imageInput.length}`,
     );
 
+    // B3 — record the ACTUAL ordered references passed to the frame model, each with a Russian role label, so the
+    // UI can show exactly which images backed this board (character identity / previous-scene frame / scene anchor /
+    // location plate). Indices are 1-based and match the "reference image N" callouts inside the English prompt.
+    const charUrlToName = new Map<string, string>();
+    refImages.forEach((u, i) => { if (!charUrlToName.has(u)) charUrlToName.set(u, refImageNames[i]); });
+    const plateStartIndex = composed.imageInput.length - composed.platesAttached.length; // 0-based
+    const frameRefs: BoardRefEntry[] = composed.imageInput.map((url, i) => {
+      const index = i + 1;
+      const isContinuity = composed.continuityRefIndex === index;
+      const isAnchor = composed.anchorRefIndex === index;
+      if (isContinuity && isAnchor) return { index, url, kind: "anchor+continuity", label: "Опорный + предыдущий кадр сцены" };
+      if (isContinuity) return { index, url, kind: "continuity", label: "Предыдущий кадр сцены" };
+      if (isAnchor) return { index, url, kind: "anchor", label: "Опорный кадр сцены" };
+      if (i >= plateStartIndex) {
+        const isRegion = composed.regionPlateAttached && i === plateStartIndex;
+        return { index, url, kind: isRegion ? "region_plate" : "plate", label: isRegion ? "Плита подлокации" : "Плита локации" };
+      }
+      const name = charUrlToName.get(url);
+      return { index, url, kind: "character", label: name ? `Персонаж: ${name}` : "Персонаж" };
+    });
+
+    // B1 — a fixed, board-stable seed so a re-render of THIS board reproduces the frame as closely as the provider
+    // allows (best-effort; Seedream v5.0 Pro may honor `seed` loosely). Persisted for transparency in the UI.
+    const frameSeed = boardFrameSeed(boardId);
+
     const { prompt } = buildBoardFramePrompt({
       board: { index: board.index, actionOrDialogue: board.actionOrDialogue, motion: board.motionEn, directionJson: board.directionJson },
       characters: visibleLinks.length ? visibleLinks : links,
@@ -284,13 +327,13 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
 
     await updateJob(jobId, { progress: 45, message: `Board ${board.index + 1}: rendering frame...` });
     const remote = await generateImage(
-      { prompt, aspect_ratio: REFERENCE_ASPECT_RATIO, ...(imageInput.length ? { image_input: imageInput } : {}) },
+      { prompt, aspect_ratio: REFERENCE_ASPECT_RATIO, seed: frameSeed, ...(imageInput.length ? { image_input: imageInput } : {}) },
       { jobId, shouldCancel: canceled },
     );
     if (await canceled()) throw new GenerationCanceledError();
 
     const imageUrl = await uploadRemoteToS3(remote, `media/public/boards/${projectId}/${boardId}/${VISUAL_STYLE_ID}/frame-${Date.now()}.png`, "image/png");
-    await prisma.board.update({ where: { id: boardId }, data: { imageUrl, imagePrompt: prompt, plateUrl: authority.primaryUrl, anchorUrl: anchor?.anchorUrl ?? null, anchorBoardId: anchor?.anchorBoardId ?? null, status: "frame_ready", error: null } });
+    await prisma.board.update({ where: { id: boardId }, data: { imageUrl, imagePrompt: prompt, frameRefs: frameRefs as unknown as object, frameSeed, plateUrl: authority.primaryUrl, anchorUrl: anchor?.anchorUrl ?? null, anchorBoardId: anchor?.anchorBoardId ?? null, status: "frame_ready", error: null } });
     await completeJob(jobId, { boardId, imageUrl }, `Board ${board.index + 1} frame ready`);
   } catch (err: any) {
     if (err instanceof GenerationCanceledError) { await markCanceled(jobId); return; }
@@ -333,8 +376,15 @@ export async function runBoardVideoJob(jobId: string, projectId: string, boardId
       ...(previousActionText ? { previousActionText } : {}),
     };
     const request = buildStoryboardVideoRequest(animationBoard);
+    // B2/B3 — the ACTUAL composed animate prompt and the ACTUAL references the i2v receives. This provider takes the
+    // board still as its ONLY image input (start frame); extra identity refs are unsupported, so the reference list
+    // is exactly that single frame. Both are persisted so the UI can show what drove the animation.
+    const motionPromptEn = request.prompt;
+    const animateRefs: BoardRefEntry[] = [{ index: 1, url: board.imageUrl as string, kind: "frame", label: "Стартовый кадр (это изображение)" }];
     // No URLs, names, speech text or secrets in diagnostics. Extra identity refs are unsupported by this i2v API.
     console.info("[storyboard-animation]", { cameraMode: storyboardCameraMode(animationBoard), extraCharacterRefs: "unsupported", resolution: request.resolution, duration: request.duration });
+    // Persist the animate prompt/refs up front so they are visible even while the clip is still rendering.
+    await prisma.board.update({ where: { id: boardId }, data: { motionPromptEn, animateRefs: animateRefs as unknown as object } }).catch(() => {});
     predictionId = await startImageToVideoGeneration(request);
 
     // Poll until the clip is ready (best-effort cancel on user stop).

@@ -44,19 +44,6 @@ export function Header({ projectName = null, projectId = null }: { projectName?:
               <span className="text-primary">Foltum</span> Studio
             </span>
           </Link>
-          {projectName && (
-            <>
-              <span className="shrink-0 text-muted-foreground/60" aria-hidden="true">/</span>
-              <Link
-                href={`/project/${projectId ?? ''}`}
-                title={projectName}
-                className="font-display truncate max-w-[40vw] text-base font-semibold tracking-tight text-foreground hover:text-primary sm:max-w-[420px]"
-                data-testid="header-project-name"
-              >
-                {projectName}
-              </Link>
-            </>
-          )}
         </div>
 
         {session?.user ? (

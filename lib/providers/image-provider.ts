@@ -64,6 +64,11 @@ export function buildWaveSpeedImageRequest(input: ImageGenerationInput): { slug:
   // (`size` is a v5.0 Lite parameter; Pro silently ignores it and falls back to 1:1 → square.)
   const aspect_ratio = (input.aspect_ratio ?? "9:16").trim() || "9:16";
   const body: Record<string, unknown> = { prompt: input.prompt, aspect_ratio, resolution: "2k", output_format: "png", enable_sync_mode: false };
+  // Reproducibility: forward a fixed seed when the caller supplies one so re-rendering the same board with the
+  // same prompt/refs yields a stable frame. Additive — omitted entirely when no seed is given (Seedream then
+  // picks a random one). NOTE: Seedream v5.0 Pro may treat `seed` as best-effort, so identical output is not
+  // guaranteed by the provider; the value is still persisted and surfaced for transparency.
+  if (typeof input.seed === "number" && Number.isFinite(input.seed)) body.seed = Math.floor(input.seed);
   if (refs.length) {
     body.images = refs;
     return { slug: WAVESPEED_SEEDREAM_EDIT, body };

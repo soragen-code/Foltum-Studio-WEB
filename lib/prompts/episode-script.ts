@@ -12,7 +12,7 @@ import type { EpisodeScript, SceneScript } from "../season";
 // Prompt version — stamped onto Episode.promptVersion when a script is generated.
 // ---------------------------------------------------------------------------
 /** Bumped whenever the episode-script prompt CONTRACT changes; written to Episode.promptVersion. */
-export const EPISODE_SCRIPT_PROMPT_VERSION = "6.4.1";
+export const EPISODE_SCRIPT_PROMPT_VERSION = "6.4.3";
 
 // ---------------------------------------------------------------------------
 // Numeric bounds (LITERAL mirrors of the season.ts constants — kept in step by tests).
@@ -107,7 +107,7 @@ export const DIALOGUE_POLISH_SYSTEM =
   "Rewrite the dialogue so it drives the story FORWARD through the characters talking to each other, keeping the SAME speakers and the SAME story beats, applying these rules: " +
   "(1) REMOVE any line where a character explains their own motive / feelings aloud ('I'm doing this because…', 'I feel…', 'the reason I…') — replace it with a line that IMPLIES the motive through subtext, action or a concrete detail. " +
   "(2) Make the conversation SUBSTANTIVE and LIFELIKE: a real back-and-forth where the characters actually answer each other — a line, a genuine reply, then a rejoinder — not one lone line per side. You MAY lengthen a scene's exchange (add a reply / rejoinder line so it reads like a real conversation) as long as you keep the same speakers and the same beat; never make a spoken scene silent and never drop the scene's beat. " +
-  "(3) Keep the AVERAGE spoken line AT OR UNDER 16 words — lines may be a little fuller and more natural than before, but still cut empty filler, hedges and throat-clearing; every line carries real meaning. " +
+  "(3) Let each line run its NATURAL spoken length — there is NO hard word cap. Lines may be full and lifelike, and a longer line is fine whenever the beat calls for it (dialogue should read like real, substantive speech, not clipped fragments); only cut empty filler, hedges and throat-clearing so every line carries real meaning. Match a line's length to how long it is actually spoken on screen — a line should take about as long to say aloud as its moment in the clip allows, never so long it could not be spoken in the time available. " +
   "(4) Favour SUBTEXT over on-the-nose statement: characters say less than they mean, but the exchange still clearly moves the plot (a reveal, a decision, an escalation). " +
   "(5) The dialogue stays STRICTLY ENGLISH (Latin letters only), one line per row in the exact format NAME (tone cue): \"line\", using the SAME speaker names as the input. " +
   "Return JSON: { \"scenes\": [ { \"number\": <int>, \"dialogue\": \"<the polished lines, \\n-separated>\" }, … ] } — one entry per NON-silent scene you changed; omit silent scenes.";
