@@ -579,3 +579,13 @@ ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "plotStatus" TEXT;
 
 -- Stage 174: asset-gathering gate state for STORYBOARD episodes (additive, nullable).
 ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "boardGate" TEXT;
+
+
+
+-- Stage 220 (PER-SCENE storyboard): each Scene yields exactly two boards — a start frame and an end frame —
+-- plus one start→end i2v clip on the start board. sceneId links the board to its Scene, boardRole is
+-- "start"/"end", castInFrame carries the per-scene shot plan (onScreen/entering/exiting + frame descriptions
+-- + motion + dialogue). Additive, nullable & idempotent; legacy boards keep NULL and are unaffected.
+ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "sceneId" TEXT;
+ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "boardRole" TEXT;
+ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "castInFrame" JSONB;

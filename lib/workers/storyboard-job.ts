@@ -20,21 +20,28 @@ import { assembleStoryboardVideo } from "@/lib/assemble";
 import { VISUAL_STYLE_ID, REFERENCE_ASPECT_RATIO } from "@/lib/visual-style";
 import { DEFAULT_ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY } from "@/lib/assemble-options";
 import {
-  detailedEpisodeStory,
-  storyboardBoardsSystemPrompt,
-  storyboardBoardsUserPrompt,
   dialogueRepairSystemPrompt,
   dialogueRepairUserPrompt,
 } from "@/lib/storyboard";
 import { buildBoardFramePrompt, type BoardCharacterLink } from "@/lib/storyboard-prompt";
 import { deriveSetAnchors } from "@/lib/set-anchors";
 import { readBoardDirection } from "@/lib/storyboard-direction";
-import { resolveVisibleCast } from "@/lib/board-coverage";
+import { resolveVisibleCast, type BoardCoverage, type ShotSize } from "@/lib/board-coverage";
 import { pickBoardGeometryAuthority } from "@/lib/board-plate";
 import { boardSceneKey, pickSceneAnchor, renderingLowerSiblings, composeBoardImageInput } from "@/lib/board-anchor";
 import { WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
-import { storyboardSourceResilient, type DialogueRepairFn } from "@/lib/storyboard-dialogue";
-import { balanceBoardCount, finalizeDirectedBoards, type RawDirectedBoard } from "@/lib/storyboard-direction";
+import {
+  extractSpokenLinesResilient,
+  estimatedSpeechSeconds,
+  type DialogueRepairFn,
+  type SpokenLine,
+} from "@/lib/storyboard-dialogue";
+import {
+  scenePlanSystemPrompt,
+  scenePlanUserPrompt,
+  normalizeScenePlan,
+  type ScenePlanInput,
+} from "@/lib/storyboard-scenes";
 import { buildStoryboardVideoRequest, storyboardCameraMode } from "@/lib/storyboard-animation";
 import { detectSpokenLanguage, translateDialogue } from "@/lib/voiceover";
 
@@ -67,7 +74,7 @@ const ANCHOR_WAIT_POLL_MS = Number(process.env.BOARD_ANCHOR_WAIT_POLL_MS ?? 4000
 const ANCHOR_WAIT_MAX_POLLS = Number(process.env.BOARD_ANCHOR_WAIT_MAX_POLLS ?? 90); // ~6 min at 4s
 
 /** Minimal sibling projection shared by the Stage 140 set-anchors and the Stage 142 scene anchor. */
-const SIBLING_SELECT = { id: true, index: true, imageUrl: true, status: true, directionJson: true, motionEn: true, actionOrDialogue: true, region: true } as const;
+const SIBLING_SELECT = { id: true, index: true, imageUrl: true, status: true, directionJson: true, motionEn: true, actionOrDialogue: true, region: true, sceneId: true, boardRole: true } as const;
 
 /**
  * Load the episode's cast (identity + sex source of truth) for a board frame prompt.
@@ -97,7 +104,33 @@ async function loadEpisodeCharacters(episodeId: string): Promise<{ links: BoardC
   return { links, refs };
 }
 
-/* ───────────── 1) storyboard_boards — split the story into 12–15 boards ───────────── */
+/** Stage 220 — the per-scene shot plan persisted on BOTH boards of a scene (Board.castInFrame JSON). */
+export type CastInFrame = {
+  onScreen: string[];
+  entering: string[];
+  exiting: string[];
+  startFrame: string;
+  endFrame: string;
+  motion: string;
+  durationSec: number;
+  dialogue: SpokenLine[];
+};
+
+/** Build a deterministic BoardCoverage from an explicit in-frame name list (cast order), for the frame prompt. */
+function coverageFromNames(inFrame: string[], fullCast: string[]): BoardCoverage {
+  const visible = fullCast.filter((c) => inFrame.includes(c));
+  const vis = visible.length ? visible : fullCast;
+  const shotSize: ShotSize = vis.length <= 1 ? "MEDIUM" : vis.length === 2 ? "TWO-SHOT" : "WIDE ESTABLISHING";
+  return { shotSize, visible: vis, offScreen: fullCast.filter((c) => !vis.includes(c)), focus: "" };
+}
+
+/* ───────────── 1) storyboard_boards — per Scene → EXACTLY 2 boards (start frame + end frame) ─────────────
+ * Stage 220 — the episode is no longer split into ~50 discrete LLM beats. Every existing Scene now yields
+ * EXACTLY two boards: a START frame (boardRole="start", index 2i) and an END frame (boardRole="end", index
+ * 2i+1). ONE image-to-video clip animates the start frame INTO the end frame (last_image), carrying the whole
+ * scene's verbatim dialogue. A single LLM call plans, for every scene, who is on screen / enters / exits and
+ * the start/end/motion descriptions; the dialogue itself is restored verbatim from the scene (never rewritten).
+ */
 export async function runStoryboardBoardsJob(jobId: string, projectId: string, episodeId: string): Promise<void> {
   try {
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
@@ -106,26 +139,26 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
     if (episode.mode !== "STORYBOARD") { await failJob(jobId, "Episode is not in STORYBOARD mode"); return; }
 
     await updateJob(jobId, { status: "processing", progress: 10, message: "Building the storyboard..." });
-    // Single flowing through-line (no first-30 / last-30 split) derived from the shared episode description.
-    const story = detailedEpisodeStory(episode.description);
-    if (!story) { await failJob(jobId, "The episode has no story yet"); return; }
 
     const { links } = await loadEpisodeCharacters(episodeId);
     const characters = links.map((l) => l.name);
     const location = episode.locationName ?? null;
 
-    // Stage 141 — all Storyboard dialogue is voiced in ENGLISH. Read the source lines and translate any
-    // non-English dialogue to English BEFORE building the immutable speech ledger, so the verbatim per-line
-    // text restored into every board (and fed to the i2v payload / voicing / board display) is English.
-    // This overrides the earlier "verbatim in the source/original language" rule. Attribution, source order
-    // and the exact-once ledger integrity are unchanged — only the LANGUAGE of the spoken words is normalized.
     const rawScenes = await prisma.scene.findMany({
       where: { episodeId }, orderBy: { number: "asc" },
-      select: { number: true, action: true, dialogue: true, dialogueEn: true },
+      select: {
+        id: true, number: true, action: true, dialogue: true, dialogueEn: true,
+        startState: true, endState: true, presence: true, entrances: true,
+        sceneKind: true, voiceover: true, durationSec: true,
+      },
     });
-    const scenes = await Promise.all(
+    if (rawScenes.length === 0) { await failJob(jobId, "The episode has no scenes yet"); return; }
+
+    // Stage 141/220 — all Storyboard dialogue is voiced in ENGLISH. Prefer an already-English translated line
+    // (dialogueEn); otherwise translate the source dialogue. The English text is what the planner sees (context
+    // only) and what is restored VERBATIM (attributed, never paraphrased) into the per-scene i2v clip.
+    const scenesEn = await Promise.all(
       rawScenes.map(async (s) => {
-        // Prefer an already-English translated line (dialogueEn); otherwise translate the source dialogue.
         let english = (s.dialogueEn ?? "").trim();
         if (!english || detectSpokenLanguage(english) !== "English") {
           const src = (s.dialogue ?? "").trim();
@@ -134,14 +167,15 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
               ? await translateDialogue(src, "English")
               : src || english;
         }
-        return { number: s.number, action: s.action, dialogue: english };
+        return { ...s, dialogueEnResolved: english };
       }),
     );
+
     // Attribution honours gender-lock (a pronoun reporter resolves to the sole cast member of that sex).
     const attributionCast = links.map((l) => ({ name: l.name, gender: l.gender ?? null }));
     // Stage 135 — RESOLVING attribution: when the deterministic parser cannot attribute a quoted line, make
-    // ONE LLM repair round that forces an explicit canonical speaker (+delivery/addressee) so boards rebuild
-    // in the required NAME (delivery): "line" format instead of hard-blocking. Same model as the board split.
+    // ONE LLM repair round that forces an explicit canonical speaker (+delivery/addressee) so lines resolve
+    // instead of hard-blocking. The spoken TEXT/order is never changed — only the speaker is filled in.
     const dialogueRepair: DialogueRepairFn = async ({ cast, lines }) => {
       const res = await chatJSON<{ assignments?: Array<{ id: number; speaker: string; delivery?: string; addressee?: string }> }>(
         dialogueRepairSystemPrompt(),
@@ -150,55 +184,124 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
       );
       return res?.assignments ?? [];
     };
-    const source = await storyboardSourceResilient(episode, scenes, attributionCast, { repair: dialogueRepair });
-    await updateJob(jobId, { progress: 35, message: "Splitting the story into boards..." });
-    let boards: ReturnType<typeof finalizeDirectedBoards> | null = null;
-    let conflict = "";
-    for (let attempt = 0; attempt < 2 && !boards; attempt++) {
-      const user = storyboardBoardsUserPrompt(story, { characters, location }) +
-        `\n\nSOURCE SCRIPT (original language; authoritative action and speech):\n${source.source}` +
-        `\n\nSOURCE ACTION (literal travel evidence only):\n${source.actionSource}` +
-        `\n\nIMMUTABLE SOURCE SPEECH SEGMENTS (use IDs, preserve order):\n${JSON.stringify(source.segments)}` +
-        (conflict ? `\n\nPLANNING CONFLICT: ${conflict}. Fix the allocation without changing source speech; keep each board 4–6s and use as many boards as the content needs.` : "");
-      const res = await chatJSON<{ boards?: RawDirectedBoard[] }>(storyboardBoardsSystemPrompt(), user, { maxTokens: 6000, temperature: 0.7 });
-      try {
-        // Stage 148 — balance per-board budget with a CONTENT-DERIVED board count (no fixed 12–15 window):
-        // distribute overflow, guard against pathological over-split, never truncating speech, then finalize.
-        const balanced = balanceBoardCount(res?.boards ?? [], source.segments);
-        boards = finalizeDirectedBoards(balanced, source.segments, characters, source.actionSource);
-      } catch (err) { conflict = err instanceof Error ? err.message : "Invalid board plan"; }
-    }
-    if (!boards) { await failJob(jobId, `Storyboard planning conflict: ${conflict}`); return; }
+
+    // ONE planner call for the whole episode: per scene → onScreen / entering / exiting + start/end/motion (English).
+    await updateJob(jobId, { progress: 35, message: "Planning start & end frames for each scene..." });
+    const planInputs: ScenePlanInput[] = scenesEn.map((s) => ({
+      number: s.number,
+      action: s.action,
+      dialogue: s.dialogueEnResolved,
+      startState: s.startState,
+      endState: s.endState,
+      presence: s.presence,
+      entrances: s.entrances,
+      sceneKind: s.sceneKind,
+      voiceover: s.voiceover,
+    }));
+    const rawPlan = await chatJSON<{ scenes?: unknown[] }>(
+      scenePlanSystemPrompt(),
+      scenePlanUserPrompt(planInputs, { characters, location }),
+      { maxTokens: 8000, temperature: 0.4 },
+    );
+    const plans = normalizeScenePlan(rawPlan as any, planInputs, characters);
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
 
-    await updateJob(jobId, { progress: 80, message: "Saving boards..." });
-    // Validate BEFORE replacing old boards; failed allocation leaves them intact. Replacement is atomic.
-    // Transparency: persist a PLANNED English frame prompt for every board at split time (symmetric to
-    // motionEn, which already lets the UI show the animate prompt before rendering). The exact final prompt
-    // depends on render-time context (attached plates, the scene-anchor / continuity reference frames and
-    // their 1-based indices), which does not exist yet — so this is the plan derived purely from the board's
-    // action, cast and location. When the frame is rendered, runBoardImageJob overwrites imagePrompt with the
-    // fully composed prompt (storyboard-job.ts ~336). Building it is a pure, side-effect-free string assembly.
-    const plannedFramePrompt = (b: (typeof boards)[number]) =>
-      buildBoardFramePrompt({
-        board: { index: b.index, actionOrDialogue: b.actionOrDialogue, motion: b.motion, directionJson: b.directionJson },
-        characters: links,
-        locationName: episode.locationName,
-        locationDesc: episode.locationDesc,
-      }).prompt;
-    await prisma.$transaction(async tx => {
+    await updateJob(jobId, { progress: 70, message: "Restoring dialogue & building boards..." });
+    // Build the two board rows per scene. Dialogue is restored VERBATIM (attributed) from the scene's own
+    // English lines; a dialogue-attribution conflict fails the whole job (old boards stay intact — see below).
+    type BoardRow = {
+      episodeId: string; sceneId: string; index: number; boardRole: string;
+      actionOrDialogue: string; motionEn: string | null; durationSec: number;
+      castInFrame: object; imagePrompt: string; status: string;
+    };
+    const rows: BoardRow[] = [];
+    for (let i = 0; i < scenesEn.length; i++) {
+      const s = scenesEn[i];
+      const plan = plans[i];
+      const isNarration = (s.sceneKind ?? "").trim().toLowerCase() === "narration";
+      // Verbatim, attributed spoken lines (dialogue scenes only). Narration carries no on-screen dialogue.
+      const dialogue: SpokenLine[] = isNarration || !s.dialogueEnResolved.trim()
+        ? []
+        : await extractSpokenLinesResilient(s.dialogueEnResolved, attributionCast, { repair: dialogueRepair });
+      // Duration = enough to fit ALL speech (never truncated/accelerated), at least the scripted scene length,
+      // clamped to the i2v-supported [4, 30]s window.
+      const speechSec = dialogue.reduce((sum, l) => sum + estimatedSpeechSeconds(l), 0);
+      const durationSec = Math.min(30, Math.max(Math.ceil(speechSec) + 1, s.durationSec ?? 6, 4));
+
+      // The start frame shows everyone present at the START (onScreen + those about to exit, minus those still
+      // entering); the end frame shows everyone present at the END (onScreen + those who entered, minus exiters).
+      const startVisible = characters.filter(
+        (c) => (plan.onScreen.includes(c) || plan.exiting.includes(c)) && !plan.entering.includes(c),
+      );
+      const endVisible = characters.filter(
+        (c) => (plan.onScreen.includes(c) || plan.entering.includes(c)) && !plan.exiting.includes(c),
+      );
+      const startCoverage = coverageFromNames(startVisible.length ? startVisible : plan.onScreen, characters);
+      const endCoverage = coverageFromNames(endVisible.length ? endVisible : plan.onScreen, characters);
+
+      const castInFrame: CastInFrame = {
+        onScreen: plan.onScreen,
+        entering: plan.entering,
+        exiting: plan.exiting,
+        startFrame: plan.startFrame,
+        endFrame: plan.endFrame,
+        motion: plan.motion,
+        durationSec,
+        // Strip undefined so the JSON column is clean; keep addressee explicit (null when unknown).
+        dialogue: dialogue.map((l) => ({
+          speaker: l.speaker, text: l.text, delivery: l.delivery,
+          addressee: l.addressee ?? undefined, scene: l.scene,
+        })),
+      };
+      const castJson = JSON.parse(JSON.stringify(castInFrame));
+
+      // A PLANNED English frame prompt for each still (overwritten with the fully composed prompt at render time).
+      const framePrompt = (index: number, text: string, coverage: BoardCoverage) =>
+        buildBoardFramePrompt({
+          board: { index, actionOrDialogue: text, motion: null, directionJson: null },
+          characters: links.filter((l) => coverage.visible.includes(l.name)).length
+            ? links.filter((l) => coverage.visible.includes(l.name))
+            : links,
+          coverage,
+          locationName: episode.locationName,
+          locationDesc: episode.locationDesc,
+        }).prompt;
+
+      const startIdx = 2 * i;
+      const endIdx = 2 * i + 1;
+      rows.push({
+        episodeId, sceneId: s.id, index: startIdx, boardRole: "start",
+        actionOrDialogue: plan.startFrame, motionEn: plan.motion, durationSec,
+        castInFrame: castJson, imagePrompt: framePrompt(startIdx, plan.startFrame, startCoverage), status: "pending",
+      });
+      rows.push({
+        episodeId, sceneId: s.id, index: endIdx, boardRole: "end",
+        actionOrDialogue: plan.endFrame, motionEn: null, durationSec,
+        castInFrame: castJson, imagePrompt: framePrompt(endIdx, plan.endFrame, endCoverage), status: "pending",
+      });
+    }
+    if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
+
+    await updateJob(jobId, { progress: 90, message: "Saving boards..." });
+    // Validate/build BEFORE replacing old boards; a dialogue conflict throws above and leaves them intact.
+    // Replacement is atomic (delete + recreate) so the episode never has a half-old / half-new board set.
+    await prisma.$transaction(async (tx) => {
       await tx.board.deleteMany({ where: { episodeId } });
       await tx.board.createMany({
-        data: boards!.map((b) => ({
-          episodeId, index: b.index, actionOrDialogue: b.actionOrDialogue,
-          motionEn: b.motion, durationSec: b.durationSec,
-          region: b.region, regionKey: b.regionKey,
-          directionJson: b.directionJson, imagePrompt: plannedFramePrompt(b), status: "pending",
+        data: rows.map((r) => ({
+          episodeId: r.episodeId, sceneId: r.sceneId, index: r.index, boardRole: r.boardRole,
+          actionOrDialogue: r.actionOrDialogue, motionEn: r.motionEn, durationSec: r.durationSec,
+          castInFrame: r.castInFrame as unknown as object, imagePrompt: r.imagePrompt, status: r.status,
         })),
       });
     });
 
-    await completeJob(jobId, { episodeId, boardCount: boards.length, totalSec: boards.reduce((s, b) => s + b.durationSec, 0) }, `Storyboard ready — ${boards.length} boards`);
+    const totalSec = rows.filter((r) => r.boardRole === "start").reduce((sum, r) => sum + r.durationSec, 0);
+    await completeJob(
+      jobId,
+      { episodeId, boardCount: rows.length, sceneCount: scenesEn.length, totalSec },
+      `Storyboard ready — ${scenesEn.length} scenes (${rows.length} boards)`,
+    );
   } catch (err: any) {
     console.error("[storyboard-boards] failed:", err);
     await failJob(jobId, err?.message ?? "Storyboard generation failed");
@@ -218,11 +321,28 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
     await prisma.board.update({ where: { id: boardId }, data: { status: "frame_generating", error: null } });
 
     const { links, refs } = await loadEpisodeCharacters(board.episodeId);
-    // Stage 143 — EXACTLY who is in frame for THIS board (deterministic: direction + position in scene + action
-    // text). Only the visible characters' identity references are attached; off-screen cast is only NAMED in the
-    // prompt, so the model can no longer copy the whole cast into every board.
-    const direction = readBoardDirection(board.directionJson);
-    const coverage = resolveVisibleCast(direction, board.index, links.map((l) => l.name), board.actionOrDialogue);
+    const cast = links.map((l) => l.name);
+    // Stage 220 — per-scene board: this is the START or END frame of a scene. WHO is in frame is DETERMINED by
+    // the scene shot plan (castInFrame): the start frame shows everyone present at the START (onScreen + those
+    // about to exit, minus those still entering); the end frame shows everyone present at the END (onScreen +
+    // those who entered, minus exiters). Legacy boards (null castInFrame) keep the Stage 143 direction-derived
+    // coverage. Only the visible characters' identity references are attached; off-screen cast is only NAMED.
+    const isPerScene = !!board.boardRole;
+    const cif = (board.castInFrame ?? null) as unknown as CastInFrame | null;
+    let coverage: BoardCoverage;
+    if (cif && Array.isArray(cif.onScreen)) {
+      const onScreen = cif.onScreen ?? [];
+      const entering = cif.entering ?? [];
+      const exiting = cif.exiting ?? [];
+      const inFrame = board.boardRole === "end"
+        ? cast.filter((c) => (onScreen.includes(c) || entering.includes(c)) && !exiting.includes(c))
+        : cast.filter((c) => (onScreen.includes(c) || exiting.includes(c)) && !entering.includes(c));
+      coverage = coverageFromNames(inFrame.length ? inFrame : onScreen, cast);
+    } else {
+      // Stage 143 — EXACTLY who is in frame for a legacy board (direction + position in scene + action text).
+      const direction = readBoardDirection(board.directionJson);
+      coverage = resolveVisibleCast(direction, board.index, cast, board.actionOrDialogue);
+    }
     const visibleLinks = links.filter((l) => coverage.visible.includes(l.name));
     const refImages = links.flatMap((l, i) => (coverage.visible.includes(l.name) && refs[i] ? [refs[i] as string] : []));
     // Parallel to refImages: the character name behind each identity reference, for the UI "references passed" list.
@@ -251,32 +371,39 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
       .filter((s) => s.trim().length > 0);
     const setAnchors = deriveSetAnchors(board.episode.locationDesc ?? "", boardActions);
 
-    // Stage 142 — SCENE ANCHOR FRAME. Boards of one scene (episode × location) render strictly IN ORDER: while a
-    // lower-index sibling of the same scene is still rendering, wait for it (bounded), so the earliest successful
-    // board becomes this board's anchor. A failed/never-rendered lower sibling is not waited for — the next
-    // successful board takes over as anchor. The first board of a scene has no anchor and BECOMES the anchor.
-    const sceneKey = boardSceneKey({ episodeId: board.episodeId, locationId: board.episode.locationId });
+    // Stage 142/220 — SCENE ANCHOR FRAME. A board's SCENE KEY is its own Scene (per-scene boards) so the anchor/continuity are scoped to
+    // the SAME scene (the END frame anchors off the START frame of its scene), falling back to the episode-wide
+    // key for legacy boards (unchanged behaviour: one episode = one location = one scene key).
+    const keyOf = (sid: string | null | undefined) =>
+      sid ?? boardSceneKey({ episodeId: board.episodeId, locationId: board.episode.locationId });
+    const sceneKey = keyOf(board.sceneId);
     const self = { id: board.id, index: board.index, sceneKey };
     const toSiblings = (rows: typeof siblingBoards) =>
-      rows.map((b) => ({ id: b.id, index: b.index, imageUrl: b.imageUrl, status: b.status, sceneKey }));
-    for (let poll = 0; poll < ANCHOR_WAIT_MAX_POLLS; poll++) {
-      const rendering = renderingLowerSiblings(self, toSiblings(siblingBoards));
-      if (rendering.length === 0) break;
-      if (await canceled()) throw new GenerationCanceledError();
-      const waitingFor = Math.min(...rendering.map((r) => r.index)) + 1;
-      await updateJob(jobId, { progress: 20, message: `Board ${board.index + 1}: waiting for board ${waitingFor} (scene anchor)...` });
-      await sleep(ANCHOR_WAIT_POLL_MS);
-      siblingBoards = await loadSiblings();
+      rows.map((b) => ({ id: b.id, index: b.index, imageUrl: b.imageUrl, status: b.status, sceneKey: keyOf(b.sceneId) }));
+    // Stage 220 — per-scene start/end frames render in PARALLEL, so the frame job never WAITS for a lower sibling.
+    // The END frame simply picks the START frame as its anchor if it is already rendered (non-blocking); if not,
+    // it renders independently. Legacy boards keep the Stage 142 strict sequential wait.
+    if (!isPerScene) {
+      for (let poll = 0; poll < ANCHOR_WAIT_MAX_POLLS; poll++) {
+        const rendering = renderingLowerSiblings(self, toSiblings(siblingBoards));
+        if (rendering.length === 0) break;
+        if (await canceled()) throw new GenerationCanceledError();
+        const waitingFor = Math.min(...rendering.map((r) => r.index)) + 1;
+        await updateJob(jobId, { progress: 20, message: `Board ${board.index + 1}: waiting for board ${waitingFor} (scene anchor)...` });
+        await sleep(ANCHOR_WAIT_POLL_MS);
+        siblingBoards = await loadSiblings();
+      }
     }
     const anchor = pickSceneAnchor(self, toSiblings(siblingBoards));
 
-    // Stage 144 — ACTION / POSE CONTINUITY. The immediately previous board of the SAME scene AND SAME region (a
-    // rendered frame with the highest index below this board) is the source of the ongoing action: its still is
-    // attached as the CONTINUITY reference and its action text is passed so this board CONTINUES the exact moment
-    // (poses / body contact / props carry over; only the camera changes). Inheritance resets at a region boundary
-    // (a different corner of the set) and at the first board of the scene, which establishes the action instead.
+    // Stage 144/220 — ACTION / POSE CONTINUITY. The immediately previous rendered board of the SAME scene (by
+    // sceneId for per-scene boards, else same region) is the source of the ongoing action: its still is attached
+    // as the CONTINUITY reference and its action text is passed so this board CONTINUES the exact moment (poses /
+    // body contact / props carry over; only the camera changes). The scene's START frame has no earlier sibling
+    // and establishes the action; the END frame continues from the START frame.
     const prevRow = siblingBoards
-      .filter((b) => b.id !== board.id && b.index < board.index && (b.region ?? null) === (board.region ?? null) && validUrl(b.imageUrl))
+      .filter((b) => b.id !== board.id && b.index < board.index && validUrl(b.imageUrl) &&
+        (isPerScene ? (b.sceneId ?? null) === (board.sceneId ?? null) : (b.region ?? null) === (board.region ?? null)))
       .sort((a, b) => b.index - a.index)[0];
     const continuityUrl = prevRow ? (prevRow.imageUrl as string) : null;
     const previousActionText = prevRow
@@ -365,6 +492,9 @@ export async function runBoardVideoJob(jobId: string, projectId: string, boardId
     const board = await prisma.board.findUnique({ where: { id: boardId }, include: { episode: true } });
     if (!board) { await failJob(jobId, "Board not found"); return; }
     if (board.episode.mode !== "STORYBOARD") { await failJob(jobId, "Episode is not in STORYBOARD mode"); return; }
+    // Stage 220 — per-scene model: only the START frame is animated (start→end i2v clip). The END frame is a still
+    // keyframe consumed as the clip's last_image; it is never animated on its own.
+    if (board.boardRole === "end") { await failJob(jobId, "The scene end frame is a keyframe, not an animated clip; animate the scene's start frame instead."); return; }
     if (!validUrl(board.imageUrl)) { await failJob(jobId, "Generate the board frame before animating it"); return; }
 
     await updateJob(jobId, { status: "processing", progress: 10, message: `Board ${board.index + 1}: starting animation...` });
@@ -372,20 +502,37 @@ export async function runBoardVideoJob(jobId: string, projectId: string, boardId
 
     // The board still is the START frame of the image-to-video clip (keyframe ban lifted for STORYBOARD).
     const { links } = await loadEpisodeCharacters(board.episodeId);
+    // Stage 220 — per-scene start board: fetch the scene's END frame to drive the i2v start→end transition
+    // (Seedance last_image), and use the scene's verbatim dialogue + motion text as the clip authority.
+    const cif = (board.castInFrame ?? null) as unknown as CastInFrame | null;
+    const isPerScene = !!board.boardRole && !!board.sceneId;
+    let lastImageUrl: string | null = null;
+    if (isPerScene) {
+      const endRow = await prisma.board.findFirst({ where: { episodeId: board.episodeId, sceneId: board.sceneId, boardRole: "end" }, select: { imageUrl: true } });
+      if (endRow && validUrl(endRow.imageUrl)) lastImageUrl = endRow.imageUrl as string;
+    }
     // Stage 144 — the board's opening frame already continues the previous board's ongoing action, so the motion
     // must CONTINUE from that inherited pose rather than start neutral. Resolve the previous board of the same
     // scene AND same region (highest index below, with a rendered frame); i2v still gets NO extra image refs.
     const videoSiblings = await prisma.board.findMany({ where: { episodeId: board.episodeId }, select: SIBLING_SELECT });
-    const prevVideoRow = videoSiblings
+    // Legacy multi-board scenes chained continuity from the previous board; a per-scene start board is a
+    // self-contained start→end clip, so it never inherits a previous pose.
+    const prevVideoRow = isPerScene ? undefined : videoSiblings
       .filter((b) => b.id !== board.id && b.index < board.index && (b.region ?? null) === (board.region ?? null) && validUrl(b.imageUrl))
       .sort((a, b) => b.index - a.index)[0];
     const previousActionText = prevVideoRow
       ? (readBoardDirection(prevVideoRow.directionJson)?.actionEnglish || prevVideoRow.motionEn || prevVideoRow.actionOrDialogue || "").trim()
       : "";
+    // Per-scene: cast in the clip = everyone on-screen at either end (onScreen ∪ entering ∪ exiting).
+    const perSceneCast = cif ? Array.from(new Set([...(cif.onScreen ?? []), ...(cif.entering ?? []), ...(cif.exiting ?? [])])) : [];
     const animationBoard = {
       actionOrDialogue: board.actionOrDialogue, motion: board.motionEn,
-      directionJson: board.directionJson, characters: links.map(c => c.name), boardIndex: board.index,
-      durationSec: board.durationSec ?? 6, imageUrl: board.imageUrl as string,
+      directionJson: board.directionJson,
+      characters: isPerScene && perSceneCast.length ? perSceneCast : links.map(c => c.name),
+      boardIndex: board.index,
+      durationSec: (isPerScene ? (cif?.durationSec ?? board.durationSec) : board.durationSec) ?? 6,
+      imageUrl: board.imageUrl as string,
+      ...(isPerScene ? { lastImageUrl, spokenLines: cif?.dialogue ?? null, actionText: cif?.motion ?? null } : {}),
       ...(previousActionText ? { previousActionText } : {}),
     };
     const request = buildStoryboardVideoRequest(animationBoard);

@@ -31,6 +31,21 @@ export interface AnimationBoard {
    * than start from a neutral pose. Omitted (first board of a scene / scene boundary) → no continuation note.
    */
   previousActionText?: string | null;
+  /**
+   * Stage 220 — per-scene i2v: the END FRAME of the scene, passed as Seedance `last_image`. The clip animates the
+   * board's START frame INTO this end frame over the whole scene's duration. Omitted → single-frame animation.
+   */
+  lastImageUrl?: string | null;
+  /**
+   * Stage 220 — the scene's verbatim attributed spoken lines (from castInFrame.dialogue), used directly instead of
+   * re-parsing actionOrDialogue. When provided, these are the AUDIO the clip must voice, in order.
+   */
+  spokenLines?: SpokenLine[] | null;
+  /**
+   * Stage 220 — the English MOTION description of the start→end transition (castInFrame.motion). When provided it
+   * is the actor-action authority for the clip instead of the parsed action text.
+   */
+  actionText?: string | null;
 }
 
 function legacyAction(text: string, cast: string[]): string {
@@ -43,9 +58,12 @@ function legacyAction(text: string, cast: string[]): string {
 function animationParts(board: AnimationBoard): { plan: BoardDirection | null; lines: SpokenLine[]; action: string; tracking: boolean } {
   const plan = readBoardDirection(board.directionJson);
   const cast = plan?.cast ?? board.characters ?? [];
-  const lines = plan?.speech ?? extractSpokenLines(board.actionOrDialogue, cast);
-  const action = plan?.actionEnglish ?? legacyAction(board.actionOrDialogue, cast);
-  return { plan, lines, action, tracking: plan ? plan.cameraMode === "TRACKING" : hasActorTravel(action) };
+  // Stage 220 — a per-scene board supplies its verbatim spoken lines (castInFrame.dialogue) and its start→end
+  // MOTION text directly, so we never re-parse actionOrDialogue (which is a still-frame description, not speech).
+  const lines = plan?.speech ?? board.spokenLines ?? extractSpokenLines(board.actionOrDialogue, cast);
+  const action = plan?.actionEnglish ?? board.actionText ?? legacyAction(board.actionOrDialogue, cast);
+  const tracking = plan ? plan.cameraMode === "TRACKING" : hasActorTravel(board.actionText ?? action);
+  return { plan, lines, action, tracking };
 }
 
 export function storyboardCameraMode(board: AnimationBoard): "TRACKING" | "LOCKED_OFF" {
@@ -55,7 +73,7 @@ export function storyboardCameraMode(board: AnimationBoard): "TRACKING" | "LOCKE
 export function buildStoryboardAnimationPrompt(board: AnimationBoard): string {
   const { plan, lines, action, tracking } = animationParts(board);
   const duration = board.durationSec ?? 6;
-  if (!Number.isInteger(duration) || duration < 4 || duration > 6) throw new Error("Storyboard duration must stay 4–6s; rebuild conflicting boards.");
+  if (!Number.isInteger(duration) || duration < 4 || duration > 30) throw new Error("Storyboard duration must stay 4–30s; rebuild conflicting boards.");
   if (lines.reduce((sum, line) => sum + estimatedSpeechSeconds(line), 0) > duration)
     throw new Error("Dialogue duration conflict: rebuild boards to distribute the original lines across consecutive 4–6s clips. No acceleration, truncation or omitted speech is allowed.");
   // Stage 144 — this board's opening frame already IS the previous board's ongoing moment (continuity), so the
@@ -65,8 +83,11 @@ export function buildStoryboardAnimationPrompt(board: AnimationBoard): string {
   const actionLine = continues
     ? `ACTOR ACTION ONLY: The opening frame already shows the ongoing action continued from the previous shot (${prevAction}) — keep every pose, body contact and prop from the opening frame and CONTINUE the motion smoothly from it; do NOT reset to a neutral pose or restart the action. ${action || "Natural continuation with motivated reactions from the opening pose."}`
     : `ACTOR ACTION ONLY: ${action || "Natural breathing and motivated reactions from the opening pose."}`;
+  const toEnd = !!board.lastImageUrl;
   const instructions = styledVisualPrompt([
-    `Animate the original board opening frame into ONE continuous 3-6 second live-action shot (this clip: ${duration}s).`,
+    toEnd
+      ? `Animate the scene as ONE continuous live-action shot (this clip: ${duration}s) that begins EXACTLY on the provided START frame (image) and ends EXACTLY on the provided END frame (last_image), moving smoothly and naturally between them across the whole duration. No internal reset — the same characters, wardrobe, props and location throughout.`
+      : `Animate the original board opening frame into ONE continuous live-action shot (this clip: ${duration}s).`,
     tracking ? TRACKING_BOARD_CAMERA : LOCKED_BOARD_CAMERA,
     "No internal cuts, transitions, montage or shot/reverse-shot within this clip. Hard cuts and freely selected new angles occur BETWEEN boards only.",
     actionLine,
@@ -84,6 +105,7 @@ export function buildStoryboardVideoRequest(board: AnimationBoard & { imageUrl: 
   return {
     prompt: buildStoryboardAnimationPrompt(board),
     image: board.imageUrl, // untouched original opening-frame URL, no resizing or collage
+    ...(board.lastImageUrl && /^https?:\/\//.test(board.lastImageUrl) ? { last_image: board.lastImageUrl } : {}),
     resolution: "720p",
     duration: board.durationSec ?? 6,
     generate_audio: true,

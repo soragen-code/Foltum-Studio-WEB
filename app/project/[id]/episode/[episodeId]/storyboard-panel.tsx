@@ -11,7 +11,7 @@
  * episode-view.tsx) is untouched and keeps its text-to-video / no-start-frame rules.
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2, Film, Wand2, ImageIcon, Play, ChevronDown, ChevronRight, Copy, Check } from 'lucide-react'
 import { JobProgressBar, SmoothProgress, useJobPolling } from '../../_components/use-job-polling'
 import { boardFramePrecondition } from '@/lib/board-anchor'
@@ -19,6 +19,17 @@ import { DownloadVideoButton } from '@/app/project/[id]/_components/download-vid
 
 /** A reference image passed to a model, as persisted by the worker (label is already Russian). */
 type BoardRef = { index: number; url: string; kind: string; label: string }
+
+/** Stage 220 — the per-scene shot plan persisted on BOTH boards of a scene (Board.castInFrame). */
+type CastInFrame = {
+  onScreen?: string[]
+  entering?: string[]
+  exiting?: string[]
+  startFrame?: string
+  endFrame?: string
+  motion?: string
+  durationSec?: number
+}
 
 type Board = {
   id: string
@@ -30,6 +41,11 @@ type Board = {
   durationSec?: number | null
   status: string
   error?: string | null
+  // Stage 220 — per-scene model: scene grouping + role (start/end) + the scene's shot plan.
+  // Nullable/absent on legacy boards, which keep rendering as a flat list.
+  sceneId?: string | null
+  boardRole?: string | null
+  castInFrame?: CastInFrame | null
   // Group B — transparency fields (nullable; absent on legacy boards)
   imagePrompt?: string | null
   motionPromptEn?: string | null
@@ -116,8 +132,18 @@ function RefList({ title, refs }: { title: string; refs: BoardRef[] }) {
   )
 }
 
+/** One "who is in frame" line («В кадре» / «Входят» / «Выходят»); hidden when the name list is empty. */
+function CastLine({ label, names }: { label: string; names?: string[] }) {
+  if (!names || names.length === 0) return null
+  return (
+    <div className="text-[11px] leading-snug">
+      <span className="font-semibold text-foreground">{label}:</span> <span className="text-muted-foreground">{names.join(', ')}</span>
+    </div>
+  )
+}
+
 /** One board card: keyframe still + action/dialogue text + per-board frame/animate controls. */
-function BoardCard({ board, onChanged, frameLocked }: { board: Board; onChanged: () => void; frameLocked: boolean }) {
+function BoardCard({ board, onChanged, frameLocked, registerFrameRun }: { board: Board; onChanged: () => void; frameLocked: boolean; registerFrameRun?: (fn: () => void) => void }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [showDetails, setShowDetails] = useState(false)
@@ -142,10 +168,21 @@ function BoardCard({ board, onChanged, frameLocked }: { board: Board; onChanged:
     }
   }, [board.id, framePoll, animatePoll, onChanged])
 
+  // Stage 220 — a scene's «Сгенерировать оба кадра» button fires the frame POST for BOTH boards concurrently
+  // (start + end render in parallel). Each card registers its own frame runner with the parent scene group.
+  useEffect(() => { registerFrameRun?.(() => { void run('frame') }) }, [registerFrameRun, run])
+
+  // Per-scene role label; legacy boards keep the flat «Кадр N» heading. Duration (clip length) is a start-frame
+  // concept — the end frame is a still keyframe and shows no duration.
+  const isEnd = board.boardRole === 'end'
+  const canAnimate = !isEnd
+  const roleLabel = board.boardRole === 'start' ? 'Начальный кадр' : isEnd ? 'Последний кадр' : `Кадр ${board.index + 1}`
+  const showDur = !isEnd && board.durationSec
+
   return (
     <div className="rounded-xl border border-border bg-card p-3" data-testid={`board-card-${board.index}`}>
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-xs font-semibold text-muted-foreground">Кадр {board.index + 1}{board.durationSec ? ` · ${board.durationSec}s` : ''}</span>
+        <span className="text-xs font-semibold text-muted-foreground">{roleLabel}{showDur ? ` · ${board.durationSec}s` : ''}</span>
         <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{board.status}</span>
       </div>
       {/* 9:16 portrait viewer: object-contain + letterbox so the still/clip is never cropped or stretched. */}
@@ -173,9 +210,13 @@ function BoardCard({ board, onChanged, frameLocked }: { board: Board; onChanged:
         <button onClick={() => run('frame')} disabled={busy || frameLocked} title={frameLocked ? 'Generate the previous shot first' : undefined} className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium disabled:opacity-50" data-testid={`board-frame-${board.index}`}>
           {busy && framePoll.isActive ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />} {validUrl(board.imageUrl) ? 'Перерисовать кадр' : 'Сгенерировать кадр'}
         </button>
-        <button onClick={() => run('animate')} disabled={busy || !validUrl(board.imageUrl)} title={!validUrl(board.imageUrl) ? 'Сначала сгенерируйте кадр' : 'Оживить кадр в клип'} className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium disabled:opacity-50" data-testid={`board-animate-${board.index}`}>
-          {busy && animatePoll.isActive ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} {validUrl(board.videoUrl) ? 'Переанимировать' : 'Оживить'}
-        </button>
+        {/* Stage 220 — only the START frame is animated (start→end i2v clip). The END frame is a still keyframe
+            passed as the clip's last_image, so it exposes no animate control. */}
+        {canAnimate && (
+          <button onClick={() => run('animate')} disabled={busy || !validUrl(board.imageUrl)} title={!validUrl(board.imageUrl) ? 'Сначала сгенерируйте кадр' : 'Оживить сцену в клип (начальный → последний кадр)'} className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium disabled:opacity-50" data-testid={`board-animate-${board.index}`}>
+            {busy && animatePoll.isActive ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} {validUrl(board.videoUrl) ? 'Переанимировать' : 'Оживить сцену'}
+          </button>
+        )}
       </div>
 
       {/* B2/B3 — collapsible "frame details": the actual prompts and the actual reference images the models received.
@@ -211,6 +252,65 @@ function BoardCard({ board, onChanged, frameLocked }: { board: Board; onChanged:
           </div>
         )
       })()}
+    </div>
+  )
+}
+
+/**
+ * Stage 220 — one scene = exactly two boards (start frame + end frame) rendered in PARALLEL, plus one i2v clip
+ * (start→end). The header shows «Сцена N», the scene duration and who is on-screen / entering / exiting, and a
+ * single «Сгенерировать оба кадра» button that fires both frame POSTs concurrently. The end frame is a still
+ * keyframe (the clip's last_image) and is never animated on its own.
+ */
+function SceneGroup({ sceneNumber, boards, onChanged, boardFrameLocked }: {
+  sceneNumber: number
+  boards: Board[]
+  onChanged: () => void
+  boardFrameLocked: (b: Board) => boolean
+}) {
+  const runners = useRef<Map<string, () => void>>(new Map())
+  const register = useCallback((id: string) => (fn: () => void) => { runners.current.set(id, fn) }, [])
+  const runBoth = useCallback(() => { runners.current.forEach((fn) => fn()) }, [])
+
+  // Both boards of a scene carry the same shot plan (onScreen/entering/exiting/motion/duration).
+  const plan = boards.find((b) => b.castInFrame)?.castInFrame ?? null
+  const start = boards.find((b) => b.boardRole === 'start') ?? boards[0]
+  const end = boards.find((b) => b.boardRole === 'end')
+  const ordered = [start, ...(end ? [end] : boards.filter((b) => b !== start))].filter(Boolean) as Board[]
+  const dur = plan?.durationSec ?? start?.durationSec ?? null
+
+  return (
+    <div className="rounded-xl border border-border bg-muted/20 p-3" data-testid={`scene-group-${sceneNumber}`}>
+      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-foreground">Сцена {sceneNumber}{dur ? ` · ${dur}s` : ''}</div>
+          {plan && (
+            <div className="mt-1 space-y-0.5">
+              <CastLine label="В кадре" names={plan.onScreen} />
+              <CastLine label="Входят" names={plan.entering} />
+              <CastLine label="Выходят" names={plan.exiting} />
+            </div>
+          )}
+        </div>
+        <button
+          onClick={runBoth}
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium hover:bg-accent"
+          data-testid={`scene-frames-${sceneNumber}`}
+        >
+          <ImageIcon className="h-3.5 w-3.5" /> Сгенерировать оба кадра
+        </button>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        {ordered.map((b) => (
+          <BoardCard
+            key={b.id}
+            board={b}
+            onChanged={onChanged}
+            frameLocked={boardFrameLocked(b)}
+            registerFrameRun={register(b.id)}
+          />
+        ))}
+      </div>
     </div>
   )
 }
@@ -304,9 +404,32 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
     } catch (e: any) { setStitching(false); setError(e?.message ?? 'Ошибка запроса') }
   }, [episodeId, stitchPoll])
 
-  const allAnimated = boards.length > 0 && boards.every((b) => validUrl(b.videoUrl))
+  // Stage 220 — per-scene model: a scene = 2 boards (start + end); only the START frame becomes a clip (start→end
+  // i2v), the END frame is a still keyframe. So "animated" is counted over clip boards only (boardRole !== 'end').
+  const perScene = boards.some((b) => !!b.boardRole)
+  const clipBoards = boards.filter((b) => b.boardRole !== 'end')
+  const allAnimated = clipBoards.length > 0 && clipBoards.every((b) => validUrl(b.videoUrl))
   const framedCount = boards.filter((b) => validUrl(b.imageUrl)).length
-  const animatedCount = boards.filter((b) => validUrl(b.videoUrl)).length
+  const animatedCount = clipBoards.filter((b) => validUrl(b.videoUrl)).length
+
+  // Group boards into scenes, preserving index order (start idx=2i precedes end idx=2i+1). Legacy boards with a
+  // null sceneId each become their own singleton group so they still render.
+  const sceneGroups = (() => {
+    const groups: { key: string; boards: Board[] }[] = []
+    const byKey = new Map<string, number>()
+    for (const b of [...boards].sort((a, z) => a.index - z.index)) {
+      const key = b.sceneId ?? `__legacy__${b.id}`
+      if (!byKey.has(key)) { byKey.set(key, groups.length); groups.push({ key, boards: [] }) }
+      groups[byKey.get(key)!].boards.push(b)
+    }
+    return groups
+  })()
+
+  const frameLockedFor = (b: Board) =>
+    !boardFramePrecondition(
+      { index: b.index, imageUrl: b.imageUrl, boardRole: b.boardRole },
+      boards.map((s) => ({ index: s.index, imageUrl: s.imageUrl })),
+    ).allowed
 
   return (
     <div className="mt-4" data-testid="storyboard-panel">
@@ -318,7 +441,9 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
           {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Собрать ролик (~90с)
         </button>
         <span className="text-xs text-muted-foreground" data-testid="storyboard-status">
-          {boards.length} кадров · {framedCount} с кадром · {animatedCount} оживлено{videoUrl ? ' · ролик собран' : ''}
+          {perScene
+            ? `${sceneGroups.length} сцен · ${framedCount} из ${boards.length} кадров · ${animatedCount} из ${clipBoards.length} сцен оживлено`
+            : `${boards.length} кадров · ${framedCount} с кадром · ${animatedCount} оживлено`}{videoUrl ? ' · ролик собран' : ''}
         </span>
         {splitting && splitPoll.job && <div className="w-full"><JobProgressBar job={splitPoll.job} expectedTotalSec={40} /></div>}
         {stitching && stitchPoll.job && <div className="w-full"><JobProgressBar job={stitchPoll.job} expectedTotalSec={180} /></div>}
@@ -367,14 +492,28 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
         <p className="mt-6 text-sm text-muted-foreground"><Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> Загрузка кадров…</p>
       ) : boards.length === 0 ? (
         <p className="mt-6 text-sm text-muted-foreground">Кадров пока нет. Нажмите «Разбить историю на кадры», чтобы сгенерировать раскадровку из готовой истории.</p>
+      ) : perScene ? (
+        // Per-scene layout: one block per scene, each with a start frame + end frame rendered in parallel.
+        <div className="mt-6 space-y-4" data-testid="storyboard-boards">
+          {sceneGroups.map((g, i) => (
+            <SceneGroup
+              key={g.key}
+              sceneNumber={i + 1}
+              boards={g.boards}
+              onChanged={refresh}
+              boardFrameLocked={frameLockedFor}
+            />
+          ))}
+        </div>
       ) : (
+        // Legacy flat layout for episodes built before the per-scene model.
         <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4" data-testid="storyboard-boards">
           {boards.map((b) => (
             <BoardCard
               key={b.id}
               board={b}
               onChanged={refresh}
-              frameLocked={!boardFramePrecondition({ index: b.index, imageUrl: b.imageUrl }, boards.map((s) => ({ index: s.index, imageUrl: s.imageUrl }))).allowed}
+              frameLocked={frameLockedFor(b)}
             />
           ))}
         </div>

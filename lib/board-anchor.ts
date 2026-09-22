@@ -88,9 +88,12 @@ export interface BoardFrameGate {
  *     signal for a board frame regardless of what happens to the clip afterwards.
  */
 export function boardFramePrecondition(
-  self: { index: number; imageUrl?: string | null },
+  self: { index: number; imageUrl?: string | null; boardRole?: string | null },
   siblings: { index: number; imageUrl?: string | null }[],
 ): BoardFrameGate {
+  // Stage 220 — per-scene model: a board carrying a boardRole (start/end) has its OWN scene-scoped shot plan and
+  // is rendered in PARALLEL with its sibling and with every other scene, so it is never gated on a prior board.
+  if (self.boardRole) return { allowed: true };
   if (self.index <= 0) return { allowed: true };
   if (validUrl(self.imageUrl)) return { allowed: true };
   const prev = siblings

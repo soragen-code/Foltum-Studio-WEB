@@ -301,6 +301,12 @@ model Board {
   anchorUrl        String?  // imageUrl of the scene anchor board actually attached to this frame's image_input
   anchorBoardId    String?  // Board.id of that anchor board
   directionJson    String?  @db.Text // Stage 132: validated Storyboard-only speech ledger, camera mode and dialogue shot plan; null for legacy boards
+  // Stage 220 (PER-SCENE storyboard): each Scene now yields EXACTLY two boards — a start frame (boardRole="start")
+  // and an end frame (boardRole="end") — plus one start→end i2v clip stored on the start board. All nullable /
+  // additive; legacy boards (the old ~50 discrete boards) keep NULL and load/render exactly as before.
+  sceneId          String?  // Scene.id this board belongs to (null for legacy boards)
+  boardRole        String?  // "start" | "end" — which frame of the scene this board is (null for legacy boards)
+  castInFrame      Json?    // { onScreen[], entering[], exiting[], startFrame, endFrame, motion, durationSec, dialogue[] } — per-scene shot plan
   imagePrompt      String?  @db.Text // English Seedream FRAME prompt used to render the board still (9:16)
   // Group B (transparency): the ACTUAL animate prompt + the ACTUAL reference images passed to each model, plus the
   // fixed frame seed. All nullable / additive; legacy boards remain NULL. STORYBOARD only.

@@ -227,10 +227,13 @@ export async function assembleStoryboardVideo(episodeId: string, opts: AssembleE
     });
     if (!episode) throw new Error("Episode not found");
 
-    const boards = await prisma.board.findMany({
+    const allBoards = await prisma.board.findMany({
       where: { episodeId },
       orderBy: { index: "asc" },
     });
+    // Stage 220 — per-scene model: the END frame is a still keyframe (Seedance last_image), never a clip of its own.
+    // Exclude end boards from the cut. Use a JS filter so legacy boards (boardRole = null) are always kept.
+    const boards = allBoards.filter((b) => b.boardRole !== "end");
     if (boards.length === 0) throw new Error("There are no boards in the episode");
     if (boards.some((b) => !validUrl(b.videoUrl)))
       throw new Error("Not all boards have an animated clip");

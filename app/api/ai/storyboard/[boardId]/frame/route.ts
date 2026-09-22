@@ -26,7 +26,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ boardId: s
     const { boardId } = await ctx.params;
     const board = await prisma.board.findFirst({
       where: { id: boardId, episode: { mode: "STORYBOARD", season: { project: { userId: session.user.id } } } },
-      select: { id: true, index: true, imageUrl: true, episodeId: true, episode: { select: { season: { select: { projectId: true } } } } },
+      select: { id: true, index: true, imageUrl: true, boardRole: true, episodeId: true, episode: { select: { season: { select: { projectId: true } } } } },
     });
     if (!board) return NextResponse.json({ error: "Board not found" }, { status: 404 });
     const pid = board.episode.season.projectId;
@@ -37,7 +37,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ boardId: s
       where: { episodeId: board.episodeId },
       select: { index: true, imageUrl: true },
     });
-    const gate = boardFramePrecondition({ index: board.index, imageUrl: board.imageUrl }, siblings);
+    const gate = boardFramePrecondition({ index: board.index, imageUrl: board.imageUrl, boardRole: board.boardRole }, siblings);
     if (!gate.allowed) return NextResponse.json({ error: gate.reason ?? "Generate the previous shot first." }, { status: 409 });
 
     await failStaleJobs({ projectId: pid, type: BOARD_IMAGE_JOB_TYPE });
