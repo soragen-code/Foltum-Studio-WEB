@@ -186,6 +186,14 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
   const claimed = await prisma.generationJob.updateMany({ where: { id: jobId, status: { in: ["pending", "processing"] }, resultData: null },
     data: { resultData: JSON.stringify({ preparing: true }), status: "processing" } });
   if (!claimed.count) return;
+  // Keep the job fresh during the slow pre-submission pipeline (translate / rewriteSceneLook / prop
+  // registry / region + sub-location plates / re-angle / downscale — together these can exceed
+  // STALE_JOB_MS). Until the predictionId is persisted, failStaleJobs does NOT exempt this job, so
+  // without a heartbeat a >3 min preprocessing run is falsely marked "Generation timed out (worker
+  // stopped responding)" while the worker is still alive — and the later predictionId checkpoint then
+  // resurrects it into a charged, orphaned zombie (status=failed but message="Queued" with a live
+  // predictionId). The 60 s ping stays well under the 3 min staleness window.
+  const preSubmitHeartbeat = setInterval(() => { void heartbeatJob(jobId); }, 60_000);
   const diagnostics: GenerationAttempt[] = [];
   let state: VideoJobState | null = null;
   const persist = () => updateJob(jobId, { resultData: JSON.stringify({ ...state, diagnostics }) });
@@ -400,6 +408,8 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
       return;
     }
     await handleFailure(jobId, { sceneId, userId, cost }, err);
+  } finally {
+    clearInterval(preSubmitHeartbeat);
   }
 }
 
@@ -569,6 +579,10 @@ async function runShotVideoJob(params: VideoJobParams): Promise<void> {
   const claimed = await prisma.generationJob.updateMany({ where: { id: jobId, status: { in: ["pending", "processing"] }, resultData: null },
     data: { resultData: JSON.stringify({ preparing: true }), status: "processing" } });
   if (!claimed.count) return;
+  // Same guard as the scene path: heartbeat through the slow pre-submission pipeline so the still-alive
+  // job is never falsely marked "Generation timed out" before the predictionId is persisted (failStaleJobs
+  // only exempts jobs that already carry a predictionId). 60 s ping < 3 min staleness window.
+  const preSubmitHeartbeat = setInterval(() => { void heartbeatJob(jobId); }, 60_000);
   const diagnostics: GenerationAttempt[] = [];
   let state: VideoJobState | null = null;
   const persist = () => updateJob(jobId, { resultData: JSON.stringify({ ...state, diagnostics }) });
@@ -677,6 +691,8 @@ async function runShotVideoJob(params: VideoJobParams): Promise<void> {
       return;
     }
     await handleFailure(jobId, { sceneId, userId, cost, shotId }, err, state ?? undefined);
+  } finally {
+    clearInterval(preSubmitHeartbeat);
   }
 }
 
