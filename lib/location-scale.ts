@@ -143,14 +143,20 @@ export function episodeLocations(
   // top-level locationDesc, so the legacy text-match below silently dropped the real cards AND wrongly pulled in
   // an orphaned top-level location whose name equals the locationDesc. Keying on the persisted scene.locationId
   // shows exactly the cards the script produced (one per authored spot), in scene order.
+  let hasBinding = false
   for (const s of episode.scenes ?? []) {
-    if (s?.locationId) add(byId.get(s.locationId))
+    if (s?.locationId) { hasBinding = true; add(byId.get(s.locationId)) }
   }
-  const haystack = `${episode.locationName ?? ''} ${(episode.scenes ?? []).map((s) => s.locationDesc ?? '').join(' ')}`.toLowerCase()
-  for (const loc of projectLocations ?? []) {
-    if (seen.has(loc.id)) continue
-    const name = (loc.name ?? '').toLowerCase().trim()
-    if (name.length >= 3 && haystack.includes(name)) add(loc)
+  // Legacy fuzzy match runs ONLY when no scene carries an authoritative binding — otherwise it would wrongly
+  // pull in an orphaned top-level Location whose name equals the scene locationDesc (the pre-Stage171 collapsed
+  // card), inflating the count above the real per-spot cards the current script produced.
+  if (!hasBinding) {
+    const haystack = `${episode.locationName ?? ''} ${(episode.scenes ?? []).map((s) => s.locationDesc ?? '').join(' ')}`.toLowerCase()
+    for (const loc of projectLocations ?? []) {
+      if (seen.has(loc.id)) continue
+      const name = (loc.name ?? '').toLowerCase().trim()
+      if (name.length >= 3 && haystack.includes(name)) add(loc)
+    }
   }
   if (out.length === 0) {
     const names = new Set<string>()
