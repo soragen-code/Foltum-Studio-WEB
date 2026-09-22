@@ -703,6 +703,11 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
         seasonStateBlock,
         // Stage 8 (final) — project dialogue language (default "en" → no-op directive; old rows resolve to en).
         dialogueLanguage: getDialogueLanguage(project),
+        // Stage 173 (task 3) — the per-episode PLOT (written on the episode-plot page before the script) is the
+        // AUTHORITATIVE BASIS for the shooting script: the script must contain every event / character /
+        // location / sub-location / scene-order from the plot, then add dialogue + camera. Read defensively:
+        // absent (old episodes / plot not yet generated) → null ⇒ the prompt block is omitted (script unchanged).
+        episodePlot: (ep as { plot?: string | null }).plot ?? null,
         ...(planned.instruction ? { instruction: reviseInstruction(planned.instruction, next) } : {}),
       }) + episodeRetryNote(state),
       // Stage 108 — the episode script is written by gpt-4o (EPISODE_SCRIPT_MODEL): non-reasoning →

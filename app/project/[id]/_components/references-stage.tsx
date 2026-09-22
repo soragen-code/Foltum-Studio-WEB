@@ -197,8 +197,8 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
   const activeLoc: Record<string, JobInfo | 'local'> = {}
   for (const j of locJobs) for (const lid of jobLocationIds(j as any)) activeLoc[lid] = j
   for (const lid of Object.keys(localLoc)) if (!activeLoc[lid]) activeLoc[lid] = 'local'
-  // Stage 111: a location counts as ready only with both mandatory frames (wide master + elevated layout view).
-  const locReady = locations.filter((l) => validUrl(l.imageUrl) && validUrl(l.imageReverse)).length
+  // Stage 173: a location counts as ready with its single mandatory frame — the wide master.
+  const locReady = locations.filter((l) => validUrl(l.imageUrl)).length
   // Extra-angle job state (one location at a time)
   const activeExtra: Record<string, JobInfo | 'local'> = {}
   for (const j of locExtraJobs) { const lid = jobExtraLocationId(j as any); if (lid) activeExtra[lid] = j }
@@ -478,23 +478,9 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                           {gen ? <Loader2 className="h-3 w-3 animate-spin" /> : <Camera className="h-3 w-3" />}
                           {gen ? 'Generating…' : has ? `Regenerate (${LOCATION_SET_COST} cr.)` : `Generate reference (${LOCATION_SET_COST} cr.)`}
                         </button>
-                        {has && !validUrl(loc.imageReverse) && (
-                          /* Stage 111: legacy location with only the wide master — add the mandatory layout view alone (1 frame). */
-                          <button
-                            type="button"
-                            onClick={() => regenShot('location', loc.id, 'layout')}
-                            disabled={!!gen || !!activeExtra[loc.id] || !!shotBusy[shotKey(loc.id, 'layout')]}
-                            className="flex items-center gap-1 rounded-lg border border-amber-500/60 bg-amber-500/10 px-3 py-1.5 text-xs transition disabled:opacity-50"
-                            data-testid="location-add-layout"
-                            title={`Add the mandatory elevated layout view (${CHARACTER_REFERENCE_COST} cr.)`}
-                          >
-                            {shotBusy[shotKey(loc.id, 'layout')] ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
-                            Add layout view ({CHARACTER_REFERENCE_COST} cr.)
-                          </button>
-                        )}
                         {gen && gen !== 'local' && <CancelButton onCancel={() => cancelJob((gen as JobInfo).id)} testId="location-cancel" />}
                       </div>
-                      <p className="mt-2 text-[11px] text-muted-foreground">Wide master + elevated layout view (mandatory), optional medium shot and extra angles — same place, same lighting; all go to Seedance as references.</p>
+                      <p className="mt-2 text-[11px] text-muted-foreground">One wide master reference per location, optional medium shot and extra angles — same place, same lighting; all go to Seedance as references.</p>
                       {has && (() => {
                         const extras = parseExtra(loc.imageExtra)
                         const extraJob = activeExtra[loc.id]

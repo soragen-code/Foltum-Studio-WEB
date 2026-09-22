@@ -555,3 +555,17 @@ ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "loglineApproved" BOOLEAN NOT NUL
 -- "generate next 3" action knows where to continue. Additive, nullable & idempotent; legacy rows keep NULL
 -- and behave exactly as the previous all-at-once flow.
 ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "storyEpisodesGenerated" INTEGER;
+
+
+
+-- Stage 173 (task 1): AI-recommended number of episodes, computed from the approved synopsis right after
+-- synopsis approval. Shown to the producer as the suggested value (they may keep it or override via
+-- "episodeCount"). Additive, nullable & idempotent; legacy rows keep NULL and behave exactly as before.
+ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "recommendedEpisodeCount" INTEGER;
+
+-- Stage 173 (task 2): the episode PLOT — a prose beat-sheet (events, characters, locations/sub-locations,
+-- scene order) generated on the episode-plot page BEFORE the script, sequentially on demand. It is the
+-- AUTHORITATIVE BASIS for the script (task 3). plotStatus drives the plot page UI. Additive, nullable &
+-- idempotent; legacy rows keep NULL and are unaffected.
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "plot" TEXT;
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "plotStatus" TEXT;

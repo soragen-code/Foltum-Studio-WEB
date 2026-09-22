@@ -16,9 +16,9 @@ export const EXTRA_ANGLES_PER_REQUEST = 3;
 
 /**
  * Charge + start a background job that renders reference PNGs for the given locations.
- * Stage 111: two mandatory frames per location (wide master + elevated layout view), each priced like a
- * character reference — LOCATION_MASTER_FRAMES × CHARACTER_REFERENCE_COST per location. Refunds per missing frame:
- * both when the master did not change, one when only the layout view is missing.
+ * Stage 173: exactly one mandatory frame per location (the wide master), priced like a
+ * character reference — LOCATION_MASTER_FRAMES (= 1) × CHARACTER_REFERENCE_COST per location. Refunds the
+ * location whose single master frame did not change.
  */
 export { LOCATION_SET_COST };
 export async function startLocationImageJob(opts: { user: { id: string; credits: number | null }; projectId: string; locationIds: string[]; imageModel?: string }) {
@@ -34,9 +34,8 @@ export async function startLocationImageJob(opts: { user: { id: string; credits:
   const cost = locationIds.length * LOCATION_SET_COST;
   if ((user.credits ?? 0) < cost)
     return { error: `Insufficient credits: need ${cost}, balance ${user.credits ?? 0}`, status: 402 as const };
-  const names = await prisma.location.findMany({ where: { id: { in: locationIds } }, select: { id: true, name: true, imageUrl: true, imageReverse: true } });
+  const names = await prisma.location.findMany({ where: { id: { in: locationIds } }, select: { id: true, name: true, imageUrl: true } });
   const before = new Map(names.map((n) => [n.id, n.imageUrl]));
-  const beforeLayout = new Map(names.map((n) => [n.id, n.imageReverse]));
   await prisma.user.update({ where: { id: user.id }, data: { credits: { decrement: cost } } });
   await prisma.creditTransaction.create({ data: { userId: user.id, amount: -cost, description: `Location reference: ${names.map((n) => n.name).join(", ")}` } });
   const job = await prisma.generationJob.create({
@@ -45,18 +44,13 @@ export async function startLocationImageJob(opts: { user: { id: string; credits:
   runInBackground(async () => {
     await runLocationImagesJob({ jobId: job.id, projectId, locationIds, imageModel });
     try {
-      const after = await prisma.location.findMany({ where: { id: { in: locationIds } }, select: { id: true, name: true, imageUrl: true, imageReverse: true } });
+      const after = await prisma.location.findMany({ where: { id: { in: locationIds } }, select: { id: true, name: true, imageUrl: true } });
       const failed = after.filter((l) => !l.imageUrl || l.imageUrl === before.get(l.id));
-      // Master changed but the elevated layout view is missing/unchanged → refund that one frame.
-      const layoutMissing = after.filter((l) => !failed.includes(l) && (!l.imageReverse || l.imageReverse === beforeLayout.get(l.id)));
-      const refund = failed.length * LOCATION_SET_COST + layoutMissing.length * CHARACTER_REFERENCE_COST;
+      // Stage 173: one frame per location — refund the location whose single master frame did not change.
+      const refund = failed.length * LOCATION_SET_COST;
       if (refund > 0) {
-        const parts = [
-          failed.length ? `location reference was not generated (${failed.map((l) => l.name).join(", ")})` : "",
-          layoutMissing.length ? `layout view was not generated (${layoutMissing.map((l) => l.name).join(", ")})` : "",
-        ].filter(Boolean);
         await prisma.user.update({ where: { id: user.id }, data: { credits: { increment: refund } } });
-        await prisma.creditTransaction.create({ data: { userId: user.id, amount: refund, description: `Refund: ${parts.join("; ")}` } });
+        await prisma.creditTransaction.create({ data: { userId: user.id, amount: refund, description: `Refund: location reference was not generated (${failed.map((l) => l.name).join(", ")})` } });
       }
     } catch (e) { console.error("[location-refs] refund check failed:", e); }
   });

@@ -81,6 +81,10 @@ model Project {
   idea        String?  @db.Text
   // New flow (Stage 14 B): producer-chosen number of episodes for the season. Null = let the AI decide.
   episodeCount Int?
+  // Stage 173 (task 1): AI-recommended number of episodes, computed from the approved synopsis right after
+  // synopsis approval. Shown to the producer as the suggested value (they may keep it or override via
+  // `episodeCount`). Additive + optional: legacy rows keep NULL and behave exactly as before.
+  recommendedEpisodeCount Int?
   // Stage 210 (batched story generation): how many per-episode synopses have been generated so far for the
   // season story, generated in batches of STORY_EPISODE_BATCH (=3). Null = legacy/all-at-once flow (unchanged).
   storyEpisodesGenerated Int?
@@ -227,6 +231,12 @@ model Episode {
   locationName  String?
   locationDesc  String?  @db.Text
   locationId    String?  // stage 3: bound project Location (reference image)
+  // Stage 173 (task 2): the episode PLOT — a prose beat-sheet (events, characters, locations/sub-locations,
+  // scene order) generated on the episode-plot page BEFORE the script. Plots are generated sequentially on
+  // demand (episode N's plot enables episode N+1's plot). It is the AUTHORITATIVE BASIS for the script
+  // (task 3). Additive + optional: legacy rows keep NULL and are unaffected.
+  plot          String?  @db.Text
+  plotStatus    String?  // null/"pending" = not generated yet | "generating" | "ready" — drives the plot page UI
   script        String?  @db.Text
   arcRole       String?  // stage 2: завязка / развитие / поворот / финал
   status        String   @default("draft") // draft, script_ready, scenes_ready, approved, assembled

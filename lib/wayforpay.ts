@@ -61,9 +61,9 @@ export const WFP_PRODUCTS: Record<string, WfpProduct> = {
   pro: { id: "pro", name: "Foltum Studio — Pro (access plan)", amount: 99, credits: 0, kind: "subscription", tier: "pro" },
   studio: { id: "studio", name: "Foltum Studio — Studio (access plan)", amount: 299, credits: 0, kind: "subscription", tier: "studio" },
   // One-off credit packs
-  mini: { id: "mini", name: "20 credits pack", amount: 20, credits: 20, kind: "credits" },
-  plus: { id: "plus", name: "60 credits pack", amount: 54, credits: 60, kind: "credits" },
-  max: { id: "max", name: "150 credits pack", amount: 120, credits: 150, kind: "credits" },
+  mini: { id: "mini", name: "30 credits pack", amount: 19.99, credits: 30, kind: "credits" },
+  plus: { id: "plus", name: "80 credits pack", amount: 49.99, credits: 80, kind: "credits" },
+  max: { id: "max", name: "300 credits pack", amount: 99.99, credits: 300, kind: "credits" },
 };
 
 export function getProduct(id: string): WfpProduct | null {

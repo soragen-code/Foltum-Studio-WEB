@@ -184,16 +184,18 @@ export const STATE_MAX_SENTENCES = 60;
 export const STATE_MIN_WORDS = 150;
 /** Stage 166 — the state "size / shape" instruction is now the structured checklist text (5 items, ≥150 words). */
 const STATE_SIZE_TEXT = STATE_CHECKLIST_TEXT;
-/** Stage 115 (Stage 167 — fuller lines) — dialogue is the product, and a clip is a short VARIABLE length (3–15 s):
- *  every talking scene carries a SUBSTANTIVE exchange of 2–3 sentences sized to the clip (a two-line exchange for a
- *  shorter clip, a fuller 3-sentence exchange for a longer one), with no dead air and no crammed speech. A longer
+/** Stage 115 (Stage 167 / Stage 172 — fuller, more lifelike lines) — dialogue is the product, and a clip is a
+ *  short VARIABLE length (3–15 s): every talking scene carries a SUBSTANTIVE, real-life back-and-forth exchange of
+ *  3–4 sentences sized to the clip (the characters actually answer each other — a line, a genuine reply, a
+ *  rejoinder), with no dead air and no crammed speech. A longer
  *  conversation is NOT cut short — it runs across SEVERAL consecutive same-location clips (see MULTI_CLIP_DIALOGUE_RULE)
  *  so the viewer is actually informed of what is going on before the location ever changes. */
-export const TALK_MIN_SENTENCES = 2;
-export const TALK_MAX_SENTENCES = 3;
-/** Stage 166 — up to 2 SILENT scenes are allowed per episode, BUT a silent scene is valid ONLY if it carries a
- *  `visualBeat` field (a short description of what the viewer reads with no dialogue). Stage 110 was ZERO. */
-export const MAX_SILENT_SCENES = 2;
+export const TALK_MIN_SENTENCES = 3;
+export const TALK_MAX_SENTENCES = 4;
+/** Stage 172 — at most 1 SILENT scene per episode: the story is driven FIRST by the characters talking to each
+ *  other, so almost every scene is a talking scene. A silent scene is valid ONLY if it carries a `visualBeat`
+ *  field (a short description of what the viewer reads with no dialogue). Stage 110 was ZERO; Stage 166 was 2. */
+export const MAX_SILENT_SCENES = 1;
 export const ARC_ROLES = ["завязка", "развитие", "поворот", "финал"] as const;
 
 export const episodeOutlineSchema = z.object({
@@ -1453,6 +1455,61 @@ export const EPISODE_DIRECTOR_BASE_PROMPT = `Ты — сценарист и ре
    • ИСТОЧНИКИ СВЕТА (откуда падает свет, какой), ЗНАЧИМЫЕ ЗВУКИ (что слышно), и ПОЛОЖЕНИЕ персонажей относительно друг друга и предметов (кто где стоит/сидит, кто ближе к двери, кто у окна).
 Требование объёма: пиши РАЗВЁРНУТЫЕ action-блоки (заметно длиннее, чем короткий абзац), но сохраняй контракты формата — короткий заголовок сцены, локация в шапке одним предложением, при говорящем персонаже — только диалоговый план (не общий), число сцен/кадров по длительности, контракты startState/endState. Не раздувай сверх необходимого настолько, чтобы упереться в таймаут генерации.`;
 
+/* ───────────── Stage 173 (task 1) — recommend a season episode count from the synopsis ───────────── */
+// Right after synopsis approval the AI reads the approved synopsis and RECOMMENDS how many episodes the
+// season should have to tell that story well (no filler, no rushing). The producer sees this number and may
+// keep it or override it. Returned as JSON {episodeCount, reason}.
+export function recommendEpisodeCountSystemPrompt(language: IdeaLanguage): string {
+  return `You are a senior TV series showrunner. Given a season SYNOPSIS, decide how many episodes this season should have to tell the story WELL — enough room for every arc, escalation beat and subplot, but no filler and no rushing. Judge the scope from the synopsis: the number of distinct storylines, turning points, character arcs and locations it implies. A tight, single-thread story needs fewer episodes; a broad, multi-thread saga needs more.\nRespond with ONLY a compact JSON object, no prose around it:\n{"episodeCount": <integer from ${SEASON_MIN_EPISODES} to ${SEASON_MAX_EPISODES}>, "reason": "<one short sentence explaining the number, written in ${langName(language)}>"}`;
+}
+export function recommendEpisodeCountUserPrompt(synopsis: string): string {
+  return `SYNOPSIS:\n${synopsis.trim()}\n\nHow many episodes should this season have? Answer as the specified JSON object.`;
+}
+
+/* ───────────── Stage 173 (task 2) — per-episode PLOT (сюжет), generated sequentially before the script ───────────── */
+// The PLOT is a prose beat-sheet of ONE episode: WHAT happens (events, characters, locations/sub-locations,
+// scene order) — NOT a shooting script (no dialogue lines, no camera/shot directions; those are added later
+// when the script is written FROM this plot). Plots are generated one episode at a time, each one aware of the
+// previous episodes' plots so the season stays continuous.
+export function episodePlotSystemPrompt(language: IdeaLanguage, episodeNumber: number): string {
+  const L = langName(language);
+  return `You are a professional TV series writer. Write the PLOT (сюжет) of ONE episode — EPISODE ${episodeNumber} — as a clear prose beat-sheet. This is the PLOT, NOT the shooting script: describe WHAT happens; do NOT write spoken dialogue lines, camera directions, shot types or timings (those are added later when the script is built from this plot).
+Cover, in the order they happen on screen (this order IS the scene order):
+- every KEY EVENT / story beat of the episode;
+- which CHARACTERS take part in each beat and what they want and do (a change of who is present must be motivated — someone arrives, leaves or the action moves);
+- the LOCATION and the specific SUB-LOCATION (the exact spot within the location) where each beat plays out — a new beat at a new spot means the story moved there;
+- how this episode continues from the previous one (for episode 1, how it opens the season) and the HOOK / CLIFFHANGER it ends on.
+Write it as readable paragraphs, one per beat/scene, in the order they occur. Write ALL prose in ${L}, but keep every CHARACTER NAME in Latin letters. Keep it concise but complete — roughly 250–500 words. Output ONLY the plot text (no JSON, no headings like "System:", no commentary).`;
+}
+export function episodePlotUserPrompt(input: {
+  synopsis: string;
+  season: SeasonStructure;
+  episode: EpisodeOutline;
+  previousPlots: { number: number; plot: string }[];
+  language: IdeaLanguage;
+}): string {
+  const prev = input.previousPlots
+    .filter((p) => p.plot && p.plot.trim())
+    .sort((a, b) => a.number - b.number)
+    .map((p) => `— EPISODE ${p.number} PLOT:\n${p.plot.trim()}`)
+    .join("\n\n");
+  const prevBlock = prev
+    ? `\n\nPLOTS OF THE PREVIOUS EPISODES (this episode MUST continue directly from them — do not repeat or contradict them):\n${prev}`
+    : "\n\n(This is the FIRST episode — it opens the season.)";
+  const ep = input.episode;
+  return `SEASON «${input.season.title}»: ${input.season.logline}
+SYNOPSIS OF THE WHOLE SEASON:
+${input.synopsis.trim()}${prevBlock}
+
+WRITE THE PLOT OF EPISODE ${ep.number} «${ep.title}» (${ep.arcRole}):
+LOGLINE: ${ep.logline}
+MAIN LOCATION: ${ep.locationName} — ${ep.locationDesc}
+CHARACTERS EXPECTED IN THIS EPISODE: ${ep.characters.join(", ")}
+INTENDED CLIFFHANGER: ${ep.cliffhanger}
+
+Write the full PLOT (сюжет) of episode ${ep.number} following the rules above.`;
+}
+
 export function episodeScriptSystemPrompt(language: IdeaLanguage, episodeNumber = 1): string {
   const L = langName(language);
   const local = language !== "en";
@@ -1471,7 +1528,7 @@ Return STRICT JSON: {"visualIdentity": string, "peakSceneIndex": int, "scenes": 
 SCENE KINDS ("sceneKind"): "dialogue" = an on-camera talking scene (the default for most scenes); "action" = a FIGHT / DUEL / CHASE / physical struggle — REQUIRED whenever the beat is a physical confrontation. An action scene is written as combat choreography (see R9) and STILL carries spoken English lines (1–2 short lines in the pauses between impacts) — no scene of any kind is silent. There is NO narration kind: never write an off-screen narrator, a voice-over-only scene or a recap.
 
 HARD RULES (the script is REJECTED automatically if any is broken):
-R1. RUNNING-TIME BUDGET (VARIABLE-LENGTH SHOTS): ${SCENE_COUNT_DURATION_RULE} ${CLIP_LENGTH_RULE} Keep the lines you write matched to each clip's length — one short line or a quick 1–2-line exchange per clip; never cram a long speech into one clip, and never stretch a short beat. All scenes happen in/around the episode's key location; scene 1 may open on a wide shot but the HOOK lands from the first second.
+R1. RUNNING-TIME BUDGET (VARIABLE-LENGTH SHOTS): ${SCENE_COUNT_DURATION_RULE} ${CLIP_LENGTH_RULE} Keep the lines you write matched to each clip's length — a substantive 2–3-line back-and-forth exchange per clip (the characters actually answer each other), never a single lone line per side unless the beat is deliberately terse; never cram a long speech into one clip, and never stretch a short beat. All scenes happen in/around the episode's key location; scene 1 may open on a wide shot but the HOOK lands from the first second.
 R1b. ${MULTI_CLIP_DIALOGUE_RULE}
 R2. ${SILENT_SCENE_RULE}
 R-HOOK. ${SCENE_HOOK_RULE}
@@ -1480,6 +1537,7 @@ R-PEAK. ${EMOTIONAL_PEAK_RULE}
 R-TIMESKIP. ${TIME_SKIP_RULE}
 R8. ${ONE_LOCATION_RULE}
 R10. START / END STATE — MATCH CUT ON ACTION: ${END_STATE_RULE} ${START_STATE_RULE} In short: on every continuous seam the WORLD is the same and the CAMERA is new — scene N+1 opens on the SAME instant of the SAME action as scene N's final frame, seen from a DIFFERENT angle / shot scale / height, exactly like an editor cutting between two cameras on one continuous take. Repeating the previous framing is an error; changing the place, light, wardrobe, props or the phase of the movement across a continuous seam is an error. Dialogue never straddles a cut: a line may end right on the cut but is never split across two scenes, and the next scene begins with a fresh line; nobody falls silent or freezes before the cut.
+R12. CAST & MOVEMENT CONTINUITY — NO UNEXPLAINED PARTNER SWAP: a character NEVER changes who they are with, or where they stand, between two consecutive scenes unless the script SHOWS that change on screen. If a character talks to person A in one scene and in the next scene is with person B (or alone, or at a different spot), the intervening movement MUST be described and staged: who WALKS IN, who LEAVES, who CROSSES to whom, or the shown travel to the new spot — recorded in "presence"/"entrances"/"continuesFrom" AND staged in the [BLOCKING], [ACTION] and [TRANSITION] lines. A hard cut that silently replaces a conversation partner, teleports a character to a new place, or makes someone appear or vanish with NO described entrance, exit or move is REJECTED. EXPLICIT MOVEMENT: every scene names ALL character movements (who enters, who exits, who moves and to where) AND, on a continuous seam, the camera moves to a NEW angle / shot scale / height (R10) with [SHOT TYPE] and [ACTION] naming exactly how the camera travels from the previous shot — a character's or the camera's position never changes off-screen without the script saying how.
 R11. ${PACING_RULE} This episode dramatises ONLY its own logline — one major turn, then the cliffhanger; do not borrow events from the next episodes' loglines.${isFirst ? " As EPISODE 1 it introduces the world and the people and lands the single inciting conflict, nothing more — but scene 1 STILL opens on the hook (R-HOOK), never on exposition." : ""}
 R9. ACTION SCENES: whenever the beat is a fight, duel, chase, ambush or any physical struggle — including anything the logline promises (a battle, an attack, a monster / creature / pack assault, a duel, a chase) — the scene MUST have "sceneKind": "action" and the confrontation ACTUALLY HAPPENS on screen; it is never merely a conversation ABOUT fighting. Its "action" text and its videoPrompt are written as combat choreography, applying this rule INSTEAD of the talking-scene STAGING / FRAMING wording: ${ACTION_STAGING_RULE} The "action" field of a fight scene names the REAL MECHANICS beat by beat — who strikes / lunges / throws / grabs and who dodges / blocks / is hit and falls, with visible CONTACT and IMPACT — never a vague "they fight", "they battle" or "they clash"; and when the opponent is a creature / monster / pack, that creature is an ACTIVE attacker in direct contact with the hero (lunging, swiping, surrounding), never a backdrop. An action scene carries 1–2 SHORT English lines (never "[NO DIALOGUE]"), spoken in the pauses between impacts — a taunt, a warning, a shouted name, a demand; the R3 sentence minimum does not apply to it, but it is never silent.
 R3. A talking scene is BUILT AROUND its dialogue — a SUBSTANTIVE beat of ${TALK_MIN_SENTENCES}–${TALK_MAX_SENTENCES} full sentences (normally a quick two-way EXCHANGE where the characters actually answer each other; a lone short line only for a deliberately terse beat) where the story is carried THROUGH what is said (a decision, an accusation, a confession, a piece of information, subtext) and each line reveals character or pushes the plot. The lines INTERWEAVE with the action — a line lands together with a piece of business or a reaction, then the reply, dialogue and staging braided into ONE beat rather than a token line pinned onto an action shot. Match the amount of speech to the clip's real length (${SCENE_MIN_SECONDS}–${SCENE_CLIP_MAX_SECONDS} s): a single short line fills a ${SCENE_MIN_SECONDS}–7 s clip, a two-line exchange a fuller one — never cram a long speech in, and set "durationSec" to how long the line(s) plus their visible action actually take. A longer conversation is NOT forced into one scene: split it across consecutive scenes (see R1b), one line or short exchange per clip with a camera cut between them. A genuine two-way exchange is usually strongest, but it is NOT mandatory: a scene may turn on a refusal, a one-sided confrontation, a withheld answer, a loaded silence broken by one line, or a lone character on the phone / speaking to someone off-screen — whatever the beat calls for. What is not allowed is a pure off-screen NARRATOR or a voice-over-only scene replacing on-camera speech. A weak, throwaway one-liner with no dramatic content is REJECTED — even a single line must carry a real story beat. PLOT-DRIVING LINES: every scene's dialogue MUST actively MOVE THE STORY — each spoken beat delivers at least one of a REVEAL (new information, a secret, a name, a motive), a DECISION or demand (a choice made, an ultimatum, an offer, a refusal), or a CONFLICT ESCALATION (an accusation, a threat, a challenge, a shift of power between the characters). No filler, no small talk, no restating what the audience already knows: if a line does not reveal, decide or escalate, cut it or replace it with one that does, so the plot visibly advances scene to scene. One line per row, format: NAME (tone cue): "line". Tone cues like (sharply), (whispering), (holding back tears). The "dialogue" line carries ONLY the words actually SPOKEN plus that short parenthetical tone cue — NEVER stage directions, action, blocking or narration inside the line (no "*he grabs the knife*", no "(walks to the door and) ..."): everything the characters DO belongs in "action" / [BLOCKING] / [ACTION], never in the spoken line.
@@ -1554,6 +1612,15 @@ export function episodeScriptUserPrompt(input: {
    */
   plotSource?: string | null;
   /**
+   * Stage 173 — the PLOT of THIS SPECIFIC EPISODE (generated on the episode-plot page, stored on Episode.plot).
+   * When present it is the AUTHORITATIVE BASIS for this episode's shooting script: the script MUST contain every
+   * event, character, location and sub-location from this plot and preserve the plot's scene ORDER, then EXPAND
+   * each plot beat into full shooting scenes by ADDING dialogue, camera positions and character/camera movements.
+   * It is more specific than the season-level plotSource and wins over it and the auto-derived outline (only the
+   * author-pasted userScript is stronger). Absent/empty → the script is written the usual way from the outline.
+   */
+  episodePlot?: string | null;
+  /**
    * Stage 158 — the AUTHOR-PROVIDED FULL EPISODE SCRIPT ("insert your own script"). When present, this is the
    * finished script for THIS episode written by the author: the model must ONLY STRUCTURE it into the required
    * shooting-script JSON (keeping the author's scenes/order/action and EVERY dialogue line verbatim, only
@@ -1619,6 +1686,14 @@ export function episodeScriptUserPrompt(input: {
   const plotBlock = plot
     ? `\n\nAUTHOR-PROVIDED SEASON PLOT (AUTHORITATIVE — write THIS episode's script from it; where it differs from the outline above, the plot wins; use the part covering episode ${input.episode.number}):\n${plot}`
     : "";
+  // Stage 173 — the PLOT of THIS episode (generated on the episode-plot page, Episode.plot). It is the
+  // AUTHORITATIVE BASIS for the script: the script must reproduce EVERY event, character, location and
+  // sub-location from it and keep the plot's ORDER, then EXPAND each beat into full shooting scenes by ADDING
+  // dialogue, camera positions and the character/camera movements — nothing from the plot may be dropped.
+  const episodePlot = (input.episodePlot ?? "").trim();
+  const episodePlotBlock = episodePlot
+    ? `\n\nPLOT OF THIS EPISODE ${input.episode.number} (AUTHORITATIVE BASIS FOR THE SCRIPT — build the shooting script DIRECTLY from this plot). The script for this episode MUST:\n- CONTAIN EVERY event / beat described in the plot, in the SAME ORDER (do not drop, reorder or invent story beats);\n- include EVERY character the plot involves and keep each in the SAME role/relationship the plot gives them;\n- play out in the SAME locations and SUB-LOCATIONS the plot names (a beat set at a given place stays at that place; when the plot moves the action to a new spot, show that move on screen per R12);\n- then EXPAND each plot beat into full shooting scenes by ADDING what the plot does not spell out: the spoken DIALOGUE (R3), the CAMERA positions / cut list (R4 [SHOT TYPE]) and every CHARACTER and CAMERA MOVEMENT between shots (R10 / R12).\nThe plot is the WHAT (events, people, places, order); you add the HOW (dialogue, camera, movement). Where this episode plot differs from the outline/synopsis/season plot above, THIS EPISODE PLOT WINS.\n${episodePlot}`
+    : "";
   // Stage 158 — the author pasted a COMPLETE episode script. This is the STRONGEST source: the model must only
   // STRUCTURE it into the required shooting-script JSON, preserving the author's scenes/order/action and every
   // dialogue line EXACTLY as written, and synthesize ONLY the technical fields. It wins over plotSource + outline.
@@ -1641,7 +1716,7 @@ export function episodeScriptUserPrompt(input: {
   // names and titles in that language while keeping stage directions / field keys English.
   const langDirective = dialogueLanguageDirective(input.dialogueLanguage);
   const langBlock = langDirective ? `\n\n${langDirective}` : "";
-  return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}${plotBlock}${userScriptBlock}${dramaBibleBlock}\n\nPREVIOUS EPISODES:\n${prev}${continuityBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}${locationInventoryBlock(input.locationInventory)}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${seasonMapBlock}${langBlock}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
+  return `SEASON «${input.season.title}»: ${input.season.logline}\nSYNOPSIS: ${input.synopsis}${plotBlock}${episodePlotBlock}${userScriptBlock}${dramaBibleBlock}\n\nPREVIOUS EPISODES:\n${prev}${continuityBlock}\n\nTHIS EPISODE ${input.episode.number} «${input.episode.title}» (${input.episode.arcRole}):\n${input.episode.logline}${beats}\nCLIFFHANGER: ${input.episode.cliffhanger}\nLOCATION: ${input.episode.locationName} — ${input.episode.locationDesc}${locationInventoryBlock(input.locationInventory)}\n\nCHARACTERS IN THIS EPISODE:\n${charactersBlock(cast.length ? cast : input.characters)}${seasonMapBlock}${langBlock}${input.instruction ? `\n\nREVISION INSTRUCTION FROM THE AUTHOR (apply it, keep everything else coherent):\n${input.instruction}` : ""}`;
 }
 
 /**

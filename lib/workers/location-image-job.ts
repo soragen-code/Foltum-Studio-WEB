@@ -9,12 +9,11 @@ import { detectC2paFromUrl } from "@/lib/c2pa";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Background job: a photoreal 9:16 PNG reference SET per location (Seedream, C2PA kept):
- * Stage 111: TWO mandatory frames per location — the wide establishing master (Location.imageUrl) and the
- * elevated LAYOUT view chained on it (Location.imageReverse; camera raised ~2.5–3 m, looking slightly down so the
- * placement of every object is readable). Extra angles are still added on demand by the location_extra_image job.
- * Job type "location_image". Charged LOCATION_MASTER_FRAMES (= 2) frames per location; the caller refunds any
- * frame that did not change.
+ * Background job: a photoreal 9:16 PNG reference per location (Seedream, C2PA kept):
+ * Stage 173: exactly ONE mandatory frame per location — the wide establishing master (Location.imageUrl).
+ * Extra angles are still added on demand by the location_extra_image job.
+ * Job type "location_image". Charged LOCATION_MASTER_FRAMES (= 1) frame per location; the caller refunds the
+ * frame if it did not change.
  */
 export async function runLocationImagesJob({ jobId, projectId, locationIds, imageModel }: { jobId: string; projectId: string; locationIds: string[]; imageModel?: string }): Promise<void> {
   // User cancel: checked before every provider call (inside generateImage, which also cancels the running
@@ -66,22 +65,9 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
         const wideUrl = await uploadRemoteToS3(wideRemote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${stamp}-wide.png`, "image/png");
         await prisma.location.update({ where: { id: loc.id }, data: { imageUrl: wideUrl, imageReverse: null, imageDetail: null, imageExtra: null } }); // new master → the old angles no longer match; re-shot from this frame
         await checkC2pa(loc.id, "wide", wideUrl);
-        // 2) Stage 111: mandatory elevated LAYOUT view, chained on the wide frame so it shows the SAME space.
-        // A layout failure keeps the wide frame (the author can add the layout alone via the "Add layout frame"
-        // button); the caller's refund pass returns the credit for the missing frame.
-        try {
-          await updateJob(jobId, { progress: pct(), message: `Location layout view "${loc.name}» (${done + 1}/${total})…` });
-          const layoutRemote = await gen({ prompt: locationAnglePrompt(visual, loc.name, "layout", loc.setInventory), aspect_ratio: REFERENCE_ASPECT_RATIO, image_input: [wideUrl] });
-          if (await canceled()) throw new GenerationCanceledError();
-          const layoutUrl = await uploadRemoteToS3(layoutRemote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${stamp}-layout.png`, "image/png");
-          await prisma.location.update({ where: { id: loc.id }, data: { imageReverse: layoutUrl } });
-          await checkC2pa(loc.id, "layout", layoutUrl);
-        } catch (e: any) {
-          if (e instanceof GenerationCanceledError) throw e;
-          layoutFailed += 1;
-          console.error(`[location-images] layout view failed for ${loc.name}:`, e?.message ?? e);
-        }
-        // Additional angles are requested one at a time by the author ("+ Angle" → location_extra_image job).
+        // Stage 173: exactly ONE reference per location — the wide establishing master above. The elevated
+        // layout view is no longer generated automatically. Additional angles are still requested one at a
+        // time by the author ("+ Angle" -> location_extra_image job).
       } catch (e: any) {
         if (e instanceof GenerationCanceledError) { await markCanceled(jobId, CANCEL_MSG); return; }
         failed += 1;

@@ -90,6 +90,12 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
   const [plotFile, setPlotFile] = useState<File | null>(null)
   const [uploadBusy, setUploadBusy] = useState(false)
   const plotInputRef = useRef<HTMLInputElement | null>(null)
+  // ПРАВКА (task 1) — рекомендованное ИИ число серий (посчитано после аппрува синопсиса). Прифилл поля:
+  // выбор продюсера (episodeCount) → рекомендация ИИ → 8 по умолчанию. Продюсер может оставить или изменить.
+  const [episodesWanted, setEpisodesWanted] = useState<number>(() => {
+    const n = Number(project?.episodeCount ?? project?.recommendedEpisodeCount)
+    return Number.isFinite(n) && n > 0 ? Math.min(100, Math.max(1, Math.round(n))) : 8
+  })
 
   const load = useCallback(async () => {
     try {
@@ -128,7 +134,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
   const start = async () => {
     setStarting(true); setError(null)
     try {
-      const res = await fetch('/api/ai/season', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, ...(typeof project.episodeCount === 'number' ? { episodeCount: project.episodeCount } : {}) }) })
+      const res = await fetch('/api/ai/season', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, episodeCount: episodesWanted }) })
       const data = await res.json()
       if (!res.ok) throw new Error(data?.error ?? 'Failed to start generation')
       setJob({ id: data.jobId, status: 'processing', progress: 1, message: 'Starting...' })
@@ -293,14 +299,16 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
           </div>
         )}
 
-        {/* Stage 59 (step 3 → step 4): jump straight to the first ready episode. Identical to the bottom button. */}
+        {/* Stage 173 (task 2): after the season structure is built, the next step is the episode PLOT page —
+           it shows the plot (сюжет) of the FIRST episode, from where the producer goes to its script or
+           generates the next episode's plot. */}
         {firstEpisode && (
           <Link
-            href={`/project/${project.id}/episode/${firstEpisode.id}/script`}
+            href={`/project/${project.id}/plot/${firstEpisode.id}`}
             className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
             data-testid="go-first-episode-top"
           >
-            Аппрув / Далее <ArrowRight className="h-4 w-4" />
+            Аппрув / К сюжету серий <ArrowRight className="h-4 w-4" />
           </Link>
         )}
 
@@ -329,10 +337,35 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
             </div>
 
             {plotMode === 'auto' ? (
-              <button onClick={start} disabled={starting} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="season-generate">
-                {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-                Сгенерировать сезон
-              </button>
+              <div className="space-y-3" data-testid="episode-count-panel">
+                {/* ПРАВКА (task 1) — рекомендованное ИИ число серий: показываем подсказку и поле, где можно оставить
+                   рекомендацию или задать своё число. */}
+                <div className="rounded-lg border border-border bg-muted/40 p-3">
+                  <label htmlFor="episodes-wanted" className="text-sm font-medium">Количество серий в сезоне</label>
+                  {typeof project?.recommendedEpisodeCount === 'number' && (
+                    <p className="mt-1 text-xs text-muted-foreground" data-testid="episode-count-recommendation">
+                      Рекомендация ИИ по синопсису: <b>{project.recommendedEpisodeCount}</b> серий. Можно оставить как есть или изменить.
+                    </p>
+                  )}
+                  <input
+                    id="episodes-wanted"
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={episodesWanted}
+                    onChange={(e) => {
+                      const n = Math.round(Number(e.target.value))
+                      setEpisodesWanted(Number.isFinite(n) ? Math.min(100, Math.max(1, n)) : 1)
+                    }}
+                    className="mt-2 w-28 rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                    data-testid="episode-count-input"
+                  />
+                </div>
+                <button onClick={start} disabled={starting} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="season-generate">
+                  {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
+                  Сгенерировать сезон
+                </button>
+              </div>
             ) : (
               <div className="space-y-3" data-testid="plot-upload-panel">
                 <input

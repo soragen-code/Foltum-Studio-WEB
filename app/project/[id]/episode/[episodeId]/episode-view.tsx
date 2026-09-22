@@ -306,10 +306,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   }, [])
 
   // ---- Reference readiness ----
-  // Stage 111: a location is ready only with BOTH mandatory frames — the wide master AND the elevated layout view.
-  const locBaseReady = (l: any) => validUrl(l?.imageUrl) && validUrl(l?.imageReverse)
+  // Stage 173: a location is ready with its single mandatory frame — the wide master.
+  const locBaseReady = (l: any) => validUrl(l?.imageUrl)
   const locHasMaster = (l: any) => validUrl(l?.imageUrl)
-  const locNeedsLayout = (l: any) => locHasMaster(l) && !validUrl(l?.imageReverse)
+  const locNeedsLayout = (_l: any) => false
   // Stage 46A: a location is "ready" with its MASTER frame alone — extra angles are optional and are
   // added one by one with the «+ "Angle" button. The scenes step unlocks as soon as every character
   // has its full photo set and every episode location has a master frame.

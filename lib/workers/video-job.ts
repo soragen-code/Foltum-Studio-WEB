@@ -276,8 +276,8 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
     let reangleInfo: VideoJobState["reangle"];
     let reangleRequest: ReturnType<typeof buildReangleRequest> | null = null;
     if (previousRow) {
-      if (!episodeLoc?.location?.imageUrl || !episodeLoc.location.imageReverse)
-        throw new Error("Add the location's mandatory wide and layout views before generating this transition.");
+      if (!episodeLoc?.location?.imageUrl)
+        throw new Error("Add the location's wide master reference before generating this transition.");
       await updateJob(jobId, { progress: 8, message: "Re-angling the previous video's last frame (Seedream camera edit)..." });
       reangleRequest = buildReangleRequest({ sceneId, number: scene.number, startState: scene.startState,
         videoPrompt: scene.videoPrompt, promptOverride: scene.promptOverride, previous: previousRow, refs: support, castState: characters,

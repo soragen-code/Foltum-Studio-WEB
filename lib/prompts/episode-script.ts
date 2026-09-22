@@ -12,7 +12,7 @@ import type { EpisodeScript, SceneScript } from "../season";
 // Prompt version — stamped onto Episode.promptVersion when a script is generated.
 // ---------------------------------------------------------------------------
 /** Bumped whenever the episode-script prompt CONTRACT changes; written to Episode.promptVersion. */
-export const EPISODE_SCRIPT_PROMPT_VERSION = "6.1.0";
+export const EPISODE_SCRIPT_PROMPT_VERSION = "6.3.0";
 
 // ---------------------------------------------------------------------------
 // Numeric bounds (LITERAL mirrors of the season.ts constants — kept in step by tests).
@@ -23,9 +23,9 @@ export const STAGE166_SCENE_MIN_SEC = 3;
 export const STAGE166_SCENE_MAX_SEC = 15;
 export const STAGE166_EP_MIN_SEC = 70;
 export const STAGE166_EP_MAX_SEC = 100;
-export const STAGE166_MAX_SILENT_SCENES = 2;
-/** Dialogue polish: average spoken line length must stay AT OR UNDER this many words. */
-export const DIALOGUE_MAX_AVG_WORDS = 12;
+export const STAGE166_MAX_SILENT_SCENES = 1;
+/** Dialogue polish: average spoken line length must stay AT OR UNDER this many words (Stage 172 — fuller, more lifelike lines). */
+export const DIALOGUE_MAX_AVG_WORDS = 16;
 /** A state checklist must be AT LEAST this many words (the LLM critic, not the count, is the real gate). */
 export const STATE_CHECKLIST_MIN_WORDS = 150;
 
@@ -96,7 +96,7 @@ export const TIME_SKIP_RULE =
 
 /** Rule 2 — silent scenes: up to 2, valid ONLY with a visualBeat; non-silent scenes still open on the speaker close-up. */
 export const SILENT_SCENE_RULE =
-  "SILENT SCENES (max 2): at most TWO scenes in the episode may be silent (no spoken dialogue). A silent scene is valid ONLY if it carries a \"visualBeat\" field — a short description of what the viewer READS from the image with no dialogue (a look, an object, a gesture that tells the story wordlessly). A silent scene with no \"visualBeat\" is REJECTED. " +
+  "SILENT SCENES (max 1): at most ONE scene in the episode may be silent (no spoken dialogue), and only when the story truly needs a wordless beat — the story is driven FIRST by the characters talking to each other, so almost every scene is a talking scene. A silent scene is valid ONLY if it carries a \"visualBeat\" field — a short description of what the viewer READS from the image with no dialogue (a look, an object, a gesture that tells the story wordlessly). A silent scene with no \"visualBeat\" is REJECTED. " +
   "There is NO narrator and NO voice-over. Every NON-silent scene still OPENS on a close-up of the character who starts speaking.";
 
 // ---------------------------------------------------------------------------
@@ -104,11 +104,12 @@ export const SILENT_SCENE_RULE =
 // ---------------------------------------------------------------------------
 export const DIALOGUE_POLISH_SYSTEM =
   "You are a dialogue polisher for a short-form vertical drama. You are given the episode's scenes with their spoken dialogue. " +
-  "Rewrite ONLY the dialogue lines, keeping the SAME speakers, the SAME number of lines and the SAME story beats, applying these rules: " +
+  "Rewrite the dialogue so it drives the story FORWARD through the characters talking to each other, keeping the SAME speakers and the SAME story beats, applying these rules: " +
   "(1) REMOVE any line where a character explains their own motive / feelings aloud ('I'm doing this because…', 'I feel…', 'the reason I…') — replace it with a line that IMPLIES the motive through subtext, action or a concrete detail. " +
-  "(2) Keep the AVERAGE spoken line AT OR UNDER 12 words — cut filler, hedges and throat-clearing; short, sharp, alive lines. " +
-  "(3) Favour SUBTEXT over on-the-nose statement: characters say less than they mean. " +
-  "(4) The dialogue stays STRICTLY ENGLISH (Latin letters only), one line per row in the exact format NAME (tone cue): \"line\", using the SAME speaker names as the input. " +
+  "(2) Make the conversation SUBSTANTIVE and LIFELIKE: a real back-and-forth where the characters actually answer each other — a line, a genuine reply, then a rejoinder — not one lone line per side. You MAY lengthen a scene's exchange (add a reply / rejoinder line so it reads like a real conversation) as long as you keep the same speakers and the same beat; never make a spoken scene silent and never drop the scene's beat. " +
+  "(3) Keep the AVERAGE spoken line AT OR UNDER 16 words — lines may be a little fuller and more natural than before, but still cut empty filler, hedges and throat-clearing; every line carries real meaning. " +
+  "(4) Favour SUBTEXT over on-the-nose statement: characters say less than they mean, but the exchange still clearly moves the plot (a reveal, a decision, an escalation). " +
+  "(5) The dialogue stays STRICTLY ENGLISH (Latin letters only), one line per row in the exact format NAME (tone cue): \"line\", using the SAME speaker names as the input. " +
   "Return JSON: { \"scenes\": [ { \"number\": <int>, \"dialogue\": \"<the polished lines, \\n-separated>\" }, … ] } — one entry per NON-silent scene you changed; omit silent scenes.";
 
 /**

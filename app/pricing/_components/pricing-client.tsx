@@ -55,9 +55,9 @@ const plans = [
 ]
 
 const creditPacks = [
-  { id: 'mini', credits: 20, price: '$20' },
-  { id: 'plus', credits: 60, price: '$54' },
-  { id: 'max', credits: 150, price: '$120' },
+  { id: 'mini', credits: 30, price: '$19.99' },
+  { id: 'plus', credits: 80, price: '$49.99' },
+  { id: 'max', credits: 300, price: '$99.99' },
 ]
 
 function postToWayForPay(action: string, fields: Record<string, any>) {
