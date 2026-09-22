@@ -11,7 +11,7 @@ import { startLocationImageJob } from "@/lib/location-refs";
 import { CHARACTER_REFERENCE_COST, LOCATION_SET_COST } from "@/lib/power-tier";
 import { normalizeImageModel } from "@/lib/ai-models";
 import { episodeCastFromScenes } from "@/lib/episode-cast";
-import { planEpisodeLocations } from "@/lib/season";
+import { planEpisodeLocations, planManualEpisodeLocations, episodeHasMultipleLocations } from "@/lib/season";
 
 /**
  * POST /api/ai/episodes/[id]/references/regenerate → { charJobId, locationJobId, characterIds, locationIds }
@@ -49,7 +49,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
         characters: { select: { characterId: true } },
         scenes: {
           orderBy: { number: "asc" },
-          select: { id: true, locationDesc: true, characters: { select: { characterId: true } } },
+          select: { id: true, title: true, subLocation: true, locationDesc: true, characters: { select: { characterId: true } } },
         },
         season: { select: { projectId: true, project: { select: { id: true } } } },
       },
@@ -79,10 +79,20 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     const castIds = episodeCastFromScenes(sceneCastIds, declaredIds);
 
     // ---- 2) Re-extract the episode LOCATIONS strictly from the CURRENT scenes ----
-    const plan = planEpisodeLocations(
-      episode.scenes.map((s) => ({ id: s.id, locationDesc: s.locationDesc })),
-      project.locations.map((l) => ({ id: l.id, name: l.name })),
-    );
+    // Stage 171 — a MANUAL (author) script keeps distinct SPOTS (sub-locations) inside one top-level place, and
+    // each authored spot must get its OWN location reference card. The manual scenes are deterministically marked
+    // by the Stage 169 title "<location> — <sub-location>" (dash surrounded by spaces) + a populated subLocation.
+    // When that marker is present (or the script spans 2+ top-level places), use the MANUAL planner that keys on
+    // the full "<location> — <sub-location>" name → one card per spot. Auto (LLM) scripts stay single-location.
+    const sceneRows = episode.scenes.map((s) => ({ id: s.id, title: s.title, subLocation: s.subLocation, locationDesc: s.locationDesc }));
+    const manualSpotScenes = sceneRows.filter((s) => /\s[—–]\s/.test((s.title ?? "").trim()) && (s.subLocation ?? "").trim().length > 0);
+    const isManualScript = manualSpotScenes.length >= 2 || episodeHasMultipleLocations(sceneRows);
+    const plan = isManualScript
+      ? planManualEpisodeLocations(sceneRows, project.locations.map((l) => ({ id: l.id, name: l.name })))
+      : planEpisodeLocations(
+          sceneRows.map((s) => ({ id: s.id, locationDesc: s.locationDesc })),
+          project.locations.map((l) => ({ id: l.id, name: l.name })),
+        );
     const idByName = new Map(project.locations.map((l) => [l.name.toLowerCase(), l.id]));
     const newLocationIds: string[] = [];
     for (const c of plan.create) {
