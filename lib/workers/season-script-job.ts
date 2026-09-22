@@ -68,12 +68,14 @@ import {
   matchCharacter,
   matchLocation,
   planEpisodeLocations,
+  planManualEpisodeLocations,
 } from "@/lib/season";
 import { anchorSceneLocation } from "@/lib/location-anchor";
 import { startLocationImageJob } from "@/lib/location-refs";
 import { selectPlotSource } from "@/lib/plot-import";
 import { deriveRegionKey } from "@/lib/region-plate";
 import { normalizeSubLocation } from "@/lib/sub-location";
+import { parseManualScriptScenes } from "@/lib/manual-script";
 import { translateDialogue } from "@/lib/voiceover";
 import { episodeCastFromScenes } from "@/lib/episode-cast";
 // Stage 3 (seasonMap) — validated per-episode season map: the generate→validate→retry loop (season-map.ts)
@@ -887,6 +889,32 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
     } catch (err) {
       console.warn(`[season-job] episode ${ep.number} auto-create characters failed:`, err instanceof Error ? err.message : String(err));
     }
+    // Stage 169 — DETERMINISTIC per-scene header for a MANUAL (author-provided) script. The LLM structuring step
+    // was unreliable at carrying each authored scene's OWN sub-location into `title`/`subLocation`: it kept anchoring
+    // every scene to the episode's single top-level LOCATION, so the Script stage rendered an identical
+    // "<place>" / "<place> — <sub>" header on EVERY scene even though the author gave each scene a distinct spot.
+    // We do NOT trust the model for this. We parse the author's ORIGINAL pasted text (which explicitly marks each
+    // scene's LOCATION — SUB-LOCATION) and, aligned by author scene order, force each generated scene's `title` and
+    // `subLocation` from it. The prompt already emits EXACTLY ONE JSON scene per authored marker (no merge/drop), so
+    // index alignment is 1:1; if the model ever produced a different count we only override the scenes that line up
+    // and leave the rest as written. Applies ONLY to the manual path — auto (LLM-invented) scripts are untouched.
+    if (manual && state.revise?.userScript) {
+      const authored = parseManualScriptScenes(state.revise.userScript);
+      if (authored.length) {
+        script = {
+          ...script,
+          scenes: script.scenes.map((s, i) => {
+            const a = authored[i];
+            if (!a) return s;
+            const loc = (a.location ?? "").trim();
+            const sub = (a.subLocation ?? "").trim();
+            if (!loc && !sub) return s;
+            const title = sub ? `${loc} — ${sub}` : loc;
+            return { ...s, title: title || s.title, subLocation: sub || s.subLocation };
+          }),
+        };
+      }
+    }
     await persistEpisodeScript(ep.id, outline, script, project.characters.map((c) => ({ id: c.id, name: c.name })), language, { preserveSceneLocations: manual });
     // Stage 162 — derive this episode's Location rows FROM the finished, persisted script (not all up front).
     // Reload the scenes with their final locationDesc, plan create/reuse against the project's existing locations,
@@ -894,9 +922,16 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
     // enqueue reference images for the NEW locations only. A location problem is logged, never thrown — it must
     // never fail the episode job.
     try {
-      const persisted = await prisma.scene.findMany({ where: { episodeId: ep.id }, orderBy: { number: "asc" }, select: { id: true, locationDesc: true } });
+      const persisted = await prisma.scene.findMany({ where: { episodeId: ep.id }, orderBy: { number: "asc" }, select: { id: true, locationDesc: true, title: true, subLocation: true } });
       const existing = project.locations.map((l) => ({ id: l.id, name: l.name }));
-      const plan = planEpisodeLocations(persisted, existing);
+      // Stage 170 — for a MANUAL (author) script, plan one Location PER distinct authored spot
+      // ("<location> — <sub-location>", taken from the deterministic scene.title set by the Stage 169
+      // override, persisted above), so each sub-location gets its own reference card. The persisted Scene
+      // rows already carry `title` + `subLocation`, so we read straight from the DB (no in-memory fallback
+      // needed). Auto (LLM) scripts keep the single-key `planEpisodeLocations` (one location per episode).
+      const plan = manual
+        ? planManualEpisodeLocations(persisted, existing)
+        : planEpisodeLocations(persisted, existing);
       const idByName = new Map(existing.map((l) => [l.name.toLowerCase(), l.id]));
       const newLocationIds: string[] = [];
       for (const c of plan.create) {

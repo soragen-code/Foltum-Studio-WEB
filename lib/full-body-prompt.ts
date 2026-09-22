@@ -290,8 +290,19 @@ export function characterExtraShotPrompt(appearance: string, name = "", index = 
  * of the whole set — style block, character description, framing and the proportion rule). Nothing is sent
  * to the model from here; it is exactly what `characterShotPrompt(appearance, "full", …)` produces.
  */
-export function characterBasePrompt(appearance: string, name = "", tier?: string | null, groupSize?: number | null): string {
-  return characterShotPrompt(appearance, "full", name, tier, groupSize, false, "face");
+export function characterBasePrompt(
+  appearance: string,
+  name = "",
+  tier?: string | null,
+  groupSize?: number | null,
+  age?: string | null,
+  gender?: string | null,
+  role?: string | null,
+): string {
+  // Stage 200 — pass age/gender/role through so the VIEWED / COPIED prompt carries the same front-loaded sex
+  // assertion + age clause + gender-lock that the actual image-generation path emits. Previously these were
+  // dropped here, so the preview route showed "CHARACTER: ." with no sex even though generation was correct.
+  return characterShotPrompt(appearance, "full", name, tier, groupSize, false, "face", null, age, gender, role);
 }
 
 /** Fixed fragments of the composed prompt that every shot re-adds itself (so they must not be duplicated from a saved override). */

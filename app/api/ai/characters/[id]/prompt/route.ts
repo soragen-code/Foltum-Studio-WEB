@@ -20,7 +20,7 @@ import { characterBasePrompt } from "@/lib/full-body-prompt";
 async function loadOwned(id: string, userId: string) {
   return prisma.character.findFirst({
     where: { id, project: { userId } },
-    select: { id: true, name: true, tier: true, groupSize: true, appearance: true, promptOverride: true },
+    select: { id: true, name: true, tier: true, groupSize: true, appearance: true, promptOverride: true, age: true, gender: true, role: true },
   });
 }
 
@@ -35,7 +35,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
   if (!char) return NextResponse.json({ error: "Character not found" }, { status: 404 });
 
   const hasOverride = !!(char.promptOverride && char.promptOverride.trim());
-  const prompt = hasOverride ? (char.promptOverride as string) : characterBasePrompt(char.appearance ?? "", char.name, char.tier, char.groupSize);
+  const prompt = hasOverride ? (char.promptOverride as string) : characterBasePrompt(char.appearance ?? "", char.name, char.tier, char.groupSize, char.age ?? null, (char as { gender?: string | null }).gender ?? null, char.role ?? null);
   return NextResponse.json({ ok: true, prompt, hasOverride });
 }
 
@@ -57,6 +57,6 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
   await prisma.character.update({ where: { id: char.id }, data: { promptOverride } });
 
   const hasOverride = promptOverride !== null;
-  const prompt = hasOverride ? promptOverride : characterBasePrompt(char.appearance ?? "", char.name, char.tier, char.groupSize);
+  const prompt = hasOverride ? promptOverride : characterBasePrompt(char.appearance ?? "", char.name, char.tier, char.groupSize, char.age ?? null, (char as { gender?: string | null }).gender ?? null, char.role ?? null);
   return NextResponse.json({ ok: true, prompt, hasOverride });
 }

@@ -850,12 +850,44 @@ export function validateEpisodeScript(script: EpisodeScript, opts: ValidateEpiso
 }
 
 
+// Stage 200 — Cyrillic→Latin romanization so a script's Latin character name ("Saira", "Yuri", "Lev")
+// resolves to a cast stored in Cyrillic ("Сайра Хаддад", "Юрий Лебедев", "Лев Орлов"). Names in the script
+// are ALWAYS Latin (prompt rule), but a project's cast may be recorded in Cyrillic; without this the two never
+// matched, so matchCharacter returned nothing and the episode job AUTO-CREATED an empty stub character (no
+// gender / appearance) — the root cause of "gender missing in the prompt and on the card".
+const CYR_TO_LAT: Record<string, string> = {
+  а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z", и: "i", й: "y",
+  к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r", с: "s", т: "t", у: "u", ф: "f",
+  х: "h", ц: "ts", ч: "ch", ш: "sh", щ: "sch", ъ: "", ы: "y", ь: "", э: "e", ю: "yu", я: "ya",
+};
+function translitCyr(s: string): string {
+  return s.replace(/[а-яё]/gi, (ch) => {
+    const mapped = CYR_TO_LAT[ch.toLowerCase()];
+    return mapped === undefined ? ch : mapped;
+  });
+}
+// Small edit distance, capped: we only ever care whether two romanized first names differ by ≤ 1 letter
+// (й→y vs i, a dropped trailing -y in "Yuriy" vs "Yuri", etc.), so bail out early once they clearly diverge.
+function editDistanceLE1(a: string, b: string): number {
+  const m = a.length, n = b.length;
+  if (Math.abs(m - n) > 1) return 2;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0));
+  for (let i = 0; i <= m; i++) dp[i][0] = i;
+  for (let j = 0; j <= n; j++) dp[0][j] = j;
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return dp[m][n];
+}
+
 /**
- * Resolve a character name as written by the LLM ("Валерия", "ВАЛЕРИЯ Соколова") to one of the project's
- * characters. Exact (case-insensitive) match first, then unique first-name / substring match.
+ * Resolve a character name as written by the LLM ("Валерия", "ВАЛЕРИЯ Соколова", "Saira") to one of the
+ * project's characters. Romanizes both sides first (so a Latin script name matches a Cyrillic cast). Exact
+ * (case-insensitive) match, then unique first-name / substring match, then a transliteration-tolerant fuzzy
+ * first-name match (edit distance ≤ 1) applied ONLY when nothing else matched and the result is unambiguous.
  */
 export function matchCharacter<T extends { name: string }>(characters: T[], raw: string): T | undefined {
-  const norm = (x: string) => x.toLowerCase().replace(/[«»"'().,]/g, " ").replace(/\s+/g, " ").trim();
+  const norm = (x: string) => translitCyr(x).toLowerCase().replace(/[«»"'().,]/g, " ").replace(/\s+/g, " ").trim();
   const q = norm(raw);
   if (!q) return undefined;
   const exact = characters.find((c) => norm(c.name) === q);
@@ -865,7 +897,15 @@ export function matchCharacter<T extends { name: string }>(characters: T[], raw:
     const n = norm(c.name);
     return n.includes(q) || q.includes(n) || n.split(" ")[0] === qFirst;
   });
-  return partial.length === 1 ? partial[0] : undefined;
+  if (partial.length) return partial.length === 1 ? partial[0] : undefined;
+  // Romanization schemes disagree by a letter (Сайра→"sayra" vs script "saira"; Юрий→"yuriy" vs "yuri"):
+  // fall back to a first-name edit-distance-≤1 match, but only when exactly one candidate qualifies.
+  if (!qFirst) return undefined;
+  const fuzzy = characters.filter((c) => {
+    const nFirst = norm(c.name).split(" ")[0];
+    return nFirst.length > 1 && qFirst.length > 1 && editDistanceLE1(nFirst, qFirst) <= 1;
+  });
+  return fuzzy.length === 1 ? fuzzy[0] : undefined;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1748,6 +1788,68 @@ export function planEpisodeLocations(
     const n = sceneLocationName(s.locationDesc);
     if (!n) continue;
     // Resolve to the canonical name: an existing location's stored name wins over the raw script name.
+    const matched = matchLocation(existing, n);
+    bindings.push({ sceneId: s.id, locationName: matched ? matched.name : n });
+  }
+  return { names, create, bindings, primaryName: names[0] ?? null };
+}
+
+/**
+ * Stage 170 — combined "<location> — <sub-location>" display name for ONE scene of a MANUAL (author) script.
+ * Prefers the deterministic `title` that the manual override (season-script-job Stage 169) writes as
+ * "<location> — <sub-location>"; falls back to reconstructing it from locationDesc + subLocation. This is what
+ * makes each authored SPOT a distinct place — never used for auto (LLM) scripts.
+ */
+export function manualSceneLocationName(scene: { title?: string | null; subLocation?: string | null; locationDesc?: string | null }): string {
+  const title = (scene.title ?? "").replace(/\s+/g, " ").trim();
+  if (title) return title;
+  const loc = sceneLocationName(scene.locationDesc);
+  const sub = (scene.subLocation ?? "").replace(/\s+/g, " ").trim();
+  if (loc && sub) return `${loc} — ${sub}`;
+  return loc || sub;
+}
+
+/**
+ * Stage 170 — MANUAL-ONLY location planner. A hand-pasted author script often keeps ONE top-level place but
+ * moves the action across several distinct SPOTS (sub-locations) inside it — the author WANTS each spot to be
+ * its own reference. `planEpisodeLocations` (auto path) keys only on the top-level place name, so it collapses
+ * all such scenes into ONE location card. This planner instead keys on the FULL "<location> — <sub-location>"
+ * name (from `manualSceneLocationName`), so each distinct authored spot becomes its own Location row / reference,
+ * in scene order, deduped case-insensitively, reusing an existing project location when the full name matches.
+ * The per-location visual prompt anchors the shared place description and names the specific spot so the
+ * generated reference images actually differ. Auto (LLM) episodes never call this — they stay single-location.
+ */
+export function planManualEpisodeLocations(
+  scenes: { id: string; title?: string | null; subLocation?: string | null; locationDesc?: string | null }[],
+  existing: { id: string; name: string }[],
+): EpisodeLocationPlan {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  const promptByName = new Map<string, string>();
+  for (const s of scenes) {
+    const n = manualSceneLocationName(s);
+    if (!n) continue;
+    const key = n.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(n);
+    // Visual prompt for the new location's reference: the shared place description (locationDesc) plus an
+    // explicit note of WHICH spot this reference is, so the 5 cards render as visibly different vantages.
+    const baseDesc = (s.locationDesc ?? "").replace(/\s+/g, " ").trim();
+    const sub = (s.subLocation ?? "").replace(/\s+/g, " ").trim();
+    const prompt = baseDesc
+      ? (sub ? `${baseDesc} — specific spot: ${sub}.` : baseDesc)
+      : n;
+    promptByName.set(key, prompt);
+  }
+  const create: PlannedLocation[] = [];
+  for (const name of names) {
+    if (!matchLocation(existing, name)) create.push({ name, visualPrompt: promptByName.get(name.toLowerCase()) ?? name });
+  }
+  const bindings: { sceneId: string; locationName: string }[] = [];
+  for (const s of scenes) {
+    const n = manualSceneLocationName(s);
+    if (!n) continue;
     const matched = matchLocation(existing, n);
     bindings.push({ sceneId: s.id, locationName: matched ? matched.name : n });
   }
