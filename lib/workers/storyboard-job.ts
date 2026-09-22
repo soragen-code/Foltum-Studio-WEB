@@ -173,6 +173,19 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
 
     await updateJob(jobId, { progress: 80, message: "Saving boards..." });
     // Validate BEFORE replacing old boards; failed allocation leaves them intact. Replacement is atomic.
+    // Transparency: persist a PLANNED English frame prompt for every board at split time (symmetric to
+    // motionEn, which already lets the UI show the animate prompt before rendering). The exact final prompt
+    // depends on render-time context (attached plates, the scene-anchor / continuity reference frames and
+    // their 1-based indices), which does not exist yet — so this is the plan derived purely from the board's
+    // action, cast and location. When the frame is rendered, runBoardImageJob overwrites imagePrompt with the
+    // fully composed prompt (storyboard-job.ts ~336). Building it is a pure, side-effect-free string assembly.
+    const plannedFramePrompt = (b: (typeof boards)[number]) =>
+      buildBoardFramePrompt({
+        board: { index: b.index, actionOrDialogue: b.actionOrDialogue, motion: b.motion, directionJson: b.directionJson },
+        characters: links,
+        locationName: episode.locationName,
+        locationDesc: episode.locationDesc,
+      }).prompt;
     await prisma.$transaction(async tx => {
       await tx.board.deleteMany({ where: { episodeId } });
       await tx.board.createMany({
@@ -180,7 +193,7 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
           episodeId, index: b.index, actionOrDialogue: b.actionOrDialogue,
           motionEn: b.motion, durationSec: b.durationSec,
           region: b.region, regionKey: b.regionKey,
-          directionJson: b.directionJson, status: "pending",
+          directionJson: b.directionJson, imagePrompt: plannedFramePrompt(b), status: "pending",
         })),
       });
     });

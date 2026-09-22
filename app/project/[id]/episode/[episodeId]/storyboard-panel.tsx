@@ -199,7 +199,7 @@ function BoardCard({ board, onChanged, frameLocked }: { board: Board; onChanged:
             </button>
             {showDetails && (
               <div className="mt-2 space-y-3" data-testid={`board-details-${board.index}`}>
-                {framePrompt && <PromptBlock title="Промпт кадра (image, англ.)" text={framePrompt} />}
+                {framePrompt && <PromptBlock title={validUrl(board.imageUrl) ? "Промпт кадра (image, англ.)" : "Промпт кадра — план (image, англ.)"} text={framePrompt} />}
                 {animatePrompt && <PromptBlock title="Промпт оживления (i2v, англ.)" text={animatePrompt} />}
                 {frameRefs.length > 0 && <RefList title="Референсы кадра (переданы в image-модель)" refs={frameRefs} />}
                 {animateRefs.length > 0 && <RefList title="Референсы оживления (переданы в i2v)" refs={animateRefs} />}
