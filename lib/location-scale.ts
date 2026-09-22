@@ -129,14 +129,23 @@ function _slug(s: string): string {
  * read-only card in episode-view.tsx). Real DB rows always win over synthetic ones.
  */
 export function episodeLocations(
-  episode: { locationId?: string | null; locationName?: string | null; location?: any; scenes?: { locationDesc?: string | null }[] },
+  episode: { locationId?: string | null; locationName?: string | null; location?: any; scenes?: { locationDesc?: string | null; locationId?: string | null }[] },
   projectLocations: any[],
 ): any[] {
   const out: any[] = []
   const seen = new Set<string>()
   const add = (loc: any) => { if (loc && !seen.has(loc.id)) { seen.add(loc.id); out.push(loc) } }
+  const byId = new Map((projectLocations ?? []).map((l) => [l.id, l]))
   if (episode.location) add(episode.location)
-  else if (episode.locationId) add((projectLocations ?? []).find((l) => l.id === episode.locationId))
+  else if (episode.locationId) add(byId.get(episode.locationId))
+  // Stage 171b — AUTHORITATIVE binding first: every location a scene is actually bound to (scene.locationId).
+  // For MANUAL sub-location cards the card name ("Oasis — Maintenance Pit") is NOT a substring of the scene's
+  // top-level locationDesc, so the legacy text-match below silently dropped the real cards AND wrongly pulled in
+  // an orphaned top-level location whose name equals the locationDesc. Keying on the persisted scene.locationId
+  // shows exactly the cards the script produced (one per authored spot), in scene order.
+  for (const s of episode.scenes ?? []) {
+    if (s?.locationId) add(byId.get(s.locationId))
+  }
   const haystack = `${episode.locationName ?? ''} ${(episode.scenes ?? []).map((s) => s.locationDesc ?? '').join(' ')}`.toLowerCase()
   for (const loc of projectLocations ?? []) {
     if (seen.has(loc.id)) continue
