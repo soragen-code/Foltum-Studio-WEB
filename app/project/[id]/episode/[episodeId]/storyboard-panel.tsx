@@ -322,9 +322,6 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
         </span>
         {splitting && splitPoll.job && <div className="w-full"><JobProgressBar job={splitPoll.job} expectedTotalSec={40} /></div>}
         {stitching && stitchPoll.job && <div className="w-full"><JobProgressBar job={stitchPoll.job} expectedTotalSec={180} /></div>}
-        <p className="w-full text-xs text-muted-foreground">
-          Режим «Сториборд»: история делится на 12–15 кадров (один кадр = одно действие или пара реплик). Каждый кадр — референс-изображение 9:16, которое оживляется в клип 4–6с через image-to-video (кадр = стартовый фрейм). Клипы склеиваются в единый ролик ~90с с одной музыкальной дорожкой.
-        </p>
         {error && <p className="w-full text-sm text-destructive" data-testid="storyboard-error">{error}</p>}
       </div>
 
