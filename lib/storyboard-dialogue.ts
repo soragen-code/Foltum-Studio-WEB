@@ -298,10 +298,10 @@ export function storyboardSource(episode: { script?: string | null; description?
     })
     : extractSpokenLines(source, cast);
   const segments = segmentSpeech(speech);
-  // Budget check uses the ORIGINAL lines (not the post-split segments): word-splitting adds a per-segment
-  // baseline that must never, by itself, push a within-budget script over the planning limit.
-  if (speech.reduce((sum, l) => sum + estimatedSpeechSeconds(l), 0) > 90)
-    throw new Error("Dialogue duration conflict: original speech exceeds the 15 × 6s planning budget. No lines were omitted; approve a script/budget change separately.");
+  // Stage 148 — the board count is CONTENT-DERIVED (see contentBoardBounds / balanceBoardCount): a
+  // dialogue-heavy scene simply yields MORE boards, and every speech segment lands on exactly one board,
+  // so no line is ever dropped, truncated or accelerated. There is deliberately NO hard 90s (15×6s) cap —
+  // a long scene is allowed to run past 15 boards, which per the storyboard design is not an error.
   return { source, segments, actionSource: ordered.length ? ordered.map(s => s.action ?? "").join("\n") : source };
 }
 
@@ -334,10 +334,10 @@ export async function storyboardSourceResilient(
     speech = await extractSpokenLinesResilient(source, cast, opts);
   }
   const segments = segmentSpeech(speech);
-  // Budget check uses the ORIGINAL lines (not the post-split segments): word-splitting adds a per-segment
-  // baseline that must never, by itself, push a within-budget script over the planning limit.
-  if (speech.reduce((sum, l) => sum + estimatedSpeechSeconds(l), 0) > 90)
-    throw new Error("Dialogue duration conflict: original speech exceeds the 15 × 6s planning budget. No lines were omitted; approve a script/budget change separately.");
+  // Stage 148 — the board count is CONTENT-DERIVED (see contentBoardBounds / balanceBoardCount): a
+  // dialogue-heavy scene simply yields MORE boards, and every speech segment lands on exactly one board,
+  // so no line is ever dropped, truncated or accelerated. There is deliberately NO hard 90s (15×6s) cap —
+  // a long scene is allowed to run past 15 boards, which per the storyboard design is not an error.
   return { source, segments, actionSource: ordered.length ? ordered.map(s => s.action ?? "").join("\n") : source };
 }
 
