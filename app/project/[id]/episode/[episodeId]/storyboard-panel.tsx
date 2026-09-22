@@ -11,8 +11,8 @@
  * episode-view.tsx) is untouched and keeps its text-to-video / no-start-frame rules.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Loader2, Film, Wand2, ImageIcon, Play, ChevronDown, ChevronRight, ChevronLeft, Copy, Check } from 'lucide-react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
+import { Loader2, Film, Wand2, ImageIcon, Play, ChevronDown, ChevronRight, ChevronLeft, Copy, Check, X, Maximize2 } from 'lucide-react'
 import { JobProgressBar, SmoothProgress, useJobPolling } from '../../_components/use-job-polling'
 import { boardFramePrecondition } from '@/lib/board-anchor'
 import { DownloadVideoButton } from '@/app/project/[id]/_components/download-video-button'
@@ -68,6 +68,50 @@ function validUrl(u?: string | null): u is string {
   return typeof u === 'string' && /^https?:\/\//.test(u)
 }
 
+/**
+ * Lightweight full-screen image lightbox, wired through context so any thumbnail (a rendered frame or a
+ * reference image) can open itself without prop-drilling. `openImage(url)` is provided by StoryboardPanel.
+ */
+const LightboxContext = createContext<((url: string) => void) | null>(null)
+function useLightbox() { return useContext(LightboxContext) }
+
+/** The full-screen overlay: dark backdrop, centered object-contain image, close via backdrop / ✕ / Esc. */
+function Lightbox({ url, onClose }: { url: string; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Просмотр изображения"
+      data-testid="storyboard-lightbox"
+    >
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Закрыть"
+        title="Закрыть (Esc)"
+        className="absolute right-4 top-4 inline-flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20"
+        data-testid="storyboard-lightbox-close"
+      >
+        <X className="h-5 w-5" />
+      </button>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={url}
+        alt="Просмотр изображения"
+        onClick={(e) => e.stopPropagation()}
+        className="max-h-[90vh] max-w-[95vw] object-contain"
+      />
+    </div>
+  )
+}
+
 /** One asset-kind tile in the "Ассеты" panel: how many refs are ready from the library vs. still generating. */
 function AssetKindStat({ title, k }: { title: string; k: KindStatus }) {
   return (
@@ -112,6 +156,7 @@ function PromptBlock({ title, text }: { title: string; text: string }) {
 
 /** A labelled list of the reference images that were actually passed to a model. */
 function RefList({ title, refs }: { title: string; refs: BoardRef[] }) {
+  const openImage = useLightbox()
   return (
     <div>
       <span className="text-[11px] font-semibold text-foreground">{title}</span>
@@ -120,8 +165,16 @@ function RefList({ title, refs }: { title: string; refs: BoardRef[] }) {
           <div key={`${r.index}-${r.url}`} className="w-16">
             <div className="flex aspect-[9/16] w-full items-center justify-center overflow-hidden rounded border border-border bg-black">
               {validUrl(r.url)
-                // eslint-disable-next-line @next/next/no-img-element
-                ? <img src={r.url} alt={r.label} className="h-full w-full object-contain" />
+                ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={r.url}
+                    alt={r.label}
+                    onClick={openImage ? () => openImage(r.url) : undefined}
+                    title={openImage ? 'Открыть во весь экран' : undefined}
+                    className={`h-full w-full object-contain${openImage ? ' cursor-zoom-in' : ''}`}
+                  />
+                )
                 : <ImageIcon className="h-4 w-4 opacity-40" />}
             </div>
             <p className="mt-0.5 text-center text-[9px] leading-tight text-muted-foreground">#{r.index} {r.label}</p>
@@ -147,6 +200,7 @@ function BoardCard({ board, onChanged, frameLocked, registerFrameRun }: { board:
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [showDetails, setShowDetails] = useState(false)
+  const openImage = useLightbox()
 
   const framePoll = useJobPolling({
     onFinish: (res) => { setBusy(false); if (res.job.status === 'failed') setErr(res.job.error ?? 'Frame generation failed'); onChanged() },
@@ -185,13 +239,34 @@ function BoardCard({ board, onChanged, frameLocked, registerFrameRun }: { board:
         <span className="text-xs font-semibold text-muted-foreground">{roleLabel}{showDur ? ` · ${board.durationSec}s` : ''}</span>
         <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{board.status}</span>
       </div>
-      {/* 9:16 portrait viewer: object-contain + letterbox so the still/clip is never cropped or stretched. */}
-      <div className="flex aspect-[9/16] w-full items-center justify-center overflow-hidden rounded-lg bg-black">
+      {/* 9:16 portrait viewer: compact (bounded max width, centered) + object-contain letterbox so the
+          still/clip is never cropped or stretched. A rendered frame opens full-screen in the lightbox. */}
+      <div className="relative mx-auto flex aspect-[9/16] w-full max-w-[200px] items-center justify-center overflow-hidden rounded-lg bg-black">
         {validUrl(board.videoUrl) ? (
           <video src={board.videoUrl} controls playsInline className="h-full w-full object-contain" />
         ) : validUrl(board.imageUrl) ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={board.imageUrl} alt={`Board ${board.index + 1}`} className="h-full w-full object-contain" />
+          <>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={board.imageUrl}
+              alt={`Board ${board.index + 1}`}
+              onClick={openImage ? () => openImage(board.imageUrl!) : undefined}
+              title={openImage ? 'Открыть во весь экран' : undefined}
+              className={`h-full w-full object-contain${openImage ? ' cursor-zoom-in' : ''}`}
+            />
+            {openImage && (
+              <button
+                type="button"
+                onClick={() => openImage(board.imageUrl!)}
+                aria-label="Открыть во весь экран"
+                title="Открыть во весь экран"
+                className="absolute right-1.5 top-1.5 inline-flex h-7 w-7 items-center justify-center rounded-md bg-black/50 text-white transition hover:bg-black/70"
+                data-testid={`board-expand-${board.index}`}
+              >
+                <Maximize2 className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </>
         ) : (
           <div className="flex h-full w-full items-center justify-center text-muted-foreground"><ImageIcon className="h-8 w-8 opacity-40" /></div>
         )}
@@ -330,6 +405,8 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
   const [boardGate, setBoardGate] = useState<string | null>(null)
   // Stage 230 — per-scene UI: one scene per page with a pager («‹ Сцена N из M ›»).
   const [scenePage, setScenePage] = useState(0)
+  // Full-screen preview target (a rendered frame or a reference image); null = lightbox closed.
+  const [lightbox, setLightbox] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -443,7 +520,9 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
     ).allowed
 
   return (
+    <LightboxContext.Provider value={setLightbox}>
     <div className="mt-4" data-testid="storyboard-panel">
+      {lightbox && <Lightbox url={lightbox} onClose={() => setLightbox(null)} />}
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
         <button onClick={startSplit} disabled={splitting || gathering} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="storyboard-generate-boards">
           {splitting || gathering ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {gathering ? 'Сбор ассетов…' : boards.length ? 'Перестроить кадры' : 'Разбить историю на кадры'}
@@ -561,5 +640,6 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
         </div>
       )}
     </div>
+    </LightboxContext.Provider>
   )
 }

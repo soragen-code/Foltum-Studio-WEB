@@ -157,7 +157,7 @@ export function buildBoardFramePrompt(input: BuildBoardFramePromptInput): BuildB
   const continuityRefIndex = input.continuity?.continuityRefIndex ?? null;
 
   const body = [
-    `KEYFRAME STILL — a single cinematic vertical ${REFERENCE_ASPECT_RATIO} frame: the OPENING frame of a 3-6 second shot (it will be animated into a moving clip).`,
+    `KEYFRAME STILL — a single vertical ${REFERENCE_ASPECT_RATIO} in-scene photograph: the FIRST frame of a 3-6 second shot (it will be animated into a moving clip). This is NOT a movie intro, title card, opening/establishing shot or empty-scenery plate: it must depict the concrete first beat of the action described below, with the on-screen characters already present in the frame and actively posed mid-action. Never render an empty room, an empty landscape, a logo, on-screen title text, or a wide scene-setting view waiting for the action to begin — open directly on the people and what they are doing.`,
     `BOARD ${board.index + 1} — ${dialogue ? "DIALOGUE beat" : "ACTION beat"}: ${board.actionOrDialogue.trim()}`,
     castLines.length ? `CHARACTERS IN FRAME (EXACTLY these ${castLines.length} — nobody else):\n${castLines.join("\n")}` : "",
     locationLine ? `LOCATION: ${locationLine}` : "",
