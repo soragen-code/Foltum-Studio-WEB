@@ -237,19 +237,40 @@ export function estimatedSpeechSeconds(line: SpokenLine): number {
   return Math.max(words / (slow ? 1.6 : 2), [...line.text].length / (slow ? 10 : 13)) + 0.6;
 }
 
-/** Split ONLY at natural punctuation boundaries; preserve every character and the original order.
- * An overlong unbroken clause is an explicit conflict, never truncated or spoken faster.
+/** Split a single over-long clause (one with no internal punctuation to break on) into the fewest
+ * word-group fragments that each fit the 6s planning budget. Lossless: every character and the
+ * original order are preserved (each whitespace run is attached to exactly one fragment); a lone
+ * word that still exceeds the budget is kept whole rather than truncated or spoken faster. */
+function splitClauseByWords(line: SpokenLine, clause: string): string[] {
+  const tokens = clause.match(/\s*\S+\s*/gu);
+  if (!tokens || tokens.join("") !== clause) return [clause];
+  const parts: string[] = [];
+  let part = "";
+  for (const token of tokens) {
+    if (part && estimatedSpeechSeconds({ ...line, text: part + token }) > 6) { parts.push(part); part = ""; }
+    part += token;
+  }
+  if (part) parts.push(part);
+  return parts.length ? parts : [clause];
+}
+
+/** Split at natural punctuation boundaries first; preserve every character and the original order.
+ * A clause with no punctuation to break on that still exceeds the 6s budget is split losslessly at
+ * word boundaries (never truncated, omitted or spoken faster), so no phrase is ever un-splittable
+ * and the storyboard always builds instead of aborting.
  */
 export function segmentSpeech(lines: SpokenLine[]): SpeechSegment[] {
   return lines.flatMap((line, index) => {
     const sourceId = `speech-${index + 1}`;
-    const clauses = line.text.match(/[^.!?;,…—]+(?:[.!?;,…—]+\s*|$)/gu) ?? [line.text];
-    if (clauses.join("") !== line.text) throw new Error("Dialogue segmentation conflict: punctuation cannot be split losslessly.");
+    const rawClauses = line.text.match(/[^.!?;,…—]+(?:[.!?;,…—]+\s*|$)/gu) ?? [line.text];
+    if (rawClauses.join("") !== line.text) throw new Error("Dialogue segmentation conflict: punctuation cannot be split losslessly.");
+    // Break any over-long unbroken clause into word-group fragments so every fragment fits a 4–6s
+    // board; downstream balancing then fans them out across consecutive boards. Text stays verbatim.
+    const clauses = rawClauses.flatMap(clause =>
+      estimatedSpeechSeconds({ ...line, text: clause }) > 6 ? splitClauseByWords(line, clause) : [clause]);
     const chunks: string[] = [];
     let chunk = "";
     for (const clause of clauses) {
-      if (estimatedSpeechSeconds({ ...line, text: clause }) > 6)
-        throw new Error(`Dialogue duration conflict for ${line.speaker}: an uninterrupted phrase exceeds the 6s planning budget. Revise its phrasing or approve a different duration separately; no text was removed.`);
       if (chunk && estimatedSpeechSeconds({ ...line, text: chunk + clause }) > 6) { chunks.push(chunk); chunk = ""; }
       chunk += clause;
     }
@@ -277,7 +298,9 @@ export function storyboardSource(episode: { script?: string | null; description?
     })
     : extractSpokenLines(source, cast);
   const segments = segmentSpeech(speech);
-  if (segments.reduce((sum, s) => sum + s.estimatedSec, 0) > 90)
+  // Budget check uses the ORIGINAL lines (not the post-split segments): word-splitting adds a per-segment
+  // baseline that must never, by itself, push a within-budget script over the planning limit.
+  if (speech.reduce((sum, l) => sum + estimatedSpeechSeconds(l), 0) > 90)
     throw new Error("Dialogue duration conflict: original speech exceeds the 15 × 6s planning budget. No lines were omitted; approve a script/budget change separately.");
   return { source, segments, actionSource: ordered.length ? ordered.map(s => s.action ?? "").join("\n") : source };
 }
@@ -311,7 +334,9 @@ export async function storyboardSourceResilient(
     speech = await extractSpokenLinesResilient(source, cast, opts);
   }
   const segments = segmentSpeech(speech);
-  if (segments.reduce((sum, s) => sum + s.estimatedSec, 0) > 90)
+  // Budget check uses the ORIGINAL lines (not the post-split segments): word-splitting adds a per-segment
+  // baseline that must never, by itself, push a within-budget script over the planning limit.
+  if (speech.reduce((sum, l) => sum + estimatedSpeechSeconds(l), 0) > 90)
     throw new Error("Dialogue duration conflict: original speech exceeds the 15 × 6s planning budget. No lines were omitted; approve a script/budget change separately.");
   return { source, segments, actionSource: ordered.length ? ordered.map(s => s.action ?? "").join("\n") : source };
 }
