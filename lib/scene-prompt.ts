@@ -701,7 +701,8 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // Stage 44 — the BASE photographed angles vs the extra angles are separated so the Stage 62 last-frame
   // ref can be prioritized above the extras (and above crowds) but not above the base angles.
   const baseLocationRefs = locationRefs.slice(0, locationAngles.length);
-  const extraLocationRefs = locationRefs.slice(locationAngles.length);
+  // TZ: only one location ref ships per scene now, so the former "extra angles" tier is no longer
+  // assembled into the batch; the master wide plate is the lowest-priority location fallback.
   const forbidden = new Set([previous?.lastFrameUrl, ...(input.forbiddenReferenceUrls ?? [])].filter(Boolean));
   const reangleUrl = (input.reangleUrl ?? "").trim();
   if (reangleUrl && forbidden.has(reangleUrl)) throw new Error("The raw last frame cannot be a video reference.");
@@ -735,8 +736,17 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   // any extra location angles) are trimmed to fit REFERENCE_IMAGE_CAP — instead of failing the whole build.
   // Stage 122 — the region plate (if any) leads the location tier, ahead of the master wide/layout plates, and is
   // itself non-droppable: it is the primary environment authority, the masters remain as backing geometry truth.
-  const anchorRefs = [...openingRefs, ...characterRefs, ...combatCrowdRefs, ...regionPlateRefs, ...subLocationRefs, ...baseLocationRefs].filter(r => !forbidden.has(r.url));
-  const droppableRefs = [...backgroundCrowdRefs, ...extraLocationRefs].filter(r => !forbidden.has(r.url));
+  // TZ: EXACTLY ONE location reference per scene. The three location tiers — the SUB-LOCATION angle of the
+  // exact spot (Stage 123), the REGION PLATE of this part of the room (Stage 122) and the master WIDE plate —
+  // are all controlled re-frames of the SAME photographed location, so historically up to three near-identical
+  // location images shipped with every clip (the "location ref passed 3 times" the producer sees). Collapse
+  // them to a single, most scene-specific plate: sub-location ref → region plate → master wide. The kept ref's
+  // own note (SUB_LOCATION_REF_NOTE / REGION_PLATE_NOTE / location angle note) still travels in the REFERENCE MAP.
+  const locationTier = [...subLocationRefs, ...regionPlateRefs, ...baseLocationRefs].slice(0, 1);
+  const keptLocationKind: "subloc" | "region" | "master" | "none" =
+    subLocationRefs.length ? "subloc" : regionPlateRefs.length ? "region" : baseLocationRefs.length ? "master" : "none";
+  const anchorRefs = [...openingRefs, ...characterRefs, ...combatCrowdRefs, ...locationTier].filter(r => !forbidden.has(r.url));
+  const droppableRefs = [...backgroundCrowdRefs].filter(r => !forbidden.has(r.url));
   if (anchorRefs.length > REFERENCE_IMAGE_CAP) throw new Error("Too many required video references. Reduce the scene cast.");
   const room = Math.max(0, REFERENCE_IMAGE_CAP - anchorRefs.length);
   const ordered = [...anchorRefs, ...droppableRefs.slice(0, room)];
@@ -837,13 +847,16 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     // anchor line here — this keeps the prompt from carrying two overlapping environment blocks.
     // Stage 149 — the wall / architecture / layout constancy anchor is an INTERIOR-only rule: emit it
     // only for interior locations (exteriors — streets, rooftops — have no fixed room to hold constant).
-    interior && hasRegionPlate ? REGION_PLATE_ANCHOR_LINE : (interior && locationAngles.length ? LOCATION_ANCHOR_LINE : ""),
+    // TZ: only ONE location ref ships, so the anchor line must describe the ref that was actually kept
+    // (keptLocationKind). Claiming "the attached region plate" while the region image was dropped would
+    // point the model at an image that is not in the batch. Region line only when the region plate is kept.
+    interior && keptLocationKind === "region" ? REGION_PLATE_ANCHOR_LINE : (interior && keptLocationKind !== "none" ? LOCATION_ANCHOR_LINE : ""),
     // Stage 126 — whenever the environment is anchored (region plate or master plates), the small props resting
     // on tables/counters/desks/shelves are immutable set dressing: the same objects in the same spots in every
     // shot, re-invented never, changing only when the on-screen action moves them. Carried between scenes of the
     // same location because the location's fixed inventory is identical in every scene there.
     // Stage 149 — TABLE/SURFACE props constancy is likewise interior-only.
-    interior && (hasRegionPlate || locationAngles.length) ? SURFACE_PROPS_IMMUTABLE_LINE : "",
+    interior && keptLocationKind !== "none" ? SURFACE_PROPS_IMMUTABLE_LINE : "",
   ].filter(Boolean);
   // Stage 54 — the deterministic structure block (reference map + people counter + clothing&props)
   // sits AFTER the state blocks and BEFORE the reused 9-tag body, so the prompt still opens with the
