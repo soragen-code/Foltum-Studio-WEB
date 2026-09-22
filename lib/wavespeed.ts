@@ -96,6 +96,14 @@ const providerErrorText = wavespeedErrorText;
 
 /** POST `${WAVESPEED_BASE}/${slug}` with `body`; returns the task id. */
 export async function wavespeedSubmit(slug: string, body: Record<string, unknown>, label = "WaveSpeed"): Promise<string> {
+  // English-only guarantee (catch-all): this is the shared transport for sub-location angle
+  // references, camera re-angles and region plates (via reangle-store), plus the Seedance
+  // video paths. Translate/romanise any Cyrillic in `body.prompt` before dispatch so no
+  // Russian text (e.g. sub-location labels, region descriptions) reaches the provider.
+  if (typeof body?.prompt === "string" && body.prompt) {
+    const { ensureEnglishPrompt } = await import("@/lib/english-prompt");
+    body = { ...body, prompt: await ensureEnglishPrompt(body.prompt) };
+  }
   let res: Response;
   try {
     res = await fetch(`${WAVESPEED_BASE}/${slug}`, {

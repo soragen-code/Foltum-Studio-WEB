@@ -2,14 +2,14 @@
 
 import Link from 'next/link'
 import { useSession, signOut } from 'next-auth/react'
-import { Coins, Film, LogOut, Plus, User, CreditCard, Crown } from 'lucide-react'
+import { Coins, Film, LogOut, User, CreditCard, Crown } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { hasActiveSubscription } from '@/lib/entitlements'
 
 // Stage 76: optional project context — when `projectName` is set, the sticky header shows
 // "Foltum Studio / <project name>" (the name links back to the project's main page).
-export function Header({ showNewProject = true, projectName = null, projectId = null }: { showNewProject?: boolean; projectName?: string | null; projectId?: string | null } = {}) {
+export function Header({ projectName = null, projectId = null }: { projectName?: string | null; projectId?: string | null } = {}) {
   const { data: session, status } = useSession()
   const [credits, setCredits] = useState(0)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -61,15 +61,6 @@ export function Header({ showNewProject = true, projectName = null, projectId = 
 
         {session?.user ? (
           <div className="flex items-center gap-3">
-            {showNewProject && (
-              <Link
-                href="/project/new"
-                className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
-              >
-                <Plus className="h-4 w-4" />
-                New Project
-              </Link>
-            )}
             {activeSub ? (
               <Link
                 href="/pricing"

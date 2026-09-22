@@ -1,6 +1,7 @@
 import { GenerationAttempt, safeDiagnosticInput, safeProviderError, classifyProviderError, logAttempt } from "@/lib/generation-diagnostics";
 import { VISUAL_STYLE_ID } from "@/lib/visual-style";
 import { WAVESPEED_BASE, getWaveSpeedKey, wavespeedErrorText } from "@/lib/wavespeed";
+import { ensureEnglishPrompt } from "@/lib/english-prompt";
 
 /* ------------------------------------------------------------------ */
 /*  Reference-image generation — Seedream 5.0 Pro on WaveSpeed ONLY.    */
@@ -75,7 +76,10 @@ function wsUnwrap(body: any): any {
 }
 
 async function wavespeedStart(input: ImageGenerationInput): Promise<string> {
-  const { slug, body } = buildWaveSpeedImageRequest(input);
+  // English-only guarantee: translate/romanise the prompt before dispatch so no Cyrillic
+  // (from Location.visualPrompt/name, Character.appearance, scene-still text, etc.) reaches Seedream.
+  const prompt = await ensureEnglishPrompt(input.prompt);
+  const { slug, body } = buildWaveSpeedImageRequest({ ...input, prompt });
   let res: Response;
   try {
     res = await fetch(`${WAVESPEED_BASE}/${slug}`, {

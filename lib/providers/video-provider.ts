@@ -1,5 +1,6 @@
 import type { PredictionState, SeedanceInput, SeedanceImageToVideoInput } from "@/lib/wavespeed";
 import * as wavespeed from "@/lib/wavespeed";
+import { ensureEnglishPrompt } from "@/lib/english-prompt";
 
 /* ------------------------------------------------------------------ */
 /*  Scene-video generation — Seedance 2.5 on WaveSpeed ONLY (Stage 104).*/
@@ -14,13 +15,17 @@ function requireKey(): void {
 /** Submit a scene video (text-to-video with reference images); returns the task id. */
 export async function startVideoGeneration(input: SeedanceInput): Promise<string> {
   requireKey();
-  return wavespeed.startVideoPrediction(input);
+  // English-only guarantee: the final prompt is translated/romanised before dispatch so no
+  // Cyrillic (from Scene.action/locationDesc/subLocation, location/character names, etc.) reaches Seedance.
+  const prompt = await ensureEnglishPrompt(input.prompt);
+  return wavespeed.startVideoPrediction({ ...input, prompt });
 }
 
 /** Submit a scene video as image-to-video (first / last frame keyframes); returns the task id. */
 export async function startImageToVideoGeneration(input: SeedanceImageToVideoInput): Promise<string> {
   requireKey();
-  return wavespeed.generateSeedanceImageToVideo(input);
+  const prompt = await ensureEnglishPrompt(input.prompt);
+  return wavespeed.generateSeedanceImageToVideo({ ...input, prompt });
 }
 
 /** Poll a scene video task (shared PredictionState). */

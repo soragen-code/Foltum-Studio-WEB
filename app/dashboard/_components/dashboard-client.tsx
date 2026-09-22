@@ -98,7 +98,7 @@ export function DashboardClient() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Header showNewProject={false} />
+      <Header />
       <main className="mx-auto max-w-[1200px] px-4 py-8">
         <div className="mb-8 flex items-center justify-between">
           <div>
