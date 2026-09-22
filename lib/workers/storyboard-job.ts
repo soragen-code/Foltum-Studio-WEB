@@ -28,11 +28,12 @@ import { deriveSetAnchors } from "@/lib/set-anchors";
 import { readBoardDirection } from "@/lib/storyboard-direction";
 import { resolveVisibleCast, type BoardCoverage, type ShotSize } from "@/lib/board-coverage";
 import { pickBoardGeometryAuthority } from "@/lib/board-plate";
-import { boardSceneKey, pickSceneAnchor, renderingLowerSiblings, composeBoardImageInput } from "@/lib/board-anchor";
+import { boardSceneKey, pickSceneAnchor, renderingLowerSiblings, composeBoardImageInput, boardFramePrecondition } from "@/lib/board-anchor";
 import { WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
 import {
   extractSpokenLinesResilient,
   estimatedSpeechSeconds,
+  chunkLinesByBudget,
   type DialogueRepairFn,
   type SpokenLine,
 } from "@/lib/storyboard-dialogue";
@@ -72,6 +73,16 @@ type BoardRefEntry = { index: number; url: string; kind: string; label: string }
 /** Stage 142 — sequential render inside a scene: poll interval / max wait for a lower-index sibling still rendering. */
 const ANCHOR_WAIT_POLL_MS = Number(process.env.BOARD_ANCHOR_WAIT_POLL_MS ?? 4000);
 const ANCHOR_WAIT_MAX_POLLS = Number(process.env.BOARD_ANCHOR_WAIT_MAX_POLLS ?? 90); // ~6 min at 4s
+
+/**
+ * Stage 230 — HARD 10s cap per scene clip and the per-clip speech budget used to PRE-CALCULATE the scene count.
+ * A scene's clip may never exceed SCENE_CLIP_MAX_SEC seconds (image-to-video hard cap; speech is never
+ * accelerated or cut to fit — an over-long scene is split into continuation scenes instead). Dialogue is packed
+ * into chunks of at most SCENE_SPEECH_BUDGET_SEC seconds of estimated speech, leaving ~1s of headroom under the
+ * cap for delivery/pauses so a full chunk still fits a ≤10s clip.
+ */
+const SCENE_CLIP_MAX_SEC = 10;
+const SCENE_SPEECH_BUDGET_SEC = 9;
 
 /** Minimal sibling projection shared by the Stage 140 set-anchors and the Stage 142 scene anchor. */
 const SIBLING_SELECT = { id: true, index: true, imageUrl: true, status: true, directionJson: true, motionEn: true, actionOrDialogue: true, region: true, sceneId: true, boardRole: true } as const;
@@ -185,18 +196,61 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
       return res?.assignments ?? [];
     };
 
-    // ONE planner call for the whole episode: per scene → onScreen / entering / exiting + start/end/motion (English).
-    await updateJob(jobId, { progress: 35, message: "Planning start & end frames for each scene..." });
-    const planInputs: ScenePlanInput[] = scenesEn.map((s) => ({
-      number: s.number,
-      action: s.action,
-      dialogue: s.dialogueEnResolved,
-      startState: s.startState,
-      endState: s.endState,
-      presence: s.presence,
-      entrances: s.entrances,
-      sceneKind: s.sceneKind,
-      voiceover: s.voiceover,
+    // Stage 230 — PRE-CALCULATE the scene count from dialogue length. Extract every scene's verbatim, attributed
+    // spoken lines FIRST, then pack them into chunks that each fit one ≤10s clip's speech budget. A scene whose
+    // dialogue overflows one clip becomes a first scene + sequential CONTINUATION scene(s) (same location, same
+    // characters, action carried forward). Nothing is ever accelerated, truncated or dropped — the story simply
+    // gets more scenes. A narration / no-dialogue scene yields exactly one part (one clip, no spoken lines).
+    await updateJob(jobId, { progress: 30, message: "Splitting dialogue into scene clips..." });
+    type PlannedScene = {
+      source: (typeof scenesEn)[number];
+      sceneId: string;
+      dialogue: SpokenLine[];
+      partIndex: number;
+      partCount: number;
+    };
+    const planned: PlannedScene[] = [];
+    for (const s of scenesEn) {
+      const isNarration = (s.sceneKind ?? "").trim().toLowerCase() === "narration";
+      const lines: SpokenLine[] = isNarration || !s.dialogueEnResolved.trim()
+        ? []
+        : await extractSpokenLinesResilient(s.dialogueEnResolved, attributionCast, { repair: dialogueRepair });
+      const chunks = chunkLinesByBudget(lines, SCENE_SPEECH_BUDGET_SEC);
+      const partCount = chunks.length;
+      chunks.forEach((chunk, partIndex) => {
+        planned.push({
+          source: s,
+          // Part 0 keeps the source scene id; continuation parts get a synthetic, unique per-scene id so they
+          // are distinct boards/scenes (Board.sceneId is a plain string, never an FK, so this is safe).
+          sceneId: partIndex === 0 ? s.id : `${s.id}#p${partIndex + 1}`,
+          dialogue: chunk,
+          partIndex,
+          partCount,
+        });
+      });
+    }
+    if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
+
+    // ONE planner call over the PLANNED scenes (parts included): per scene → onScreen / entering / exiting +
+    // start/end/motion (English). Continuation parts are flagged so the planner keeps their location/cast/action.
+    await updateJob(jobId, { progress: 40, message: "Planning start & end frames for each scene..." });
+    const planInputs: ScenePlanInput[] = planned.map((p, seq) => ({
+      number: seq + 1, // unique sequential id for the planner (a source scene may split into several parts)
+      action: p.source.action,
+      // Context only: a split scene passes just THIS part's lines so its frames reflect that part; a single-part
+      // scene passes the whole (English) dialogue text unchanged.
+      dialogue: p.partCount > 1
+        ? (p.dialogue.map((l) => `${l.speaker}: ${l.text}`).join("\n") || null)
+        : (p.source.dialogueEnResolved || null),
+      startState: p.source.startState,
+      endState: p.source.endState,
+      presence: p.source.presence,
+      entrances: p.source.entrances,
+      sceneKind: p.source.sceneKind,
+      voiceover: p.source.voiceover,
+      continues: p.partCount > 1,
+      partIndex: p.partIndex,
+      partCount: p.partCount,
     }));
     const rawPlan = await chatJSON<{ scenes?: unknown[] }>(
       scenePlanSystemPrompt(),
@@ -207,26 +261,24 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
 
     await updateJob(jobId, { progress: 70, message: "Restoring dialogue & building boards..." });
-    // Build the two board rows per scene. Dialogue is restored VERBATIM (attributed) from the scene's own
-    // English lines; a dialogue-attribution conflict fails the whole job (old boards stay intact — see below).
+    // Build the two board rows per PLANNED scene. Dialogue is the pre-computed verbatim chunk for that part.
     type BoardRow = {
       episodeId: string; sceneId: string; index: number; boardRole: string;
       actionOrDialogue: string; motionEn: string | null; durationSec: number;
       castInFrame: object; imagePrompt: string; status: string;
     };
     const rows: BoardRow[] = [];
-    for (let i = 0; i < scenesEn.length; i++) {
-      const s = scenesEn[i];
+    for (let i = 0; i < planned.length; i++) {
+      const p = planned[i];
+      const s = p.source;
       const plan = plans[i];
-      const isNarration = (s.sceneKind ?? "").trim().toLowerCase() === "narration";
-      // Verbatim, attributed spoken lines (dialogue scenes only). Narration carries no on-screen dialogue.
-      const dialogue: SpokenLine[] = isNarration || !s.dialogueEnResolved.trim()
-        ? []
-        : await extractSpokenLinesResilient(s.dialogueEnResolved, attributionCast, { repair: dialogueRepair });
-      // Duration = enough to fit ALL speech (never truncated/accelerated), at least the scripted scene length,
-      // clamped to the i2v-supported [4, 30]s window.
+      const dialogue = p.dialogue;
+      // Duration = enough to fit THIS part's speech (never truncated/accelerated), at least a scene minimum,
+      // clamped to the HARD 10s clip cap. A single-part scene keeps its scripted length as the floor; a split
+      // scene uses a 6s floor per part (the scripted length applies to the whole scene, not each part).
       const speechSec = dialogue.reduce((sum, l) => sum + estimatedSpeechSeconds(l), 0);
-      const durationSec = Math.min(30, Math.max(Math.ceil(speechSec) + 1, s.durationSec ?? 6, 4));
+      const durationFloor = p.partCount > 1 ? 6 : (s.durationSec ?? 6);
+      const durationSec = Math.min(SCENE_CLIP_MAX_SEC, Math.max(Math.ceil(speechSec) + 1, durationFloor, 4));
 
       // The start frame shows everyone present at the START (onScreen + those about to exit, minus those still
       // entering); the end frame shows everyone present at the END (onScreen + those who entered, minus exiters).
@@ -270,12 +322,12 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
       const startIdx = 2 * i;
       const endIdx = 2 * i + 1;
       rows.push({
-        episodeId, sceneId: s.id, index: startIdx, boardRole: "start",
+        episodeId, sceneId: p.sceneId, index: startIdx, boardRole: "start",
         actionOrDialogue: plan.startFrame, motionEn: plan.motion, durationSec,
         castInFrame: castJson, imagePrompt: framePrompt(startIdx, plan.startFrame, startCoverage), status: "pending",
       });
       rows.push({
-        episodeId, sceneId: s.id, index: endIdx, boardRole: "end",
+        episodeId, sceneId: p.sceneId, index: endIdx, boardRole: "end",
         actionOrDialogue: plan.endFrame, motionEn: null, durationSec,
         castInFrame: castJson, imagePrompt: framePrompt(endIdx, plan.endFrame, endCoverage), status: "pending",
       });
@@ -297,10 +349,12 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
     });
 
     const totalSec = rows.filter((r) => r.boardRole === "start").reduce((sum, r) => sum + r.durationSec, 0);
+    // Stage 230 — the scene count is now DERIVED from dialogue length (source scenes may split into continuation
+    // scenes), so report the PLANNED scene count and how many source scenes it expanded from.
     await completeJob(
       jobId,
-      { episodeId, boardCount: rows.length, sceneCount: scenesEn.length, totalSec },
-      `Storyboard ready — ${scenesEn.length} scenes (${rows.length} boards)`,
+      { episodeId, boardCount: rows.length, sceneCount: planned.length, sourceSceneCount: scenesEn.length, totalSec },
+      `Storyboard ready — ${planned.length} scenes (${rows.length} boards)`,
     );
   } catch (err: any) {
     console.error("[storyboard-boards] failed:", err);
@@ -390,6 +444,22 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
         if (await canceled()) throw new GenerationCanceledError();
         const waitingFor = Math.min(...rendering.map((r) => r.index)) + 1;
         await updateJob(jobId, { progress: 20, message: `Board ${board.index + 1}: waiting for board ${waitingFor} (scene anchor)...` });
+        await sleep(ANCHOR_WAIT_POLL_MS);
+        siblingBoards = await loadSiblings();
+      }
+    } else {
+      // Stage 230 — STRICTLY SEQUENTIAL SCENES: this scene's frames may only render once the immediately
+      // previous scene's frames are ALL rendered. The two frames of the SAME scene render in parallel (they
+      // never gate one another). Poll boardFramePrecondition against the live siblings until it allows this
+      // frame (or the wait budget elapses, after which we proceed rather than stall the job forever).
+      for (let poll = 0; poll < ANCHOR_WAIT_MAX_POLLS; poll++) {
+        const gate = boardFramePrecondition(
+          { index: board.index, imageUrl: board.imageUrl, boardRole: board.boardRole, sceneId: board.sceneId },
+          siblingBoards.map((b) => ({ index: b.index, imageUrl: b.imageUrl, sceneId: b.sceneId })),
+        );
+        if (gate.allowed) break;
+        if (await canceled()) throw new GenerationCanceledError();
+        await updateJob(jobId, { progress: 20, message: `Board ${board.index + 1}: waiting for the previous scene to finish...` });
         await sleep(ANCHOR_WAIT_POLL_MS);
         siblingBoards = await loadSiblings();
       }

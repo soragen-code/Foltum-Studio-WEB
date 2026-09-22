@@ -24,6 +24,13 @@ export interface ScenePlanInput {
   entrances?: string | null; // who enters / leaves inside the scene (free text)
   sceneKind?: string | null; // "narration" = voice-over; otherwise dialogue/action
   voiceover?: string | null; // English narration (narration scenes)
+  // Stage 230 — a source scene whose dialogue exceeds one clip's speech budget is pre-split into several
+  // sequential CONTINUATION parts. Each part is planned as its own two-frame scene, but a continuation part
+  // (partIndex > 0) MUST keep the SAME location, the SAME characters and the SAME ongoing action as the
+  // preceding part — it is the very next continuous moment, not a new scene.
+  continues?: boolean; // true when the source scene was split into more than one part
+  partIndex?: number; // 0-based index of this part inside its source scene
+  partCount?: number; // total number of parts the source scene was split into
 }
 
 /** Normalized per-scene shot plan (one entry per input scene, in the same order). */
@@ -72,6 +79,12 @@ export function scenePlanSystemPrompt(): string {
     "  end frame. Do NOT include spoken dialogue text here (speech is handled separately) — describe only what is",
     "  seen to move. Show every scripted movement on camera; the camera never cuts inside the clip.",
     "- Preserve the scene's own order and count. Return one object per input scene.",
+    "- CONTINUATION PARTS: some scenes carry `continues:true` with `partIndex`/`partCount` — a long scene that",
+    "  was split into several consecutive parts (partIndex 0..partCount-1). All parts of one source scene are the",
+    "  SAME physical scene running on without interruption: keep the SAME location, the SAME set, furniture and lighting, and the",
+    "  SAME characters across all its parts. A continuation part (partIndex > 0) must OPEN exactly where the",
+    "  previous part ended (same poses, positions and ongoing action) and simply carry the action forward — it is",
+    "  the very next continuous moment, never a new place, a time jump or a fresh cast.",
     "",
     'Return STRICT JSON: {"scenes":[{"number":<int>,"onScreen":[...],"entering":[...],"exiting":[...],"startFrame":"...","endFrame":"...","motion":"..."}]}',
   ].join("\n");
@@ -92,6 +105,10 @@ export function scenePlanUserPrompt(
     entrancesExits: (s.entrances ?? "").trim() || null,
     kind: (s.sceneKind ?? "").trim() || null,
     narration: (s.voiceover ?? "").trim() || null,
+    // Stage 230 — continuation metadata (present only for scenes split across several parts).
+    ...(s.continues
+      ? { continues: true, partIndex: s.partIndex ?? 0, partCount: s.partCount ?? 1 }
+      : {}),
   }));
   return [
     `CAST (use these names verbatim, nobody else): ${cast.join(", ") || "(none)"}`,

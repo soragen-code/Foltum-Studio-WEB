@@ -241,17 +241,64 @@ export function estimatedSpeechSeconds(line: SpokenLine): number {
  * word-group fragments that each fit the 6s planning budget. Lossless: every character and the
  * original order are preserved (each whitespace run is attached to exactly one fragment); a lone
  * word that still exceeds the budget is kept whole rather than truncated or spoken faster. */
-function splitClauseByWords(line: SpokenLine, clause: string): string[] {
+function splitClauseByWords(line: SpokenLine, clause: string, budgetSec = 6): string[] {
   const tokens = clause.match(/\s*\S+\s*/gu);
   if (!tokens || tokens.join("") !== clause) return [clause];
   const parts: string[] = [];
   let part = "";
   for (const token of tokens) {
-    if (part && estimatedSpeechSeconds({ ...line, text: part + token }) > 6) { parts.push(part); part = ""; }
+    if (part && estimatedSpeechSeconds({ ...line, text: part + token }) > budgetSec) { parts.push(part); part = ""; }
     part += token;
   }
   if (part) parts.push(part);
   return parts.length ? parts : [clause];
+}
+
+/**
+ * Stage 230 — split ONE spoken line into sub-lines that each fit `budgetSec` of estimated speech, breaking at
+ * sentence/clause punctuation first and then (only for an over-long unbroken clause) at word boundaries.
+ * LOSSLESS: every character and the original order are preserved, and speech is never truncated, dropped or
+ * accelerated. A line that already fits, or that cannot be split losslessly, is returned unchanged. The
+ * speaker / delivery / addressee / scene of every sub-line are inherited from the original line.
+ */
+export function atomizeLine(line: SpokenLine, budgetSec: number): SpokenLine[] {
+  if (estimatedSpeechSeconds(line) <= budgetSec) return [line];
+  const rawClauses = line.text.match(/[^.!?;,…—]+(?:[.!?;,…—]+\s*|$)/gu) ?? [line.text];
+  if (rawClauses.join("") !== line.text) return [line]; // cannot split losslessly — keep whole (never truncate)
+  const clauses = rawClauses.flatMap((clause) =>
+    estimatedSpeechSeconds({ ...line, text: clause }) > budgetSec ? splitClauseByWords(line, clause, budgetSec) : [clause]);
+  const chunks: string[] = [];
+  let chunk = "";
+  for (const clause of clauses) {
+    if (chunk && estimatedSpeechSeconds({ ...line, text: chunk + clause }) > budgetSec) { chunks.push(chunk); chunk = ""; }
+    chunk += clause;
+  }
+  if (chunk) chunks.push(chunk);
+  return (chunks.length ? chunks : [line.text]).map((text) => ({ ...line, text }));
+}
+
+/**
+ * Stage 230 — pack ordered spoken lines into sequential CHUNKS, each fitting `budgetSec` of estimated speech.
+ * Used to pre-calculate how many scene clips a scene's dialogue needs: a scene whose dialogue exceeds the
+ * per-clip speech budget is split into a first scene + continuation scene(s), each chunk feeding one clip.
+ * An individual line that alone exceeds the budget is first atomized (sentence → clause → word boundaries) so
+ * it never blocks a chunk. LOSSLESS: every line lands in exactly one chunk, in order, verbatim — nothing is
+ * dropped, truncated or accelerated. Empty input → a single empty chunk (the scene still yields one clip).
+ */
+export function chunkLinesByBudget(lines: SpokenLine[], budgetSec: number): SpokenLine[][] {
+  if (!lines.length) return [[]];
+  const atomized = lines.flatMap((l) => atomizeLine(l, budgetSec));
+  const chunks: SpokenLine[][] = [];
+  let cur: SpokenLine[] = [];
+  let curSec = 0;
+  for (const line of atomized) {
+    const sec = estimatedSpeechSeconds(line);
+    if (cur.length && curSec + sec > budgetSec) { chunks.push(cur); cur = []; curSec = 0; }
+    cur.push(line);
+    curSec += sec;
+  }
+  if (cur.length) chunks.push(cur);
+  return chunks.length ? chunks : [[]];
 }
 
 /** Split at natural punctuation boundaries first; preserve every character and the original order.

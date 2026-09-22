@@ -12,7 +12,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Loader2, Film, Wand2, ImageIcon, Play, ChevronDown, ChevronRight, Copy, Check } from 'lucide-react'
+import { Loader2, Film, Wand2, ImageIcon, Play, ChevronDown, ChevronRight, ChevronLeft, Copy, Check } from 'lucide-react'
 import { JobProgressBar, SmoothProgress, useJobPolling } from '../../_components/use-job-polling'
 import { boardFramePrecondition } from '@/lib/board-anchor'
 import { DownloadVideoButton } from '@/app/project/[id]/_components/download-video-button'
@@ -278,6 +278,8 @@ function SceneGroup({ sceneNumber, boards, onChanged, boardFrameLocked }: {
   const end = boards.find((b) => b.boardRole === 'end')
   const ordered = [start, ...(end ? [end] : boards.filter((b) => b !== start))].filter(Boolean) as Board[]
   const dur = plan?.durationSec ?? start?.durationSec ?? null
+  // The whole scene is locked while the previous scene is still rendering (a not-yet-framed board is gated).
+  const sceneLocked = ordered.some((b) => !validUrl(b.imageUrl) && boardFrameLocked(b))
 
   return (
     <div className="rounded-xl border border-border bg-muted/20 p-3" data-testid={`scene-group-${sceneNumber}`}>
@@ -294,7 +296,9 @@ function SceneGroup({ sceneNumber, boards, onChanged, boardFrameLocked }: {
         </div>
         <button
           onClick={runBoth}
-          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium hover:bg-accent"
+          disabled={sceneLocked}
+          title={sceneLocked ? 'Доступно, когда предыдущая сцена будет готова' : undefined}
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
           data-testid={`scene-frames-${sceneNumber}`}
         >
           <ImageIcon className="h-3.5 w-3.5" /> Сгенерировать оба кадра
@@ -324,6 +328,8 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
   const [stitching, setStitching] = useState(false)
   const [assets, setAssets] = useState<AssetReconciliation | null>(null)
   const [boardGate, setBoardGate] = useState<string | null>(null)
+  // Stage 230 — per-scene UI: one scene per page with a pager («‹ Сцена N из M ›»).
+  const [scenePage, setScenePage] = useState(0)
 
   const refresh = useCallback(async () => {
     try {
@@ -425,10 +431,15 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
     return groups
   })()
 
+  // Keep the active scene page within bounds when the number of scenes changes (rebuild / first load).
+  useEffect(() => {
+    setScenePage((p) => Math.min(Math.max(0, p), Math.max(0, sceneGroups.length - 1)))
+  }, [sceneGroups.length])
+
   const frameLockedFor = (b: Board) =>
     !boardFramePrecondition(
-      { index: b.index, imageUrl: b.imageUrl, boardRole: b.boardRole },
-      boards.map((s) => ({ index: s.index, imageUrl: s.imageUrl })),
+      { index: b.index, imageUrl: b.imageUrl, boardRole: b.boardRole, sceneId: b.sceneId },
+      boards.map((s) => ({ index: s.index, imageUrl: s.imageUrl, sceneId: s.sceneId })),
     ).allowed
 
   return (
@@ -493,17 +504,48 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
       ) : boards.length === 0 ? (
         <p className="mt-6 text-sm text-muted-foreground">Кадров пока нет. Нажмите «Разбить историю на кадры», чтобы сгенерировать раскадровку из готовой истории.</p>
       ) : perScene ? (
-        // Per-scene layout: one block per scene, each with a start frame + end frame rendered in parallel.
+        // Per-scene layout: ONE scene per page with a pager. Each scene has a start frame + end frame that
+        // render in parallel; scenes themselves are generated strictly in order (previous scene must finish).
         <div className="mt-6 space-y-4" data-testid="storyboard-boards">
-          {sceneGroups.map((g, i) => (
-            <SceneGroup
-              key={g.key}
-              sceneNumber={i + 1}
-              boards={g.boards}
-              onChanged={refresh}
-              boardFrameLocked={frameLockedFor}
-            />
-          ))}
+          {(() => {
+            const page = Math.min(Math.max(0, scenePage), Math.max(0, sceneGroups.length - 1))
+            const g = sceneGroups[page]
+            if (!g) return null
+            return (
+              <>
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2" data-testid="storyboard-scene-pager">
+                  <button
+                    onClick={() => setScenePage((p) => Math.max(0, p - 1))}
+                    disabled={page <= 0}
+                    className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm font-medium disabled:opacity-40"
+                    data-testid="storyboard-scene-prev"
+                    aria-label="Предыдущая сцена"
+                  >
+                    <ChevronLeft className="h-4 w-4" /> Назад
+                  </button>
+                  <div className="text-sm font-semibold text-foreground" data-testid="storyboard-scene-indicator">
+                    Сцена {page + 1} из {sceneGroups.length}
+                  </div>
+                  <button
+                    onClick={() => setScenePage((p) => Math.min(sceneGroups.length - 1, p + 1))}
+                    disabled={page >= sceneGroups.length - 1}
+                    className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm font-medium disabled:opacity-40"
+                    data-testid="storyboard-scene-next"
+                    aria-label="Следующая сцена"
+                  >
+                    Далее <ChevronRight className="h-4 w-4" />
+                  </button>
+                </div>
+                <SceneGroup
+                  key={g.key}
+                  sceneNumber={page + 1}
+                  boards={g.boards}
+                  onChanged={refresh}
+                  boardFrameLocked={frameLockedFor}
+                />
+              </>
+            )
+          })()}
         </div>
       ) : (
         // Legacy flat layout for episodes built before the per-scene model.

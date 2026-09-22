@@ -88,12 +88,43 @@ export interface BoardFrameGate {
  *     signal for a board frame regardless of what happens to the clip afterwards.
  */
 export function boardFramePrecondition(
-  self: { index: number; imageUrl?: string | null; boardRole?: string | null },
-  siblings: { index: number; imageUrl?: string | null }[],
+  self: { index: number; imageUrl?: string | null; boardRole?: string | null; sceneId?: string | null },
+  siblings: { index: number; imageUrl?: string | null; sceneId?: string | null }[],
 ): BoardFrameGate {
-  // Stage 220 — per-scene model: a board carrying a boardRole (start/end) has its OWN scene-scoped shot plan and
-  // is rendered in PARALLEL with its sibling and with every other scene, so it is never gated on a prior board.
-  if (self.boardRole) return { allowed: true };
+  // Stage 230 — per-scene SEQUENTIAL model: a board carrying a boardRole (start/end) belongs to a scene
+  // (sceneId). Scenes render strictly in order: a scene's frames may only begin once the IMMEDIATELY
+  // PREVIOUS scene's frames are ALL rendered. The two frames of one scene render in PARALLEL with each
+  // other (they never gate one another). Regenerating an already-rendered frame is always allowed, and the
+  // first scene is always allowed. When scene grouping is absent (no sceneId) the per-scene path stays fully
+  // parallel (legacy behaviour).
+  if (self.boardRole) {
+    if (validUrl(self.imageUrl)) return { allowed: true };
+    const selfScene = (self.sceneId ?? "").trim();
+    if (!selfScene) return { allowed: true };
+    const sceneMap = new Map<string, { minIndex: number; boards: { imageUrl?: string | null }[] }>();
+    for (const s of siblings) {
+      const key = (s.sceneId ?? "").trim();
+      if (!key) continue;
+      const entry = sceneMap.get(key) ?? { minIndex: s.index, boards: [] };
+      entry.minIndex = Math.min(entry.minIndex, s.index);
+      entry.boards.push(s);
+      sceneMap.set(key, entry);
+    }
+    const selfEntry = sceneMap.get(selfScene);
+    const selfMinIndex = selfEntry ? selfEntry.minIndex : self.index;
+    // The immediately-previous scene = the scene whose min board index is the greatest one still strictly
+    // below this scene's min board index.
+    let prevScene: { minIndex: number; boards: { imageUrl?: string | null }[] } | null = null;
+    for (const [key, entry] of sceneMap) {
+      if (key === selfScene) continue;
+      if (entry.minIndex < selfMinIndex && (!prevScene || entry.minIndex > prevScene.minIndex)) {
+        prevScene = entry;
+      }
+    }
+    if (!prevScene) return { allowed: true };
+    if (prevScene.boards.every((b) => validUrl(b.imageUrl))) return { allowed: true };
+    return { allowed: false, reason: "Generate the previous scene first." };
+  }
   if (self.index <= 0) return { allowed: true };
   if (validUrl(self.imageUrl)) return { allowed: true };
   const prev = siblings
