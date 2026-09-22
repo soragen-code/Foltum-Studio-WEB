@@ -576,3 +576,6 @@ ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "recommendedEpisodeCount" INTEGER
 -- idempotent; legacy rows keep NULL and are unaffected.
 ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "plot" TEXT;
 ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "plotStatus" TEXT;
+
+-- Stage 174: asset-gathering gate state for STORYBOARD episodes (additive, nullable).
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "boardGate" TEXT;

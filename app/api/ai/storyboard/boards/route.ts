@@ -9,6 +9,7 @@ import { parseBody, storyboardBoardsSchema } from "@/lib/validations";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runStoryboardBoardsJob, STORYBOARD_BOARDS_JOB_TYPE } from "@/lib/workers/storyboard-job";
 import { selectAuthoritativeBoardJob } from "@/lib/board-job-select";
+import { gatherMissingAssets, reconcileEpisodeAssets } from "@/lib/asset-gathering";
 
 /**
  * Stage 127 — POST /api/ai/storyboard/boards  { projectId?, episodeId }  →  { jobId, resumed }
@@ -47,6 +48,29 @@ export async function POST(request: Request) {
     });
     if (active) return NextResponse.json({ jobId: active.id, resumed: true });
 
+    // Stage 174 — ASSET GATHERING GATE: before splitting the story into boards, make sure every character
+    // and location reference the boards will consume already exists. If any are missing, charge + kick off
+    // their generation via the EXISTING reference workers and DO NOT start the split; the advance-chains cron
+    // resumes the split automatically once all assets are ready (no open tab needed). An episode whose assets
+    // are all present reconciles with blockingMissing === 0 and passes straight through — no charge, no delay
+    // (exactly the pre-Stage-174 behaviour).
+    const recon = await reconcileEpisodeAssets(episodeId);
+    if (recon.blockingMissing > 0) {
+      const user = await prisma.user.findUnique({ where: { id: session.user.id }, select: { id: true, credits: true } });
+      if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
+      const gathered = await gatherMissingAssets({ user, projectId: pid, episodeId });
+      if (gathered.insufficientCredits) {
+        return NextResponse.json(
+          { error: `Недостаточно кредитов для генерации недостающих ассетов: нужно ${gathered.insufficientCredits.need}, доступно ${gathered.insufficientCredits.have}`, assets: gathered.reconciliation },
+          { status: 402 },
+        );
+      }
+      await prisma.episode.update({ where: { id: episodeId }, data: { boardGate: "assets" } });
+      return NextResponse.json({ gated: true, assets: gathered.reconciliation, charged: gathered.charged, creditsRemaining: gathered.creditsRemaining });
+    }
+    // Assets all present → clear any stale gate and split immediately (unchanged behaviour).
+    await prisma.episode.updateMany({ where: { id: episodeId, boardGate: { not: null } }, data: { boardGate: null } });
+
     // Stage 154 — retire any prior FAILED board-planning jobs for this episode before starting a new
     // one, so an obsolete failure (e.g. the pre-Stage-148 "outside the required 12–15" message) can
     // never resurface in the UI once a fresh plan is under way.
@@ -76,10 +100,13 @@ export async function GET(request: Request) {
 
   const episode = await prisma.episode.findFirst({
     where: { id: episodeId, season: { project: { userId: session.user.id } } },
-    select: { id: true, mode: true, videoUrl: true, season: { select: { projectId: true } } },
+    select: { id: true, mode: true, videoUrl: true, boardGate: true, season: { select: { projectId: true } } },
   });
   if (!episode) return NextResponse.json({ error: "Episode not found" }, { status: 404 });
   const projectId = episode.season.projectId;
+
+  // Stage 174 — asset-gathering status for the "Ассеты" panel (STORYBOARD only; cheap DB reads, no LLM).
+  const assets = episode.mode === "STORYBOARD" ? await reconcileEpisodeAssets(episodeId) : null;
 
   const boards = await prisma.board.findMany({ where: { episodeId }, orderBy: { index: "asc" } });
   await failStaleJobs({ projectId, type: STORYBOARD_BOARDS_JOB_TYPE });
@@ -93,7 +120,7 @@ export async function GET(request: Request) {
   const job = selectAuthoritativeBoardJob(jobs, boards.length > 0);
 
   return NextResponse.json(
-    { mode: episode.mode, videoUrl: episode.videoUrl, boards, job },
+    { mode: episode.mode, videoUrl: episode.videoUrl, boards, job, assets, boardGate: episode.boardGate ?? null },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

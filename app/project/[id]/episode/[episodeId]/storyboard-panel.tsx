@@ -38,8 +38,31 @@ type Board = {
   frameSeed?: number | null
 }
 
+/** Stage 174 — mirrors AssetReconciliation from lib/asset-gathering (per-kind ready/missing counts). */
+type KindStatus = { ready: number; missing: number; total: number; missingIds: string[] }
+type AssetReconciliation = {
+  characters: KindStatus
+  locations: KindStatus
+  props: KindStatus
+  blockingMissing: number
+  totalMissing: number
+}
+
 function validUrl(u?: string | null): u is string {
   return typeof u === 'string' && /^https?:\/\//.test(u)
+}
+
+/** One asset-kind tile in the "Ассеты" panel: how many refs are ready from the library vs. still generating. */
+function AssetKindStat({ title, k }: { title: string; k: KindStatus }) {
+  return (
+    <div className="rounded-lg border border-border bg-muted/30 p-3">
+      <div className="text-sm font-medium text-foreground">{title}</div>
+      <div className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+        <div>Готово: <span className="font-semibold text-foreground">{k.ready}</span> из {k.total}</div>
+        {k.missing > 0 && <div className="text-amber-600 dark:text-amber-400">Генерируется: {k.missing}</div>}
+      </div>
+    </div>
+  )
 }
 
 /** Small copy-to-clipboard button with a transient "copied" tick. English prompt content is copied verbatim. */
@@ -199,6 +222,8 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
   const [error, setError] = useState<string | null>(null)
   const [splitting, setSplitting] = useState(false)
   const [stitching, setStitching] = useState(false)
+  const [assets, setAssets] = useState<AssetReconciliation | null>(null)
+  const [boardGate, setBoardGate] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -207,6 +232,8 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
       if (res.ok) {
         setBoards(data.boards ?? [])
         if (validUrl(data.videoUrl)) setVideoUrl(data.videoUrl)
+        setAssets(data.assets ?? null)
+        setBoardGate(data.boardGate ?? null)
         // resume an in-flight split job
         if (data.job && (data.job.status === 'pending' || data.job.status === 'processing')) {
           setSplitting(true); splitPoll.start(data.job.id)
@@ -231,12 +258,36 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
 
   useEffect(() => { refresh() }, [refresh])
 
+  // Stage 174 — while the episode is parked at the asset gate, re-poll every 5s so the panel tracks
+  // generation and picks up the auto-started split (kicked off by the advance-chains cron) as soon as the
+  // refs are ready. The interval clears itself once the gate lifts (boardGate → null / a split job appears).
+  const gathering = boardGate === 'assets'
+  useEffect(() => {
+    if (!gathering) return
+    const t = setInterval(() => { refresh() }, 5000)
+    return () => clearInterval(t)
+  }, [gathering, refresh])
+
   const startSplit = useCallback(async () => {
     setSplitting(true); setError(null)
     try {
       const res = await fetch('/api/ai/storyboard/boards', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId, episodeId }) })
       const data = await res.json()
-      if (!res.ok) { setSplitting(false); setError(data?.error ?? 'Не удалось запустить разбиение'); return }
+      if (!res.ok) {
+        setSplitting(false)
+        if (data?.assets) setAssets(data.assets) // e.g. 402: show what still needs generating
+        setError(data?.error ?? 'Не удалось запустить разбиение')
+        return
+      }
+      // Stage 174 — asset gate engaged: refs are being generated, the split is deferred. The advance-chains
+      // cron will start the split automatically once everything is ready. Enter the "gathering" state and let
+      // the poll effect below track progress; no split job to poll yet.
+      if (data.gated) {
+        setSplitting(false)
+        setBoardGate('assets')
+        if (data.assets) setAssets(data.assets)
+        return
+      }
       if (data.jobId) splitPoll.start(data.jobId)
       else { setSplitting(false); refresh() }
     } catch (e: any) { setSplitting(false); setError(e?.message ?? 'Ошибка запроса') }
@@ -260,8 +311,8 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
   return (
     <div className="mt-4" data-testid="storyboard-panel">
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
-        <button onClick={startSplit} disabled={splitting} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="storyboard-generate-boards">
-          {splitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {boards.length ? 'Перестроить кадры' : 'Разбить историю на кадры'}
+        <button onClick={startSplit} disabled={splitting || gathering} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="storyboard-generate-boards">
+          {splitting || gathering ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {gathering ? 'Сбор ассетов…' : boards.length ? 'Перестроить кадры' : 'Разбить историю на кадры'}
         </button>
         <button onClick={startAssemble} disabled={!allAnimated || stitching} title={allAnimated ? 'Склеить клипы кадров в один ролик' : 'Доступно, когда все кадры оживлены'} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="storyboard-assemble">
           {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Собрать ролик (~90с)
@@ -276,6 +327,32 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
         </p>
         {error && <p className="w-full text-sm text-destructive" data-testid="storyboard-error">{error}</p>}
       </div>
+
+      {/* Stage 174 — «Ассеты»: the references the boards need (characters + locations + props), reconciled
+          against the library. Anything missing is generated automatically before the split; the split starts
+          on its own once everything is ready (the tab may be closed). */}
+      {assets && (assets.characters.total + assets.locations.total + assets.props.total > 0) && (
+        <div className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="storyboard-assets">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <h2 className="inline-flex items-center gap-1 font-semibold"><ImageIcon className="h-4 w-4" /> Ассеты</h2>
+            {gathering && (
+              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground" data-testid="storyboard-assets-gathering">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Ассеты генерируются…
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <AssetKindStat title="Персонажи" k={assets.characters} />
+            <AssetKindStat title="Локации" k={assets.locations} />
+            <AssetKindStat title="Предметы" k={assets.props} />
+          </div>
+          {gathering && (
+            <p className="mt-3 text-xs text-muted-foreground">
+              Недостающие референсы генерируются автоматически. Разбивка истории на кадры начнётся сама, как только все персонажи и локации будут готовы — это окно можно закрыть.
+            </p>
+          )}
+        </div>
+      )}
 
       {validUrl(videoUrl) && (
         <div className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="storyboard-video">

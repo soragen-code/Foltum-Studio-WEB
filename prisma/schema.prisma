@@ -262,6 +262,11 @@ model Episode {
   // prompt version this script was generated with. Both nullable so existing rows are unaffected.
   peakSceneIndex Int?
   promptVersion  String?
+  // Stage 174 (additive): ASSET-GATHERING gate state for STORYBOARD mode. null = no gate (normal). "assets"
+  // = a board split was requested but is waiting for the episode's missing character/location references to
+  // generate; the advance-chains cron starts the split automatically once they are all ready, then clears it.
+  // Nullable/backward-compatible — legacy rows keep NULL and behave exactly as before.
+  boardGate      String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
