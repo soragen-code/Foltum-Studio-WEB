@@ -5,7 +5,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { buildBoardFramePrompt } from "@/lib/storyboard-prompt";
-import { loadEpisodeCharacters, coverageFromNames } from "@/lib/workers/storyboard-job";
+import { loadEpisodeCharacters, coverageFromNames, contrastEndCoverage } from "@/lib/workers/storyboard-job";
 import { resolveVisibleCast, type BoardCoverage } from "@/lib/board-coverage";
 import { readBoardDirection } from "@/lib/storyboard-direction";
 
@@ -69,6 +69,10 @@ export async function POST(request: Request, ctx: { params: Promise<{ boardId: s
       const direction = readBoardDirection(board.directionJson);
       coverage = resolveVisibleCast(direction, board.index, fullCast, board.actionOrDialogue);
     }
+    // Stage 240 — the END frame is a contrasting shot vs. its START frame (mirror of runBoardImageJob), so the
+    // rebuilt prompt text matches exactly what the end frame renders.
+    const isEndFrame = board.boardRole === "end";
+    if (isEndFrame) coverage = contrastEndCoverage(coverage);
 
     // Only the visible characters' identity lines go into the prompt (fall back to the full cast if none matched).
     const visibleLinks = links.filter((l) => coverage.visible.includes(l.name));
@@ -76,13 +80,17 @@ export async function POST(request: Request, ctx: { params: Promise<{ boardId: s
 
     // "Planned" builder call — text only (no plate, anchor, continuity or ref images). Matches the split's
     // framePrompt() at lib/workers/storyboard-job.ts, so the text follows the current builder rules exactly.
-    const prompt = buildBoardFramePrompt({
+    const built = buildBoardFramePrompt({
       board: { index: board.index, actionOrDialogue: board.actionOrDialogue, motion: null, directionJson: null },
       characters,
       coverage,
       locationName: board.episode.locationName,
       locationDesc: board.episode.locationDesc,
     }).prompt;
+    // Same END-FRAME CAMERA CHANGE directive the worker appends, so the displayed prompt equals the rendered one.
+    const prompt = isEndFrame
+      ? `${built}\nEND-FRAME CAMERA CHANGE: this is the scene's CLOSING frame and MUST use a DIFFERENT camera setup from the scene's opening frame — a different shot size and a clearly different camera position (angle, height and distance from the subject), for example moving from a wider/straight-on opening to a tighter reverse, over-the-shoulder or opposite-side vantage. Do NOT reproduce the opening frame's framing or camera angle; keep the same location, characters and wardrobe.`
+      : built;
 
     await prisma.board.update({ where: { id: board.id }, data: { imagePrompt: prompt } });
 

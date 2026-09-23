@@ -135,6 +135,25 @@ export function coverageFromNames(inFrame: string[], fullCast: string[]): BoardC
   return { shotSize, visible: vis, offScreen: fullCast.filter((c) => !vis.includes(c)), focus: "" };
 }
 
+/**
+ * Stage 240 — the END frame of a scene must NOT repeat the START frame's shot. The start frame establishes the
+ * scene (its shot size is chosen by head-count); the end frame is a DELIBERATE camera change — a DIFFERENT shot
+ * size seen from a DIFFERENT camera position (angle / height / distance). This maps the count-derived start shot to
+ * a contrasting end shot and picks a focus so the reverse / over-the-shoulder framing text renders. Deterministic,
+ * no LLM. The start frame itself is never attached as a reference when the end frame renders (see runBoardImageJob).
+ */
+export function contrastEndCoverage(base: BoardCoverage): BoardCoverage {
+  const vis = base.visible;
+  const n = vis.length;
+  // 1 in frame: the start is a MEDIUM → the end pushes IN to a CLOSE-UP (different distance).
+  if (n <= 1) return { ...base, shotSize: "CLOSE-UP", focus: vis[0] ?? "" };
+  // 2 in frame: the start is a flat TWO-SHOT → the end crosses to an OVER-THE-SHOULDER reverse on the other
+  // character (camera moves to the opposite vantage; buildShotSizeLine renders the foreground shoulder text).
+  if (n === 2) return { ...base, shotSize: "OVER-THE-SHOULDER", focus: vis[1] };
+  // 3+ in frame: the start is a WIDE ESTABLISHING → the end moves IN to a MEDIUM grouping (tighter, new angle).
+  return { ...base, shotSize: "MEDIUM", focus: vis[0] ?? "" };
+}
+
 /* ───────────── 1) storyboard_boards — per Scene → EXACTLY 2 boards (start frame + end frame) ─────────────
  * Stage 220 — the episode is no longer split into ~50 discrete LLM beats. Every existing Scene now yields
  * EXACTLY two boards: a START frame (boardRole="start", index 2i) and an END frame (boardRole="end", index
@@ -397,6 +416,10 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
       const direction = readBoardDirection(board.directionJson);
       coverage = resolveVisibleCast(direction, board.index, cast, board.actionOrDialogue);
     }
+    // Stage 240 — the scene's END frame must be a DIFFERENT shot than its START frame: remap the count-derived
+    // coverage to a contrasting shot size + camera vantage so the two frames are never the same plan.
+    const isEndFrame = board.boardRole === "end";
+    if (isEndFrame) coverage = contrastEndCoverage(coverage);
     const visibleLinks = links.filter((l) => coverage.visible.includes(l.name));
     const refImages = links.flatMap((l, i) => (coverage.visible.includes(l.name) && refs[i] ? [refs[i] as string] : []));
     // Parallel to refImages: the character name behind each identity reference, for the UI "references passed" list.
@@ -464,7 +487,10 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
         siblingBoards = await loadSiblings();
       }
     }
-    const anchor = pickSceneAnchor(self, toSiblings(siblingBoards));
+    // Stage 240 — the END frame is rendered INDEPENDENTLY of its START frame: the start frame is never attached as
+    // the scene anchor (nor, below, as the continuity still). Only character identity references and location plates
+    // back the end frame, so it is a genuinely different shot rather than a re-frame of the start image.
+    const anchor = isEndFrame ? null : pickSceneAnchor(self, toSiblings(siblingBoards));
 
     // Stage 144/220 — ACTION / POSE CONTINUITY. The immediately previous rendered board of the SAME scene (by
     // sceneId for per-scene boards, else same region) is the source of the ongoing action: its still is attached
@@ -475,8 +501,10 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
       .filter((b) => b.id !== board.id && b.index < board.index && validUrl(b.imageUrl) &&
         (isPerScene ? (b.sceneId ?? null) === (board.sceneId ?? null) : (b.region ?? null) === (board.region ?? null)))
       .sort((a, b) => b.index - a.index)[0];
-    const continuityUrl = prevRow ? (prevRow.imageUrl as string) : null;
-    const previousActionText = prevRow
+    // Stage 240 — the END frame never carries the START frame as a continuity still (that would re-frame the start
+    // image); it renders independently. Non-end boards keep the Stage 144 continuity behaviour unchanged.
+    const continuityUrl = !isEndFrame && prevRow ? (prevRow.imageUrl as string) : null;
+    const previousActionText = !isEndFrame && prevRow
       ? (readBoardDirection(prevRow.directionJson)?.actionEnglish || prevRow.motionEn || prevRow.actionOrDialogue || "").trim()
       : "";
 
@@ -522,7 +550,7 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
     // allows (best-effort; Seedream v5.0 Pro may honor `seed` loosely). Persisted for transparency in the UI.
     const frameSeed = boardFrameSeed(boardId);
 
-    const { prompt } = buildBoardFramePrompt({
+    const built = buildBoardFramePrompt({
       board: { index: board.index, actionOrDialogue: board.actionOrDialogue, motion: board.motionEn, directionJson: board.directionJson },
       characters: visibleLinks.length ? visibleLinks : links,
       coverage,
@@ -534,6 +562,12 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
       anchorRefIndex: composed.anchorRefIndex,
       ...(previousActionText ? { continuity: { previousActionText, continuityRefIndex: composed.continuityRefIndex } } : {}),
     });
+    // Stage 240 — the END frame is the scene's CLOSING shot and MUST be a deliberate camera change from the opening
+    // frame: a different shot size AND a different camera position (angle, height, distance). This directive is
+    // appended in the worker (the prompt builder is never modified) and only for the end frame.
+    const prompt = isEndFrame
+      ? `${built.prompt}\nEND-FRAME CAMERA CHANGE: this is the scene's CLOSING frame and MUST use a DIFFERENT camera setup from the scene's opening frame — a different shot size and a clearly different camera position (angle, height and distance from the subject), for example moving from a wider/straight-on opening to a tighter reverse, over-the-shoulder or opposite-side vantage. Do NOT reproduce the opening frame's framing or camera angle; keep the same location, characters and wardrobe.`
+      : built.prompt;
 
     await updateJob(jobId, { progress: 45, message: `Board ${board.index + 1}: rendering frame...` });
     const remote = await generateImage(
