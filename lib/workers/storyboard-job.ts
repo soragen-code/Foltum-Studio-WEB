@@ -126,6 +126,11 @@ export type CastInFrame = {
   motion: string;
   durationSec: number;
   dialogue: SpokenLine[];
+  // Localization — a natural Russian translation of `startFrame`, produced once here (see the batched
+  // translateStartFramesRu call) and stored inside this JSON. NO DB column. UI display text ONLY; the
+  // English `startFrame`/`actionOrDialogue` is left untouched so generation prompts stay English.
+  // Optional: absent when the (best-effort) translation is skipped or fails.
+  startFrameRu?: string;
 };
 
 /** Build a deterministic BoardCoverage from an explicit in-frame name list (cast order), for the frame prompt. */
@@ -134,6 +139,34 @@ export function coverageFromNames(inFrame: string[], fullCast: string[]): BoardC
   const vis = visible.length ? visible : fullCast;
   const shotSize: ShotSize = vis.length <= 1 ? "MEDIUM" : vis.length === 2 ? "TWO-SHOT" : "WIDE ESTABLISHING";
   return { shotSize, visible: vis, offScreen: fullCast.filter((c) => !vis.includes(c)), focus: "" };
+}
+
+/**
+ * Localization — batch-translate every board's English `startFrame` sentence into natural Russian for UI
+ * DISPLAY only (this is NOT a generation prompt, so translating it is allowed). Returns an array aligned 1:1
+ * with `texts`, or null when the result is unavailable/untrustworthy (LLM error, wrong count, or a blank
+ * entry) so the caller can safely skip `startFrameRu` and let the UI fall back to the English text. One
+ * batched call for the whole episode. Never throws.
+ */
+async function translateStartFramesRu(texts: string[]): Promise<string[] | null> {
+  if (texts.length === 0) return [];
+  try {
+    const res = await chatJSON<{ translations?: unknown }>(
+      "You are a professional Russian localizer for a filmmaking app. Translate each English cinematic frame " +
+        "description into natural, fluent Russian. Preserve the meaning and tone; do NOT add, merge, or drop " +
+        "entries. Keep proper names as they are. Return STRICT JSON of the shape " +
+        '{"translations": string[]} with EXACTLY one Russian string per input, in the same order.',
+      JSON.stringify({ frames: texts }),
+      { maxTokens: 4000, temperature: 0 },
+    );
+    const arr = (res as { translations?: unknown } | null)?.translations;
+    if (!Array.isArray(arr) || arr.length !== texts.length) return null;
+    const out = arr.map((v) => (typeof v === "string" ? v.trim() : ""));
+    if (out.some((s) => !s)) return null;
+    return out;
+  } catch {
+    return null;
+  }
 }
 
 /* ───────────── 1) storyboard_boards — per planned Scene → EXACTLY 1 board (single keyframe) ─────────────
@@ -321,6 +354,23 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
       });
     }
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
+
+    // Localization (best-effort) — translate all English startFrame sentences into Russian in ONE batched call
+    // and store each translation inside its board's castInFrame JSON as `startFrameRu` (no DB column). This is
+    // UI display text only; the English startFrame/actionOrDialogue is left untouched for generation. On any
+    // failure or count mismatch the field is simply left undefined and the UI falls back to the English text —
+    // board creation is never blocked.
+    try {
+      const ru = await translateStartFramesRu(
+        rows.map((r) => ((r.castInFrame as { startFrame?: string })?.startFrame ?? "")),
+      );
+      if (ru) {
+        for (let i = 0; i < rows.length; i++) {
+          const cif = rows[i].castInFrame as { startFrameRu?: string };
+          if (cif && ru[i]) cif.startFrameRu = ru[i];
+        }
+      }
+    } catch { /* leave startFrameRu undefined — the UI falls back to the English sentence */ }
 
     await updateJob(jobId, { progress: 90, message: "Saving boards..." });
     // Validate/build BEFORE replacing old boards; a dialogue conflict throws above and leaves them intact.

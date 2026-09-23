@@ -16,6 +16,7 @@ import { Loader2, Film, Wand2, ImageIcon, Play, ChevronDown, ChevronRight, Copy,
 import { JobProgressBar, SmoothProgress, useJobPolling } from '../../_components/use-job-polling'
 import { boardFramePrecondition } from '@/lib/board-anchor'
 import { DownloadVideoButton } from '@/app/project/[id]/_components/download-video-button'
+import { useTranslation } from '@/lib/i18n/context'
 
 /** A reference image passed to a model, as persisted by the worker (label is already Russian). */
 type BoardRef = { index: number; url: string; kind: string; label: string }
@@ -29,6 +30,10 @@ type CastInFrame = {
   endFrame?: string
   motion?: string
   durationSec?: number
+  // Localization — a natural Russian translation of `startFrame`, produced once by the worker and stored
+  // inside this JSON (NO DB column). UI display text only; the English `startFrame`/`actionOrDialogue`
+  // stays untouched for generation. Absent on legacy boards → the UI falls back to the English text.
+  startFrameRu?: string
 }
 
 type Board = {
@@ -232,9 +237,12 @@ function CastLine({ label, names }: { label: string; names?: string[] }) {
  * page reload (board.frameJobId / board.animateJobId).
  */
 function BoardCard({ board, onChanged, frameLocked = false }: { board: Board; onChanged: () => void; frameLocked?: boolean }) {
+  const { t, locale } = useTranslation()
   const [err, setErr] = useState<string | null>(null)
   const [animErr, setAnimErr] = useState<string | null>(null)
   const [showDetails, setShowDetails] = useState(false)
+  // Deliverable 2 — the frame's description sentence is hidden by default behind a toggle (like «Детали кадра»).
+  const [showDesc, setShowDesc] = useState(false)
   const openImage = useLightbox()
 
   const framePoll = useJobPolling({
@@ -293,24 +301,27 @@ function BoardCard({ board, onChanged, frameLocked = false }: { board: Board; on
   const frameReady = validUrl(board.imageUrl)
   const frameBusy = framePoll.isActive
   const animateBusy = animatePoll.isActive
-  const frameLabel = frameReady ? 'Перегенерировать кадр' : 'Сгенерировать кадр'
+  const frameLabel = frameReady ? t('board.regenerateFrame') : t('board.generateFrame')
   const frameDisabled = frameBusy || (!frameReady && frameLocked)
-  const frameTitle = !frameReady && frameLocked ? 'Сначала сгенерируйте предыдущий кадр' : undefined
-  const animateLabel = validUrl(board.videoUrl) ? 'Переанимировать' : 'Оживить'
+  const frameTitle = !frameReady && frameLocked ? t('board.frameLocked') : undefined
+  const animateLabel = validUrl(board.videoUrl) ? t('board.reanimate') : t('board.animate')
   const animateDisabled = !frameReady || animateBusy
-  const animateTitle = !frameReady ? 'Сначала сгенерируйте кадр' : 'Оживить кадр в клип 4–6с'
+  const animateTitle = !frameReady ? t('board.needFrameFirst') : t('board.animateHint')
+  // Deliverable 2 — locale-aware description: Russian uses the worker's translation with a fallback to the
+  // English sentence (legacy boards have no startFrameRu); English always shows the English sentence.
+  const frameDescription = locale === 'ru' ? (board.castInFrame?.startFrameRu ?? board.actionOrDialogue) : board.actionOrDialogue
 
   return (
     <div className="rounded-xl border border-border bg-card p-3" data-testid={`board-card-${board.index}`}>
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-xs font-semibold text-muted-foreground">Кадр {board.index + 1}{board.durationSec ? ` · ${board.durationSec}s` : ''}</span>
+        <span className="text-xs font-semibold text-muted-foreground">{t('board.frame', { n: board.index + 1 })}{board.durationSec ? ` · ${board.durationSec}s` : ''}</span>
         <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{board.status}</span>
       </div>
       {plan && (
         <div className="mb-2 space-y-0.5">
-          <CastLine label="В кадре" names={plan.onScreen} />
-          <CastLine label="Входят" names={plan.entering} />
-          <CastLine label="Выходят" names={plan.exiting} />
+          <CastLine label={t('board.inFrame')} names={plan.onScreen} />
+          <CastLine label={t('board.entering')} names={plan.entering} />
+          <CastLine label={t('board.exiting')} names={plan.exiting} />
         </div>
       )}
       <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -369,7 +380,24 @@ function BoardCard({ board, onChanged, frameLocked = false }: { board: Board; on
           <div className="flex h-full w-full items-center justify-center text-muted-foreground"><ImageIcon className="h-8 w-8 opacity-40" /></div>
         )}
       </div>
-      <p className="mt-2 line-clamp-4 text-sm">{board.actionOrDialogue}</p>
+      {/* Deliverable 2 — the frame description sentence is hidden by default behind a toggle (same pattern
+          as «Детали кадра»). Shown locale-aware: Russian uses the worker's translation (startFrameRu) with a
+          fallback to the English sentence for legacy boards; English shows the English sentence. */}
+      {frameDescription && (
+        <div className="mt-2">
+          <button
+            type="button"
+            onClick={() => setShowDesc((v) => !v)}
+            className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+            data-testid={`board-desc-toggle-${board.index}`}
+          >
+            {showDesc ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />} {t('board.frameDescription')}
+          </button>
+          {showDesc && (
+            <p className="mt-1 line-clamp-4 text-sm" data-testid={`board-desc-${board.index}`}>{frameDescription}</p>
+          )}
+        </div>
+      )}
       {/* Frame generation keeps the raw job progress bar (resumes after a reload via board.frameJobId).
           Single-frame model: this board owns both its «Сгенерировать кадр» and «Оживить» controls, and
           the animate progress bar (resumes via board.animateJobId) is rendered above with the buttons. */}
@@ -393,7 +421,7 @@ function BoardCard({ board, onChanged, frameLocked = false }: { board: Board; on
               className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground"
               data-testid={`board-details-toggle-${board.index}`}
             >
-              {showDetails ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />} Детали кадра
+              {showDetails ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />} {t('board.details')}
             </button>
             {showDetails && (
               <div className="mt-2 space-y-3" data-testid={`board-details-${board.index}`}>
@@ -419,6 +447,7 @@ function BoardCard({ board, onChanged, frameLocked = false }: { board: Board; on
 }
 
 export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { projectId: string; episodeId: string; initialVideoUrl?: string | null }) {
+  const { t } = useTranslation()
   const [boards, setBoards] = useState<Board[]>([])
   const [videoUrl, setVideoUrl] = useState<string | null>(initialVideoUrl ?? null)
   const [loading, setLoading] = useState(true)
@@ -450,12 +479,12 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
   }, [episodeId])
 
   const splitPoll = useJobPolling({
-    onFinish: (res) => { setSplitting(false); if (res.job.status === 'failed') setError(res.job.error ?? 'Не удалось разбить историю на кадры'); refresh() },
+    onFinish: (res) => { setSplitting(false); if (res.job.status === 'failed') setError(res.job.error ?? t('storyboard.errBuild')); refresh() },
   })
   const stitchPoll = useJobPolling({
     onFinish: (res) => {
       setStitching(false)
-      if (res.job.status === 'failed') setError(res.job.error ?? 'Не удалось собрать ролик')
+      if (res.job.status === 'failed') setError(res.job.error ?? t('storyboard.errAssemble'))
       else if (validUrl(res.job.result?.videoUrl)) setVideoUrl(res.job.result.videoUrl)
       refresh()
     },
@@ -481,7 +510,7 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
       if (!res.ok) {
         setSplitting(false)
         if (data?.assets) setAssets(data.assets) // e.g. 402: show what still needs generating
-        setError(data?.error ?? 'Не удалось запустить разбиение')
+        setError(data?.error ?? t('storyboard.errBuildStart'))
         return
       }
       // Stage 174 — asset gate engaged: refs are being generated, the split is deferred. The advance-chains
@@ -495,19 +524,19 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
       }
       if (data.jobId) splitPoll.start(data.jobId)
       else { setSplitting(false); refresh() }
-    } catch (e: any) { setSplitting(false); setError(e?.message ?? 'Ошибка запроса') }
-  }, [projectId, episodeId, splitPoll, refresh])
+    } catch (e: any) { setSplitting(false); setError(e?.message ?? t('storyboard.errRequest')) }
+  }, [projectId, episodeId, splitPoll, refresh, t])
 
   const startAssemble = useCallback(async () => {
     setStitching(true); setError(null)
     try {
       const res = await fetch('/api/ai/storyboard/assemble', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ episodeId }) })
       const data = await res.json()
-      if (!res.ok) { setStitching(false); setError(data?.error ?? 'Не удалось запустить сборку'); return }
+      if (!res.ok) { setStitching(false); setError(data?.error ?? t('storyboard.errAssembleStart')); return }
       if (data.jobId) stitchPoll.start(data.jobId)
       else setStitching(false)
-    } catch (e: any) { setStitching(false); setError(e?.message ?? 'Ошибка запроса') }
-  }, [episodeId, stitchPoll])
+    } catch (e: any) { setStitching(false); setError(e?.message ?? t('storyboard.errRequest')) }
+  }, [episodeId, stitchPoll, t])
 
   // Single-frame model: one planned scene = one board = one keyframe still, animated on its own into a 4–6s clip.
   // Any leftover two-frame "end" boards (from episodes built before the revert) are excluded from the assemble gate.
@@ -528,13 +557,13 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
       {lightbox && <Lightbox url={lightbox} onClose={() => setLightbox(null)} />}
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
         <button onClick={startSplit} disabled={splitting || gathering} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="storyboard-generate-boards">
-          {splitting || gathering ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {gathering ? 'Сбор ассетов…' : boards.length ? 'Перестроить кадры' : 'Разбить историю на кадры'}
+          {splitting || gathering ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {gathering ? t('storyboard.gatheringAssets') : boards.length ? t('storyboard.rebuildBoards') : t('storyboard.buildBoards')}
         </button>
-        <button onClick={startAssemble} disabled={!allAnimated || stitching} title={allAnimated ? 'Склеить клипы кадров в один ролик' : 'Доступно, когда все кадры оживлены'} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="storyboard-assemble">
-          {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Собрать ролик (~90с)
+        <button onClick={startAssemble} disabled={!allAnimated || stitching} title={allAnimated ? t('storyboard.assembleReady') : t('storyboard.assembleLocked')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="storyboard-assemble">
+          {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} {t('storyboard.assemble')}
         </button>
         <span className="text-xs text-muted-foreground" data-testid="storyboard-status">
-          {`${boards.length} кадров · ${framedCount} с кадром · ${animatedCount} оживлено`}{videoUrl ? ' · ролик собран' : ''}
+          {t('storyboard.status', { boards: boards.length, framed: framedCount, animated: animatedCount })}{videoUrl ? t('storyboard.statusAssembled') : ''}
         </span>
         {splitting && splitPoll.job && <div className="w-full"><JobProgressBar job={splitPoll.job} expectedTotalSec={40} /></div>}
         {stitching && stitchPoll.job && <div className="w-full"><JobProgressBar job={stitchPoll.job} expectedTotalSec={180} /></div>}
@@ -547,21 +576,21 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
       {assets && (assets.characters.total + assets.locations.total + assets.props.total > 0) && (
         <div className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="storyboard-assets">
           <div className="mb-3 flex flex-wrap items-center gap-2">
-            <h2 className="inline-flex items-center gap-1 font-semibold"><ImageIcon className="h-4 w-4" /> Ассеты</h2>
+            <h2 className="inline-flex items-center gap-1 font-semibold"><ImageIcon className="h-4 w-4" /> {t('storyboard.assets')}</h2>
             {gathering && (
               <span className="inline-flex items-center gap-1 text-xs text-muted-foreground" data-testid="storyboard-assets-gathering">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" /> Ассеты генерируются…
+                <Loader2 className="h-3.5 w-3.5 animate-spin" /> {t('storyboard.assetsGenerating')}
               </span>
             )}
           </div>
           <div className="grid grid-cols-3 gap-3">
-            <AssetKindStat title="Персонажи" k={assets.characters} />
-            <AssetKindStat title="Локации" k={assets.locations} />
-            <AssetKindStat title="Предметы" k={assets.props} />
+            <AssetKindStat title={t('storyboard.assetsCharacters')} k={assets.characters} />
+            <AssetKindStat title={t('storyboard.assetsLocations')} k={assets.locations} />
+            <AssetKindStat title={t('storyboard.assetsProps')} k={assets.props} />
           </div>
           {gathering && (
             <p className="mt-3 text-xs text-muted-foreground">
-              Недостающие референсы генерируются автоматически. Разбивка истории на кадры начнётся сама, как только все персонажи и локации будут готовы — это окно можно закрыть.
+              {t('storyboard.assetsHint')}
             </p>
           )}
         </div>
@@ -569,20 +598,20 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
 
       {validUrl(videoUrl) && (
         <div className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="storyboard-video">
-          <h2 className="mb-2 inline-flex items-center gap-1 font-semibold"><Film className="h-4 w-4" /> Собранный ролик</h2>
+          <h2 className="mb-2 inline-flex items-center gap-1 font-semibold"><Film className="h-4 w-4" /> {t('storyboard.assembledVideo')}</h2>
           {/* Vertical 9:16 player: fixed portrait aspect, object-contain (never stretched/cropped or
               auto-fullscreen), height bounded by the viewport, centered with black letterbox on the sides. */}
           <div className="mx-auto flex aspect-[9/16] max-h-[80vh] w-full max-w-sm items-center justify-center overflow-hidden rounded-lg bg-black">
             <video src={videoUrl} controls playsInline className="h-full w-full object-contain" />
           </div>
-          <div className="mt-2"><DownloadVideoButton videoUrl={videoUrl} fileStem="storyboard" label="Скачать mp4" /></div>
+          <div className="mt-2"><DownloadVideoButton videoUrl={videoUrl} fileStem="storyboard" label={t('storyboard.downloadMp4')} /></div>
         </div>
       )}
 
       {loading ? (
-        <p className="mt-6 text-sm text-muted-foreground"><Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> Загрузка кадров…</p>
+        <p className="mt-6 text-sm text-muted-foreground"><Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> {t('storyboard.loadingBoards')}</p>
       ) : boards.length === 0 ? (
-        <p className="mt-6 text-sm text-muted-foreground">Кадров пока нет. Нажмите «Разбить историю на кадры», чтобы сгенерировать раскадровку из готовой истории.</p>
+        <p className="mt-6 text-sm text-muted-foreground">{t('storyboard.noBoards')}</p>
       ) : (
         // Single-frame model: a flat grid of boards. Each board is one keyframe still with its own
         // «Сгенерировать кадр» + «Оживить» controls. Frames render strictly in index order (a board is

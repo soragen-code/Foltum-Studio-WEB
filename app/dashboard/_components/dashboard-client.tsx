@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { Header } from '@/components/header'
 import { Film, Plus, Clapperboard, Clock, ChevronRight, Sparkles, Zap, Crown, Trash2, Loader2 } from 'lucide-react'
 import { motion } from 'framer-motion'
+import { useTranslation } from '@/lib/i18n/context'
 
 interface Project {
   id: string
@@ -24,14 +25,8 @@ const tierConfig: Record<string, { icon: React.ElementType; color: string; label
   maximum: { icon: Crown, color: 'text-red-400', label: 'Maximum' },
 }
 
-const stageLabels: Record<string, string> = {
-  synopsis: 'Synopsis',
-  characters: 'Characters',
-  structure: 'Structure',
-  scenes: 'Scenes & Video',
-}
-
 export function DashboardClient() {
+  const { t, locale } = useTranslation()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
   // Stage 46A — delete a project from the list: two-step confirm inside the card, then DELETE /api/projects/[id].
@@ -44,11 +39,11 @@ export function DashboardClient() {
     try {
       const res = await fetch(`/api/projects/${id}`, { method: 'DELETE' })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(d?.error || "Couldn't delete the project")
+      if (!res.ok) throw new Error(d?.error || t('dashboard.deleteFailed'))
       setProjects((list) => list.filter((p) => p.id !== id))
       setConfirmId(null)
     } catch (e: any) {
-      setDeleteError(e?.message || "Couldn't delete the project")
+      setDeleteError(e?.message || t('dashboard.deleteFailed'))
     } finally {
       setDeletingId(null)
     }
@@ -79,12 +74,12 @@ export function DashboardClient() {
         if (res.ok) {
           const d = await res.json()
           if (d.status === 'approved') {
-            toast.success(`Payment successful! +${d.credits} credits added.`)
+            toast.success(t('dashboard.paySuccess', { credits: d.credits }))
             window.history.replaceState({}, '', '/dashboard')
             return
           }
           if (d.status === 'declined') {
-            toast.error('Payment was declined.')
+            toast.error(t('dashboard.payDeclined'))
             window.history.replaceState({}, '', '/dashboard')
             return
           }
@@ -103,10 +98,10 @@ export function DashboardClient() {
         <div className="mb-8 flex items-center justify-between">
           <div>
             <h1 className="font-display text-3xl font-bold tracking-tight">
-              Your <span className="text-primary">Projects</span>
+              <span className="text-primary">{t('dashboard.yourProjects')}</span>
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Create AI-powered films and series from a single prompt
+              {t('dashboard.subtitle')}
             </p>
           </div>
           <Link
@@ -114,7 +109,7 @@ export function DashboardClient() {
             className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
           >
             <Plus className="h-4 w-4" />
-            New Project
+            {t('dashboard.newProject')}
           </Link>
         </div>
 
@@ -131,16 +126,16 @@ export function DashboardClient() {
             className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-20"
           >
             <Clapperboard className="mb-4 h-16 w-16 text-muted-foreground/40" />
-            <h2 className="text-lg font-semibold">No projects yet</h2>
+            <h2 className="text-lg font-semibold">{t('dashboard.emptyTitle')}</h2>
             <p className="mb-6 mt-1 text-sm text-muted-foreground">
-              Start your first AI film or series
+              {t('dashboard.emptyHint')}
             </p>
             <Link
               href="/project/new"
               className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
             >
               <Plus className="h-4 w-4" />
-              Create Project
+              {t('dashboard.createProject')}
             </Link>
           </motion.div>
         ) : (
@@ -165,7 +160,7 @@ export function DashboardClient() {
                       {project?.coverUrl ? (
                         <img
                           src={project.coverUrl}
-                          alt={project?.name ?? 'Untitled'}
+                          alt={project?.name ?? t('dashboard.untitled')}
                           loading="lazy"
                           className="h-full w-full object-cover"
                         />
@@ -179,11 +174,11 @@ export function DashboardClient() {
                       <div className="flex items-center gap-2">
                         <Film className="h-5 w-5 text-primary" />
                         <h3 className="font-display font-semibold tracking-tight">
-                          {project?.name ?? 'Untitled'}
+                          {project?.name ?? t('dashboard.untitled')}
                         </h3>
                         {project?.isTest && (
                           <span data-testid="project-test-badge" className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-400">
-                            Test
+                            {t('dashboard.testBadge')}
                           </span>
                         )}
                       </div>
@@ -195,18 +190,18 @@ export function DashboardClient() {
                         {tier?.label ?? 'Minimum'}
                       </span>
                       <span className="rounded bg-muted px-2 py-0.5">
-                        {stageLabels[project?.stage] ?? project?.stage ?? 'Synopsis'}
+                        {project?.stage ? t('dashboard.stage.' + project.stage) : t('dashboard.stage.synopsis')}
                       </span>
                     </div>
                     <div className="mt-3 flex items-center gap-1 text-xs text-muted-foreground">
                       <Clock className="h-3 w-3" />
-                      Created {project?.createdAt ? new Date(project.createdAt).toLocaleDateString('en-US', { timeZone: 'UTC' }) : ''}
+                      {t('dashboard.created', { date: project?.createdAt ? new Date(project.createdAt).toLocaleDateString(locale === 'ru' ? 'ru-RU' : 'en-US', { timeZone: 'UTC' }) : '' })}
                     </div>
                   </Link>
                   <div className="flex flex-wrap items-center justify-end gap-2 px-5 pb-4">
                     {confirmId === project?.id ? (
                       <>
-                        <span className="mr-auto text-xs text-destructive" data-testid="project-delete-confirm-text">Delete the project permanently?</span>
+                        <span className="mr-auto text-xs text-destructive" data-testid="project-delete-confirm-text">{t('dashboard.confirmDeletePermanent')}</span>
                         <button
                           type="button"
                           onClick={() => deleteProject(project.id)}
@@ -214,9 +209,9 @@ export function DashboardClient() {
                           className="inline-flex items-center gap-1 rounded-lg bg-destructive px-3 py-1.5 text-xs font-semibold text-destructive-foreground disabled:opacity-50"
                           data-testid="project-delete-confirm"
                         >
-                          {deletingId === project.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />} Yes, delete
+                          {deletingId === project.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />} {t('dashboard.yesDelete')}
                         </button>
-                        <button type="button" onClick={() => { setConfirmId(null); setDeleteError(null) }} disabled={deletingId === project.id} className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50" data-testid="project-delete-cancel">Cancel</button>
+                        <button type="button" onClick={() => { setConfirmId(null); setDeleteError(null) }} disabled={deletingId === project.id} className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-muted disabled:opacity-50" data-testid="project-delete-cancel">{t('common.cancel')}</button>
                       </>
                     ) : (
                       <button
@@ -225,7 +220,7 @@ export function DashboardClient() {
                         className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:border-destructive/50 hover:text-destructive"
                         data-testid="project-delete"
                       >
-                        <Trash2 className="h-3 w-3" /> Delete
+                        <Trash2 className="h-3 w-3" /> {t('dashboard.delete')}
                       </button>
                     )}
                     {deleteError && confirmId === project?.id && <p className="w-full text-right text-xs text-destructive" data-testid="project-delete-error">{deleteError}</p>}

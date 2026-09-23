@@ -589,3 +589,9 @@ ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "boardGate" TEXT;
 ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "sceneId" TEXT;
 ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "boardRole" TEXT;
 ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "castInFrame" JSONB;
+
+
+
+-- Site localization: per-user UI language ("ru" | "en"). Additive, non-null with a default so existing
+-- rows backfill to Russian (the current UI language). Never renames/drops.
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "locale" TEXT NOT NULL DEFAULT 'ru';

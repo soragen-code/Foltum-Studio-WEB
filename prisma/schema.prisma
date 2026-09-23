@@ -16,6 +16,7 @@ model User {
   image         String?
   password      String?
   credits       Int       @default(0)
+  locale        String    @default("ru")
   subscriptionTier String? @default("free")
   subscriptionExpiresAt DateTime?
   createdAt     DateTime  @default(now())

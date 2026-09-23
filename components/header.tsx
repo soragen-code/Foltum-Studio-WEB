@@ -2,15 +2,18 @@
 
 import Link from 'next/link'
 import { useSession, signOut } from 'next-auth/react'
-import { Coins, Film, LogOut, User, CreditCard, Crown } from 'lucide-react'
+import { Coins, Film, LogOut, User, CreditCard, Crown, Languages, Check } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { hasActiveSubscription } from '@/lib/entitlements'
+import { useTranslation } from '@/lib/i18n/context'
+import { LOCALES, LOCALE_LABELS } from '@/lib/i18n/dictionary'
 
 // Stage 76: optional project context — when `projectName` is set, the sticky header shows
 // "Foltum Studio / <project name>" (the name links back to the project's main page).
 export function Header({ projectName = null, projectId = null }: { projectName?: string | null; projectId?: string | null } = {}) {
   const { data: session, status } = useSession()
+  const { t, locale, setLocale } = useTranslation()
   const [credits, setCredits] = useState(0)
   const [menuOpen, setMenuOpen] = useState(false)
 
@@ -51,7 +54,7 @@ export function Header({ projectName = null, projectId = null }: { projectName?:
             {activeSub ? (
               <Link
                 href="/pricing"
-                title={`Активная подписка: ${tierLabel}`}
+                title={t('nav.activeSub', { tier: tierLabel })}
                 className="flex items-center gap-1.5 rounded-full bg-primary/15 px-3 py-1.5 text-sm font-semibold text-primary transition hover:bg-primary/25"
                 data-testid="header-plan-badge"
               >
@@ -64,7 +67,7 @@ export function Header({ projectName = null, projectId = null }: { projectName?:
                 className="hidden items-center gap-1.5 rounded-full border border-border px-3 py-1.5 text-sm font-medium text-muted-foreground transition hover:text-foreground sm:flex"
                 data-testid="header-subscribe-link"
               >
-                Оформить подписку
+                {t('nav.subscribe')}
               </Link>
             )}
             <Link
@@ -97,13 +100,30 @@ export function Header({ projectName = null, projectId = null }: { projectName?:
                     onClick={() => setMenuOpen(false)}
                     className="flex items-center gap-2 rounded-md px-3 py-2 text-sm hover:bg-muted"
                   >
-                    <CreditCard className="h-4 w-4" /> Plans & Credits
+                    <CreditCard className="h-4 w-4" /> {t('nav.plansCredits')}
                   </Link>
+                  {/* Language switcher — persists to User.locale via PATCH /api/user/locale and switches the UI instantly. */}
+                  <div className="border-t border-border pt-1 mt-1">
+                    <div className="flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground">
+                      <Languages className="h-3.5 w-3.5" /> {t('common.language')}
+                    </div>
+                    {LOCALES.map((lc) => (
+                      <button
+                        key={lc}
+                        onClick={() => { setLocale(lc) }}
+                        className="flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-sm hover:bg-muted"
+                        data-testid={`header-locale-${lc}`}
+                      >
+                        <span>{LOCALE_LABELS[lc]}</span>
+                        {locale === lc && <Check className="h-4 w-4 text-primary" />}
+                      </button>
+                    ))}
+                  </div>
                   <button
                     onClick={() => signOut({ redirectTo: '/login' })}
-                    className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-destructive hover:bg-muted"
+                    className="mt-1 flex w-full items-center gap-2 rounded-md border-t border-border px-3 py-2 text-sm text-destructive hover:bg-muted"
                   >
-                    <LogOut className="h-4 w-4" /> Sign Out
+                    <LogOut className="h-4 w-4" /> {t('nav.signOut')}
                   </button>
                 </motion.div>
               )}
@@ -115,13 +135,13 @@ export function Header({ projectName = null, projectId = null }: { projectName?:
               href="/login"
               className="rounded-lg px-4 py-1.5 text-sm font-medium transition hover:bg-muted"
             >
-              Sign In
+              {t('nav.signIn')}
             </Link>
             <Link
               href="/signup"
               className="rounded-lg bg-primary px-4 py-1.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
             >
-              Get Started
+              {t('nav.getStarted')}
             </Link>
           </div>
         )}

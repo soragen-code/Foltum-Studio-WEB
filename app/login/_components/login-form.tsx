@@ -6,8 +6,10 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Film, Mail, Lock, Loader2 } from 'lucide-react'
 import { motion } from 'framer-motion'
+import { useTranslation } from '@/lib/i18n/context'
 
 export function LoginForm() {
+  const { t } = useTranslation()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
@@ -25,12 +27,12 @@ export function LoginForm() {
         redirect: false,
       })
       if (result?.error) {
-        setError('Invalid email or password')
+        setError(t('auth.invalidCredentials'))
       } else {
         router.replace('/dashboard')
       }
     } catch {
-      setError('Something went wrong')
+      setError(t('auth.somethingWrong'))
     } finally {
       setLoading(false)
     }
@@ -53,7 +55,7 @@ export function LoginForm() {
             </span>
           </Link>
           <p className="mt-2 text-sm text-muted-foreground">
-            Sign in to create AI-powered films
+            {t('auth.signInSubtitle')}
           </p>
         </div>
 
@@ -67,7 +69,7 @@ export function LoginForm() {
             <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
               type="email"
-              placeholder="Email"
+              placeholder={t('auth.email')}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
@@ -78,7 +80,7 @@ export function LoginForm() {
             <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
               type="password"
-              placeholder="Password"
+              placeholder={t('auth.password')}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
@@ -91,14 +93,14 @@ export function LoginForm() {
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
           >
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Sign In
+            {t('auth.signInBtn')}
           </button>
         </form>
 
         <p className="mt-6 text-center text-sm text-muted-foreground">
-          Don&apos;t have an account?{' '}
+          {t('auth.noAccount')}{' '}
           <Link href="/signup" className="font-medium text-primary hover:underline">
-            Sign Up
+            {t('auth.signUpBtn')}
           </Link>
         </p>
       </motion.div>

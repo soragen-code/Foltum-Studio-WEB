@@ -6,8 +6,10 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { Film, Mail, Lock, User as UserIcon, Loader2 } from 'lucide-react'
 import { motion } from 'framer-motion'
+import { useTranslation } from '@/lib/i18n/context'
 
 export function SignupForm() {
+  const { t } = useTranslation()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -27,7 +29,7 @@ export function SignupForm() {
       })
       const data = await res.json()
       if (!res.ok) {
-        setError(data?.error ?? 'Signup failed')
+        setError(data?.error ?? t('auth.signupFailed'))
         setLoading(false)
         return
       }
@@ -37,12 +39,12 @@ export function SignupForm() {
         redirect: false,
       })
       if (result?.error) {
-        setError('Account created but sign-in failed. Please log in.')
+        setError(t('auth.signInAfterFail'))
       } else {
         router.replace('/dashboard')
       }
     } catch {
-      setError('Something went wrong')
+      setError(t('auth.somethingWrong'))
     } finally {
       setLoading(false)
     }
@@ -65,7 +67,7 @@ export function SignupForm() {
             </span>
           </Link>
           <p className="mt-2 text-sm text-muted-foreground">
-            Create your account to start making films
+            {t('auth.signUpSubtitle')}
           </p>
         </div>
 
@@ -79,7 +81,7 @@ export function SignupForm() {
             <UserIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
               type="text"
-              placeholder="Full Name"
+              placeholder={t('auth.fullName')}
               value={name}
               onChange={(e) => setName(e.target.value)}
               required
@@ -90,7 +92,7 @@ export function SignupForm() {
             <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
               type="email"
-              placeholder="Email"
+              placeholder={t('auth.email')}
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
@@ -101,7 +103,7 @@ export function SignupForm() {
             <Lock className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <input
               type="password"
-              placeholder="Password (min 6 characters)"
+              placeholder={t('auth.passwordMin')}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
@@ -115,14 +117,14 @@ export function SignupForm() {
             className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
           >
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            Create Account
+            {t('auth.createAccount')}
           </button>
         </form>
 
         <p className="mt-6 text-center text-sm text-muted-foreground">
-          Already have an account?{' '}
+          {t('auth.haveAccount')}{' '}
           <Link href="/login" className="font-medium text-primary hover:underline">
-            Sign In
+            {t('auth.signInBtn')}
           </Link>
         </p>
       </motion.div>

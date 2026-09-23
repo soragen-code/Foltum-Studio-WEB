@@ -59,6 +59,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
               subscriptionTier: true,
               subscriptionExpiresAt: true,
               credits: true,
+              locale: true,
             },
           })
           if (dbUser) {
@@ -67,6 +68,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
               ? dbUser.subscriptionExpiresAt.toISOString()
               : null
             ;(token as any).credits = dbUser.credits ?? 0
+            ;(token as any).locale = dbUser.locale ?? 'ru'
           }
         } catch {
           // Never break auth if the read fails — the session keeps its previous values.
@@ -81,6 +83,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         u.subscriptionTier = (token as any).subscriptionTier ?? null
         u.subscriptionExpiresAt = (token as any).subscriptionExpiresAt ?? null
         u.credits = (token as any).credits ?? 0
+        u.locale = (token as any).locale ?? 'ru'
       }
       return session
     },
