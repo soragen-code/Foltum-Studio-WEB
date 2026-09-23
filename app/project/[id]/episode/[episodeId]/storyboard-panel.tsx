@@ -12,7 +12,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
-import { Loader2, Film, Wand2, ImageIcon, Play, ChevronDown, ChevronRight, ChevronLeft, Copy, Check, X, Maximize2 } from 'lucide-react'
+import { Loader2, Film, Wand2, ImageIcon, Play, ChevronDown, ChevronRight, ChevronLeft, Copy, Check, X, Maximize2, RotateCw } from 'lucide-react'
 import { JobProgressBar, SmoothProgress, useJobPolling } from '../../_components/use-job-polling'
 import { boardFramePrecondition } from '@/lib/board-anchor'
 import { DownloadVideoButton } from '@/app/project/[id]/_components/download-video-button'
@@ -141,15 +141,41 @@ function CopyButton({ text }: { text: string }) {
   )
 }
 
-/** One labelled prompt block: Russian heading + copy button + the verbatim (English) prompt text. */
-function PromptBlock({ title, text }: { title: string; text: string }) {
+/**
+ * One labelled prompt block: Russian heading + copy button + the verbatim (English) prompt text.
+ *
+ * When `onRegenerate` is provided, a small "rebuild" icon button appears next to the copy button.
+ * It re-derives the (English) prompt text from the current builder rules and returns the fresh
+ * text, which is shown in place. This is a text-only rebuild — it never renders a frame or clip
+ * and never clears any rendered image/video. Local state keeps the expanded details from collapsing.
+ */
+function PromptBlock({ title, text, onRegenerate }: { title: string; text: string; onRegenerate?: () => Promise<string> }) {
+  const [txt, setTxt] = useState(text)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => { setTxt(text) }, [text])
   return (
     <div>
       <div className="mb-1 flex items-center justify-between gap-2">
         <span className="text-[11px] font-semibold text-foreground">{title}</span>
-        <CopyButton text={text} />
+        <div className="flex items-center gap-1">
+          {onRegenerate && (
+            <button
+              type="button"
+              disabled={busy}
+              title="Пересобрать промпт по актуальным правилам"
+              onClick={async () => {
+                setBusy(true)
+                try { const next = await onRegenerate(); if (next) setTxt(next) } catch { /* keep current text on failure */ } finally { setBusy(false) }
+              }}
+              className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-foreground disabled:opacity-50"
+            >
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCw className="h-3 w-3" />} Пересобрать
+            </button>
+          )}
+          <CopyButton text={txt} />
+        </div>
       </div>
-      <p className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/50 p-2 text-[11px] leading-snug text-muted-foreground">{text}</p>
+      <p className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/50 p-2 text-[11px] leading-snug text-muted-foreground">{txt}</p>
     </div>
   )
 }
@@ -313,7 +339,12 @@ function BoardCard({ board, onChanged, registerFrameRun }: { board: Board; onCha
             </button>
             {showDetails && (
               <div className="mt-2 space-y-3" data-testid={`board-details-${board.index}`}>
-                {framePrompt && <PromptBlock title={validUrl(board.imageUrl) ? "Промпт кадра (image, англ.)" : "Промпт кадра — план (image, англ.)"} text={framePrompt} />}
+                {framePrompt && <PromptBlock title={validUrl(board.imageUrl) ? "Промпт кадра (image, англ.)" : "Промпт кадра — план (image, англ.)"} text={framePrompt} onRegenerate={async () => {
+                  const res = await fetch(`/api/ai/storyboard/${board.id}/prompt`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+                  if (!res.ok) throw new Error('prompt rebuild failed')
+                  const data = await res.json()
+                  return typeof data?.prompt === 'string' ? data.prompt : ''
+                }} />}
                 {animatePrompt && <PromptBlock title="Промпт оживления (i2v, англ.)" text={animatePrompt} />}
                 {frameRefs.length > 0 && <RefList title="Референсы кадра (переданы в image-модель)" refs={frameRefs} />}
                 {animateRefs.length > 0 && <RefList title="Референсы оживления (переданы в i2v)" refs={animateRefs} />}

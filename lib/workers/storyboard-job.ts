@@ -92,7 +92,7 @@ const SIBLING_SELECT = { id: true, index: true, imageUrl: true, status: true, di
  * Stage 143 — `refs` is ALIGNED with `links` (null when a character has no usable reference image) so the
  * board_image job can keep only the references of the characters that are actually IN FRAME.
  */
-async function loadEpisodeCharacters(episodeId: string): Promise<{ links: BoardCharacterLink[]; refs: (string | null)[] }> {
+export async function loadEpisodeCharacters(episodeId: string): Promise<{ links: BoardCharacterLink[]; refs: (string | null)[] }> {
   const rows = await prisma.episodeCharacter.findMany({
     where: { episodeId },
     include: { character: true },
@@ -128,7 +128,7 @@ export type CastInFrame = {
 };
 
 /** Build a deterministic BoardCoverage from an explicit in-frame name list (cast order), for the frame prompt. */
-function coverageFromNames(inFrame: string[], fullCast: string[]): BoardCoverage {
+export function coverageFromNames(inFrame: string[], fullCast: string[]): BoardCoverage {
   const visible = fullCast.filter((c) => inFrame.includes(c));
   const vis = visible.length ? visible : fullCast;
   const shotSize: ShotSize = vis.length <= 1 ? "MEDIUM" : vis.length === 2 ? "TWO-SHOT" : "WIDE ESTABLISHING";
