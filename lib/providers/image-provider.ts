@@ -2,6 +2,7 @@ import { GenerationAttempt, safeDiagnosticInput, safeProviderError, classifyProv
 import { VISUAL_STYLE_ID } from "@/lib/visual-style";
 import { WAVESPEED_BASE, getWaveSpeedKey, wavespeedErrorText } from "@/lib/wavespeed";
 import { ensureEnglishPrompt } from "@/lib/english-prompt";
+import { heartbeatJob } from "@/lib/jobs";
 
 /* ------------------------------------------------------------------ */
 /*  Reference-image generation — Seedream 5.0 Pro on WaveSpeed ONLY.    */
@@ -192,6 +193,11 @@ export async function generateImage(input: FluxInput, context: GenerateImageCont
         attempt.status = "canceled"; logAttempt(attempt);
         throw new GenerationCanceledError();
       }
+      // Heartbeat: the provider poll can run for up to ~3 min with no other job write. Without touching
+      // the job's updatedAt on every tick, failStaleJobs (fired by the boards GET poll, the frame POST and
+      // the cron) crosses the STALE_JOB_MS boundary and falsely fails a still-live render with
+      // "Generation timed out (worker stopped responding)". A cheap per-tick heartbeat keeps it fresh.
+      if (logContext.jobId) await heartbeatJob(logContext.jobId);
       const st = await getImageGenerationState(attempt.predictionId);
       if (st.status === "succeeded" && st.outputUrl) { attempt.status = "succeeded"; logAttempt(attempt); return st.outputUrl; }
       if (st.status === "failed") throw new Error(st.error || "Image model failed");
