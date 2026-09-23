@@ -75,14 +75,15 @@ const ANCHOR_WAIT_POLL_MS = Number(process.env.BOARD_ANCHOR_WAIT_POLL_MS ?? 4000
 const ANCHOR_WAIT_MAX_POLLS = Number(process.env.BOARD_ANCHOR_WAIT_MAX_POLLS ?? 90); // ~6 min at 4s
 
 /**
- * Stage 230 — HARD 10s cap per scene clip and the per-clip speech budget used to PRE-CALCULATE the scene count.
- * A scene's clip may never exceed SCENE_CLIP_MAX_SEC seconds (image-to-video hard cap; speech is never
- * accelerated or cut to fit — an over-long scene is split into continuation scenes instead). Dialogue is packed
- * into chunks of at most SCENE_SPEECH_BUDGET_SEC seconds of estimated speech, leaving ~1s of headroom under the
- * cap for delivery/pauses so a full chunk still fits a ≤10s clip.
+ * Stage 230 — HARD 5s cap per scene clip and the per-clip speech budget used to PRE-CALCULATE the scene count.
+ * Each shot is a short 4–5s clip (image-to-video hard cap; speech is never accelerated or cut to fit — an
+ * over-long scene is split into continuation shots instead). Dialogue is packed into chunks of at most
+ * SCENE_SPEECH_BUDGET_SEC seconds of estimated speech, leaving ~1s of headroom under the cap for delivery/pauses
+ * so a full chunk still fits a ≤5s clip. A ~90s episode therefore expands into roughly 18–22 short shots: the
+ * shot count is DERIVED from the dialogue length + the 4–5s/shot cap, never a fixed number.
  */
-const SCENE_CLIP_MAX_SEC = 10;
-const SCENE_SPEECH_BUDGET_SEC = 9;
+const SCENE_CLIP_MAX_SEC = 5;
+const SCENE_SPEECH_BUDGET_SEC = 4;
 
 /** Minimal sibling projection shared by the Stage 140 set-anchors and the Stage 142 scene anchor. */
 const SIBLING_SELECT = { id: true, index: true, imageUrl: true, status: true, directionJson: true, motionEn: true, actionOrDialogue: true, region: true, sceneId: true, boardRole: true } as const;
@@ -196,7 +197,7 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
     };
 
     // Stage 230 — PRE-CALCULATE the scene count from dialogue length. Extract every scene's verbatim, attributed
-    // spoken lines FIRST, then pack them into chunks that each fit one ≤10s clip's speech budget. A scene whose
+    // spoken lines FIRST, then pack them into chunks that each fit one ≤5s clip's speech budget. A scene whose
     // dialogue overflows one clip becomes a first scene + sequential CONTINUATION scene(s) (same location, same
     // characters, action carried forward). Nothing is ever accelerated, truncated or dropped — the story simply
     // gets more scenes. A narration / no-dialogue scene yields exactly one part (one clip, no spoken lines).
@@ -269,18 +270,16 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
     const rows: BoardRow[] = [];
     for (let i = 0; i < planned.length; i++) {
       const p = planned[i];
-      const s = p.source;
       const plan = plans[i];
       const dialogue = p.dialogue;
-      // Duration = enough to fit THIS part's speech (never truncated/accelerated), at least a scene minimum,
-      // clamped to the HARD 10s clip cap. A single-part scene keeps its scripted length as the floor; a split
-      // scene uses a 6s floor per part (the scripted length applies to the whole scene, not each part).
+      // Duration = enough to fit THIS part's speech (never truncated/accelerated), floored at 4s and clamped to
+      // the HARD 5s clip cap. The scripted scene length is NOT used as a floor — a shot is always a short 4–5s
+      // clip regardless of how long the source scene was written; longer dialogue splits into more shots instead.
       const speechSec = dialogue.reduce((sum, l) => sum + estimatedSpeechSeconds(l), 0);
-      const durationFloor = p.partCount > 1 ? 6 : (s.durationSec ?? 6);
-      const durationSec = Math.min(SCENE_CLIP_MAX_SEC, Math.max(Math.ceil(speechSec) + 1, durationFloor, 4));
+      const durationSec = Math.min(SCENE_CLIP_MAX_SEC, Math.max(Math.ceil(speechSec) + 1, 4));
 
       // Single-frame model: each planned scene yields ONE board — a keyframe still that is animated on its OWN
-      // into a 4–6s clip (no start→end morph). WHO is in frame is everyone present at the scene start
+      // into a 4–5s clip (no start→end morph). WHO is in frame is everyone present at the scene start
       // (onScreen ∪ exiting, minus those still entering).
       const startVisible = characters.filter(
         (c) => (plan.onScreen.includes(c) || plan.exiting.includes(c)) && !plan.entering.includes(c),
@@ -573,7 +572,9 @@ export async function runBoardVideoJob(jobId: string, projectId: string, boardId
       directionJson: board.directionJson,
       characters: inFrameCast.length ? inFrameCast : links.map(c => c.name),
       boardIndex: board.index,
-      durationSec: (cif?.durationSec ?? board.durationSec) ?? 6,
+      // Defensive clamp to the HARD per-shot cap: even a board persisted under an older, longer model animates
+      // as a short 4–5s clip (a full rebuild via "Перестроить кадры" re-splits the dialogue to fit properly).
+      durationSec: Math.min(SCENE_CLIP_MAX_SEC, Math.max(4, (cif?.durationSec ?? board.durationSec) ?? SCENE_CLIP_MAX_SEC)),
       imageUrl: board.imageUrl as string,
       ...(cif ? { spokenLines: cif?.dialogue ?? null, actionText: cif?.motion ?? null } : {}),
       ...(previousActionText ? { previousActionText } : {}),
