@@ -3,10 +3,12 @@ export const maxDuration = 800; // may host a resumed video finalization via aft
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { authorizeCron, failStaleJobs, runInBackground, JOB_MAX_DURATION } from "@/lib/jobs";
+import { authorizeCron, failStaleJobs, runInBackground, JOB_MAX_DURATION, STALE_JOB_MS, isCancelRequested, completeJob, heartbeatJob } from "@/lib/jobs";
 import { resumeVideoJob } from "@/lib/workers/video-job";
 import { reconcileEpisodeAssets } from "@/lib/asset-gathering";
-import { runStoryboardBoardsJob, STORYBOARD_BOARDS_JOB_TYPE } from "@/lib/workers/storyboard-job";
+import { runStoryboardBoardsJob, STORYBOARD_BOARDS_JOB_TYPE, runBoardImageJob, BOARD_IMAGE_JOB_TYPE } from "@/lib/workers/storyboard-job";
+
+const isHttpUrl = (u: unknown): u is string => typeof u === "string" && /^https?:\/\//i.test(u);
 
 // Keep the route-level maxDuration in step with the shared constant used by other job hosts.
 void JOB_MAX_DURATION;
@@ -34,8 +36,44 @@ void JOB_MAX_DURATION;
 export async function GET(request: Request) {
   if (!authorizeCron(request)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const summary = { staleFailed: 0, resumed: 0, boardGatesReleased: 0 };
+  const summary = { staleFailed: 0, resumed: 0, resumedFrames: 0, boardGatesReleased: 0 };
   try {
+    // Resume interrupted board keyframe (image) jobs BEFORE failStaleJobs reaps them. A frame POST already
+    // enqueues a background job (after()-hosted) rather than rendering synchronously, but nothing used to
+    // re-drive a frame job whose hosting serverless invocation was killed mid-render. After STALE_JOB_MS of
+    // silence failStaleJobs would mark it "Generation timed out (worker stopped responding)" with no retry —
+    // exactly the timeout users saw. Here we pick up every quiet board_image job once: if the board already
+    // has a valid image (the render actually finished, only the completion write was lost) we finalize it;
+    // otherwise we touch the job (heartbeat, so failStaleJobs skips it this pass) and re-run the idempotent
+    // worker in the background. runBoardImageJob overwrites the board's imageUrl and charges no credits, so
+    // re-driving never double-bills. This makes frame generation survive a dead worker with no tab open.
+    const staleBefore = new Date(Date.now() - STALE_JOB_MS);
+    const frameJobs = await prisma.generationJob.findMany({
+      where: { type: BOARD_IMAGE_JOB_TYPE, status: { in: ["pending", "processing"] }, updatedAt: { lt: staleBefore } },
+      orderBy: { createdAt: "asc" },
+      take: 30,
+    });
+    for (const job of frameJobs) {
+      try {
+        let boardId: string | null = null;
+        try { boardId = JSON.parse(job.resultData ?? "{}")?.boardId ?? null; } catch { boardId = null; }
+        if (!boardId || !job.projectId) continue;
+        if (await isCancelRequested(job.id)) continue;
+        const board = await prisma.board.findUnique({ where: { id: boardId }, select: { imageUrl: true } });
+        if (board && isHttpUrl(board.imageUrl)) {
+          // Render already produced an image — the completion write was just lost. Finalize the job.
+          await completeJob(job.id, { boardId, imageUrl: board.imageUrl }, "Frame ready");
+          continue;
+        }
+        // Not rendered yet — keep the job alive past this failStaleJobs pass and re-drive it in the background.
+        await heartbeatJob(job.id);
+        runInBackground(() => runBoardImageJob(job.id, job.projectId!, boardId!));
+        summary.resumedFrames++;
+      } catch (err) {
+        console.error("[cron/advance-chains] frame resume failed:", err);
+      }
+    }
+
     // Clean up dead, non-recoverable jobs first. Video/season jobs that hold a live provider handle are
     // deliberately skipped by failStaleJobs — they are advanced by resume/poll recovery, not by age.
     summary.staleFailed = await failStaleJobs({});

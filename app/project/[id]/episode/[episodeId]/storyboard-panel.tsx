@@ -196,7 +196,7 @@ function CastLine({ label, names }: { label: string; names?: string[] }) {
 }
 
 /** One board card: keyframe still + action/dialogue text + per-board frame/animate controls. */
-function BoardCard({ board, onChanged, frameLocked, registerFrameRun }: { board: Board; onChanged: () => void; frameLocked: boolean; registerFrameRun?: (fn: () => void) => void }) {
+function BoardCard({ board, onChanged, registerFrameRun }: { board: Board; onChanged: () => void; registerFrameRun?: (fn: () => void) => void }) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [showDetails, setShowDetails] = useState(false)
@@ -280,11 +280,9 @@ function BoardCard({ board, onChanged, frameLocked, registerFrameRun }: { board:
       {animatePoll.isActive && animatePoll.job && <div className="mt-2"><SmoothProgress job={animatePoll.job} expectedTotalSec={60} /></div>}
       {err && <p className="mt-1 text-xs text-destructive">{err}</p>}
       <div className="mt-2 flex flex-wrap gap-2">
-        {/* Stage 145 — strictly sequential: the frame button is disabled until the previous board's
-            frame is ready (regenerating an already-framed board stays enabled). English tooltip. */}
-        <button onClick={() => run('frame')} disabled={busy || frameLocked} title={frameLocked ? 'Generate the previous shot first' : undefined} className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium disabled:opacity-50" data-testid={`board-frame-${board.index}`}>
-          {busy && framePoll.isActive ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />} {validUrl(board.imageUrl) ? 'Перерисовать кадр' : 'Сгенерировать кадр'}
-        </button>
+        {/* Frame (re)generation is triggered ONLY from the scene-level «Сгенерировать оба кадра» button
+            (see SceneGroup) — the per-board frame button was removed so both keyframes always render together
+            as one background job. This card keeps only the START-frame animate control below. */}
         {/* Stage 220 — only the START frame is animated (start→end i2v clip). The END frame is a still keyframe
             passed as the clip's last_image, so it exposes no animate control. */}
         {canAnimate && (
@@ -337,11 +335,13 @@ function BoardCard({ board, onChanged, frameLocked, registerFrameRun }: { board:
  * single «Сгенерировать оба кадра» button that fires both frame POSTs concurrently. The end frame is a still
  * keyframe (the clip's last_image) and is never animated on its own.
  */
-function SceneGroup({ sceneNumber, boards, onChanged, boardFrameLocked }: {
+function SceneGroup({ sceneNumber, boards, onChanged, boardFrameLocked, legacy = false }: {
   sceneNumber: number
   boards: Board[]
   onChanged: () => void
   boardFrameLocked: (b: Board) => boolean
+  /** Legacy flat layout wraps each single board in its own group; suppress the misleading «Сцена N» header. */
+  legacy?: boolean
 }) {
   const runners = useRef<Map<string, () => void>>(new Map())
   const register = useCallback((id: string) => (fn: () => void) => { runners.current.set(id, fn) }, [])
@@ -356,11 +356,20 @@ function SceneGroup({ sceneNumber, boards, onChanged, boardFrameLocked }: {
   // The whole scene is locked while the previous scene is still rendering (a not-yet-framed board is gated).
   const sceneLocked = ordered.some((b) => !validUrl(b.imageUrl) && boardFrameLocked(b))
 
+  // One button (re)generates every frame of the scene in parallel as a background job. Its label switches
+  // between «Сгенерировать» (nothing rendered yet) and «Перегенерировать» (at least one frame already exists),
+  // and between the single-frame and «оба кадра» wording depending on how many boards this scene holds.
+  const anyFramed = ordered.some((b) => validUrl(b.imageUrl))
+  const single = ordered.length <= 1
+  const buttonLabel = single
+    ? (anyFramed ? 'Перегенерировать кадр' : 'Сгенерировать кадр')
+    : (anyFramed ? 'Перегенерировать оба кадра' : 'Сгенерировать оба кадра')
+
   return (
     <div className="rounded-xl border border-border bg-muted/20 p-3" data-testid={`scene-group-${sceneNumber}`}>
       <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
-          <div className="text-sm font-semibold text-foreground">Сцена {sceneNumber}{dur ? ` · ${dur}s` : ''}</div>
+          {!legacy && <div className="text-sm font-semibold text-foreground">Сцена {sceneNumber}{dur ? ` · ${dur}s` : ''}</div>}
           {plan && (
             <div className="mt-1 space-y-0.5">
               <CastLine label="В кадре" names={plan.onScreen} />
@@ -376,16 +385,15 @@ function SceneGroup({ sceneNumber, boards, onChanged, boardFrameLocked }: {
           className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
           data-testid={`scene-frames-${sceneNumber}`}
         >
-          <ImageIcon className="h-3.5 w-3.5" /> Сгенерировать оба кадра
+          <ImageIcon className="h-3.5 w-3.5" /> {buttonLabel}
         </button>
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className={single ? 'grid grid-cols-1 gap-3' : 'grid grid-cols-2 gap-3'}>
         {ordered.map((b) => (
           <BoardCard
             key={b.id}
             board={b}
             onChanged={onChanged}
-            frameLocked={boardFrameLocked(b)}
             registerFrameRun={register(b.id)}
           />
         ))}
@@ -627,14 +635,18 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
           })()}
         </div>
       ) : (
-        // Legacy flat layout for episodes built before the per-scene model.
-        <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4" data-testid="storyboard-boards">
+        // Legacy flat layout for episodes built before the per-scene model. Each board is wrapped in its own
+        // single-board SceneGroup so frame (re)generation still works after the per-board frame button was
+        // removed — the one scene-level button reads «Сгенерировать / Перегенерировать кадр» here.
+        <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3" data-testid="storyboard-boards">
           {boards.map((b) => (
-            <BoardCard
+            <SceneGroup
               key={b.id}
-              board={b}
+              legacy
+              sceneNumber={b.index + 1}
+              boards={[b]}
               onChanged={refresh}
-              frameLocked={frameLockedFor(b)}
+              boardFrameLocked={frameLockedFor}
             />
           ))}
         </div>
