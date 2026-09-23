@@ -135,31 +135,11 @@ export function coverageFromNames(inFrame: string[], fullCast: string[]): BoardC
   return { shotSize, visible: vis, offScreen: fullCast.filter((c) => !vis.includes(c)), focus: "" };
 }
 
-/**
- * Stage 240 — the END frame of a scene must NOT repeat the START frame's shot. The start frame establishes the
- * scene (its shot size is chosen by head-count); the end frame is a DELIBERATE camera change — a DIFFERENT shot
- * size seen from a DIFFERENT camera position (angle / height / distance). This maps the count-derived start shot to
- * a contrasting end shot and picks a focus so the reverse / over-the-shoulder framing text renders. Deterministic,
- * no LLM. The start frame itself is never attached as a reference when the end frame renders (see runBoardImageJob).
- */
-export function contrastEndCoverage(base: BoardCoverage): BoardCoverage {
-  const vis = base.visible;
-  const n = vis.length;
-  // 1 in frame: the start is a MEDIUM → the end pushes IN to a CLOSE-UP (different distance).
-  if (n <= 1) return { ...base, shotSize: "CLOSE-UP", focus: vis[0] ?? "" };
-  // 2 in frame: the start is a flat TWO-SHOT → the end crosses to an OVER-THE-SHOULDER reverse on the other
-  // character (camera moves to the opposite vantage; buildShotSizeLine renders the foreground shoulder text).
-  if (n === 2) return { ...base, shotSize: "OVER-THE-SHOULDER", focus: vis[1] };
-  // 3+ in frame: the start is a WIDE ESTABLISHING → the end moves IN to a MEDIUM grouping (tighter, new angle).
-  return { ...base, shotSize: "MEDIUM", focus: vis[0] ?? "" };
-}
-
-/* ───────────── 1) storyboard_boards — per Scene → EXACTLY 2 boards (start frame + end frame) ─────────────
- * Stage 220 — the episode is no longer split into ~50 discrete LLM beats. Every existing Scene now yields
- * EXACTLY two boards: a START frame (boardRole="start", index 2i) and an END frame (boardRole="end", index
- * 2i+1). ONE image-to-video clip animates the start frame INTO the end frame (last_image), carrying the whole
- * scene's verbatim dialogue. A single LLM call plans, for every scene, who is on screen / enters / exits and
- * the start/end/motion descriptions; the dialogue itself is restored verbatim from the scene (never rewritten).
+/* ───────────── 1) storyboard_boards — per planned Scene → EXACTLY 1 board (single keyframe) ─────────────
+ * Single-frame model: every planned scene yields ONE board — a single 9:16 keyframe still that is animated on
+ * its OWN into a 4–6s image-to-video clip (one frame = one shot plan; NO start→end two-frame morph). A single
+ * LLM call plans, for every scene, who is on screen / enters / exits plus the keyframe (startFrame) and motion
+ * descriptions; the dialogue itself is restored verbatim from the scene (never rewritten) and voiced in the clip.
  */
 export async function runStoryboardBoardsJob(jobId: string, projectId: string, episodeId: string): Promise<void> {
   try {
@@ -299,16 +279,13 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
       const durationFloor = p.partCount > 1 ? 6 : (s.durationSec ?? 6);
       const durationSec = Math.min(SCENE_CLIP_MAX_SEC, Math.max(Math.ceil(speechSec) + 1, durationFloor, 4));
 
-      // The start frame shows everyone present at the START (onScreen + those about to exit, minus those still
-      // entering); the end frame shows everyone present at the END (onScreen + those who entered, minus exiters).
+      // Single-frame model: each planned scene yields ONE board — a keyframe still that is animated on its OWN
+      // into a 4–6s clip (no start→end morph). WHO is in frame is everyone present at the scene start
+      // (onScreen ∪ exiting, minus those still entering).
       const startVisible = characters.filter(
         (c) => (plan.onScreen.includes(c) || plan.exiting.includes(c)) && !plan.entering.includes(c),
       );
-      const endVisible = characters.filter(
-        (c) => (plan.onScreen.includes(c) || plan.entering.includes(c)) && !plan.exiting.includes(c),
-      );
       const startCoverage = coverageFromNames(startVisible.length ? startVisible : plan.onScreen, characters);
-      const endCoverage = coverageFromNames(endVisible.length ? endVisible : plan.onScreen, characters);
 
       const castInFrame: CastInFrame = {
         onScreen: plan.onScreen,
@@ -338,17 +315,10 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
           locationDesc: episode.locationDesc,
         }).prompt;
 
-      const startIdx = 2 * i;
-      const endIdx = 2 * i + 1;
       rows.push({
-        episodeId, sceneId: p.sceneId, index: startIdx, boardRole: "start",
+        episodeId, sceneId: p.sceneId, index: i, boardRole: "start",
         actionOrDialogue: plan.startFrame, motionEn: plan.motion, durationSec,
-        castInFrame: castJson, imagePrompt: framePrompt(startIdx, plan.startFrame, startCoverage), status: "pending",
-      });
-      rows.push({
-        episodeId, sceneId: p.sceneId, index: endIdx, boardRole: "end",
-        actionOrDialogue: plan.endFrame, motionEn: null, durationSec,
-        castInFrame: castJson, imagePrompt: framePrompt(endIdx, plan.endFrame, endCoverage), status: "pending",
+        castInFrame: castJson, imagePrompt: framePrompt(i, plan.startFrame, startCoverage), status: "pending",
       });
     }
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
@@ -367,7 +337,7 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
       });
     });
 
-    const totalSec = rows.filter((r) => r.boardRole === "start").reduce((sum, r) => sum + r.durationSec, 0);
+    const totalSec = rows.reduce((sum, r) => sum + r.durationSec, 0);
     // Stage 230 — the scene count is now DERIVED from dialogue length (source scenes may split into continuation
     // scenes), so report the PLANNED scene count and how many source scenes it expanded from.
     await completeJob(
@@ -395,11 +365,10 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
 
     const { links, refs } = await loadEpisodeCharacters(board.episodeId);
     const cast = links.map((l) => l.name);
-    // Stage 220 — per-scene board: this is the START or END frame of a scene. WHO is in frame is DETERMINED by
-    // the scene shot plan (castInFrame): the start frame shows everyone present at the START (onScreen + those
-    // about to exit, minus those still entering); the end frame shows everyone present at the END (onScreen +
-    // those who entered, minus exiters). Legacy boards (null castInFrame) keep the Stage 143 direction-derived
-    // coverage. Only the visible characters' identity references are attached; off-screen cast is only NAMED.
+    // Single-frame board: WHO is in frame is DETERMINED by the scene shot plan (castInFrame) — everyone present
+    // at the scene start (onScreen ∪ exiting, minus those still entering). Legacy boards (null castInFrame) keep
+    // the Stage 143 direction-derived coverage. Only the visible characters' identity references are attached;
+    // off-screen cast is only NAMED.
     const isPerScene = !!board.boardRole;
     const cif = (board.castInFrame ?? null) as unknown as CastInFrame | null;
     let coverage: BoardCoverage;
@@ -407,19 +376,13 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
       const onScreen = cif.onScreen ?? [];
       const entering = cif.entering ?? [];
       const exiting = cif.exiting ?? [];
-      const inFrame = board.boardRole === "end"
-        ? cast.filter((c) => (onScreen.includes(c) || entering.includes(c)) && !exiting.includes(c))
-        : cast.filter((c) => (onScreen.includes(c) || exiting.includes(c)) && !entering.includes(c));
+      const inFrame = cast.filter((c) => (onScreen.includes(c) || exiting.includes(c)) && !entering.includes(c));
       coverage = coverageFromNames(inFrame.length ? inFrame : onScreen, cast);
     } else {
       // Stage 143 — EXACTLY who is in frame for a legacy board (direction + position in scene + action text).
       const direction = readBoardDirection(board.directionJson);
       coverage = resolveVisibleCast(direction, board.index, cast, board.actionOrDialogue);
     }
-    // Stage 240 — the scene's END frame must be a DIFFERENT shot than its START frame: remap the count-derived
-    // coverage to a contrasting shot size + camera vantage so the two frames are never the same plan.
-    const isEndFrame = board.boardRole === "end";
-    if (isEndFrame) coverage = contrastEndCoverage(coverage);
     const visibleLinks = links.filter((l) => coverage.visible.includes(l.name));
     const refImages = links.flatMap((l, i) => (coverage.visible.includes(l.name) && refs[i] ? [refs[i] as string] : []));
     // Parallel to refImages: the character name behind each identity reference, for the UI "references passed" list.
@@ -487,24 +450,17 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
         siblingBoards = await loadSiblings();
       }
     }
-    // Stage 240 — the END frame is rendered INDEPENDENTLY of its START frame: the start frame is never attached as
-    // the scene anchor (nor, below, as the continuity still). Only character identity references and location plates
-    // back the end frame, so it is a genuinely different shot rather than a re-frame of the start image.
-    const anchor = isEndFrame ? null : pickSceneAnchor(self, toSiblings(siblingBoards));
+    const anchor = pickSceneAnchor(self, toSiblings(siblingBoards));
 
-    // Stage 144/220 — ACTION / POSE CONTINUITY. The immediately previous rendered board of the SAME scene (by
-    // sceneId for per-scene boards, else same region) is the source of the ongoing action: its still is attached
-    // as the CONTINUITY reference and its action text is passed so this board CONTINUES the exact moment (poses /
-    // body contact / props carry over; only the camera changes). The scene's START frame has no earlier sibling
-    // and establishes the action; the END frame continues from the START frame.
+    // Stage 144 — ACTION / POSE CONTINUITY. The immediately previous rendered board (by index) is the source of
+    // the ongoing action: its still is attached as the CONTINUITY reference and its action text is passed so this
+    // board CONTINUES the exact moment (poses / body contact / props carry over; only the camera changes). The
+    // first board has no earlier sibling and establishes the action.
     const prevRow = siblingBoards
-      .filter((b) => b.id !== board.id && b.index < board.index && validUrl(b.imageUrl) &&
-        (isPerScene ? (b.sceneId ?? null) === (board.sceneId ?? null) : (b.region ?? null) === (board.region ?? null)))
+      .filter((b) => b.id !== board.id && b.index < board.index && validUrl(b.imageUrl))
       .sort((a, b) => b.index - a.index)[0];
-    // Stage 240 — the END frame never carries the START frame as a continuity still (that would re-frame the start
-    // image); it renders independently. Non-end boards keep the Stage 144 continuity behaviour unchanged.
-    const continuityUrl = !isEndFrame && prevRow ? (prevRow.imageUrl as string) : null;
-    const previousActionText = !isEndFrame && prevRow
+    const continuityUrl = prevRow ? (prevRow.imageUrl as string) : null;
+    const previousActionText = prevRow
       ? (readBoardDirection(prevRow.directionJson)?.actionEnglish || prevRow.motionEn || prevRow.actionOrDialogue || "").trim()
       : "";
 
@@ -562,12 +518,7 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
       anchorRefIndex: composed.anchorRefIndex,
       ...(previousActionText ? { continuity: { previousActionText, continuityRefIndex: composed.continuityRefIndex } } : {}),
     });
-    // Stage 240 — the END frame is the scene's CLOSING shot and MUST be a deliberate camera change from the opening
-    // frame: a different shot size AND a different camera position (angle, height, distance). This directive is
-    // appended in the worker (the prompt builder is never modified) and only for the end frame.
-    const prompt = isEndFrame
-      ? `${built.prompt}\nEND-FRAME CAMERA CHANGE: this is the scene's CLOSING frame and MUST use a DIFFERENT camera setup from the scene's opening frame — a different shot size and a clearly different camera position (angle, height and distance from the subject), for example moving from a wider/straight-on opening to a tighter reverse, over-the-shoulder or opposite-side vantage. Do NOT reproduce the opening frame's framing or camera angle; keep the same location, characters and wardrobe.`
-      : built.prompt;
+    const prompt = built.prompt;
 
     await updateJob(jobId, { progress: 45, message: `Board ${board.index + 1}: rendering frame...` });
     const remote = await generateImage(
@@ -596,47 +547,35 @@ export async function runBoardVideoJob(jobId: string, projectId: string, boardId
     const board = await prisma.board.findUnique({ where: { id: boardId }, include: { episode: true } });
     if (!board) { await failJob(jobId, "Board not found"); return; }
     if (board.episode.mode !== "STORYBOARD") { await failJob(jobId, "Episode is not in STORYBOARD mode"); return; }
-    // Stage 220 — per-scene model: only the START frame is animated (start→end i2v clip). The END frame is a still
-    // keyframe consumed as the clip's last_image; it is never animated on its own.
-    if (board.boardRole === "end") { await failJob(jobId, "The scene end frame is a keyframe, not an animated clip; animate the scene's start frame instead."); return; }
     if (!validUrl(board.imageUrl)) { await failJob(jobId, "Generate the board frame before animating it"); return; }
 
     await updateJob(jobId, { status: "processing", progress: 10, message: `Board ${board.index + 1}: starting animation...` });
     await prisma.board.update({ where: { id: boardId }, data: { status: "animating", error: null } });
 
-    // The board still is the START frame of the image-to-video clip (keyframe ban lifted for STORYBOARD).
+    // Single-frame model: the board still is the ONLY frame of the image-to-video clip — it is animated on its own
+    // (no last_image / end-frame morph), voicing the scene's verbatim dialogue over its motion.
     const { links } = await loadEpisodeCharacters(board.episodeId);
-    // Stage 220 — per-scene start board: fetch the scene's END frame to drive the i2v start→end transition
-    // (Seedance last_image), and use the scene's verbatim dialogue + motion text as the clip authority.
     const cif = (board.castInFrame ?? null) as unknown as CastInFrame | null;
-    const isPerScene = !!board.boardRole && !!board.sceneId;
-    let lastImageUrl: string | null = null;
-    if (isPerScene) {
-      const endRow = await prisma.board.findFirst({ where: { episodeId: board.episodeId, sceneId: board.sceneId, boardRole: "end" }, select: { imageUrl: true } });
-      if (endRow && validUrl(endRow.imageUrl)) lastImageUrl = endRow.imageUrl as string;
-    }
     // Stage 144 — the board's opening frame already continues the previous board's ongoing action, so the motion
-    // must CONTINUE from that inherited pose rather than start neutral. Resolve the previous board of the same
-    // scene AND same region (highest index below, with a rendered frame); i2v still gets NO extra image refs.
+    // must CONTINUE from that inherited pose rather than start neutral. Resolve the immediately previous board (by
+    // index, with a rendered frame); i2v still gets NO extra image refs.
     const videoSiblings = await prisma.board.findMany({ where: { episodeId: board.episodeId }, select: SIBLING_SELECT });
-    // Legacy multi-board scenes chained continuity from the previous board; a per-scene start board is a
-    // self-contained start→end clip, so it never inherits a previous pose.
-    const prevVideoRow = isPerScene ? undefined : videoSiblings
-      .filter((b) => b.id !== board.id && b.index < board.index && (b.region ?? null) === (board.region ?? null) && validUrl(b.imageUrl))
+    const prevVideoRow = videoSiblings
+      .filter((b) => b.id !== board.id && b.index < board.index && validUrl(b.imageUrl))
       .sort((a, b) => b.index - a.index)[0];
     const previousActionText = prevVideoRow
       ? (readBoardDirection(prevVideoRow.directionJson)?.actionEnglish || prevVideoRow.motionEn || prevVideoRow.actionOrDialogue || "").trim()
       : "";
-    // Per-scene: cast in the clip = everyone on-screen at either end (onScreen ∪ entering ∪ exiting).
-    const perSceneCast = cif ? Array.from(new Set([...(cif.onScreen ?? []), ...(cif.entering ?? []), ...(cif.exiting ?? [])])) : [];
+    // Cast in the clip = everyone on-screen at the scene (onScreen ∪ entering ∪ exiting).
+    const inFrameCast = cif ? Array.from(new Set([...(cif.onScreen ?? []), ...(cif.entering ?? []), ...(cif.exiting ?? [])])) : [];
     const animationBoard = {
       actionOrDialogue: board.actionOrDialogue, motion: board.motionEn,
       directionJson: board.directionJson,
-      characters: isPerScene && perSceneCast.length ? perSceneCast : links.map(c => c.name),
+      characters: inFrameCast.length ? inFrameCast : links.map(c => c.name),
       boardIndex: board.index,
-      durationSec: (isPerScene ? (cif?.durationSec ?? board.durationSec) : board.durationSec) ?? 6,
+      durationSec: (cif?.durationSec ?? board.durationSec) ?? 6,
       imageUrl: board.imageUrl as string,
-      ...(isPerScene ? { lastImageUrl, spokenLines: cif?.dialogue ?? null, actionText: cif?.motion ?? null } : {}),
+      ...(cif ? { spokenLines: cif?.dialogue ?? null, actionText: cif?.motion ?? null } : {}),
       ...(previousActionText ? { previousActionText } : {}),
     };
     const request = buildStoryboardVideoRequest(animationBoard);

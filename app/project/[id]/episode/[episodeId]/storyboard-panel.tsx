@@ -12,7 +12,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
-import { Loader2, Film, Wand2, ImageIcon, Play, ChevronDown, ChevronRight, ChevronLeft, Copy, Check, X, Maximize2, RotateCw } from 'lucide-react'
+import { Loader2, Film, Wand2, ImageIcon, Play, ChevronDown, ChevronRight, Copy, Check, X, Maximize2, RotateCw } from 'lucide-react'
 import { JobProgressBar, SmoothProgress, useJobPolling } from '../../_components/use-job-polling'
 import { boardFramePrecondition } from '@/lib/board-anchor'
 import { DownloadVideoButton } from '@/app/project/[id]/_components/download-video-button'
@@ -225,14 +225,23 @@ function CastLine({ label, names }: { label: string; names?: string[] }) {
   )
 }
 
-/** One board card: keyframe still + action/dialogue text + per-board frame/animate controls. */
-function BoardCard({ board, onChanged, registerFrameRun }: { board: Board; onChanged: () => void; registerFrameRun?: (fn: () => void) => void }) {
+/**
+ * One board card = ONE single keyframe (one frame = one shot plan). It is self-contained: it renders its own
+ * 9:16 keyframe still, animates that ONE still into its own 4–6s clip (image-to-video, no start→end morph), and
+ * carries per-board «Сгенерировать кадр» + «Оживить» controls with their own progress bars that resume after a
+ * page reload (board.frameJobId / board.animateJobId).
+ */
+function BoardCard({ board, onChanged, frameLocked = false }: { board: Board; onChanged: () => void; frameLocked?: boolean }) {
   const [err, setErr] = useState<string | null>(null)
+  const [animErr, setAnimErr] = useState<string | null>(null)
   const [showDetails, setShowDetails] = useState(false)
   const openImage = useLightbox()
 
   const framePoll = useJobPolling({
     onFinish: (res) => { if (res.job.status === 'failed') setErr(res.job.error ?? 'Frame generation failed'); onChanged() },
+  })
+  const animatePoll = useJobPolling({
+    onFinish: (res) => { if (res.job.status === 'failed') setAnimErr(res.job.error ?? 'Animation failed'); onChanged() },
   })
 
   const run = useCallback(async () => {
@@ -248,12 +257,21 @@ function BoardCard({ board, onChanged, registerFrameRun }: { board: Board; onCha
     }
   }, [board.id, framePoll, onChanged])
 
-  // Stage 220 — a scene's «Сгенерировать оба кадра» button fires the frame POST for BOTH boards concurrently
-  // (start + end render in parallel). Each card registers its own frame runner with the parent scene group.
-  useEffect(() => { registerFrameRun?.(() => { void run() }) }, [registerFrameRun, run])
+  const runAnimate = useCallback(async () => {
+    setAnimErr(null)
+    try {
+      const res = await fetch(`/api/ai/storyboard/${board.id}/animate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      const data = await res.json()
+      if (!res.ok) { setAnimErr(data?.error ?? 'Request failed'); return }
+      if (data.jobId) { animatePoll.start(data.jobId) }
+      else { onChanged() }
+    } catch (e: any) {
+      setAnimErr(e?.message ?? 'Request failed')
+    }
+  }, [board.id, animatePoll, onChanged])
 
-  // Resume-on-reload — if the server still has an active frame job for this board, re-attach the progress bar
-  // after a page reload. Guarded so it only starts once per job id and never restarts an already-active poll.
+  // Resume-on-reload — if the server still has an active frame/animate job for this board, re-attach the progress
+  // bar after a page reload. Guarded so it only starts once per job id and never restarts an already-active poll.
   const resumedFrameRef = useRef<string | null>(null)
   useEffect(() => {
     const jid = board.frameJobId
@@ -262,19 +280,63 @@ function BoardCard({ board, onChanged, registerFrameRun }: { board: Board; onCha
     resumedFrameRef.current = jid
     framePoll.start(jid)
   }, [board.frameJobId, framePoll])
+  const resumedAnimateRef = useRef<string | null>(null)
+  useEffect(() => {
+    const jid = board.animateJobId
+    if (!jid) return
+    if (animatePoll.isActive || animatePoll.job?.id === jid || resumedAnimateRef.current === jid) return
+    resumedAnimateRef.current = jid
+    animatePoll.start(jid)
+  }, [board.animateJobId, animatePoll])
 
-  // Per-scene role label; legacy boards keep the flat «Кадр N» heading. Duration (clip length) is a start-frame
-  // concept — the end frame is a still keyframe and shows no duration.
-  const isEnd = board.boardRole === 'end'
-  const roleLabel = board.boardRole === 'start' ? 'Начальный кадр' : isEnd ? 'Последний кадр' : `Кадр ${board.index + 1}`
-  const showDur = !isEnd && board.durationSec
+  const plan = board.castInFrame ?? null
+  const frameReady = validUrl(board.imageUrl)
+  const frameBusy = framePoll.isActive
+  const animateBusy = animatePoll.isActive
+  const frameLabel = frameReady ? 'Перегенерировать кадр' : 'Сгенерировать кадр'
+  const frameDisabled = frameBusy || (!frameReady && frameLocked)
+  const frameTitle = !frameReady && frameLocked ? 'Сначала сгенерируйте предыдущий кадр' : undefined
+  const animateLabel = validUrl(board.videoUrl) ? 'Переанимировать' : 'Оживить'
+  const animateDisabled = !frameReady || animateBusy
+  const animateTitle = !frameReady ? 'Сначала сгенерируйте кадр' : 'Оживить кадр в клип 4–6с'
 
   return (
     <div className="rounded-xl border border-border bg-card p-3" data-testid={`board-card-${board.index}`}>
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-xs font-semibold text-muted-foreground">{roleLabel}{showDur ? ` · ${board.durationSec}s` : ''}</span>
+        <span className="text-xs font-semibold text-muted-foreground">Кадр {board.index + 1}{board.durationSec ? ` · ${board.durationSec}s` : ''}</span>
         <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{board.status}</span>
       </div>
+      {plan && (
+        <div className="mb-2 space-y-0.5">
+          <CastLine label="В кадре" names={plan.onScreen} />
+          <CastLine label="Входят" names={plan.entering} />
+          <CastLine label="Выходят" names={plan.exiting} />
+        </div>
+      )}
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <button
+          onClick={run}
+          disabled={frameDisabled}
+          title={frameTitle}
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
+          data-testid={`board-frame-${board.index}`}
+        >
+          {frameBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />} {frameLabel}
+        </button>
+        <button
+          onClick={runAnimate}
+          disabled={animateDisabled}
+          title={animateTitle}
+          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
+          data-testid={`board-animate-${board.index}`}
+        >
+          {animateBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} {animateLabel}
+        </button>
+      </div>
+      {/* i2v clip progress (single-frame animation). SmoothProgress eases Seedance's coarse time-based
+          checkpoints into a rising percentage; it resumes after a reload via board.animateJobId. */}
+      {animatePoll.isActive && animatePoll.job && <div className="mb-2"><SmoothProgress job={animatePoll.job} expectedTotalSec={60} /></div>}
+      {animErr && <p className="mb-2 text-xs text-destructive">{animErr}</p>}
       {/* 9:16 portrait viewer: compact (bounded max width, centered) + object-contain letterbox so the
           still/clip is never cropped or stretched. A rendered frame opens full-screen in the lightbox. */}
       <div className="relative mx-auto flex aspect-[9/16] w-full max-w-[200px] items-center justify-center overflow-hidden rounded-lg bg-black">
@@ -309,8 +371,8 @@ function BoardCard({ board, onChanged, registerFrameRun }: { board: Board; onCha
       </div>
       <p className="mt-2 line-clamp-4 text-sm">{board.actionOrDialogue}</p>
       {/* Frame generation keeps the raw job progress bar (resumes after a reload via board.frameJobId).
-          The animate control + its progress bar now live at the top of the scene group (see SceneGroup) —
-          the clip is a start→end i2v render, so it belongs to the whole scene, not a single board. */}
+          Single-frame model: this board owns both its «Сгенерировать кадр» and «Оживить» controls, and
+          the animate progress bar (resumes via board.animateJobId) is rendered above with the buttons. */}
       {framePoll.isActive && framePoll.job && <div className="mt-2"><JobProgressBar job={framePoll.job} expectedTotalSec={90} /></div>}
       {err && <p className="mt-1 text-xs text-destructive">{err}</p>}
 
@@ -356,135 +418,6 @@ function BoardCard({ board, onChanged, registerFrameRun }: { board: Board; onCha
   )
 }
 
-/**
- * Stage 220 — one scene = exactly two boards (start frame + end frame) rendered in PARALLEL, plus one i2v clip
- * (start→end). The header shows «Сцена N», the scene duration and who is on-screen / entering / exiting, and a
- * single «Сгенерировать оба кадра» button that fires both frame POSTs concurrently. The end frame is a still
- * keyframe (the clip's last_image) and is never animated on its own.
- */
-function SceneGroup({ sceneNumber, boards, onChanged, boardFrameLocked, legacy = false }: {
-  sceneNumber: number
-  boards: Board[]
-  onChanged: () => void
-  boardFrameLocked: (b: Board) => boolean
-  /** Legacy flat layout wraps each single board in its own group; suppress the misleading «Сцена N» header. */
-  legacy?: boolean
-}) {
-  const runners = useRef<Map<string, () => void>>(new Map())
-  const register = useCallback((id: string) => (fn: () => void) => { runners.current.set(id, fn) }, [])
-  const runBoth = useCallback(() => { runners.current.forEach((fn) => fn()) }, [])
-
-  // Both boards of a scene carry the same shot plan (onScreen/entering/exiting/motion/duration).
-  const plan = boards.find((b) => b.castInFrame)?.castInFrame ?? null
-  const start = boards.find((b) => b.boardRole === 'start') ?? boards[0]
-  const end = boards.find((b) => b.boardRole === 'end')
-  const ordered = [start, ...(end ? [end] : boards.filter((b) => b !== start))].filter(Boolean) as Board[]
-  const dur = plan?.durationSec ?? start?.durationSec ?? null
-  // The whole scene is locked while the previous scene is still rendering (a not-yet-framed board is gated).
-  const sceneLocked = ordered.some((b) => !validUrl(b.imageUrl) && boardFrameLocked(b))
-
-  // One button (re)generates every frame of the scene in parallel as a background job. Its label switches
-  // between «Сгенерировать» (nothing rendered yet) and «Перегенерировать» (at least one frame already exists),
-  // and between the single-frame and «оба кадра» wording depending on how many boards this scene holds.
-  const anyFramed = ordered.some((b) => validUrl(b.imageUrl))
-  const single = ordered.length <= 1
-  const buttonLabel = single
-    ? (anyFramed ? 'Перегенерировать кадр' : 'Сгенерировать кадр')
-    : (anyFramed ? 'Перегенерировать оба кадра' : 'Сгенерировать оба кадра')
-
-  // Stage 231 — the «Оживить сцену» control lives at the TOP of the scene: the clip is one start→end i2v render,
-  // so it belongs to the whole scene, not to a single board. It targets the START board and is enabled ONLY when
-  // BOTH keyframes are ready (single/legacy scenes require just their one frame). Its progress bar persists here
-  // and resumes after a page reload via start.animateJobId.
-  const [animErr, setAnimErr] = useState<string | null>(null)
-  const animatePoll = useJobPolling({
-    onFinish: (res) => { if (res.job.status === 'failed') setAnimErr(res.job.error ?? 'Animation failed'); onChanged() },
-  })
-  const bothFramesReady = validUrl(start?.imageUrl) && (end ? validUrl(end.imageUrl) : true)
-  const animateBusy = animatePoll.isActive
-  const animateDisabled = !bothFramesReady || animateBusy
-  const animateLabel = validUrl(start?.videoUrl) ? 'Переанимировать' : 'Оживить сцену'
-  const animateTitle = !bothFramesReady
-    ? (single ? 'Сначала сгенерируйте кадр' : 'Сначала сгенерируйте оба кадра')
-    : 'Оживить сцену в клип (начальный → последний кадр)'
-
-  const runAnimate = useCallback(async () => {
-    if (!start) return
-    setAnimErr(null)
-    try {
-      const res = await fetch(`/api/ai/storyboard/${start.id}/animate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-      const data = await res.json()
-      if (!res.ok) { setAnimErr(data?.error ?? 'Request failed'); return }
-      if (data.jobId) { animatePoll.start(data.jobId) }
-      else { onChanged() }
-    } catch (e: any) {
-      setAnimErr(e?.message ?? 'Request failed')
-    }
-  }, [start, animatePoll, onChanged])
-
-  // Resume-on-reload — re-attach the animate progress bar if the server still has an active clip job for the
-  // start board. Guarded so it only starts once per job id and never restarts an already-active poll.
-  const resumedAnimateRef = useRef<string | null>(null)
-  useEffect(() => {
-    const jid = start?.animateJobId
-    if (!jid) return
-    if (animatePoll.isActive || animatePoll.job?.id === jid || resumedAnimateRef.current === jid) return
-    resumedAnimateRef.current = jid
-    animatePoll.start(jid)
-  }, [start?.animateJobId, animatePoll])
-
-  return (
-    <div className="rounded-xl border border-border bg-muted/20 p-3" data-testid={`scene-group-${sceneNumber}`}>
-      <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          {!legacy && <div className="text-sm font-semibold text-foreground">Сцена {sceneNumber}{dur ? ` · ${dur}s` : ''}</div>}
-          {plan && (
-            <div className="mt-1 space-y-0.5">
-              <CastLine label="В кадре" names={plan.onScreen} />
-              <CastLine label="Входят" names={plan.entering} />
-              <CastLine label="Выходят" names={plan.exiting} />
-            </div>
-          )}
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <button
-            onClick={runBoth}
-            disabled={sceneLocked}
-            title={sceneLocked ? 'Доступно, когда предыдущая сцена будет готова' : undefined}
-            className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
-            data-testid={`scene-frames-${sceneNumber}`}
-          >
-            <ImageIcon className="h-3.5 w-3.5" /> {buttonLabel}
-          </button>
-          <button
-            onClick={runAnimate}
-            disabled={animateDisabled}
-            title={animateTitle}
-            className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
-            data-testid={`scene-animate-${sceneNumber}`}
-          >
-            {animateBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} {animateLabel}
-          </button>
-        </div>
-      </div>
-      {/* i2v clip progress persists here (start→end animation). SmoothProgress eases Seedance's coarse
-          time-based checkpoints into a rising percentage; it resumes after a reload via start.animateJobId. */}
-      {animatePoll.isActive && animatePoll.job && <div className="mb-2"><SmoothProgress job={animatePoll.job} expectedTotalSec={60} /></div>}
-      {animErr && <p className="mb-2 text-xs text-destructive">{animErr}</p>}
-      <div className={single ? 'grid grid-cols-1 gap-3' : 'grid grid-cols-2 gap-3'}>
-        {ordered.map((b) => (
-          <BoardCard
-            key={b.id}
-            board={b}
-            onChanged={onChanged}
-            registerFrameRun={register(b.id)}
-          />
-        ))}
-      </div>
-    </div>
-  )
-}
-
 export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { projectId: string; episodeId: string; initialVideoUrl?: string | null }) {
   const [boards, setBoards] = useState<Board[]>([])
   const [videoUrl, setVideoUrl] = useState<string | null>(initialVideoUrl ?? null)
@@ -494,8 +427,6 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
   const [stitching, setStitching] = useState(false)
   const [assets, setAssets] = useState<AssetReconciliation | null>(null)
   const [boardGate, setBoardGate] = useState<string | null>(null)
-  // Stage 230 — per-scene UI: one scene per page with a pager («‹ Сцена N из M ›»).
-  const [scenePage, setScenePage] = useState(0)
   // Full-screen preview target (a rendered frame or a reference image); null = lightbox closed.
   const [lightbox, setLightbox] = useState<string | null>(null)
 
@@ -578,31 +509,12 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
     } catch (e: any) { setStitching(false); setError(e?.message ?? 'Ошибка запроса') }
   }, [episodeId, stitchPoll])
 
-  // Stage 220 — per-scene model: a scene = 2 boards (start + end); only the START frame becomes a clip (start→end
-  // i2v), the END frame is a still keyframe. So "animated" is counted over clip boards only (boardRole !== 'end').
-  const perScene = boards.some((b) => !!b.boardRole)
+  // Single-frame model: one planned scene = one board = one keyframe still, animated on its own into a 4–6s clip.
+  // Any leftover two-frame "end" boards (from episodes built before the revert) are excluded from the assemble gate.
   const clipBoards = boards.filter((b) => b.boardRole !== 'end')
   const allAnimated = clipBoards.length > 0 && clipBoards.every((b) => validUrl(b.videoUrl))
   const framedCount = boards.filter((b) => validUrl(b.imageUrl)).length
   const animatedCount = clipBoards.filter((b) => validUrl(b.videoUrl)).length
-
-  // Group boards into scenes, preserving index order (start idx=2i precedes end idx=2i+1). Legacy boards with a
-  // null sceneId each become their own singleton group so they still render.
-  const sceneGroups = (() => {
-    const groups: { key: string; boards: Board[] }[] = []
-    const byKey = new Map<string, number>()
-    for (const b of [...boards].sort((a, z) => a.index - z.index)) {
-      const key = b.sceneId ?? `__legacy__${b.id}`
-      if (!byKey.has(key)) { byKey.set(key, groups.length); groups.push({ key, boards: [] }) }
-      groups[byKey.get(key)!].boards.push(b)
-    }
-    return groups
-  })()
-
-  // Keep the active scene page within bounds when the number of scenes changes (rebuild / first load).
-  useEffect(() => {
-    setScenePage((p) => Math.min(Math.max(0, p), Math.max(0, sceneGroups.length - 1)))
-  }, [sceneGroups.length])
 
   const frameLockedFor = (b: Board) =>
     !boardFramePrecondition(
@@ -622,9 +534,7 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
           {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Собрать ролик (~90с)
         </button>
         <span className="text-xs text-muted-foreground" data-testid="storyboard-status">
-          {perScene
-            ? `${sceneGroups.length} сцен · ${framedCount} из ${boards.length} кадров · ${animatedCount} из ${clipBoards.length} сцен оживлено`
-            : `${boards.length} кадров · ${framedCount} с кадром · ${animatedCount} оживлено`}{videoUrl ? ' · ролик собран' : ''}
+          {`${boards.length} кадров · ${framedCount} с кадром · ${animatedCount} оживлено`}{videoUrl ? ' · ролик собран' : ''}
         </span>
         {splitting && splitPoll.job && <div className="w-full"><JobProgressBar job={splitPoll.job} expectedTotalSec={40} /></div>}
         {stitching && stitchPoll.job && <div className="w-full"><JobProgressBar job={stitchPoll.job} expectedTotalSec={180} /></div>}
@@ -673,63 +583,17 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
         <p className="mt-6 text-sm text-muted-foreground"><Loader2 className="mr-1 inline h-4 w-4 animate-spin" /> Загрузка кадров…</p>
       ) : boards.length === 0 ? (
         <p className="mt-6 text-sm text-muted-foreground">Кадров пока нет. Нажмите «Разбить историю на кадры», чтобы сгенерировать раскадровку из готовой истории.</p>
-      ) : perScene ? (
-        // Per-scene layout: ONE scene per page with a pager. Each scene has a start frame + end frame that
-        // render in parallel; scenes themselves are generated strictly in order (previous scene must finish).
-        <div className="mt-6 space-y-4" data-testid="storyboard-boards">
-          {(() => {
-            const page = Math.min(Math.max(0, scenePage), Math.max(0, sceneGroups.length - 1))
-            const g = sceneGroups[page]
-            if (!g) return null
-            return (
-              <>
-                <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2" data-testid="storyboard-scene-pager">
-                  <button
-                    onClick={() => setScenePage((p) => Math.max(0, p - 1))}
-                    disabled={page <= 0}
-                    className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm font-medium disabled:opacity-40"
-                    data-testid="storyboard-scene-prev"
-                    aria-label="Предыдущая сцена"
-                  >
-                    <ChevronLeft className="h-4 w-4" /> Назад
-                  </button>
-                  <div className="text-sm font-semibold text-foreground" data-testid="storyboard-scene-indicator">
-                    Сцена {page + 1} из {sceneGroups.length}
-                  </div>
-                  <button
-                    onClick={() => setScenePage((p) => Math.min(sceneGroups.length - 1, p + 1))}
-                    disabled={page >= sceneGroups.length - 1}
-                    className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm font-medium disabled:opacity-40"
-                    data-testid="storyboard-scene-next"
-                    aria-label="Следующая сцена"
-                  >
-                    Далее <ChevronRight className="h-4 w-4" />
-                  </button>
-                </div>
-                <SceneGroup
-                  key={g.key}
-                  sceneNumber={page + 1}
-                  boards={g.boards}
-                  onChanged={refresh}
-                  boardFrameLocked={frameLockedFor}
-                />
-              </>
-            )
-          })()}
-        </div>
       ) : (
-        // Legacy flat layout for episodes built before the per-scene model. Each board is wrapped in its own
-        // single-board SceneGroup so frame (re)generation still works after the per-board frame button was
-        // removed — the one scene-level button reads «Сгенерировать / Перегенерировать кадр» here.
+        // Single-frame model: a flat grid of boards. Each board is one keyframe still with its own
+        // «Сгенерировать кадр» + «Оживить» controls. Frames render strictly in index order (a board is
+        // locked until the previous one has a frame) so continuity chaining still works.
         <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3" data-testid="storyboard-boards">
-          {boards.map((b) => (
-            <SceneGroup
+          {[...boards].sort((a, z) => a.index - z.index).map((b) => (
+            <BoardCard
               key={b.id}
-              legacy
-              sceneNumber={b.index + 1}
-              boards={[b]}
+              board={b}
               onChanged={refresh}
-              boardFrameLocked={frameLockedFor}
+              frameLocked={frameLockedFor(b)}
             />
           ))}
         </div>

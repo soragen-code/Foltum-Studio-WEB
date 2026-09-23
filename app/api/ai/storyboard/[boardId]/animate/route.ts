@@ -29,11 +29,6 @@ export async function POST(request: Request, ctx: { params: Promise<{ boardId: s
       select: { id: true, imageUrl: true, boardRole: true, episode: { select: { season: { select: { projectId: true } } } } },
     });
     if (!board) return NextResponse.json({ error: "Board not found" }, { status: 404 });
-    // Stage 220 — per-scene model: only the START frame is animated (start→end i2v). The END frame is a still
-    // keyframe consumed as the clip's last_image; reject an attempt to animate it directly.
-    if (board.boardRole === "end") {
-      return NextResponse.json({ error: "The scene end frame is a keyframe, not an animated clip; animate the scene's start frame instead." }, { status: 400 });
-    }
     if (!board.imageUrl) {
       return NextResponse.json({ error: "Generate the board frame before animating it" }, { status: 400 });
     }
