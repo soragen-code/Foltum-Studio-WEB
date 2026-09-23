@@ -7,7 +7,7 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, storyboardBoardsSchema } from "@/lib/validations";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
-import { runStoryboardBoardsJob, STORYBOARD_BOARDS_JOB_TYPE } from "@/lib/workers/storyboard-job";
+import { runStoryboardBoardsJob, STORYBOARD_BOARDS_JOB_TYPE, BOARD_IMAGE_JOB_TYPE, BOARD_VIDEO_JOB_TYPE } from "@/lib/workers/storyboard-job";
 import { selectAuthoritativeBoardJob } from "@/lib/board-job-select";
 import { gatherMissingAssets, reconcileEpisodeAssets } from "@/lib/asset-gathering";
 
@@ -119,8 +119,32 @@ export async function GET(request: Request) {
   });
   const job = selectAuthoritativeBoardJob(jobs, boards.length > 0);
 
+  // Resume-on-reload — attach the id of any ACTIVE (pending/processing) board-level job to each board, so the
+  // client can re-attach its frame / clip progress bar after a page reload (poll state is memory-only otherwise).
+  const activeBoardJobs = await prisma.generationJob.findMany({
+    where: { projectId, type: { in: [BOARD_IMAGE_JOB_TYPE, BOARD_VIDEO_JOB_TYPE] }, status: { in: ["pending", "processing"] } },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, type: true, resultData: true },
+  });
+  const jobBoardId = (resultData: string | null): string | null => {
+    if (!resultData) return null;
+    try {
+      const parsed = JSON.parse(resultData);
+      return typeof parsed?.boardId === "string" ? parsed.boardId : null;
+    } catch {
+      const m = resultData.match(/"boardId":"([^"]+)"/);
+      return m ? m[1] : null;
+    }
+  };
+  // activeBoardJobs is newest-first, so the FIRST match per board is the newest active job of that kind.
+  const enrichedBoards = boards.map((b) => {
+    const frameJobId = activeBoardJobs.find((j) => j.type === BOARD_IMAGE_JOB_TYPE && jobBoardId(j.resultData) === b.id)?.id ?? null;
+    const animateJobId = activeBoardJobs.find((j) => j.type === BOARD_VIDEO_JOB_TYPE && jobBoardId(j.resultData) === b.id)?.id ?? null;
+    return { ...b, frameJobId, animateJobId };
+  });
+
   return NextResponse.json(
-    { mode: episode.mode, videoUrl: episode.videoUrl, boards, job, assets, boardGate: episode.boardGate ?? null },
+    { mode: episode.mode, videoUrl: episode.videoUrl, boards: enrichedBoards, job, assets, boardGate: episode.boardGate ?? null },
     { headers: { "Cache-Control": "no-store" } },
   );
 }

@@ -52,6 +52,10 @@ type Board = {
   frameRefs?: BoardRef[] | null
   animateRefs?: BoardRef[] | null
   frameSeed?: number | null
+  // Resume-on-reload — the id of the active (pending/processing) board-level job, if any.
+  // Populated by GET /api/ai/storyboard/boards so the client can re-attach its progress bar after a reload.
+  frameJobId?: string | null
+  animateJobId?: string | null
 }
 
 /** Stage 174 — mirrors AssetReconciliation from lib/asset-gathering (per-kind ready/missing counts). */
@@ -223,39 +227,45 @@ function CastLine({ label, names }: { label: string; names?: string[] }) {
 
 /** One board card: keyframe still + action/dialogue text + per-board frame/animate controls. */
 function BoardCard({ board, onChanged, registerFrameRun }: { board: Board; onChanged: () => void; registerFrameRun?: (fn: () => void) => void }) {
-  const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [showDetails, setShowDetails] = useState(false)
   const openImage = useLightbox()
 
   const framePoll = useJobPolling({
-    onFinish: (res) => { setBusy(false); if (res.job.status === 'failed') setErr(res.job.error ?? 'Frame generation failed'); onChanged() },
-  })
-  const animatePoll = useJobPolling({
-    onFinish: (res) => { setBusy(false); if (res.job.status === 'failed') setErr(res.job.error ?? 'Animation failed'); onChanged() },
+    onFinish: (res) => { if (res.job.status === 'failed') setErr(res.job.error ?? 'Frame generation failed'); onChanged() },
   })
 
-  const run = useCallback(async (kind: 'frame' | 'animate') => {
-    setBusy(true); setErr(null)
+  const run = useCallback(async () => {
+    setErr(null)
     try {
-      const res = await fetch(`/api/ai/storyboard/${board.id}/${kind}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      const res = await fetch(`/api/ai/storyboard/${board.id}/frame`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
       const data = await res.json()
-      if (!res.ok) { setBusy(false); setErr(data?.error ?? 'Request failed'); return }
-      if (data.jobId) { (kind === 'frame' ? framePoll : animatePoll).start(data.jobId) }
-      else { setBusy(false); onChanged() }
+      if (!res.ok) { setErr(data?.error ?? 'Request failed'); return }
+      if (data.jobId) { framePoll.start(data.jobId) }
+      else { onChanged() }
     } catch (e: any) {
-      setBusy(false); setErr(e?.message ?? 'Request failed')
+      setErr(e?.message ?? 'Request failed')
     }
-  }, [board.id, framePoll, animatePoll, onChanged])
+  }, [board.id, framePoll, onChanged])
 
   // Stage 220 — a scene's «Сгенерировать оба кадра» button fires the frame POST for BOTH boards concurrently
   // (start + end render in parallel). Each card registers its own frame runner with the parent scene group.
-  useEffect(() => { registerFrameRun?.(() => { void run('frame') }) }, [registerFrameRun, run])
+  useEffect(() => { registerFrameRun?.(() => { void run() }) }, [registerFrameRun, run])
+
+  // Resume-on-reload — if the server still has an active frame job for this board, re-attach the progress bar
+  // after a page reload. Guarded so it only starts once per job id and never restarts an already-active poll.
+  const resumedFrameRef = useRef<string | null>(null)
+  useEffect(() => {
+    const jid = board.frameJobId
+    if (!jid) return
+    if (framePoll.isActive || framePoll.job?.id === jid || resumedFrameRef.current === jid) return
+    resumedFrameRef.current = jid
+    framePoll.start(jid)
+  }, [board.frameJobId, framePoll])
 
   // Per-scene role label; legacy boards keep the flat «Кадр N» heading. Duration (clip length) is a start-frame
   // concept — the end frame is a still keyframe and shows no duration.
   const isEnd = board.boardRole === 'end'
-  const canAnimate = !isEnd
   const roleLabel = board.boardRole === 'start' ? 'Начальный кадр' : isEnd ? 'Последний кадр' : `Кадр ${board.index + 1}`
   const showDur = !isEnd && board.durationSec
 
@@ -298,25 +308,11 @@ function BoardCard({ board, onChanged, registerFrameRun }: { board: Board; onCha
         )}
       </div>
       <p className="mt-2 line-clamp-4 text-sm">{board.actionOrDialogue}</p>
-      {/* Frame generation keeps the raw job progress bar. */}
+      {/* Frame generation keeps the raw job progress bar (resumes after a reload via board.frameJobId).
+          The animate control + its progress bar now live at the top of the scene group (see SceneGroup) —
+          the clip is a start→end i2v render, so it belongs to the whole scene, not a single board. */}
       {framePoll.isActive && framePoll.job && <div className="mt-2"><JobProgressBar job={framePoll.job} expectedTotalSec={90} /></div>}
-      {/* Feature: image-to-video (i2v) animation shows a monotonic 0–100% bar with an elapsed counter.
-          Seedance emits no per-frame percent, so SmoothProgress eases the coarse time-based server
-          checkpoints upward and always displays a rising numeric percentage while the clip renders. */}
-      {animatePoll.isActive && animatePoll.job && <div className="mt-2"><SmoothProgress job={animatePoll.job} expectedTotalSec={60} /></div>}
       {err && <p className="mt-1 text-xs text-destructive">{err}</p>}
-      <div className="mt-2 flex flex-wrap gap-2">
-        {/* Frame (re)generation is triggered ONLY from the scene-level «Сгенерировать оба кадра» button
-            (see SceneGroup) — the per-board frame button was removed so both keyframes always render together
-            as one background job. This card keeps only the START-frame animate control below. */}
-        {/* Stage 220 — only the START frame is animated (start→end i2v clip). The END frame is a still keyframe
-            passed as the clip's last_image, so it exposes no animate control. */}
-        {canAnimate && (
-          <button onClick={() => run('animate')} disabled={busy || !validUrl(board.imageUrl)} title={!validUrl(board.imageUrl) ? 'Сначала сгенерируйте кадр' : 'Оживить сцену в клип (начальный → последний кадр)'} className="inline-flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium disabled:opacity-50" data-testid={`board-animate-${board.index}`}>
-            {busy && animatePoll.isActive ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} {validUrl(board.videoUrl) ? 'Переанимировать' : 'Оживить сцену'}
-          </button>
-        )}
-      </div>
 
       {/* B2/B3 — collapsible "frame details": the actual prompts and the actual reference images the models received.
           Prompt text is English (as sent to the providers); all headings/labels are Russian. */}
@@ -396,6 +392,47 @@ function SceneGroup({ sceneNumber, boards, onChanged, boardFrameLocked, legacy =
     ? (anyFramed ? 'Перегенерировать кадр' : 'Сгенерировать кадр')
     : (anyFramed ? 'Перегенерировать оба кадра' : 'Сгенерировать оба кадра')
 
+  // Stage 231 — the «Оживить сцену» control lives at the TOP of the scene: the clip is one start→end i2v render,
+  // so it belongs to the whole scene, not to a single board. It targets the START board and is enabled ONLY when
+  // BOTH keyframes are ready (single/legacy scenes require just their one frame). Its progress bar persists here
+  // and resumes after a page reload via start.animateJobId.
+  const [animErr, setAnimErr] = useState<string | null>(null)
+  const animatePoll = useJobPolling({
+    onFinish: (res) => { if (res.job.status === 'failed') setAnimErr(res.job.error ?? 'Animation failed'); onChanged() },
+  })
+  const bothFramesReady = validUrl(start?.imageUrl) && (end ? validUrl(end.imageUrl) : true)
+  const animateBusy = animatePoll.isActive
+  const animateDisabled = !bothFramesReady || animateBusy
+  const animateLabel = validUrl(start?.videoUrl) ? 'Переанимировать' : 'Оживить сцену'
+  const animateTitle = !bothFramesReady
+    ? (single ? 'Сначала сгенерируйте кадр' : 'Сначала сгенерируйте оба кадра')
+    : 'Оживить сцену в клип (начальный → последний кадр)'
+
+  const runAnimate = useCallback(async () => {
+    if (!start) return
+    setAnimErr(null)
+    try {
+      const res = await fetch(`/api/ai/storyboard/${start.id}/animate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+      const data = await res.json()
+      if (!res.ok) { setAnimErr(data?.error ?? 'Request failed'); return }
+      if (data.jobId) { animatePoll.start(data.jobId) }
+      else { onChanged() }
+    } catch (e: any) {
+      setAnimErr(e?.message ?? 'Request failed')
+    }
+  }, [start, animatePoll, onChanged])
+
+  // Resume-on-reload — re-attach the animate progress bar if the server still has an active clip job for the
+  // start board. Guarded so it only starts once per job id and never restarts an already-active poll.
+  const resumedAnimateRef = useRef<string | null>(null)
+  useEffect(() => {
+    const jid = start?.animateJobId
+    if (!jid) return
+    if (animatePoll.isActive || animatePoll.job?.id === jid || resumedAnimateRef.current === jid) return
+    resumedAnimateRef.current = jid
+    animatePoll.start(jid)
+  }, [start?.animateJobId, animatePoll])
+
   return (
     <div className="rounded-xl border border-border bg-muted/20 p-3" data-testid={`scene-group-${sceneNumber}`}>
       <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
@@ -409,16 +446,31 @@ function SceneGroup({ sceneNumber, boards, onChanged, boardFrameLocked, legacy =
             </div>
           )}
         </div>
-        <button
-          onClick={runBoth}
-          disabled={sceneLocked}
-          title={sceneLocked ? 'Доступно, когда предыдущая сцена будет готова' : undefined}
-          className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
-          data-testid={`scene-frames-${sceneNumber}`}
-        >
-          <ImageIcon className="h-3.5 w-3.5" /> {buttonLabel}
-        </button>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <button
+            onClick={runBoth}
+            disabled={sceneLocked}
+            title={sceneLocked ? 'Доступно, когда предыдущая сцена будет готова' : undefined}
+            className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
+            data-testid={`scene-frames-${sceneNumber}`}
+          >
+            <ImageIcon className="h-3.5 w-3.5" /> {buttonLabel}
+          </button>
+          <button
+            onClick={runAnimate}
+            disabled={animateDisabled}
+            title={animateTitle}
+            className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs font-medium hover:bg-accent disabled:opacity-50"
+            data-testid={`scene-animate-${sceneNumber}`}
+          >
+            {animateBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />} {animateLabel}
+          </button>
+        </div>
       </div>
+      {/* i2v clip progress persists here (start→end animation). SmoothProgress eases Seedance's coarse
+          time-based checkpoints into a rising percentage; it resumes after a reload via start.animateJobId. */}
+      {animatePoll.isActive && animatePoll.job && <div className="mb-2"><SmoothProgress job={animatePoll.job} expectedTotalSec={60} /></div>}
+      {animErr && <p className="mb-2 text-xs text-destructive">{animErr}</p>}
       <div className={single ? 'grid grid-cols-1 gap-3' : 'grid grid-cols-2 gap-3'}>
         {ordered.map((b) => (
           <BoardCard
