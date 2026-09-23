@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 800;
 
 import { NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
@@ -46,6 +47,20 @@ export async function POST(request: Request, ctx: { params: Promise<{ boardId: s
       orderBy: { createdAt: "desc" },
     });
     if (active) return NextResponse.json({ jobId: active.id, resumed: true });
+
+    // (Re)generation renders the frame FROM SCRATCH: drop this board's existing keyframe AND its animated clip
+    // (plus the clip's i2v reference list), so a stale ролик that was animated from the PREVIOUS frame never
+    // survives a re-render. The scene button fires this POST for BOTH boards of the scene, so the whole scene's
+    // frames and clips are cleared together. This clears runtime RESULT fields only — never the scenario/text
+    // fields (actionOrDialogue, imagePrompt, motionPromptEn, castInFrame, boardRole, index, sceneId, durationSec).
+    // Cleared HERE at job CREATION (not inside the worker): the cron sweeper re-drives an interrupted frame job
+    // by calling runBoardImageJob on the SAME job WITHOUT re-POSTing, so clearing in the worker would wipe an
+    // in-progress render's own output on every resume. Because imageUrl is now null during the legit render,
+    // the sweeper correctly treats the job as still-rendering (heartbeat + re-run) rather than false-finalizing.
+    await prisma.board.update({
+      where: { id: boardId },
+      data: { imageUrl: null, videoUrl: null, animateRefs: Prisma.DbNull, status: "frame_generating", error: null },
+    });
 
     const job = await prisma.generationJob.create({
       data: { type: BOARD_IMAGE_JOB_TYPE, status: "pending", progress: 0, message: "Starting...", projectId: pid, resultData: JSON.stringify({ boardId }) },
