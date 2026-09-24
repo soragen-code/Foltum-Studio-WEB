@@ -25,7 +25,8 @@
  *    gracefully: for text-to-video they send the text prompt only; for
  *    image-to-video they send the first frame (and, where supported, the last frame).
  *
- * Slugs verified against https://api.wavespeed.ai/api/v3/<slug> (2026-09-22).
+ * Slugs verified against https://api.wavespeed.ai/api/v3/<slug> (2026-09-24; Kling ≥2.5 use
+ *  a /text-to-video | /image-to-video suffix, Kling 2.1 keeps the -t2v-master / -i2v-standard form).
  */
 
 export type VideoFamilyId = "seedance" | "kling" | "minimax" | "veo";
@@ -111,8 +112,8 @@ export const VIDEO_MODEL_CATALOG: VideoModelDef[] = [
     id: "kling-v2.5-turbo-pro",
     label: "Kling 2.5 Turbo Pro",
     family: "kling",
-    slugT2V: "kwaivgi/kling-v2.5-turbo-pro",
-    slugI2V: "kwaivgi/kling-v2.5-turbo-pro",
+    slugT2V: "kwaivgi/kling-v2.5-turbo-pro/text-to-video",
+    slugI2V: "kwaivgi/kling-v2.5-turbo-pro/image-to-video",
     refImages: false,
     bodyStyle: "kling",
     resolutions: [],
@@ -125,8 +126,8 @@ export const VIDEO_MODEL_CATALOG: VideoModelDef[] = [
     id: "kling-v2.5-turbo-std",
     label: "Kling 2.5 Turbo Standard",
     family: "kling",
-    slugT2V: "kwaivgi/kling-v2.5-turbo-std",
-    slugI2V: "kwaivgi/kling-v2.5-turbo-std",
+    // No text-to-video endpoint for the Std tier on WaveSpeed (verified 2026-09-24).
+    slugI2V: "kwaivgi/kling-v2.5-turbo-std/image-to-video",
     refImages: false,
     bodyStyle: "kling",
     resolutions: [],
@@ -139,8 +140,8 @@ export const VIDEO_MODEL_CATALOG: VideoModelDef[] = [
     id: "kling-v2.6-pro",
     label: "Kling 2.6 Pro",
     family: "kling",
-    slugT2V: "kwaivgi/kling-v2.6-pro",
-    slugI2V: "kwaivgi/kling-v2.6-pro",
+    slugT2V: "kwaivgi/kling-v2.6-pro/text-to-video",
+    slugI2V: "kwaivgi/kling-v2.6-pro/image-to-video",
     refImages: false,
     bodyStyle: "kling",
     resolutions: [],
@@ -153,8 +154,8 @@ export const VIDEO_MODEL_CATALOG: VideoModelDef[] = [
     id: "kling-v2.6-std",
     label: "Kling 2.6 Standard",
     family: "kling",
-    slugT2V: "kwaivgi/kling-v2.6-std",
-    slugI2V: "kwaivgi/kling-v2.6-std",
+    slugT2V: "kwaivgi/kling-v2.6-std/text-to-video",
+    slugI2V: "kwaivgi/kling-v2.6-std/image-to-video",
     refImages: false,
     bodyStyle: "kling",
     resolutions: [],
@@ -167,8 +168,8 @@ export const VIDEO_MODEL_CATALOG: VideoModelDef[] = [
     id: "kling-v3.0-pro",
     label: "Kling 3.0 Pro",
     family: "kling",
-    slugT2V: "kwaivgi/kling-v3.0-pro",
-    slugI2V: "kwaivgi/kling-v3.0-pro",
+    slugT2V: "kwaivgi/kling-v3.0-pro/text-to-video",
+    slugI2V: "kwaivgi/kling-v3.0-pro/image-to-video",
     refImages: false,
     bodyStyle: "kling",
     resolutions: [],
@@ -181,8 +182,8 @@ export const VIDEO_MODEL_CATALOG: VideoModelDef[] = [
     id: "kling-v3.0-std",
     label: "Kling 3.0 Standard",
     family: "kling",
-    slugT2V: "kwaivgi/kling-v3.0-std",
-    slugI2V: "kwaivgi/kling-v3.0-std",
+    slugT2V: "kwaivgi/kling-v3.0-std/text-to-video",
+    slugI2V: "kwaivgi/kling-v3.0-std/image-to-video",
     refImages: false,
     bodyStyle: "kling",
     resolutions: [],
