@@ -28,6 +28,7 @@ model User {
   creditTransactions CreditTransaction[]
   payments      Payment[]
   manualGenerations ManualGeneration[]
+  manualLocations ManualLocation[]
 }
 
 model Account {
@@ -636,6 +637,29 @@ model ManualGeneration {
   updatedAt      DateTime @updatedAt
 
   user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+// Stage 234h: "Location Generator" (/manual) — a saved location entity with four wall labels and four
+// generated 9:16 plates (front / back / left / right). Reusable as a reference in the video-prompt builder.
+model ManualLocation {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  description String   @db.Text
+  frontLabel  String
+  backLabel   String
+  leftLabel   String
+  rightLabel  String
+  frontUrl    String?  @db.Text
+  backUrl     String?  @db.Text
+  leftUrl     String?  @db.Text
+  rightUrl    String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
 }

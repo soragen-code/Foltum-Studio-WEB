@@ -6,13 +6,14 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Camera, Clapperboard, Download, Loader2, Plus, RefreshCw, Send, Trash2, Upload, X, ImageOff, AlertCircle } from 'lucide-react'
+import { ArrowLeft, Camera, Clapperboard, Download, Loader2, Plus, RefreshCw, Send, Trash2, Upload, X, ImageOff, AlertCircle, ChevronLeft, ChevronRight, Play } from 'lucide-react'
 import { Header } from '@/components/header'
 import { useTranslation } from '@/lib/i18n/context'
 import { MANUAL_IMAGE_MODELS, DEFAULT_MANUAL_IMAGE_MODEL_ID, MANUAL_PHOTO_COST, MANUAL_VIDEO_COST_PER_SEC } from '@/lib/manual-image-models'
 import { VIDEO_FAMILIES, DEFAULT_VIDEO_MODEL_ID, getVideoModel } from '@/lib/video-models'
 import { useJobPolling, JobProgressBar, type JobPollResponse } from '@/app/project/[id]/_components/use-job-polling'
 import { compressImageForUpload } from '@/lib/client-image-compress'
+import { LocationGenerator, buildReferenceBlock, type ManualLocation } from './location-generator'
 
 interface ManualItem {
   id: string
@@ -174,6 +175,37 @@ export function ManualClient() {
   const [credits, setCredits] = useState<number | null>(null)
   const [historyLoading, setHistoryLoading] = useState(true)
 
+  // ── saved locations (Stage 234h) ──
+  const [locations, setLocations] = useState<ManualLocation[]>([])
+
+  // ── fullscreen viewer (lightbox) ──
+  const [lightboxId, setLightboxId] = useState<string | null>(null)
+  const viewable = useMemo(() => items.filter((it) => it.resultUrl && (it.kind === 'photo' || it.kind === 'video')), [items])
+  const lightboxIndex = useMemo(() => viewable.findIndex((v) => v.id === lightboxId), [viewable, lightboxId])
+  const lightboxItem = lightboxIndex >= 0 ? viewable[lightboxIndex] : null
+  const closeLightbox = useCallback(() => setLightboxId(null), [])
+  const stepLightbox = useCallback((dir: number) => {
+    setLightboxId((cur) => {
+      if (!cur || viewable.length === 0) return cur
+      const idx = viewable.findIndex((v) => v.id === cur)
+      if (idx < 0) return cur
+      return viewable[(idx + dir + viewable.length) % viewable.length].id
+    })
+  }, [viewable])
+  const touchStartX = useRef<number | null>(null)
+  useEffect(() => {
+    if (!lightboxId) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeLightbox()
+      else if (e.key === 'ArrowLeft') stepLightbox(-1)
+      else if (e.key === 'ArrowRight') stepLightbox(1)
+    }
+    window.addEventListener('keydown', onKey)
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prevOverflow }
+  }, [lightboxId, closeLightbox, stepLightbox])
+
   const loadHistory = useCallback(async () => {
     try {
       const res = await fetch('/api/manual/history', { cache: 'no-store' })
@@ -186,6 +218,16 @@ export function ManualClient() {
     }
   }, [])
   useEffect(() => { loadHistory() }, [loadHistory])
+
+  const loadLocations = useCallback(async () => {
+    try {
+      const res = await fetch('/api/manual/locations', { cache: 'no-store' })
+      if (!res.ok) return
+      const data = await res.json()
+      if (Array.isArray(data?.items)) setLocations(data.items)
+    } catch { /* ignore */ }
+  }, [])
+  useEffect(() => { loadLocations() }, [loadLocations])
 
   const photoJob = useJobPolling({
     onFinish: (res: JobPollResponse) => {
@@ -282,6 +324,24 @@ export function ManualClient() {
     else setVideoRefs((prev) => (prev.includes(url) || prev.length >= VIDEO_MAX_REFS ? prev : [...prev, url]))
     document.getElementById('manual-video-tile')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }
+
+  // Stage 234h — insert a saved location into the video-prompt builder: append the reference block to the prompt
+  // and attach the 4 plates as reference images (T2V → refs; I2V → FRONT plate as the first frame).
+  const applyLocationToVideo = useCallback((loc: ManualLocation, n: number) => {
+    const plates = [loc.frontUrl, loc.backUrl, loc.leftUrl, loc.rightUrl].filter((u): u is string => !!u)
+    const block = buildReferenceBlock(loc, n)
+    setVideoPrompt((prev) => (prev.trim() ? `${prev.trim()}\n\n${block}` : block))
+    if (videoMode === 'i2v') {
+      if (loc.frontUrl) setFirstFrame([loc.frontUrl])
+    } else {
+      setVideoRefs((prev) => {
+        const merged = [...prev]
+        for (const u of plates) if (!merged.includes(u) && merged.length < VIDEO_MAX_REFS) merged.push(u)
+        return merged
+      })
+    }
+    document.getElementById('manual-video-tile')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  }, [videoMode])
 
   const deleteItem = async (id: string) => {
     if (!confirm(t('manual.confirmDelete'))) return
@@ -419,6 +479,22 @@ export function ManualClient() {
                 </select>
               </div>
             </div>
+            {locations.length > 0 && (
+              <div className="mb-3">
+                <label className="mb-1 block text-xs font-medium">{t('manual.loc.videoSelectLabel')}</label>
+                <select
+                  value=""
+                  onChange={(e) => { const loc = locations.find((l) => l.id === e.target.value); if (loc) applyLocationToVideo(loc, 2); e.target.value = '' }}
+                  className={selectCls}
+                  disabled={videoBusy}
+                  data-testid="manual-video-location"
+                >
+                  <option value="">{t('manual.loc.videoSelectPlaceholder')}</option>
+                  {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                </select>
+                <p className="mt-1 text-[11px] text-muted-foreground">{t('manual.loc.videoSelectHint')}</p>
+              </div>
+            )}
             {videoMode === 'i2v' ? (
               <>
                 <label className="mb-1 block text-xs font-medium">{t('manual.firstFrame')}</label>
@@ -458,6 +534,9 @@ export function ManualClient() {
           </section>
         </div>
 
+        {/* ── Location Generator (Stage 234h) ── */}
+        <LocationGenerator locations={locations} reloadLocations={loadLocations} onUseInVideo={applyLocationToVideo} />
+
         {/* ── History ── */}
         <section className="mt-8" data-testid="manual-history">
           <h2 className="mb-3 font-display text-lg font-bold">{t('manual.history')}</h2>
@@ -471,10 +550,17 @@ export function ManualClient() {
                 <div key={it.id} className="flex flex-col overflow-hidden rounded-xl border border-border bg-card" data-testid="manual-history-item">
                   <div className="relative aspect-[9/16] w-full bg-muted">
                     {it.resultUrl && it.kind === 'photo' ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={it.resultUrl} alt="" className="h-full w-full object-cover" />
+                      <button type="button" onClick={() => setLightboxId(it.id)} className="group block h-full w-full" title={t('manual.openFullscreen')} aria-label={t('manual.openFullscreen')}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={it.resultUrl} alt="" className="h-full w-full object-cover transition group-hover:brightness-90" />
+                      </button>
                     ) : it.resultUrl && it.kind === 'video' ? (
-                      <video src={it.resultUrl} controls playsInline preload="metadata" className="h-full w-full object-cover" />
+                      <button type="button" onClick={() => setLightboxId(it.id)} className="group relative block h-full w-full" title={t('manual.openFullscreen')} aria-label={t('manual.openFullscreen')}>
+                        <video src={it.resultUrl} muted playsInline preload="metadata" className="h-full w-full object-cover transition group-hover:brightness-90" />
+                        <span className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                          <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/55 text-white shadow-lg"><Play className="h-5 w-5 translate-x-0.5" /></span>
+                        </span>
+                      </button>
                     ) : (
                       <div className="flex h-full w-full items-center justify-center text-muted-foreground/40">
                         {it.status === 'pending' || it.status === 'processing' ? <Loader2 className="h-6 w-6 animate-spin text-primary" /> : <ImageOff className="h-6 w-6" />}
@@ -507,6 +593,70 @@ export function ManualClient() {
           )}
         </section>
       </main>
+
+      {/* ── Fullscreen viewer ── */}
+      {lightboxItem && lightboxItem.resultUrl && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 p-4"
+          onClick={closeLightbox}
+          onTouchStart={(e) => { touchStartX.current = e.touches[0]?.clientX ?? null }}
+          onTouchEnd={(e) => {
+            const start = touchStartX.current
+            touchStartX.current = null
+            if (start === null) return
+            const dx = (e.changedTouches[0]?.clientX ?? start) - start
+            if (Math.abs(dx) > 45) stepLightbox(dx < 0 ? 1 : -1)
+          }}
+          data-testid="manual-lightbox"
+        >
+          <button
+            type="button"
+            onClick={closeLightbox}
+            aria-label={t('manual.viewerClose')}
+            className="absolute right-3 top-3 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20"
+          >
+            <X className="h-5 w-5" />
+          </button>
+
+          {viewable.length > 1 && (
+            <>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); stepLightbox(-1) }}
+                aria-label={t('manual.viewerPrev')}
+                className="absolute left-2 top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20 sm:left-4"
+              >
+                <ChevronLeft className="h-6 w-6" />
+              </button>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); stepLightbox(1) }}
+                aria-label={t('manual.viewerNext')}
+                className="absolute right-2 top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-white transition hover:bg-white/20 sm:right-4"
+              >
+                <ChevronRight className="h-6 w-6" />
+              </button>
+            </>
+          )}
+
+          <div className="flex max-h-full max-w-full items-center justify-center" onClick={(e) => e.stopPropagation()}>
+            {lightboxItem.kind === 'video' ? (
+              <div className="aspect-[9/16] max-h-[88vh] w-auto overflow-hidden rounded-lg bg-black" style={{ maxWidth: '95vw' }}>
+                <video key={lightboxItem.id} src={lightboxItem.resultUrl} controls autoPlay playsInline className="h-full w-full object-contain" />
+              </div>
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img key={lightboxItem.id} src={lightboxItem.resultUrl} alt="" className="max-h-[90vh] max-w-[95vw] rounded-lg object-contain" />
+            )}
+          </div>
+
+          {viewable.length > 1 && (
+            <span className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-white/10 px-3 py-1 text-xs text-white">
+              {lightboxIndex + 1} / {viewable.length}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   )
 }

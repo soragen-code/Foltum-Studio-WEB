@@ -632,3 +632,32 @@ DO $$ BEGIN
       FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
   END IF;
 END $$;
+
+
+
+-- Stage 234h: "Location Generator" (/manual) — saved location entity with four wall labels + four generated
+-- 9:16 plates (front/back/left/right), reusable in the video-prompt builder. Additive & idempotent.
+CREATE TABLE IF NOT EXISTS "ManualLocation" (
+  "id" TEXT NOT NULL,
+  "userId" TEXT NOT NULL,
+  "name" TEXT NOT NULL,
+  "description" TEXT NOT NULL,
+  "frontLabel" TEXT NOT NULL,
+  "backLabel" TEXT NOT NULL,
+  "leftLabel" TEXT NOT NULL,
+  "rightLabel" TEXT NOT NULL,
+  "frontUrl" TEXT,
+  "backUrl" TEXT,
+  "leftUrl" TEXT,
+  "rightUrl" TEXT,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" TIMESTAMP(3) NOT NULL,
+  CONSTRAINT "ManualLocation_pkey" PRIMARY KEY ("id")
+);
+CREATE INDEX IF NOT EXISTS "ManualLocation_userId_createdAt_idx" ON "ManualLocation"("userId", "createdAt");
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ManualLocation_userId_fkey') THEN
+    ALTER TABLE "ManualLocation" ADD CONSTRAINT "ManualLocation_userId_fkey"
+      FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;
