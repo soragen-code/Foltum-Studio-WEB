@@ -33,7 +33,7 @@ import { WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
 import {
   extractSpokenLinesResilient,
   estimatedSpeechSeconds,
-  chunkLinesByBudget,
+  chunkLinesByBudgetCapped,
   type DialogueRepairFn,
   type SpokenLine,
 } from "@/lib/storyboard-dialogue";
@@ -84,6 +84,11 @@ const ANCHOR_WAIT_MAX_POLLS = Number(process.env.BOARD_ANCHOR_WAIT_MAX_POLLS ?? 
  */
 const SCENE_CLIP_MAX_SEC = 5;
 const SCENE_SPEECH_BUDGET_SEC = 4;
+// Stage 231 — the number of boards a scene may yield is BUDGETED against the scene's own scripted duration.
+// A shot is a ~5s clip, so a scene of D seconds yields round(D / 5) boards (a 15s scene → 3, a 14s scene → 3).
+// This keeps the whole episode proportional to its scene durations (a ~90s episode → ~18 boards / ~90s) instead
+// of tripling the length when a scene is dialogue-dense. Boards per scene are floored at 1 (narration/short scenes).
+const SCENE_CLIP_TARGET_SEC = 5;
 
 /** Minimal sibling projection shared by the Stage 140 set-anchors and the Stage 142 scene anchor. */
 const SIBLING_SELECT = { id: true, index: true, imageUrl: true, status: true, directionJson: true, motionEn: true, actionOrDialogue: true, region: true, sceneId: true, boardRole: true } as const;
@@ -248,7 +253,12 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
       const lines: SpokenLine[] = isNarration || !s.dialogueEnResolved.trim()
         ? []
         : await extractSpokenLinesResilient(s.dialogueEnResolved, attributionCast, { repair: dialogueRepair });
-      const chunks = chunkLinesByBudget(lines, SCENE_SPEECH_BUDGET_SEC);
+      // Stage 231 — cap this scene's boards at round(sceneDuration / 5) so the shot count stays proportional to
+      // the scene's own length (a 15s scene → 3 boards, not 6–11). A dialogue-dense scene now re-packs its lines
+      // into that many denser chunks instead of multiplying into many 4s chunks and tripling the episode length.
+      const sceneDur = Math.round(s.durationSec ?? 0);
+      const maxParts = Math.max(1, Math.round((sceneDur > 0 ? sceneDur : SCENE_CLIP_TARGET_SEC) / SCENE_CLIP_TARGET_SEC));
+      const chunks = chunkLinesByBudgetCapped(lines, SCENE_SPEECH_BUDGET_SEC, maxParts);
       const partCount = chunks.length;
       chunks.forEach((chunk, partIndex) => {
         planned.push({
@@ -305,11 +315,18 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
       const p = planned[i];
       const plan = plans[i];
       const dialogue = p.dialogue;
-      // Duration = enough to fit THIS part's speech (never truncated/accelerated), floored at 4s and clamped to
-      // the HARD 5s clip cap. The scripted scene length is NOT used as a floor — a shot is always a short 4–5s
-      // clip regardless of how long the source scene was written; longer dialogue splits into more shots instead.
+      // Stage 231 — duration is the scene's own scripted length distributed evenly across its parts, clamped to
+      // the 4–5s clip window, so Σ(board durations of a scene) ≈ the scene duration and the episode total tracks
+      // the scene durations (≈90s) instead of tripling them. The part COUNT was already capped at round(dur/5)
+      // upstream, so this stays inside 4–5s per board; speech is used only as a lower bound so a talky board is
+      // never shorter than its own (estimated) speech, still under the hard 5s cap.
       const speechSec = dialogue.reduce((sum, l) => sum + estimatedSpeechSeconds(l), 0);
-      const durationSec = Math.min(SCENE_CLIP_MAX_SEC, Math.max(Math.ceil(speechSec) + 1, 4));
+      const sceneTotal = Math.round(p.source.durationSec ?? 0) || (p.partCount * SCENE_CLIP_TARGET_SEC);
+      const evenPart = Math.round(sceneTotal / Math.max(1, p.partCount));
+      const durationSec = Math.min(
+        SCENE_CLIP_MAX_SEC,
+        Math.max(4, evenPart, Math.min(SCENE_CLIP_MAX_SEC, Math.ceil(speechSec))),
+      );
 
       // Single-frame model: each planned scene yields ONE board — a keyframe still that is animated on its OWN
       // into a 4–5s clip (no start→end morph). WHO is in frame is everyone present at the scene start

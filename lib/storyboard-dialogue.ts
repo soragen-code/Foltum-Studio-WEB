@@ -301,6 +301,37 @@ export function chunkLinesByBudget(lines: SpokenLine[], budgetSec: number): Spok
   return chunks.length ? chunks : [[]];
 }
 
+/**
+ * Stage 231 — chunk lines so each fits `budgetSec`, but NEVER produce more than `maxParts` chunks. The board
+ * count of a scene must stay proportional to the scene's own scripted duration: a 15s scene yields ~3 boards,
+ * not the 6–11 that raw budget-splitting of dialogue-dense scenes used to create (which tripled the episode
+ * length). When the plain budget split would exceed `maxParts`, the atomized lines are RE-PACKED evenly across
+ * exactly `maxParts` chunks (a larger effective per-chunk budget). Lossless: every line lands on exactly one
+ * chunk, in order — nothing is dropped, truncated or reordered; the denser chunks simply carry more speech and
+ * the ≤5s per-clip cap still applies downstream.
+ */
+export function chunkLinesByBudgetCapped(lines: SpokenLine[], budgetSec: number, maxParts: number): SpokenLine[][] {
+  const cap = Math.max(1, Math.floor(maxParts));
+  const byBudget = chunkLinesByBudget(lines, budgetSec);
+  if (byBudget.length <= cap) return byBudget;
+  // Re-pack: distribute atomized lines evenly across exactly `cap` chunks by cumulative estimated speech time.
+  const atomized = lines.flatMap((l) => atomizeLine(l, budgetSec));
+  if (!atomized.length) return [[]];
+  const total = atomized.reduce((sum, l) => sum + estimatedSpeechSeconds(l), 0);
+  const perChunk = total / cap;
+  const chunks: SpokenLine[][] = Array.from({ length: cap }, () => []);
+  let acc = 0;
+  let idx = 0;
+  for (const line of atomized) {
+    // Advance to the next chunk once this one has filled its even share of the total speech time.
+    while (idx < cap - 1 && acc >= perChunk * (idx + 1)) idx++;
+    chunks[idx].push(line);
+    acc += estimatedSpeechSeconds(line);
+  }
+  const nonEmpty = chunks.filter((c) => c.length);
+  return nonEmpty.length ? nonEmpty : [[]];
+}
+
 /** Split at natural punctuation boundaries first; preserve every character and the original order.
  * A clause with no punctuation to break on that still exceeds the 6s budget is split losslessly at
  * word boundaries (never truncated, omitted or spoken faster), so no phrase is ever un-splittable

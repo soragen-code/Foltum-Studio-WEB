@@ -458,6 +458,12 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
   const [boardGate, setBoardGate] = useState<string | null>(null)
   // Full-screen preview target (a rendered frame or a reference image); null = lightbox closed.
   const [lightbox, setLightbox] = useState<string | null>(null)
+  // «Сгенерировать все кадры» — while true, the orchestrator effect below fires a frame job for every board that
+  // still lacks a still, scene by scene (the per-board endpoint HARD-rejects a board until its previous scene is
+  // framed), re-firing the next scene's boards as each one unlocks. `firedRef` tracks boards already POSTed this
+  // run so the effect never double-fires the same board.
+  const [generatingAll, setGeneratingAll] = useState(false)
+  const firedRef = useRef<Set<string>>(new Set())
 
   const refresh = useCallback(async () => {
     try {
@@ -551,6 +557,40 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
       boards.map((s) => ({ index: s.index, imageUrl: s.imageUrl, sceneId: s.sceneId })),
     ).allowed
 
+  const unframedCount = boards.filter((b) => !validUrl(b.imageUrl)).length
+
+  // «Сгенерировать все кадры» — arm the orchestrator. Resets the fired-set so a repeat click retries any board
+  // that stayed unframed last run (rejected, failed, or a scene that never unlocked while the tab was closed).
+  const startGenerateAllFrames = useCallback(() => {
+    if (unframedCount === 0) return
+    firedRef.current = new Set()
+    setGeneratingAll(true)
+  }, [unframedCount])
+
+  // Orchestrator: fire, IN PARALLEL, every board that (a) still lacks a still, (b) is allowed by the scene gate
+  // right now, (c) has not been fired this run and (d) has no active job. Each fired board gets a persisted
+  // background job server-side; on refresh its own BoardCard re-attaches the progress bar (resume-on-reload) and,
+  // when it finishes, calls refresh() → boards change → this effect re-runs and fires the next scene that just
+  // unlocked. Stops when nothing is left unframed, or when nothing is fireable and nothing is in flight (any
+  // still-pending board can be retried with another button click).
+  useEffect(() => {
+    if (!generatingAll) return
+    const missing = boards.filter((b) => !validUrl(b.imageUrl))
+    if (missing.length === 0) { setGeneratingAll(false); return }
+    const fireable = missing.filter((b) => !frameLockedFor(b) && !firedRef.current.has(b.id) && !b.frameJobId)
+    if (fireable.length === 0) {
+      // Nothing to POST right now: if boards are still rendering, wait for their refresh to re-run us; otherwise
+      // the remaining boards are stuck (gate never opened / prior failure) — stop and let the user retry.
+      if (!missing.some((b) => b.frameJobId)) setGeneratingAll(false)
+      return
+    }
+    fireable.forEach((b) => firedRef.current.add(b.id))
+    Promise.allSettled(
+      fireable.map((b) => fetch(`/api/ai/storyboard/${b.id}/frame`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })),
+    ).finally(() => { refresh() })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [generatingAll, boards])
+
   return (
     <LightboxContext.Provider value={setLightbox}>
     <div className="mt-4" data-testid="storyboard-panel">
@@ -558,6 +598,9 @@ export function StoryboardPanel({ projectId, episodeId, initialVideoUrl }: { pro
       <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
         <button onClick={startSplit} disabled={splitting || gathering} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="storyboard-generate-boards">
           {splitting || gathering ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {gathering ? t('storyboard.gatheringAssets') : boards.length ? t('storyboard.rebuildBoards') : t('storyboard.buildBoards')}
+        </button>
+        <button onClick={startGenerateAllFrames} disabled={generatingAll || splitting || gathering || boards.length === 0 || unframedCount === 0} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="storyboard-generate-all-frames">
+          {generatingAll ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />} {generatingAll ? t('storyboard.generatingAllFrames') : t('storyboard.generateAllFrames')}
         </button>
         <button onClick={startAssemble} disabled={!allAnimated || stitching} title={allAnimated ? t('storyboard.assembleReady') : t('storyboard.assembleLocked')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="storyboard-assemble">
           {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} {t('storyboard.assemble')}

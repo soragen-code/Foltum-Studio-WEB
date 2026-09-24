@@ -73,6 +73,8 @@ const ru: Dict = {
   // ── storyboard panel ────────────────────────────────────────────────────
   'storyboard.buildBoards': 'Разбить историю на кадры',
   'storyboard.rebuildBoards': 'Перестроить кадры',
+  'storyboard.generateAllFrames': 'Сгенерировать все кадры',
+  'storyboard.generatingAllFrames': 'Генерация кадров…',
   'storyboard.gatheringAssets': 'Сбор ассетов…',
   'storyboard.assemble': 'Собрать ролик (~90с)',
   'storyboard.assembleReady': 'Склеить клипы кадров в один ролик',
@@ -215,6 +217,8 @@ const en: Dict = {
   // ── storyboard panel ────────────────────────────────────────────────────
   'storyboard.buildBoards': 'Split story into frames',
   'storyboard.rebuildBoards': 'Rebuild frames',
+  'storyboard.generateAllFrames': 'Generate all frames',
+  'storyboard.generatingAllFrames': 'Generating frames…',
   'storyboard.gatheringAssets': 'Gathering assets…',
   'storyboard.assemble': 'Assemble video (~90s)',
   'storyboard.assembleReady': 'Stitch the frame clips into one video',
