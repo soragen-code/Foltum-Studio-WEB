@@ -13,6 +13,7 @@
  * the (separate, still-buggy) manual reference-image upload endpoint.
  */
 import { useCallback, useMemo, useState } from 'react'
+import { usePersistentState } from '@/lib/use-persistent-state'
 import { AlertCircle, Copy, Check, Download, Loader2, MapPin, RefreshCw, Save, Trash2, X } from 'lucide-react'
 import { useTranslation } from '@/lib/i18n/context'
 import { MANUAL_IMAGE_MODELS, DEFAULT_MANUAL_IMAGE_MODEL_ID, MANUAL_PHOTO_COST } from '@/lib/manual-image-models'
@@ -69,16 +70,16 @@ export function LocationGenerator({
 }) {
   const { t } = useTranslation()
 
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [frontLabel, setFrontLabel] = useState('')
-  const [backLabel, setBackLabel] = useState('')
-  const [leftLabel, setLeftLabel] = useState('')
-  const [rightLabel, setRightLabel] = useState('')
-  const [model, setModel] = useState(DEFAULT_MANUAL_IMAGE_MODEL_ID)
-  const [refIndex, setRefIndex] = useState(2)
+  const [name, setName] = usePersistentState('foltum.location.name', '')
+  const [description, setDescription] = usePersistentState('foltum.location.description', '')
+  const [frontLabel, setFrontLabel] = usePersistentState('foltum.location.frontLabel', '')
+  const [backLabel, setBackLabel] = usePersistentState('foltum.location.backLabel', '')
+  const [leftLabel, setLeftLabel] = usePersistentState('foltum.location.leftLabel', '')
+  const [rightLabel, setRightLabel] = usePersistentState('foltum.location.rightLabel', '')
+  const [model, setModel] = usePersistentState('foltum.location.model', DEFAULT_MANUAL_IMAGE_MODEL_ID)
+  const [refIndex, setRefIndex] = usePersistentState('foltum.location.refIndex', 2)
 
-  const [urls, setUrls] = useState<Record<PlateKind, string | null>>({ front: null, back: null, left: null, right: null })
+  const [urls, setUrls] = usePersistentState<Record<PlateKind, string | null>>('foltum.location.urls', { front: null, back: null, left: null, right: null })
   const [busy, setBusy] = useState<Record<PlateKind, boolean>>({ front: false, back: false, left: false, right: false })
   const [error, setError] = useState<string | null>(null)
   const [savedId, setSavedId] = useState<string | null>(null)

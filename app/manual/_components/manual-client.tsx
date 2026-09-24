@@ -13,6 +13,7 @@ import { MANUAL_IMAGE_MODELS, DEFAULT_MANUAL_IMAGE_MODEL_ID, MANUAL_PHOTO_COST, 
 import { VIDEO_FAMILIES, DEFAULT_VIDEO_MODEL_ID, getVideoModel } from '@/lib/video-models'
 import { useJobPolling, JobProgressBar, type JobPollResponse } from '@/app/project/[id]/_components/use-job-polling'
 import { compressImageForUpload } from '@/lib/client-image-compress'
+import { usePersistentState } from '@/lib/use-persistent-state'
 import { LocationGenerator, buildReferenceBlock, type ManualLocation } from './location-generator'
 
 interface ManualItem {
@@ -151,21 +152,21 @@ export function ManualClient() {
   const { t } = useTranslation()
 
   // ── photo tile ──
-  const [photoPrompt, setPhotoPrompt] = useState('')
-  const [photoModel, setPhotoModel] = useState(DEFAULT_MANUAL_IMAGE_MODEL_ID)
-  const [photoRefs, setPhotoRefs] = useState<string[]>([])
+  const [photoPrompt, setPhotoPrompt] = usePersistentState('foltum.manual.photoPrompt', '')
+  const [photoModel, setPhotoModel] = usePersistentState('foltum.manual.photoModel', DEFAULT_MANUAL_IMAGE_MODEL_ID)
+  const [photoRefs, setPhotoRefs] = usePersistentState<string[]>('foltum.manual.photoRefs', [])
   const [photoResult, setPhotoResult] = useState<string | null>(null)
   const [photoError, setPhotoError] = useState<string | null>(null)
   const [photoSubmitting, setPhotoSubmitting] = useState(false)
 
   // ── video tile ──
-  const [videoPrompt, setVideoPrompt] = useState('')
-  const [videoMode, setVideoMode] = useState<'i2v' | 't2v'>('i2v')
-  const [videoModelId, setVideoModelId] = useState(DEFAULT_VIDEO_MODEL_ID)
-  const [videoDuration, setVideoDuration] = useState(5)
-  const [firstFrame, setFirstFrame] = useState<string[]>([])
-  const [lastFrame, setLastFrame] = useState<string[]>([])
-  const [videoRefs, setVideoRefs] = useState<string[]>([])
+  const [videoPrompt, setVideoPrompt] = usePersistentState('foltum.manual.videoPrompt', '')
+  const [videoMode, setVideoMode] = usePersistentState<'i2v' | 't2v'>('foltum.manual.videoMode', 'i2v')
+  const [videoModelId, setVideoModelId] = usePersistentState('foltum.manual.videoModelId', DEFAULT_VIDEO_MODEL_ID)
+  const [videoDuration, setVideoDuration] = usePersistentState('foltum.manual.videoDuration', 5)
+  const [firstFrame, setFirstFrame] = usePersistentState<string[]>('foltum.manual.firstFrame', [])
+  const [lastFrame, setLastFrame] = usePersistentState<string[]>('foltum.manual.lastFrame', [])
+  const [videoRefs, setVideoRefs] = usePersistentState<string[]>('foltum.manual.videoRefs', [])
   const [videoResult, setVideoResult] = useState<string | null>(null)
   const [videoError, setVideoError] = useState<string | null>(null)
   const [videoSubmitting, setVideoSubmitting] = useState(false)
