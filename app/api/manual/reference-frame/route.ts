@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { wavespeedSubmit, wavespeedWait } from "@/lib/wavespeed";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
+import { getBucketConfig } from "@/lib/aws-config";
 import { parseImageArray } from "@/lib/reference-counts";
 import { buildManualImageRequest, getManualImageModel, isKnownManualImageModelId, MANUAL_PHOTO_COST } from "@/lib/manual-image-models";
 import { requireManualUser, chargeCredits } from "@/lib/manual-credits";
@@ -71,7 +72,8 @@ export async function POST(request: Request) {
     const providerUrl = await wavespeedWait(taskId, { timeoutMs: 240_000, label: "WaveSpeed image" });
     let url = providerUrl;
     try {
-      url = await uploadRemoteToS3(providerUrl, `references/${kind}/${id}/manual-${Date.now()}.png`, "image/png");
+      const { folderPrefix } = getBucketConfig();
+      url = await uploadRemoteToS3(providerUrl, `${folderPrefix}public/references/${kind}/${id}/manual-${Date.now()}.png`, "image/png");
     } catch (err) {
       console.error("[reference-frame] S3 persist failed, keeping provider URL:", err);
     }

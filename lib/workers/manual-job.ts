@@ -9,6 +9,7 @@
 import { prisma } from "@/lib/db";
 import { wavespeedSubmit, wavespeedResult, wavespeedCancel } from "@/lib/wavespeed";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
+import { getBucketConfig } from "@/lib/aws-config";
 import { heartbeatJob, updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 
 export const MANUAL_PHOTO_JOB_TYPE = "manual_photo";
@@ -92,7 +93,9 @@ export async function runManualJob(jobId: string, genId: string, slug: string, b
     const contentType = isVideo ? "video/mp4" : "image/png";
     let finalUrl = providerUrl;
     try {
-      finalUrl = await uploadRemoteToS3(providerUrl, `manual/${gen.userId}/${genId}.${ext}`, contentType);
+      // RULE: public assets must live under `${folderPrefix}public/...` (otherwise 403).
+      const { folderPrefix } = getBucketConfig();
+      finalUrl = await uploadRemoteToS3(providerUrl, `${folderPrefix}public/manual/${gen.userId}/${genId}.${ext}`, contentType);
     } catch (err) {
       console.error("[manual] S3 persist failed, keeping provider URL:", err);
     }
