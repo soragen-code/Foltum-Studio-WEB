@@ -12,6 +12,7 @@ import { useTranslation } from '@/lib/i18n/context'
 import { MANUAL_IMAGE_MODELS, DEFAULT_MANUAL_IMAGE_MODEL_ID, MANUAL_PHOTO_COST, MANUAL_VIDEO_COST_PER_SEC } from '@/lib/manual-image-models'
 import { VIDEO_FAMILIES, DEFAULT_VIDEO_MODEL_ID, getVideoModel } from '@/lib/video-models'
 import { useJobPolling, JobProgressBar, type JobPollResponse } from '@/app/project/[id]/_components/use-job-polling'
+import { compressImageForUpload } from '@/lib/client-image-compress'
 
 interface ManualItem {
   id: string
@@ -78,9 +79,12 @@ function RefSlots({
     setUploading(true)
     setErr(null)
     try {
+      // Stage 234c: Vercel rejects bodies > ~4.5 MB (413) — downscale big photos in the browser first.
+      const prepared = await compressImageForUpload(file)
       const fd = new FormData()
-      fd.append('file', file)
+      fd.append('file', prepared)
       const res = await fetch('/api/manual/upload', { method: 'POST', body: fd })
+      if (res.status === 413) throw new Error(t('manual.uploadTooLarge'))
       if (!res.ok) throw new Error(await readError(res, t('manual.uploadFailed')))
       const data = await res.json()
       if (typeof data?.url === 'string') onChange([...urls, data.url].slice(0, max))
