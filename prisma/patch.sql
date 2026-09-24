@@ -661,3 +661,9 @@ DO $$ BEGIN
       FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
   END IF;
 END $$;
+
+-- ─── Stage 235: varied storyboard shot coverage ───────────────────────────────────────────────
+-- Per-board chosen SHOT SCALE (ShotSize string, e.g. "CLOSE-UP", "TWO-SHOT", "WIDE ESTABLISHING") so generated
+-- storyboard boards rotate wide / medium / close-up / two-shot board-to-board instead of a count-based single
+-- size. Additive & idempotent; legacy boards keep NULL.
+ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "shotType" TEXT;

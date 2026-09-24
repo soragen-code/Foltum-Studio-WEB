@@ -309,7 +309,11 @@ model Board {
   // additive; legacy boards (the old ~50 discrete boards) keep NULL and load/render exactly as before.
   sceneId          String?  // Scene.id this board belongs to (null for legacy boards)
   boardRole        String?  // "start" | "end" — which frame of the scene this board is (null for legacy boards)
-  castInFrame      Json?    // { onScreen[], entering[], exiting[], startFrame, endFrame, motion, durationSec, dialogue[] } — per-scene shot plan
+  castInFrame      Json?    // { onScreen[], entering[], exiting[], startFrame, endFrame, motion, durationSec, dialogue[], shotType, inFrame[], focus } — per-scene shot plan
+  // Stage 235 (additive): the chosen SHOT SCALE for this board (ShotSize string, e.g. "CLOSE-UP", "TWO-SHOT",
+  // "WIDE ESTABLISHING") so generated boards rotate cinematic coverage board-to-board instead of a count-based
+  // single size. Drives the render workers + a read-only UI badge. Nullable; legacy boards keep NULL.
+  shotType         String?  // per-board shot scale (rotating storyboard coverage); null for legacy boards
   imagePrompt      String?  @db.Text // English Seedream FRAME prompt used to render the board still (9:16)
   // Stage 233 (additive): USER-EDITED prompt overrides. When non-null/non-empty the render workers use the text
   // VERBATIM instead of rebuilding it — the manual edit sticks across re-renders. Null/empty = fall back to the

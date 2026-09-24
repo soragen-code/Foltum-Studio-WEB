@@ -51,6 +51,9 @@ type Board = {
   sceneId?: string | null
   boardRole?: string | null
   castInFrame?: CastInFrame | null
+  // Stage 235 — the chosen SHOT SCALE (ShotSize string) for this board; drives the read-only shot badge.
+  // Nullable/absent on legacy boards → no badge is shown.
+  shotType?: string | null
   // Group B — transparency fields (nullable; absent on legacy boards)
   imagePrompt?: string | null
   motionPromptEn?: string | null
@@ -321,6 +324,17 @@ function RefList({ title, refs }: { title: string; refs: BoardRef[] }) {
   )
 }
 
+/** Stage 235 — map each ShotSize string (Board.shotType) to its localized badge label key. */
+const SHOT_LABEL_KEY: Record<string, string> = {
+  'WIDE ESTABLISHING': 'board.shotWide',
+  'THREE-SHOT': 'board.shotThree',
+  'TWO-SHOT': 'board.shotTwo',
+  'OVER-THE-SHOULDER': 'board.shotOts',
+  'MEDIUM': 'board.shotMedium',
+  'MEDIUM CLOSE-UP': 'board.shotMediumClose',
+  'CLOSE-UP': 'board.shotClose',
+}
+
 /** One "who is in frame" line («В кадре» / «Входят» / «Выходят»); hidden when the name list is empty. */
 function CastLine({ label, names }: { label: string; names?: string[] }) {
   if (!names || names.length === 0) return null
@@ -425,7 +439,17 @@ function BoardCard({ board, onChanged, frameLocked = false }: { board: Board; on
     <div className="rounded-xl border border-border bg-card p-3" data-testid={`board-card-${board.index}`}>
       <div className="mb-2 flex items-center justify-between">
         <span className="text-xs font-semibold text-muted-foreground">{t('board.frame', { n: board.index + 1 })}{board.durationSec ? ` · ${board.durationSec}s` : ''}</span>
-        <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{board.status}</span>
+        <div className="flex items-center gap-2">
+          {board.shotType && SHOT_LABEL_KEY[board.shotType] && (
+            <span
+              className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary"
+              title={`${t('board.shot')}: ${board.shotType}`}
+            >
+              {t(SHOT_LABEL_KEY[board.shotType])}
+            </span>
+          )}
+          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{board.status}</span>
+        </div>
       </div>
       {plan && (
         <div className="mb-2 space-y-0.5">

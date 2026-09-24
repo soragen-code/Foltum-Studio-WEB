@@ -142,14 +142,118 @@ export type CastInFrame = {
   // English `startFrame`/`actionOrDialogue` is left untouched so generation prompts stay English.
   // Optional: absent when the (best-effort) translation is skipped or fails.
   startFrameRu?: string;
+  // Stage 235 — VARIED SHOT COVERAGE. The chosen shot SCALE for this board (ShotSize string), the exact cast
+  // that scale frames (cast order) and the in-focus subject. Absent on legacy per-scene boards created before
+  // Stage 235 → the presence-derived cast + count-based size are used as a fallback.
+  shotType?: string;
+  inFrame?: string[];
+  focus?: string;
 };
 
-/** Build a deterministic BoardCoverage from an explicit in-frame name list (cast order), for the frame prompt. */
-export function coverageFromNames(inFrame: string[], fullCast: string[]): BoardCoverage {
+/**
+ * Build a deterministic BoardCoverage from an explicit in-frame name list (cast order), for the frame prompt.
+ * Stage 235 — an optional `shotSize`/`focus` override lets the caller pin the chosen shot SCALE (rotating
+ * board-to-board coverage); when omitted the size falls back to the head-count (1→MEDIUM, 2→TWO-SHOT, 3+→WIDE).
+ */
+export function coverageFromNames(
+  inFrame: string[],
+  fullCast: string[],
+  opts?: { shotSize?: ShotSize; focus?: string },
+): BoardCoverage {
   const visible = fullCast.filter((c) => inFrame.includes(c));
   const vis = visible.length ? visible : fullCast;
-  const shotSize: ShotSize = vis.length <= 1 ? "MEDIUM" : vis.length === 2 ? "TWO-SHOT" : "WIDE ESTABLISHING";
-  return { shotSize, visible: vis, offScreen: fullCast.filter((c) => !vis.includes(c)), focus: "" };
+  const shotSize: ShotSize =
+    opts?.shotSize ?? (vis.length <= 1 ? "MEDIUM" : vis.length === 2 ? "TWO-SHOT" : "WIDE ESTABLISHING");
+  const focus = opts?.focus && vis.includes(opts.focus) ? opts.focus : "";
+  return { shotSize, visible: vis, offScreen: fullCast.filter((c) => !vis.includes(c)), focus };
+}
+
+/** Names from `names` kept in cast order, de-duplicated (used to derive speakers/addressees for a board). */
+const inCastOrderUnique = (names: string[], cast: string[]): string[] => {
+  const set = new Set(names.filter(Boolean));
+  return cast.filter((c) => set.has(c));
+};
+
+/**
+ * Stage 235 — deterministic, VARIED shot-scale selection so generated storyboard boards rotate between wide /
+ * medium / close-up / two-shot instead of a single count-based size. Pure; no LLM. The pool is biased by each
+ * board's OWN context (how many are present, who speaks / is addressed, whether it opens a scene / location beat);
+ * pickShot then rotates within that pool avoiding an immediate repeat, seeded by the board index for determinism.
+ * STRICT 1 board = 1 shot = 1 camera setup — a board never mixes framings.
+ */
+type ShotContext = {
+  present: number;      // characters actually eligible to be in frame (present at the scene start)
+  speakers: number;    // distinct speakers in THIS board's dialogue chunk
+  hasDialogue: boolean;
+  hasAddressee: boolean;
+  sceneOpener: boolean; // first board of a source scene → a justified establishing / location beat
+};
+
+/** Candidate shot scales for this board's context (leading entries are the natural / biased choices). */
+function shotPoolFor(ctx: ShotContext): ShotSize[] {
+  const { present, speakers, hasDialogue, hasAddressee, sceneOpener } = ctx;
+  // A scene opener with no speech or a crowd → a justified WIDE / location-establishing beat.
+  if (sceneOpener && (!hasDialogue || present >= 3)) {
+    return present >= 3 ? ["WIDE ESTABLISHING", "THREE-SHOT", "MEDIUM"] : ["WIDE ESTABLISHING", "MEDIUM"];
+  }
+  // Action / no dialogue → size by how many are present.
+  if (!hasDialogue) {
+    if (present >= 3) return ["WIDE ESTABLISHING", "THREE-SHOT", "MEDIUM"];
+    if (present === 2) return ["TWO-SHOT", "MEDIUM", "WIDE ESTABLISHING"];
+    return ["MEDIUM", "MEDIUM CLOSE-UP", "CLOSE-UP"];
+  }
+  // Dialogue between two+ interacting characters → coverage of the exchange.
+  if ((speakers >= 2 || hasAddressee) && present >= 2) {
+    const pool: ShotSize[] = ["TWO-SHOT", "OVER-THE-SHOULDER", "MEDIUM CLOSE-UP", "MEDIUM"];
+    if (present >= 3) pool.push("THREE-SHOT");
+    return pool;
+  }
+  // Single speaker / a single present character → an intimate scale.
+  return present <= 1
+    ? ["CLOSE-UP", "MEDIUM CLOSE-UP", "MEDIUM"]
+    : ["MEDIUM CLOSE-UP", "CLOSE-UP", "MEDIUM"];
+}
+
+/** Pick a shot from the pool, avoiding an immediate repeat of the previous board's shot when alternatives exist. */
+function pickShot(pool: ShotSize[], prev: ShotSize | null, seed: number): ShotSize {
+  const rot = prev ? pool.filter((s) => s !== prev) : pool;
+  const candidates = rot.length ? rot : pool;
+  return candidates[seed % candidates.length];
+}
+
+/**
+ * Narrow the present cast to the head-count the chosen shot naturally frames (cast order). The returned count
+ * ALWAYS matches the shot's implied size so buildShotSizeLine's "EXACTLY N in frame" stays consistent:
+ *   CLOSE-UP / MEDIUM CLOSE-UP / MEDIUM → 1 (the focus); OVER-THE-SHOULDER / TWO-SHOT → 2; THREE-SHOT → 3;
+ *   WIDE ESTABLISHING → everyone present.
+ */
+function visibleForShot(shot: ShotSize, present: string[], focus: string, addressee: string): string[] {
+  const order = (names: string[]) => present.filter((c) => names.includes(c));
+  const first = focus && present.includes(focus) ? focus : present[0] ?? "";
+  const second =
+    addressee && addressee !== first && present.includes(addressee)
+      ? addressee
+      : present.find((c) => c !== first) ?? "";
+  switch (shot) {
+    case "CLOSE-UP":
+    case "MEDIUM CLOSE-UP":
+    case "MEDIUM":
+      return first ? [first] : present.slice(0, 1);
+    case "OVER-THE-SHOULDER":
+    case "TWO-SHOT": {
+      const pair = order(Array.from(new Set([first, second].filter(Boolean))));
+      return pair.length >= 2 ? pair : present.slice(0, Math.min(2, present.length));
+    }
+    case "THREE-SHOT": {
+      const base = Array.from(new Set([first, second].filter(Boolean)));
+      const third = present.find((c) => !base.includes(c)) ?? "";
+      const trio = order(Array.from(new Set([...base, third].filter(Boolean))));
+      return trio.length >= 1 ? trio : present.slice(0, Math.min(3, present.length));
+    }
+    case "WIDE ESTABLISHING":
+    default:
+      return present;
+  }
 }
 
 /**
@@ -363,9 +467,12 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
     type BoardRow = {
       episodeId: string; sceneId: string; index: number; boardRole: string;
       actionOrDialogue: string; motionEn: string | null; durationSec: number;
-      castInFrame: object; imagePrompt: string; status: string;
+      castInFrame: object; imagePrompt: string; status: string; shotType: string;
     };
     const rows: BoardRow[] = [];
+    // Stage 235 — rotate shot scale board-to-board (no immediate repeats) and detect source-scene openers.
+    let prevShot: ShotSize | null = null;
+    let prevSourceSceneId: string | null = null;
     for (let i = 0; i < planned.length; i++) {
       const p = planned[i];
       const plan = plans[i];
@@ -382,7 +489,36 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
       const startVisible = characters.filter(
         (c) => (plan.onScreen.includes(c) || plan.exiting.includes(c)) && !plan.entering.includes(c),
       );
-      const startCoverage = coverageFromNames(startVisible.length ? startVisible : plan.onScreen, characters);
+
+      // Stage 235 — VARIED SHOT COVERAGE. From everyone present at the scene start plus THIS board's own dialogue
+      // chunk (who speaks / who is addressed) and whether it opens a source scene, pick a shot SCALE that rotates
+      // board-to-board (deterministic, seeded by board index; no immediate repeats) and narrow the in-frame cast to
+      // exactly what that scale frames. STRICT 1 board = 1 shot = 1 camera setup; dialogue is never re-cut here.
+      const present = startVisible.length ? startVisible : plan.onScreen;
+      const speakerList = inCastOrderUnique(dialogue.map((l) => l.speaker), characters);
+      const addresseeList = inCastOrderUnique(
+        dialogue.map((l) => l.addressee ?? "").filter(Boolean) as string[], characters,
+      );
+      const hasDialogue = dialogue.length > 0;
+      // Focus = the board's ACTIVE (last) speaker, else its first speaker, else the first present character.
+      const focus = speakerList[speakerList.length - 1] || speakerList[0] || present[0] || "";
+      const addressee = addresseeList.find((a) => a !== focus) || present.find((c) => c !== focus) || "";
+      const isSceneOpener = p.partIndex === 0 && p.source.id !== prevSourceSceneId;
+      const shot = pickShot(
+        shotPoolFor({
+          present: present.length,
+          speakers: speakerList.length,
+          hasDialogue,
+          hasAddressee: addresseeList.length > 0,
+          sceneOpener: isSceneOpener,
+        }),
+        prevShot,
+        boardFrameSeed(`${episodeId}#${i}`),
+      );
+      const inFrame = visibleForShot(shot, present, focus, addressee);
+      const startCoverage = coverageFromNames(inFrame, characters, { shotSize: shot, focus });
+      prevShot = shot;
+      prevSourceSceneId = p.source.id;
 
       const castInFrame: CastInFrame = {
         onScreen: plan.onScreen,
@@ -392,6 +528,11 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
         endFrame: plan.endFrame,
         motion: plan.motion,
         durationSec,
+        // Stage 235 — persist the chosen shot scale, its exact in-frame cast and the focus so the render workers
+        // (frame + i2v) reproduce this board's framing instead of recomputing a count-based size.
+        shotType: shot,
+        inFrame,
+        focus,
         // Strip undefined so the JSON column is clean; keep addressee explicit (null when unknown).
         dialogue: dialogue.map((l) => ({
           speaker: l.speaker, text: l.text, delivery: l.delivery,
@@ -416,6 +557,7 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
         episodeId, sceneId: p.sceneId, index: i, boardRole: "start",
         actionOrDialogue: plan.startFrame, motionEn: plan.motion, durationSec,
         castInFrame: castJson, imagePrompt: framePrompt(i, plan.startFrame, startCoverage), status: "pending",
+        shotType: shot,
       });
     }
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
@@ -447,6 +589,7 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
           episodeId: r.episodeId, sceneId: r.sceneId, index: r.index, boardRole: r.boardRole,
           actionOrDialogue: r.actionOrDialogue, motionEn: r.motionEn, durationSec: r.durationSec,
           castInFrame: r.castInFrame as unknown as object, imagePrompt: r.imagePrompt, status: r.status,
+          shotType: r.shotType,
         })),
       });
     });
@@ -487,11 +630,17 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
     const cif = (board.castInFrame ?? null) as unknown as CastInFrame | null;
     let coverage: BoardCoverage;
     if (cif && Array.isArray(cif.onScreen)) {
+      // Stage 235 — honour the per-board chosen shot SCALE + narrowed in-frame cast persisted at plan time
+      // (Board.shotType / castInFrame.inFrame / castInFrame.focus). Fall back to the presence-derived set +
+      // count-based size for legacy per-scene boards created before Stage 235.
       const onScreen = cif.onScreen ?? [];
       const entering = cif.entering ?? [];
       const exiting = cif.exiting ?? [];
-      const inFrame = cast.filter((c) => (onScreen.includes(c) || exiting.includes(c)) && !entering.includes(c));
-      coverage = coverageFromNames(inFrame.length ? inFrame : onScreen, cast);
+      const presenceInFrame = cast.filter((c) => (onScreen.includes(c) || exiting.includes(c)) && !entering.includes(c));
+      const chosenInFrame = Array.isArray(cif.inFrame) && cif.inFrame.length ? cast.filter((c) => cif.inFrame!.includes(c)) : [];
+      const inFrame = chosenInFrame.length ? chosenInFrame : (presenceInFrame.length ? presenceInFrame : onScreen);
+      const chosenShot = (board.shotType || cif.shotType || undefined) as ShotSize | undefined;
+      coverage = coverageFromNames(inFrame, cast, { shotSize: chosenShot, focus: cif.focus });
     } else {
       // Stage 143 — EXACTLY who is in frame for a legacy board (direction + position in scene + action text).
       const direction = readBoardDirection(board.directionJson);
@@ -696,6 +845,10 @@ export async function runBoardVideoJob(jobId: string, projectId: string, boardId
       imageUrl: board.imageUrl as string,
       ...(cif ? { spokenLines: cif?.dialogue ?? null, actionText: cif?.motion ?? null } : {}),
       ...(previousActionText ? { previousActionText } : {}),
+      // Stage 235 — carry the board's chosen shot SCALE + its exact in-frame cast so the i2v motion prompt states
+      // the HARD shot size / head-count and the clip keeps the board's framing (1 board = 1 shot = 1 camera setup).
+      ...(board.shotType || cif?.shotType ? { shotType: board.shotType || cif?.shotType } : {}),
+      ...(cif && Array.isArray(cif.inFrame) && cif.inFrame.length ? { inFrameCast: cif.inFrame } : {}),
     };
     const request = buildStoryboardVideoRequest(animationBoard);
     // Stage 233 — a USER-EDITED animation prompt (motionPromptOverride) is sent to the i2v model VERBATIM as the

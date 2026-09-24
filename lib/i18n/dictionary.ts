@@ -127,6 +127,14 @@ const ru: Dict = {
   'board.promptSaved': 'Сохранено',
   'board.promptSaveFailed': 'Не удалось сохранить промпт',
   'board.promptEditHint': 'Сохранённый текст используется при следующей генерации кадра / анимации',
+  'board.shot': 'Ракурс',
+  'board.shotWide': 'Общий план',
+  'board.shotThree': 'Трое в кадре',
+  'board.shotTwo': 'Двое в кадре',
+  'board.shotOts': 'Через плечо',
+  'board.shotMedium': 'Средний план',
+  'board.shotMediumClose': 'Крупный средний',
+  'board.shotClose': 'Крупный план',
 
   // ── auth ────────────────────────────────────────────────────────────────
   'auth.signInTitle': 'Вход',
@@ -375,6 +383,14 @@ const en: Dict = {
   'board.promptSaved': 'Saved',
   'board.promptSaveFailed': 'Failed to save the prompt',
   'board.promptEditHint': 'The saved text is used on the next frame / animation generation',
+  'board.shot': 'Shot',
+  'board.shotWide': 'Wide establishing',
+  'board.shotThree': 'Three-shot',
+  'board.shotTwo': 'Two-shot',
+  'board.shotOts': 'Over-the-shoulder',
+  'board.shotMedium': 'Medium',
+  'board.shotMediumClose': 'Medium close-up',
+  'board.shotClose': 'Close-up',
 
   // ── auth ────────────────────────────────────────────────────────────────
   'auth.signInTitle': 'Sign In',
