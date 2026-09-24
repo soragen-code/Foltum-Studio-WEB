@@ -9,7 +9,7 @@ import { MANUAL_VIDEO_COST_PER_SEC } from "@/lib/manual-image-models";
 import { MANUAL_VIDEO_JOB_TYPE, MANUAL_PROJECT_ID, runManualJob } from "@/lib/workers/manual-job";
 import { requireManualUser, chargeCredits, cleanUrls } from "@/lib/manual-credits";
 
-const MANUAL_VIDEO_MAX_REFS = 4;
+const MANUAL_VIDEO_MAX_REFS = 10;
 
 /**
  * Stage 234 — POST /api/manual/video

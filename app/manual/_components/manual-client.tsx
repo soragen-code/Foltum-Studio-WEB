@@ -30,7 +30,7 @@ interface ManualItem {
 }
 
 const PHOTO_MAX_REFS = 4
-const VIDEO_MAX_REFS = 4
+const VIDEO_MAX_REFS = 10
 
 async function readError(res: Response, fallback: string): Promise<string> {
   try {
