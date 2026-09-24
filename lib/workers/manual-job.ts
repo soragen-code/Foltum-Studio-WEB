@@ -36,7 +36,7 @@ async function pollWithHeartbeat(
   taskId: string,
   jobId: string,
   opts: { timeoutMs: number; label: string; progressFrom: number; progressTo: number },
-): Promise<string> {
+): Promise<string | null> {
   const started = Date.now();
   for (;;) {
     if (await isCancelRequested(jobId)) {
@@ -50,7 +50,10 @@ async function pollWithHeartbeat(
     }
     if (st.status === "failed" || st.status === "canceled") throw new Error(st.error || `${opts.label} ${st.status}`);
     const elapsed = Date.now() - started;
-    if (elapsed > opts.timeoutMs) throw new Error(`${opts.label} timed out; no automatic resubmission`);
+    // Soft budget for a single serverless invocation (kept under maxDuration). Do NOT fail/refund here:
+    // the WaveSpeed task keeps rendering, its id is persisted in the job, and the /api/cron/advance-chains
+    // sweeper resumes it (resumeManualJob) with no browser tab open. Terminal give-up is age-based in resume.
+    if (elapsed > opts.timeoutMs) return null;
     const frac = Math.min(1, elapsed / opts.timeoutMs);
     await updateJob(jobId, { progress: opts.progressFrom + (opts.progressTo - opts.progressFrom) * frac });
     await heartbeatJob(jobId);
@@ -70,6 +73,88 @@ async function finishFailure(genId: string, jobId: string, err: unknown) {
   else await failJob(jobId, msg);
 }
 
+/** Persist a finished provider output to S3 and mark the manual generation + job complete. */
+async function persistManualResult(
+  gen: { id: string; userId: string; kind: string },
+  jobId: string,
+  providerUrl: string,
+  isVideo: boolean,
+): Promise<void> {
+  await updateJob(jobId, { progress: 92, message: "Saving…" });
+  await heartbeatJob(jobId);
+  const ext = isVideo ? "mp4" : "png";
+  const contentType = isVideo ? "video/mp4" : "image/png";
+  let finalUrl = providerUrl;
+  try {
+    // RULE: public assets must live under `${folderPrefix}public/...` (otherwise 403).
+    const { folderPrefix } = getBucketConfig();
+    finalUrl = await uploadRemoteToS3(providerUrl, `${folderPrefix}public/manual/${gen.userId}/${gen.id}.${ext}`, contentType);
+  } catch (err) {
+    console.error("[manual] S3 persist failed, keeping provider URL:", err);
+  }
+  await prisma.manualGeneration.update({ where: { id: gen.id }, data: { status: "completed", resultUrl: finalUrl, error: null } });
+  await completeJob(jobId, { genId: gen.id, resultUrl: finalUrl, kind: gen.kind }, "Completed");
+}
+
+/** Give-up age for a manual render that never reaches a terminal state (WaveSpeed stuck). */
+const MANUAL_MAX_AGE_MS = 30 * 60 * 1000;
+
+/**
+ * Resume a manual job whose render outlived its submitting invocation. Called by the cron sweeper.
+ * One provider check per pass: succeeded → persist+complete; failed/canceled → fail+refund;
+ * still rendering → heartbeat & leave, unless older than MANUAL_MAX_AGE_MS → cancel + fail.
+ */
+export async function resumeManualJob(job: { id: string; resultData: string | null }): Promise<void> {
+  let genId: string | undefined;
+  let taskId: string | undefined;
+  try {
+    const parsed = job.resultData ? JSON.parse(job.resultData) : {};
+    genId = parsed.genId;
+    taskId = parsed.taskId;
+  } catch {
+    /* ignore malformed resultData */
+  }
+  if (!genId) return;
+  const gen = await prisma.manualGeneration.findUnique({ where: { id: genId } });
+  if (!gen) { await failJob(job.id, "Generation record not found"); return; }
+  if (gen.status === "completed" || gen.status === "failed") return; // already terminal
+  const isVideo = gen.kind === "video";
+  const label = isVideo ? "WaveSpeed video" : "WaveSpeed image";
+  // No taskId yet → submission never landed; let it age out then fail.
+  if (!taskId) {
+    if (Date.now() - gen.createdAt.getTime() > MANUAL_MAX_AGE_MS) {
+      await finishFailure(genId, job.id, new Error("Generation never started (worker stopped before submit)"));
+    }
+    return;
+  }
+  try {
+    if (await isCancelRequested(job.id)) {
+      await wavespeedCancel(taskId);
+      await finishFailure(genId, job.id, new Error("canceled"));
+      return;
+    }
+    const st = await wavespeedResult(taskId, label);
+    if (st.status === "succeeded") {
+      if (!st.url) { await finishFailure(genId, job.id, new Error(`${label} returned no output`)); return; }
+      await persistManualResult({ id: gen.id, userId: gen.userId, kind: gen.kind }, job.id, st.url, isVideo);
+      return;
+    }
+    if (st.status === "failed" || st.status === "canceled") {
+      await finishFailure(genId, job.id, new Error(st.error || `${label} ${st.status}`));
+      return;
+    }
+    // Still rendering — keep it alive unless it has exceeded the give-up age.
+    if (Date.now() - gen.createdAt.getTime() > MANUAL_MAX_AGE_MS) {
+      await wavespeedCancel(taskId);
+      await finishFailure(genId, job.id, new Error(`${label} timed out after 30 minutes`));
+      return;
+    }
+    await heartbeatJob(job.id);
+  } catch (err) {
+    console.error("[manual] resume check failed (will retry next pass):", err);
+  }
+}
+
 /** Run one manual generation (photo or video): submit → poll → persist → complete. */
 export async function runManualJob(jobId: string, genId: string, slug: string, body: Record<string, unknown>): Promise<void> {
   const gen = await prisma.manualGeneration.findUnique({ where: { id: genId } });
@@ -82,25 +167,19 @@ export async function runManualJob(jobId: string, genId: string, slug: string, b
     const taskId = await wavespeedSubmit(slug, body, label);
     await updateJob(jobId, { progress: 10, message: isVideo ? "Rendering video…" : "Rendering image…", resultData: JSON.stringify({ genId, taskId }) });
     const providerUrl = await pollWithHeartbeat(taskId, jobId, {
-      timeoutMs: isVideo ? 600_000 : 240_000,
+      timeoutMs: isVideo ? 700_000 : 240_000,
       label,
       progressFrom: 10,
       progressTo: 90,
     });
-    await updateJob(jobId, { progress: 92, message: "Saving…" });
-    await heartbeatJob(jobId);
-    const ext = isVideo ? "mp4" : "png";
-    const contentType = isVideo ? "video/mp4" : "image/png";
-    let finalUrl = providerUrl;
-    try {
-      // RULE: public assets must live under `${folderPrefix}public/...` (otherwise 403).
-      const { folderPrefix } = getBucketConfig();
-      finalUrl = await uploadRemoteToS3(providerUrl, `${folderPrefix}public/manual/${gen.userId}/${genId}.${ext}`, contentType);
-    } catch (err) {
-      console.error("[manual] S3 persist failed, keeping provider URL:", err);
+    if (providerUrl === null) {
+      // Soft-timeout: the WaveSpeed task is still rendering. Leave the job "processing" with a fresh
+      // heartbeat so /api/cron/advance-chains (resumeManualJob) picks it up — no browser tab required.
+      await updateJob(jobId, { message: isVideo ? "Rendering video… (continuing in background)" : "Rendering image… (continuing in background)" });
+      await heartbeatJob(jobId);
+      return;
     }
-    await prisma.manualGeneration.update({ where: { id: genId }, data: { status: "completed", resultUrl: finalUrl, error: null } });
-    await completeJob(jobId, { genId, resultUrl: finalUrl, kind: gen.kind }, "Completed");
+    await persistManualResult({ id: genId, userId: gen.userId, kind: gen.kind }, jobId, providerUrl, isVideo);
   } catch (err) {
     await finishFailure(genId, jobId, err);
   }

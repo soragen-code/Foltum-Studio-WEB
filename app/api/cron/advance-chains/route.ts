@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { authorizeCron, failStaleJobs, runInBackground, JOB_MAX_DURATION, STALE_JOB_MS, isCancelRequested, completeJob, heartbeatJob } from "@/lib/jobs";
 import { resumeVideoJob } from "@/lib/workers/video-job";
+import { resumeManualJob, MANUAL_VIDEO_JOB_TYPE, MANUAL_PHOTO_JOB_TYPE } from "@/lib/workers/manual-job";
 import { reconcileEpisodeAssets } from "@/lib/asset-gathering";
 import { runStoryboardBoardsJob, STORYBOARD_BOARDS_JOB_TYPE, runBoardImageJob, BOARD_IMAGE_JOB_TYPE } from "@/lib/workers/storyboard-job";
 
@@ -36,7 +37,7 @@ void JOB_MAX_DURATION;
 export async function GET(request: Request) {
   if (!authorizeCron(request)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const summary = { staleFailed: 0, resumed: 0, resumedFrames: 0, boardGatesReleased: 0 };
+  const summary = { staleFailed: 0, resumed: 0, resumedFrames: 0, resumedManual: 0, boardGatesReleased: 0 };
   try {
     // Resume interrupted board keyframe (image) jobs BEFORE failStaleJobs reaps them. A frame POST already
     // enqueues a background job (after()-hosted) rather than rendering synchronously, but nothing used to
@@ -90,6 +91,24 @@ export async function GET(request: Request) {
         if (await resumeVideoJob(job)) summary.resumed++;
       } catch (err) {
         console.error("[cron/advance-chains] resume failed:", err);
+      }
+    }
+
+    // Resume every quiet manual job (/manual photo & video) once. A manual render whose submitting
+    // invocation died keeps rendering on WaveSpeed (its task id is persisted in resultData); this picks
+    // it up with NO browser tab open — succeeded → persist+complete, failed → refund, still rendering →
+    // heartbeat & leave (given up only after MANUAL_MAX_AGE_MS). Mirrors the video sweep above.
+    const manualJobs = await prisma.generationJob.findMany({
+      where: { type: { in: [MANUAL_VIDEO_JOB_TYPE, MANUAL_PHOTO_JOB_TYPE] }, status: { in: ["pending", "processing"] } },
+      orderBy: { createdAt: "asc" },
+      take: 100,
+    });
+    for (const job of manualJobs) {
+      try {
+        await resumeManualJob(job);
+        summary.resumedManual++;
+      } catch (err) {
+        console.error("[cron/advance-chains] manual resume failed:", err);
       }
     }
 
