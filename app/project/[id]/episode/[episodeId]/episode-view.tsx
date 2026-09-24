@@ -165,6 +165,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [promptSaved, setPromptSaved] = useState(false)     // flashed «"Saved" inside the modal
   // Reference strategy the builder resolved for this scene (character_references | new_scene_reference | text_only).
   const [promptRefKind, setPromptRefKind] = useState<string | null>(null)
+  // Stage 205 — the ordered reference images actually submitted with the scene's most recent generation
+  // (from the API's `references`). Shown as thumbnails in the «View prompt» modal so the [Image1]…[ImageN]
+  // notes in the prompt map to real pictures. Empty until the scene has been generated at least once.
+  const [promptRefs, setPromptRefs] = useState<SubmittedReference[]>([])
   // «"Assemble" — pure concatenation of the ready scene clips into one episode (no audit / no polish / no re-gen).
   const [stitching, setStitching] = useState(false)
   // Stage 46B: «"Assemble" opens a dialog — production quality / fps of the FINAL file (scenes are always 480p);
@@ -1050,7 +1054,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     setPromptModal({ sceneId: scene.id, number: scene.number })
     setPromptText(''); setPromptErr(null); setPromptHasOverride(false)
     setPromptCopied(false); setPromptSaved(false); setPromptLoading(true)
-    setPromptRefKind(null)
+    setPromptRefKind(null); setPromptRefs([])
     try {
       const res = await fetch(`/api/ai/scenes/${scene.id}/prompt`)
       const data = await res.json().catch(() => ({}))
@@ -1058,6 +1062,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       setPromptText(String(data.prompt ?? ''))
       setPromptHasOverride(!!data.hasOverride)
       setPromptRefKind(typeof data.referenceKind === 'string' ? data.referenceKind : null)
+      setPromptRefs(Array.isArray(data.references) ? (data.references as SubmittedReference[]).filter((r) => r && typeof r.url === 'string') : [])
     } catch (e: any) {
       setPromptErr(e?.message ?? 'Failed to load prompt')
     } finally {
@@ -2142,6 +2147,29 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   />
                   {!canManualPromptEdit && (
                     <FeatureLockBadge text="Ручная правка промпта доступна по подписке Basic" className="mt-2" />
+                  )}
+                  {/* Stage 205 — the reference images actually passed to the model with this scene's last
+                      generation. They map 1:1 to the [Image1]…[ImageN] notes in the prompt above, so the
+                      author can see exactly which pictures each placeholder refers to. */}
+                  {promptRefs.length > 0 && (
+                    <div className="mt-4" data-testid="scene-prompt-refs">
+                      <p className="mb-2 text-xs font-semibold text-muted-foreground">Passed references ({promptRefs.length}) — map to [Image1]…[Image{promptRefs.length}]</p>
+                      <div className="flex flex-wrap gap-2">
+                        {promptRefs.map((r, i) => (
+                          <figure key={`${r.url}-${i}`} className="w-20">
+                            <img
+                              src={r.url}
+                              alt={referenceKindLabel(r.kind)}
+                              title={`[Image${i + 1}] · ${referenceKindLabel(r.kind)}`}
+                              className="h-24 w-20 rounded-md border border-border object-cover"
+                            />
+                            <figcaption className="mt-1 truncate text-center text-[10px] leading-tight text-muted-foreground" title={`[Image${i + 1}] · ${referenceKindLabel(r.kind)}`}>
+                              [Image{i + 1}] {referenceKindLabel(r.kind)}
+                            </figcaption>
+                          </figure>
+                        ))}
+                      </div>
+                    </div>
                   )}
                 </>
               )}

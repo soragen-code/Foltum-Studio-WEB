@@ -47,9 +47,15 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
 
   const hasOverride = !!(scene.promptOverride ?? "").trim();
 
+  // The reference images actually SUBMITTED with this scene's most recent generation, surfaced so the
+  // "View prompt" modal can show which references were passed (they map to the [Image1]…[ImageN] notes).
+  // Best-effort, side-effect-free: read from the latest video job's persisted result; empty when the
+  // scene has never been generated. Ordered exactly as the worker sent them (submittedReferences).
+  const references = await loadSubmittedReferences(scene.id);
+
   // Manual override wins verbatim — the worker submits it as-is.
   if (hasOverride) {
-    return NextResponse.json({ prompt: scene.promptOverride!.trim(), hasOverride: true, version: scene.promptVersion ?? PROMPT_VERSION });
+    return NextResponse.json({ prompt: scene.promptOverride!.trim(), hasOverride: true, version: scene.promptVersion ?? PROMPT_VERSION, references });
   }
 
   // No override → assemble deterministically from the nine ordered blocks.
@@ -67,7 +73,37 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     });
   } catch { /* debug persistence only — ignore */ }
 
-  return NextResponse.json({ prompt: assembled.prompt, hasOverride: false, version: PROMPT_VERSION });
+  return NextResponse.json({ prompt: assembled.prompt, hasOverride: false, version: PROMPT_VERSION, references });
+}
+
+/**
+ * Read the ordered reference images actually submitted with the scene's most recent video generation.
+ * Returns [{ index, url, kind }] mapping 1:1 to the prompt's [Image1]…[ImageN] notes, or [] when the
+ * scene has never produced a submission. Side-effect-free and defensive — a malformed / missing result
+ * never throws. Newest job wins; older jobs are scanned only until one carries a non-empty set.
+ */
+async function loadSubmittedReferences(sceneId: string): Promise<{ index: number; url: string; kind: string }[]> {
+  try {
+    const jobs = await prisma.generationJob.findMany({
+      where: { sceneId, type: "video", resultData: { not: null } },
+      orderBy: { createdAt: "desc" },
+      take: 5,
+      select: { resultData: true },
+    });
+    for (const j of jobs) {
+      try {
+        const parsed = JSON.parse(j.resultData ?? "") as { submittedReferences?: unknown };
+        const subs = parsed?.submittedReferences;
+        if (Array.isArray(subs) && subs.length) {
+          const refs = subs
+            .filter((r): r is { url: string; kind?: unknown } => !!r && typeof (r as { url?: unknown }).url === "string")
+            .map((r, i) => ({ index: i + 1, url: r.url, kind: typeof r.kind === "string" ? r.kind : "reference" }));
+          if (refs.length) return refs;
+        }
+      } catch { /* malformed result — try the next job */ }
+    }
+  } catch { /* best-effort — never break the prompt read */ }
+  return [];
 }
 
 /**
