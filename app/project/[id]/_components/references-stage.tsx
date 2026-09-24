@@ -13,6 +13,7 @@ import { CHARACTER_REFERENCE_COST, LOCATION_SET_COST } from '@/lib/power-tier'
 import { TIER_LABELS, groupByTier, tierOf, type Tier, type LocationCardData, LocationCard, AddLocationForm } from './cast-and-locations'
 import { locationExtraLabel } from '@/lib/visual-style'
 import { CharacterUserRefs } from './character-user-refs'
+import { AddFrameTile } from './add-frame-tile'
 
 interface RefCharacter extends CharacterCardData {
   imageFront?: string | null
@@ -519,6 +520,15 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                           </div>
                         )
                       })()}
+                      {/* Stage 234: "+ Add frame" — one prompted extra frame appended to Location.imageExtra (shown above with the other extras) */}
+                      <AddFrameTile
+                        kind="location"
+                        id={loc.id}
+                        frames={[]}
+                        hasBase={has}
+                        disabled={!!gen || !!activeExtra[loc.id]}
+                        onChanged={(imageExtra) => setLocations((prev) => prev.map((x) => (x.id === loc.id ? { ...x, imageExtra } : x)))}
+                      />
                     </div>
                   }
                 />
@@ -620,6 +630,15 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
                   extra={
                     <>
                       <ReferenceImages char={c} generating={!!gen} message={gen && gen !== 'local' ? gen.message : null} onRegen={(shot) => regenShot('character', c.id, shot)} shotBusy={(shot) => !!shotBusy[shotKey(c.id, shot)]} />
+                      {/* Stage 234: manually prompted extra frames (Character.imageExtra) + "+ Add frame" tile */}
+                      <AddFrameTile
+                        kind="character"
+                        id={c.id}
+                        frames={parseExtra(c.imageExtra)}
+                        hasBase={validUrl(c.imageFull) || validUrl(c.imageFront)}
+                        disabled={!!gen}
+                        onChanged={(imageExtra) => setCharacters((prev) => prev.map((x) => (x.id === c.id ? { ...x, imageExtra } : x)))}
+                      />
                       {/* Stage 75: user-uploaded photo references (fed as image_input to every reference shot) */}
                       <CharacterUserRefs characterId={c.id} userRefs={c.userRefs} disabled={!!c.refLocked} />
                       {/* Stage 46E: prompt view/edit + download all */}

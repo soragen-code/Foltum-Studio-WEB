@@ -27,6 +27,7 @@ model User {
   projects      Project[]
   creditTransactions CreditTransaction[]
   payments      Payment[]
+  manualGenerations ManualGeneration[]
 }
 
 model Account {
@@ -613,4 +614,28 @@ model GenerationLog {
 
   @@index([projectId])
   @@index([kind])
+}
+
+// Stage 234: "Manual mode" — standalone photo / video generations outside of any project (/manual).
+// kind: "photo" | "video"; mode: "t2i" | "i2i" | "t2v" | "i2v"; status: pending | processing | completed | failed.
+model ManualGeneration {
+  id             String   @id @default(cuid())
+  userId         String
+  kind           String
+  model          String
+  mode           String
+  prompt         String   @db.Text
+  referenceUrls  Json?
+  sourceImageUrl String?  @db.Text
+  resultUrl      String?  @db.Text
+  status         String   @default("pending")
+  jobId          String?
+  cost           Int      @default(0)
+  error          String?  @db.Text
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
 }

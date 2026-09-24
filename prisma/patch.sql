@@ -603,3 +603,32 @@ ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "locale" TEXT NOT NULL DEFAULT 'ru';
 -- Additive, nullable & idempotent.
 ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "imagePromptOverride" TEXT;
 ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "motionPromptOverride" TEXT;
+
+
+
+-- Stage 234: "Manual mode" — standalone photo/video generations outside of projects (/manual). Idempotent.
+CREATE TABLE IF NOT EXISTS "ManualGeneration" (
+  "id" TEXT NOT NULL,
+  "userId" TEXT NOT NULL,
+  "kind" TEXT NOT NULL,
+  "model" TEXT NOT NULL,
+  "mode" TEXT NOT NULL,
+  "prompt" TEXT NOT NULL,
+  "referenceUrls" JSONB,
+  "sourceImageUrl" TEXT,
+  "resultUrl" TEXT,
+  "status" TEXT NOT NULL DEFAULT 'pending',
+  "jobId" TEXT,
+  "cost" INTEGER NOT NULL DEFAULT 0,
+  "error" TEXT,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" TIMESTAMP(3) NOT NULL,
+  CONSTRAINT "ManualGeneration_pkey" PRIMARY KEY ("id")
+);
+CREATE INDEX IF NOT EXISTS "ManualGeneration_userId_createdAt_idx" ON "ManualGeneration"("userId", "createdAt");
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ManualGeneration_userId_fkey') THEN
+    ALTER TABLE "ManualGeneration" ADD CONSTRAINT "ManualGeneration_userId_fkey"
+      FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+  END IF;
+END $$;

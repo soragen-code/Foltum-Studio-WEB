@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { Header } from '@/components/header'
-import { Film, Plus, Clapperboard, Clock, ChevronRight, Sparkles, Zap, Crown, Trash2, Loader2 } from 'lucide-react'
+import { Film, Plus, Clapperboard, Clock, ChevronRight, Sparkles, Zap, Crown, Trash2, Loader2, Wand2 } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { useTranslation } from '@/lib/i18n/context'
 
@@ -104,13 +104,24 @@ export function DashboardClient() {
               {t('dashboard.subtitle')}
             </p>
           </div>
-          <Link
-            href="/project/new"
-            className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
-          >
-            <Plus className="h-4 w-4" />
-            {t('dashboard.newProject')}
-          </Link>
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Stage 234: manual mode — free-form photo/video generation outside of projects */}
+            <Link
+              href="/manual"
+              className="flex items-center gap-2 rounded-lg border border-border bg-card px-5 py-2.5 text-sm font-semibold transition hover:bg-muted"
+              data-testid="dashboard-manual-mode"
+            >
+              <Wand2 className="h-4 w-4" />
+              {t('dashboard.manualMode')}
+            </Link>
+            <Link
+              href="/project/new"
+              className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
+            >
+              <Plus className="h-4 w-4" />
+              {t('dashboard.newProject')}
+            </Link>
+          </div>
         </div>
 
         {loading ? (
