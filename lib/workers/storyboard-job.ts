@@ -84,11 +84,16 @@ const ANCHOR_WAIT_MAX_POLLS = Number(process.env.BOARD_ANCHOR_WAIT_MAX_POLLS ?? 
  */
 const SCENE_CLIP_MAX_SEC = 5;
 const SCENE_SPEECH_BUDGET_SEC = 4;
-// Stage 231 — the number of boards a scene may yield is BUDGETED against the scene's own scripted duration.
-// A shot is a ~5s clip, so a scene of D seconds yields round(D / 5) boards (a 15s scene → 3, a 14s scene → 3).
-// This keeps the whole episode proportional to its scene durations (a ~90s episode → ~18 boards / ~90s) instead
-// of tripling the length when a scene is dialogue-dense. Boards per scene are floored at 1 (narration/short scenes).
-const SCENE_CLIP_TARGET_SEC = 5;
+// Stage 232 — the storyboard is budgeted for the WHOLE EPISODE, never per scene. Storyboard shots are extracted
+// from the entire script as ONE pool of ~4s shots whose TOTAL lands in the 90–100s episode window; the shot COUNT
+// is derived from that single episode budget and shared across scenes proportionally to their spoken content — it
+// is NOT a function of any individual scene's own scripted duration (scenes and storyboard are separate modes, and
+// a board is never tied to a scene's length). A ~95s episode therefore yields ~24 shots of ~4s regardless of how
+// many Scene rows exist or how long each one is.
+const EPISODE_TARGET_SEC = 95;      // midpoint of the 90–100s episode window every storyboard aims for
+const BOARD_CLIP_SEC = 4;           // each storyboard shot is ~4s
+const MIN_EPISODE_BOARDS = 18;      // floor / ceiling on the whole-episode shot count so the total stays in 90–100s
+const MAX_EPISODE_BOARDS = 25;
 
 /** Minimal sibling projection shared by the Stage 140 set-anchors and the Stage 142 scene anchor. */
 const SIBLING_SELECT = { id: true, index: true, imageUrl: true, status: true, directionJson: true, motionEn: true, actionOrDialogue: true, region: true, sceneId: true, boardRole: true } as const;
@@ -247,17 +252,47 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
       partIndex: number;
       partCount: number;
     };
-    const planned: PlannedScene[] = [];
+    // Stage 232 — WHOLE-EPISODE budget. First extract every scene's verbatim, attributed spoken lines. Then size
+    // the storyboard ONCE for the entire script: the episode gets a single pool of ~24 shots (EPISODE_TARGET_SEC /
+    // BOARD_CLIP_SEC, clamped 18–25) so the total lands in the 90–100s window. That budget is shared across scenes
+    // proportionally to how much each one SPEAKS (min one shot per scene), never by a scene's own scripted length —
+    // storyboard and scenes are separate modes and a shot is not tied to any scene's duration.
+    const sceneLineSets: SpokenLine[][] = [];
     for (const s of scenesEn) {
       const isNarration = (s.sceneKind ?? "").trim().toLowerCase() === "narration";
       const lines: SpokenLine[] = isNarration || !s.dialogueEnResolved.trim()
         ? []
         : await extractSpokenLinesResilient(s.dialogueEnResolved, attributionCast, { repair: dialogueRepair });
-      // Stage 231 — cap this scene's boards at round(sceneDuration / 5) so the shot count stays proportional to
-      // the scene's own length (a 15s scene → 3 boards, not 6–11). A dialogue-dense scene now re-packs its lines
-      // into that many denser chunks instead of multiplying into many 4s chunks and tripling the episode length.
-      const sceneDur = Math.round(s.durationSec ?? 0);
-      const maxParts = Math.max(1, Math.round((sceneDur > 0 ? sceneDur : SCENE_CLIP_TARGET_SEC) / SCENE_CLIP_TARGET_SEC));
+      sceneLineSets.push(lines);
+    }
+    // Weight each scene by its estimated spoken seconds (baseline 1 so a silent/narration scene still earns its one
+    // shot). A talky scene therefore gets MORE of the shared episode budget → its speech spreads over more, denser
+    // shots — never accelerated or dropped.
+    const sceneWeights = sceneLineSets.map((lines) =>
+      Math.max(1, lines.reduce((sum, l) => sum + estimatedSpeechSeconds(l), 0)),
+    );
+    // Single episode-wide shot budget, then at least one shot per scene.
+    const episodeBudget = Math.max(MIN_EPISODE_BOARDS, Math.min(MAX_EPISODE_BOARDS, Math.round(EPISODE_TARGET_SEC / BOARD_CLIP_SEC)));
+    const targetTotal = Math.max(episodeBudget, scenesEn.length);
+    // Largest-remainder allocation of (targetTotal − sceneCount) extra shots over the scenes by weight; +1 baseline.
+    const boardsPerScene = ((): number[] => {
+      const n = sceneWeights.length;
+      if (n === 0) return [];
+      const totalW = sceneWeights.reduce((a, b) => a + b, 0) || n;
+      const extra = Math.max(0, targetTotal - n);
+      const raw = sceneWeights.map((w) => (w / totalW) * extra);
+      const base = raw.map((v) => Math.floor(v));
+      let left = extra - base.reduce((a, b) => a + b, 0);
+      const order = raw.map((v, i) => ({ i, frac: v - Math.floor(v) })).sort((a, b) => b.frac - a.frac);
+      for (let k = 0; k < left && n > 0; k++) base[order[k % n].i]++;
+      return base.map((b) => b + 1);
+    })();
+
+    await updateJob(jobId, { progress: 30, message: "Splitting the script into episode shots..." });
+    const planned: PlannedScene[] = [];
+    scenesEn.forEach((s, si) => {
+      const lines = sceneLineSets[si];
+      const maxParts = Math.max(1, boardsPerScene[si] ?? 1);
       const chunks = chunkLinesByBudgetCapped(lines, SCENE_SPEECH_BUDGET_SEC, maxParts);
       const partCount = chunks.length;
       chunks.forEach((chunk, partIndex) => {
@@ -271,8 +306,16 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
           partCount,
         });
       });
-    }
+    });
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
+
+    // Stage 232 — the shot COUNT is now the whole-episode budget above; distribute the episode target (90–100s)
+    // evenly across the ACTUAL shots so Σ(durations) lands in the window, each shot clamped to the 4–5s clip band.
+    const M = planned.length || 1;
+    const totalTarget = Math.max(4 * M, Math.min(5 * M, EPISODE_TARGET_SEC));
+    const baseDur = Math.max(4, Math.min(5, Math.floor(totalTarget / M)));
+    const extraSec = Math.max(0, totalTarget - baseDur * M); // first `extraSec` shots get +1s (still ≤5s)
+    const boardBaseDurations = Array.from({ length: M }, (_, i) => Math.min(SCENE_CLIP_MAX_SEC, baseDur + (i < extraSec ? 1 : 0)));
 
     // ONE planner call over the PLANNED scenes (parts included): per scene → onScreen / entering / exiting +
     // start/end/motion (English). Continuation parts are flagged so the planner keeps their location/cast/action.
@@ -315,17 +358,14 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
       const p = planned[i];
       const plan = plans[i];
       const dialogue = p.dialogue;
-      // Stage 231 — duration is the scene's own scripted length distributed evenly across its parts, clamped to
-      // the 4–5s clip window, so Σ(board durations of a scene) ≈ the scene duration and the episode total tracks
-      // the scene durations (≈90s) instead of tripling them. The part COUNT was already capped at round(dur/5)
-      // upstream, so this stays inside 4–5s per board; speech is used only as a lower bound so a talky board is
-      // never shorter than its own (estimated) speech, still under the hard 5s cap.
+      // Stage 232 — duration comes from the WHOLE-EPISODE budget: the episode target (90–100s) was distributed
+      // evenly across every shot above (boardBaseDurations), so Σ(durations) lands in the window regardless of how
+      // many scenes exist or how long each one is. Speech is only a lower bound so a talky shot is never shorter
+      // than its own (estimated) speech — always still under the hard 5s clip cap.
       const speechSec = dialogue.reduce((sum, l) => sum + estimatedSpeechSeconds(l), 0);
-      const sceneTotal = Math.round(p.source.durationSec ?? 0) || (p.partCount * SCENE_CLIP_TARGET_SEC);
-      const evenPart = Math.round(sceneTotal / Math.max(1, p.partCount));
       const durationSec = Math.min(
         SCENE_CLIP_MAX_SEC,
-        Math.max(4, evenPart, Math.min(SCENE_CLIP_MAX_SEC, Math.ceil(speechSec))),
+        Math.max(boardBaseDurations[i] ?? BOARD_CLIP_SEC, Math.min(SCENE_CLIP_MAX_SEC, Math.ceil(speechSec))),
       );
 
       // Single-frame model: each planned scene yields ONE board — a keyframe still that is animated on its OWN
@@ -584,7 +624,10 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
       anchorRefIndex: composed.anchorRefIndex,
       ...(previousActionText ? { continuity: { previousActionText, continuityRefIndex: composed.continuityRefIndex } } : {}),
     });
-    const prompt = built.prompt;
+    // Stage 233 — a USER-EDITED frame prompt (imagePromptOverride) is rendered VERBATIM; the manual edit sticks
+    // across re-renders. Empty/whitespace override falls back to the auto-composed prompt.
+    const manualFramePrompt = (board.imagePromptOverride ?? "").trim();
+    const prompt = manualFramePrompt || built.prompt;
 
     await updateJob(jobId, { progress: 45, message: `Board ${board.index + 1}: rendering frame...` });
     const remote = await generateImage(
@@ -647,6 +690,11 @@ export async function runBoardVideoJob(jobId: string, projectId: string, boardId
       ...(previousActionText ? { previousActionText } : {}),
     };
     const request = buildStoryboardVideoRequest(animationBoard);
+    // Stage 233 — a USER-EDITED animation prompt (motionPromptOverride) is sent to the i2v model VERBATIM as the
+    // motion prompt; the manual edit sticks across re-animations. Empty/whitespace override falls back to the
+    // auto-composed request prompt.
+    const manualMotionPrompt = (board.motionPromptOverride ?? "").trim();
+    if (manualMotionPrompt) request.prompt = manualMotionPrompt;
     // B2/B3 — the ACTUAL composed animate prompt and the ACTUAL references the i2v receives. This provider takes the
     // board still as its ONLY image input (start frame); extra identity refs are unsupported, so the reference list
     // is exactly that single frame. Both are persisted so the UI can show what drove the animation.

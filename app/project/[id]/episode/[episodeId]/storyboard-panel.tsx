@@ -12,7 +12,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
-import { Loader2, Film, Wand2, ImageIcon, Play, ChevronDown, ChevronRight, Copy, Check, X, Maximize2, RotateCw } from 'lucide-react'
+import { Loader2, Film, Wand2, ImageIcon, Play, ChevronDown, ChevronRight, Copy, Check, X, Maximize2, RotateCw, Pencil } from 'lucide-react'
 import { JobProgressBar, SmoothProgress, useJobPolling } from '../../_components/use-job-polling'
 import { boardFramePrecondition } from '@/lib/board-anchor'
 import { DownloadVideoButton } from '@/app/project/[id]/_components/download-video-button'
@@ -54,6 +54,9 @@ type Board = {
   // Group B — transparency fields (nullable; absent on legacy boards)
   imagePrompt?: string | null
   motionPromptEn?: string | null
+  // Stage 233 — user-edited prompt overrides (used VERBATIM by the render workers when set; null = auto prompt).
+  imagePromptOverride?: string | null
+  motionPromptOverride?: string | null
   frameRefs?: BoardRef[] | null
   animateRefs?: BoardRef[] | null
   frameSeed?: number | null
@@ -136,6 +139,7 @@ function AssetKindStat({ title, k }: { title: string; k: KindStatus }) {
 
 /** Small copy-to-clipboard button with a transient "copied" tick. English prompt content is copied verbatim. */
 function CopyButton({ text }: { text: string }) {
+  const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
   return (
     <button
@@ -145,7 +149,7 @@ function CopyButton({ text }: { text: string }) {
       }}
       className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-foreground"
     >
-      {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />} {copied ? 'Скопировано' : 'Копировать'}
+      {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />} {copied ? t('board.copied') : t('board.copy')}
     </button>
   )
 }
@@ -158,33 +162,130 @@ function CopyButton({ text }: { text: string }) {
  * text, which is shown in place. This is a text-only rebuild — it never renders a frame or clip
  * and never clears any rendered image/video. Local state keeps the expanded details from collapsing.
  */
-function PromptBlock({ title, text, onRegenerate }: { title: string; text: string; onRegenerate?: () => Promise<string> }) {
+function PromptBlock({ title, text, overridden = false, onRegenerate, onSave, onReset, testId }: {
+  title: string
+  text: string
+  /** true when the shown text is a user-edited override (the workers use it verbatim). */
+  overridden?: boolean
+  onRegenerate?: () => Promise<string>
+  /** Stage 233 — persist a user-edited prompt (PATCH). Enables the «Редактировать» flow. */
+  onSave?: (value: string) => Promise<void>
+  /** Stage 233 — clear the override and go back to the auto-composed prompt. */
+  onReset?: () => Promise<void>
+  testId?: string
+}) {
+  const { t } = useTranslation()
   const [txt, setTxt] = useState(text)
   const [busy, setBusy] = useState(false)
-  useEffect(() => { setTxt(text) }, [text])
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(text)
+  const [saving, setSaving] = useState(false)
+  const [savedTick, setSavedTick] = useState(false)
+  const [saveErr, setSaveErr] = useState<string | null>(null)
+  useEffect(() => { setTxt(text); if (!editing) setDraft(text) }, [text, editing])
+
+  const save = async () => {
+    if (!onSave) return
+    const v = draft.trim()
+    if (!v) return
+    setSaving(true); setSaveErr(null)
+    try {
+      await onSave(v)
+      setTxt(v); setEditing(false); setSavedTick(true); setTimeout(() => setSavedTick(false), 1500)
+    } catch (e: any) {
+      setSaveErr(e?.message || t('board.promptSaveFailed'))
+    } finally { setSaving(false) }
+  }
+  const reset = async () => {
+    if (!onReset) return
+    setSaving(true); setSaveErr(null)
+    try { await onReset(); setEditing(false) } catch (e: any) { setSaveErr(e?.message || t('board.promptSaveFailed')) } finally { setSaving(false) }
+  }
+
   return (
-    <div>
-      <div className="mb-1 flex items-center justify-between gap-2">
-        <span className="text-[11px] font-semibold text-foreground">{title}</span>
+    <div data-testid={testId}>
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold text-foreground">
+          {title}
+          {overridden && <span className="ml-1 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] font-medium text-amber-600 dark:text-amber-400">{t('board.promptManual')}</span>}
+        </span>
         <div className="flex items-center gap-1">
-          {onRegenerate && (
+          {onSave && !editing && (
+            <button
+              type="button"
+              disabled={saving}
+              title={t('board.promptEditHint')}
+              onClick={() => { setDraft(txt); setEditing(true); setSaveErr(null) }}
+              className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-foreground disabled:opacity-50"
+              data-testid={testId ? `${testId}-edit` : undefined}
+            >
+              <Pencil className="h-3 w-3" /> {t('board.editPrompt')}
+            </button>
+          )}
+          {overridden && onReset && !editing && (
+            <button
+              type="button"
+              disabled={saving}
+              onClick={reset}
+              className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-foreground disabled:opacity-50"
+              data-testid={testId ? `${testId}-reset` : undefined}
+            >
+              {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCw className="h-3 w-3" />} {t('board.resetPrompt')}
+            </button>
+          )}
+          {onRegenerate && !overridden && !editing && (
             <button
               type="button"
               disabled={busy}
-              title="Пересобрать промпт по актуальным правилам"
+              title={t('board.rebuildPrompt')}
               onClick={async () => {
                 setBusy(true)
                 try { const next = await onRegenerate(); if (next) setTxt(next) } catch { /* keep current text on failure */ } finally { setBusy(false) }
               }}
               className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-foreground disabled:opacity-50"
             >
-              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCw className="h-3 w-3" />} Пересобрать
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCw className="h-3 w-3" />} {t('board.rebuildPrompt')}
             </button>
           )}
-          <CopyButton text={txt} />
+          {savedTick && <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400"><Check className="h-3 w-3" /> {t('board.promptSaved')}</span>}
+          {!editing && <CopyButton text={txt} />}
         </div>
       </div>
-      <p className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/50 p-2 text-[11px] leading-snug text-muted-foreground">{txt}</p>
+      {editing ? (
+        <div className="space-y-1">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={6}
+            spellCheck={false}
+            className="w-full resize-y rounded border border-border bg-background p-2 font-mono text-[11px] leading-snug text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            data-testid={testId ? `${testId}-textarea` : undefined}
+          />
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              disabled={saving || !draft.trim()}
+              onClick={save}
+              className="inline-flex items-center gap-1 rounded border border-border bg-primary px-2 py-1 text-[10px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+              data-testid={testId ? `${testId}-save` : undefined}
+            >
+              {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />} {t('board.savePrompt')}
+            </button>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => { setEditing(false); setDraft(txt); setSaveErr(null) }}
+              className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-[10px] font-medium text-muted-foreground hover:text-foreground disabled:opacity-50"
+            >
+              <X className="h-3 w-3" /> {t('board.cancelEdit')}
+            </button>
+            <span className="text-[10px] text-muted-foreground">{t('board.promptEditHint')}</span>
+          </div>
+        </div>
+      ) : (
+        <p className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-muted/50 p-2 text-[11px] leading-snug text-muted-foreground">{txt}</p>
+      )}
+      {saveErr && <p className="mt-1 text-[10px] text-destructive">{saveErr}</p>}
     </div>
   )
 }
@@ -277,6 +378,15 @@ function BoardCard({ board, onChanged, frameLocked = false }: { board: Board; on
       setAnimErr(e?.message ?? 'Request failed')
     }
   }, [board.id, animatePoll, onChanged])
+
+  // Stage 233 — persist a user-edited frame / animation prompt (empty string = reset to the auto prompt).
+  // Text-only: never renders anything. onChanged() refetches the boards so the card shows the saved value.
+  const savePrompt = useCallback(async (body: { imagePrompt?: string; motionPrompt?: string }) => {
+    const res = await fetch(`/api/ai/storyboard/${board.id}/prompt`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(data?.error ?? t('board.promptSaveFailed'))
+    onChanged()
+  }, [board.id, onChanged, t])
 
   // Resume-on-reload — if the server still has an active frame/animate job for this board, re-attach the progress
   // bar after a page reload. Guarded so it only starts once per job id and never restarts an already-active poll.
@@ -407,8 +517,11 @@ function BoardCard({ board, onChanged, frameLocked = false }: { board: Board; on
       {/* B2/B3 — collapsible "frame details": the actual prompts and the actual reference images the models received.
           Prompt text is English (as sent to the providers); all headings/labels are Russian. */}
       {(() => {
-        const framePrompt = (board.imagePrompt ?? '').trim()
-        const animatePrompt = (board.motionPromptEn ?? board.motionEn ?? '').trim()
+        // Stage 233 — a user-edited override (if any) is what the workers will actually use, so show it first.
+        const frameOverride = (board.imagePromptOverride ?? '').trim()
+        const motionOverride = (board.motionPromptOverride ?? '').trim()
+        const framePrompt = frameOverride || (board.imagePrompt ?? '').trim()
+        const animatePrompt = motionOverride || (board.motionPromptEn ?? board.motionEn ?? '').trim()
         const frameRefs = Array.isArray(board.frameRefs) ? board.frameRefs : []
         const animateRefs = Array.isArray(board.animateRefs) ? board.animateRefs : []
         const hasAny = framePrompt || animatePrompt || frameRefs.length || animateRefs.length || typeof board.frameSeed === 'number'
@@ -425,15 +538,30 @@ function BoardCard({ board, onChanged, frameLocked = false }: { board: Board; on
             </button>
             {showDetails && (
               <div className="mt-2 space-y-3" data-testid={`board-details-${board.index}`}>
-                {framePrompt && <PromptBlock title={validUrl(board.imageUrl) ? "Промпт кадра (image, англ.)" : "Промпт кадра — план (image, англ.)"} text={framePrompt} onRegenerate={async () => {
-                  const res = await fetch(`/api/ai/storyboard/${board.id}/prompt`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-                  if (!res.ok) throw new Error('prompt rebuild failed')
-                  const data = await res.json()
-                  return typeof data?.prompt === 'string' ? data.prompt : ''
-                }} />}
-                {animatePrompt && <PromptBlock title="Промпт оживления (i2v, англ.)" text={animatePrompt} />}
-                {frameRefs.length > 0 && <RefList title="Референсы кадра (переданы в image-модель)" refs={frameRefs} />}
-                {animateRefs.length > 0 && <RefList title="Референсы оживления (переданы в i2v)" refs={animateRefs} />}
+                {framePrompt && <PromptBlock
+                  title={validUrl(board.imageUrl) ? t('board.framePromptTitle') : t('board.framePromptPlanTitle')}
+                  text={framePrompt}
+                  overridden={!!frameOverride}
+                  testId={`board-frame-prompt-${board.index}`}
+                  onSave={(v) => savePrompt({ imagePrompt: v })}
+                  onReset={() => savePrompt({ imagePrompt: '' })}
+                  onRegenerate={async () => {
+                    const res = await fetch(`/api/ai/storyboard/${board.id}/prompt`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+                    if (!res.ok) throw new Error('prompt rebuild failed')
+                    const data = await res.json()
+                    return typeof data?.prompt === 'string' ? data.prompt : ''
+                  }}
+                />}
+                {animatePrompt && <PromptBlock
+                  title={t('board.animatePromptTitle')}
+                  text={animatePrompt}
+                  overridden={!!motionOverride}
+                  testId={`board-animate-prompt-${board.index}`}
+                  onSave={(v) => savePrompt({ motionPrompt: v })}
+                  onReset={() => savePrompt({ motionPrompt: '' })}
+                />}
+                {frameRefs.length > 0 && <RefList title={t('board.frameRefsTitle')} refs={frameRefs} />}
+                {animateRefs.length > 0 && <RefList title={t('board.animateRefsTitle')} refs={animateRefs} />}
                 {typeof board.frameSeed === 'number' && (
                   <p className="text-[11px] text-muted-foreground">Seed кадра: <span className="font-mono text-foreground">{board.frameSeed}</span> <span className="opacity-70">(фиксирован для повторяемости; провайдер учитывает его приблизительно)</span></p>
                 )}

@@ -595,3 +595,11 @@ ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "castInFrame" JSONB;
 -- Site localization: per-user UI language ("ru" | "en"). Additive, non-null with a default so existing
 -- rows backfill to Russian (the current UI language). Never renames/drops.
 ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "locale" TEXT NOT NULL DEFAULT 'ru';
+
+
+
+-- Stage 233: user-edited prompt overrides per board. When set, the render workers use them VERBATIM
+-- (imagePromptOverride → frame/image prompt, motionPromptOverride → i2v animation prompt); NULL = auto prompt.
+-- Additive, nullable & idempotent.
+ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "imagePromptOverride" TEXT;
+ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "motionPromptOverride" TEXT;

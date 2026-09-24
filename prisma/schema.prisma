@@ -309,6 +309,11 @@ model Board {
   boardRole        String?  // "start" | "end" — which frame of the scene this board is (null for legacy boards)
   castInFrame      Json?    // { onScreen[], entering[], exiting[], startFrame, endFrame, motion, durationSec, dialogue[] } — per-scene shot plan
   imagePrompt      String?  @db.Text // English Seedream FRAME prompt used to render the board still (9:16)
+  // Stage 233 (additive): USER-EDITED prompt overrides. When non-null/non-empty the render workers use the text
+  // VERBATIM instead of rebuilding it — the manual edit sticks across re-renders. Null/empty = fall back to the
+  // auto-composed prompt (the default behaviour). Nullable so all legacy boards are unaffected.
+  imagePromptOverride  String? @db.Text // user-edited FRAME prompt (overrides the auto-built imagePrompt when set)
+  motionPromptOverride String? @db.Text // user-edited ANIMATION prompt (overrides the auto-built i2v motion prompt when set)
   // Group B (transparency): the ACTUAL animate prompt + the ACTUAL reference images passed to each model, plus the
   // fixed frame seed. All nullable / additive; legacy boards remain NULL. STORYBOARD only.
   motionPromptEn   String?  @db.Text // English image-to-video prompt actually sent to Seedance (composed animate prompt)

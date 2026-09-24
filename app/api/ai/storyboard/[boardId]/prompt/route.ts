@@ -81,11 +81,63 @@ export async function POST(request: Request, ctx: { params: Promise<{ boardId: s
       locationDesc: board.episode.locationDesc,
     }).prompt;
 
-    await prisma.board.update({ where: { id: board.id }, data: { imagePrompt: prompt } });
+    // Stage 233 — a rebuild returns to the AUTO prompt, so any manual override is cleared as well.
+    await prisma.board.update({ where: { id: board.id }, data: { imagePrompt: prompt, imagePromptOverride: null } });
 
     return NextResponse.json({ prompt });
   } catch (err: any) {
     console.error("Board prompt rebuild error:", err);
     return NextResponse.json({ error: "Prompt rebuild failed: " + (err?.message ?? "Unknown error") }, { status: 500 });
+  }
+}
+
+/**
+ * PATCH /api/ai/storyboard/[boardId]/prompt  →  { imagePrompt, motionPrompt }
+ *
+ * Stage 233 — SAVE (or CLEAR) the board's USER-EDITED prompt overrides. The render workers use these VERBATIM when
+ * set (imagePromptOverride for the frame, motionPromptOverride for the i2v animation), so a manual edit sticks
+ * across re-renders. Body fields are OPTIONAL and independent:
+ *   - imagePrompt / motionPrompt: a non-empty string SETS the override; an empty string / null CLEARS it (reset to
+ *     the auto-composed prompt). A field left undefined is not touched.
+ * Editing prompt TEXT never renders anything and never clears imageUrl/videoUrl/status — it only updates the text.
+ */
+export async function PATCH(request: Request, ctx: { params: Promise<{ boardId: string }> }) {
+  try {
+    const session = await auth();
+    if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const limited = rateLimitByUser(request, "ai:board-prompt-edit", session.user.email ?? session.user.id, RATE_LIMITS.ai);
+    if (limited) return limited;
+
+    const { boardId } = await ctx.params;
+    const board = await prisma.board.findFirst({
+      where: { id: boardId, episode: { mode: "STORYBOARD", season: { project: { userId: session.user.id } } } },
+      select: { id: true },
+    });
+    if (!board) return NextResponse.json({ error: "Board not found" }, { status: 404 });
+
+    const body = (await request.json().catch(() => ({}))) as { imagePrompt?: string | null; motionPrompt?: string | null };
+    const data: { imagePromptOverride?: string | null; imagePrompt?: string; motionPromptOverride?: string | null } = {};
+    if (body.imagePrompt !== undefined) {
+      const v = (body.imagePrompt ?? "").trim();
+      data.imagePromptOverride = v || null;
+      // Mirror the edited text into imagePrompt so the UI shows the saved prompt immediately (until next render).
+      if (v) data.imagePrompt = v;
+    }
+    if (body.motionPrompt !== undefined) {
+      const v = (body.motionPrompt ?? "").trim();
+      data.motionPromptOverride = v || null;
+    }
+    if (Object.keys(data).length === 0) return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
+
+    const updated = await prisma.board.update({
+      where: { id: board.id },
+      data,
+      select: { imagePromptOverride: true, motionPromptOverride: true, imagePrompt: true, motionEn: true, motionPromptEn: true },
+    });
+    return NextResponse.json({ ok: true, board: updated });
+  } catch (err: any) {
+    console.error("Board prompt edit error:", err);
+    return NextResponse.json({ error: "Prompt save failed: " + (err?.message ?? "Unknown error") }, { status: 500 });
   }
 }
