@@ -91,6 +91,7 @@ const SCENE_SPEECH_BUDGET_SEC = 4;
 // a board is never tied to a scene's length). A ~95s episode therefore yields ~24 shots of ~4s regardless of how
 // many Scene rows exist or how long each one is.
 const EPISODE_TARGET_SEC = 95;      // midpoint of the 90–100s episode window every storyboard aims for
+const EPISODE_MAX_SEC = 100;        // HARD ceiling: Σ(board durations) never exceeds the episode window
 const BOARD_CLIP_SEC = 4;           // each storyboard shot is ~4s
 const MIN_EPISODE_BOARDS = 18;      // floor / ceiling on the whole-episode shot count so the total stays in 90–100s
 const MAX_EPISODE_BOARDS = 25;
@@ -316,6 +317,17 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
     const baseDur = Math.max(4, Math.min(5, Math.floor(totalTarget / M)));
     const extraSec = Math.max(0, totalTarget - baseDur * M); // first `extraSec` shots get +1s (still ≤5s)
     const boardBaseDurations = Array.from({ length: M }, (_, i) => Math.min(SCENE_CLIP_MAX_SEC, baseDur + (i < extraSec ? 1 : 0)));
+    // Stage 233 — speech-aware levelling WITHIN the hard 100s ceiling: the talkiest shots get the spare seconds
+    // (up to the 5s clip cap) as long as Σ(durations) stays ≤ EPISODE_MAX_SEC. Previously every talky shot was
+    // bumped to 5s unconditionally, which pushed a 24-shot episode to ~118s — outside the 90–100s window.
+    const plannedSpeech = planned.map((p) => p.dialogue.reduce((sum, l) => sum + estimatedSpeechSeconds(l), 0));
+    const boardDurations = boardBaseDurations.slice();
+    let episodeTotal = boardDurations.reduce((a, b) => a + b, 0);
+    const bySpeechDesc = plannedSpeech.map((sec, i) => i).sort((a, b) => plannedSpeech[b] - plannedSpeech[a]);
+    for (const i of bySpeechDesc) {
+      if (episodeTotal >= EPISODE_MAX_SEC) break;
+      if (Math.ceil(plannedSpeech[i]) > boardDurations[i] && boardDurations[i] < SCENE_CLIP_MAX_SEC) { boardDurations[i] += 1; episodeTotal += 1; }
+    }
 
     // ONE planner call over the PLANNED scenes (parts included): per scene → onScreen / entering / exiting +
     // start/end/motion (English). Continuation parts are flagged so the planner keeps their location/cast/action.
@@ -362,11 +374,7 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
       // evenly across every shot above (boardBaseDurations), so Σ(durations) lands in the window regardless of how
       // many scenes exist or how long each one is. Speech is only a lower bound so a talky shot is never shorter
       // than its own (estimated) speech — always still under the hard 5s clip cap.
-      const speechSec = dialogue.reduce((sum, l) => sum + estimatedSpeechSeconds(l), 0);
-      const durationSec = Math.min(
-        SCENE_CLIP_MAX_SEC,
-        Math.max(boardBaseDurations[i] ?? BOARD_CLIP_SEC, Math.min(SCENE_CLIP_MAX_SEC, Math.ceil(speechSec))),
-      );
+      const durationSec = Math.min(SCENE_CLIP_MAX_SEC, Math.max(BOARD_CLIP_SEC, boardDurations[i] ?? BOARD_CLIP_SEC));
 
       // Single-frame model: each planned scene yields ONE board — a keyframe still that is animated on its OWN
       // into a 4–5s clip (no start→end morph). WHO is in frame is everyone present at the scene start
