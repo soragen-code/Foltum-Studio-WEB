@@ -330,7 +330,7 @@ export function ManualClient() {
   // and attach the 4 plates as reference images (T2V → refs; I2V → FRONT plate as the first frame).
   const applyLocationToVideo = useCallback((loc: ManualLocation, n: number) => {
     const plates = [loc.frontUrl, loc.backUrl, loc.leftUrl, loc.rightUrl].filter((u): u is string => !!u)
-    const block = buildReferenceBlock(loc, n)
+    const block = buildReferenceBlock(n)
     setVideoPrompt((prev) => (prev.trim() ? `${prev.trim()}\n\n${block}` : block))
     if (videoMode === 'i2v') {
       if (loc.frontUrl) setFirstFrame([loc.frontUrl])
