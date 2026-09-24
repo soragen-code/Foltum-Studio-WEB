@@ -29,6 +29,8 @@ export async function POST(request: Request) {
   const mode: "t2v" | "i2v" = body?.mode === "i2v" ? "i2v" : "t2v";
   const def = getVideoModel(body?.videoModelId);
   const sourceImageUrl = cleanUrls([body?.sourceImageUrl], 1)[0];
+  // Stage 234e: optional last frame for i2v (Seedance `last_image`, MiniMax `end_image`).
+  const lastImageUrl = mode === "i2v" && (def.bodyStyle === "seedance" || def.bodyStyle === "minimax") ? cleanUrls([body?.lastImageUrl], 1)[0] : undefined;
   const referenceUrls = def.refImages && mode === "t2v" ? cleanUrls(body?.referenceUrls, MANUAL_VIDEO_MAX_REFS) : [];
 
   if (mode === "i2v" && !sourceImageUrl) return NextResponse.json({ error: "First frame image is required for image-to-video" }, { status: 400 });
@@ -47,6 +49,7 @@ export async function POST(request: Request) {
     ({ slug, body: providerBody } = buildVideoRequest({
       def, mode, prompt, duration, aspectRatio: "9:16", generateAudio: true,
       image: mode === "i2v" ? sourceImageUrl : undefined,
+      lastImage: lastImageUrl,
       referenceImages: referenceUrls.length ? referenceUrls : undefined,
     }));
   } catch (err: any) {
@@ -58,7 +61,7 @@ export async function POST(request: Request) {
   const gen = await prisma.manualGeneration.create({
     data: {
       userId: user.id, kind: "video", model: def.id, mode, prompt,
-      referenceUrls: referenceUrls.length ? referenceUrls : undefined,
+      referenceUrls: referenceUrls.length ? referenceUrls : lastImageUrl ? [lastImageUrl] : undefined,
       sourceImageUrl: mode === "i2v" ? sourceImageUrl : undefined,
       status: "pending", cost,
     },

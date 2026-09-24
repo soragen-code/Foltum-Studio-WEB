@@ -163,6 +163,7 @@ export function ManualClient() {
   const [videoModelId, setVideoModelId] = useState(DEFAULT_VIDEO_MODEL_ID)
   const [videoDuration, setVideoDuration] = useState(5)
   const [firstFrame, setFirstFrame] = useState<string[]>([])
+  const [lastFrame, setLastFrame] = useState<string[]>([])
   const [videoRefs, setVideoRefs] = useState<string[]>([])
   const [videoResult, setVideoResult] = useState<string | null>(null)
   const [videoError, setVideoError] = useState<string | null>(null)
@@ -202,6 +203,9 @@ export function ManualClient() {
   })
 
   const videoDef = useMemo(() => getVideoModel(videoModelId), [videoModelId])
+  // Stage 234e: i2v takes exactly ONE first frame (provider API); Seedance/MiniMax also accept an optional last frame.
+  const supportsLastFrame = videoDef.bodyStyle === 'seedance' || videoDef.bodyStyle === 'minimax'
+  const canSwitchToRefs = videoMode === 'i2v' && !!videoDef.slugT2V && videoDef.refImages
   const durationOptions = useMemo(() => {
     if (videoDef.fixedDurations) {
       const opts = videoDef.durations.filter((d) => d >= 4 && d <= 10)
@@ -257,6 +261,7 @@ export function ManualClient() {
         body: JSON.stringify({
           prompt: videoPrompt.trim(), videoModelId, mode: videoMode, duration: videoDuration,
           sourceImageUrl: videoMode === 'i2v' ? firstFrame[0] : undefined,
+          lastImageUrl: videoMode === 'i2v' && supportsLastFrame ? lastFrame[0] : undefined,
           referenceUrls: videoMode === 't2v' ? videoRefs : [],
         }),
       })
@@ -295,7 +300,7 @@ export function ManualClient() {
       setVideoModelId(it.model)
       const mode = it.mode === 'i2v' ? 'i2v' : 't2v'
       setVideoMode(mode)
-      if (mode === 'i2v') setFirstFrame(it.sourceImageUrl ? [it.sourceImageUrl] : [])
+      if (mode === 'i2v') { setFirstFrame(it.sourceImageUrl ? [it.sourceImageUrl] : []); setLastFrame(Array.isArray(it.referenceUrls) && it.referenceUrls[0] ? [it.referenceUrls[0]] : []) }
       else setVideoRefs(Array.isArray(it.referenceUrls) ? it.referenceUrls.slice(0, VIDEO_MAX_REFS) : [])
       if (it.resultUrl) setVideoResult(it.resultUrl)
     }
@@ -418,6 +423,18 @@ export function ManualClient() {
               <>
                 <label className="mb-1 block text-xs font-medium">{t('manual.firstFrame')}</label>
                 <div className="mb-3"><RefSlots urls={firstFrame} onChange={(n) => setFirstFrame(n.slice(-1))} max={1} disabled={videoBusy} hint={t('manual.firstFrameHint')} testId="manual-first-frame" /></div>
+                {supportsLastFrame && (
+                  <>
+                    <label className="mb-1 block text-xs font-medium">{t('manual.lastFrame')}</label>
+                    <div className="mb-3"><RefSlots urls={lastFrame} onChange={(n) => setLastFrame(n.slice(-1))} max={1} disabled={videoBusy} hint={t('manual.lastFrameHint')} testId="manual-last-frame" /></div>
+                  </>
+                )}
+                {canSwitchToRefs && (
+                  <p className="mb-3 text-[11px] text-muted-foreground" data-testid="manual-i2v-refs-hint">
+                    {t('manual.i2vSingleHint')}{' '}
+                    <button type="button" onClick={() => setVideoMode('t2v')} disabled={videoBusy} className="underline hover:text-foreground">{t('manual.switchToRefs')}</button>
+                  </p>
+                )}
               </>
             ) : (
               <>
