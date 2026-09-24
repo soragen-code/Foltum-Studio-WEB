@@ -257,6 +257,33 @@ function visibleForShot(shot: ShotSize, present: string[], focus: string, addres
 }
 
 /**
+ * Stage 236 — a deterministic per-board CAMERA directive (vertical height + horizontal angle) appended to the
+ * frame prompt so consecutive boards are shot from a genuinely different vantage even at the same scale. Seeded by
+ * the board index (stable across re-renders); the two axes use independent seeds so heights and angles both rotate.
+ * English, sent as-is. This complements the SHOT SIZE line: the scale says how CLOSE, this says from WHERE.
+ */
+const CAM_HEIGHTS = [
+  "at eye level",
+  "from a low angle looking slightly up at the subject",
+  "from a high angle looking slightly down at the subject",
+  "from a slightly elevated three-quarter vantage",
+] as const;
+const CAM_ANGLES = [
+  "straight-on frontal to the subject",
+  "three-quarters from the subject's left",
+  "three-quarters from the subject's right",
+  "a near-profile side view",
+] as const;
+function boardCameraDirective(shot: ShotSize, index: number, key: string): string {
+  // Angle rotates STRICTLY by board index (0,1,2,3,0,…) so the horizontal vantage of two adjacent boards can
+  // never match. Height is seeded by the board's unique id so it varies per board without the clean period-N
+  // aliasing an index-only hash produces (two boards N apart would otherwise land on an identical camera setup).
+  const a = CAM_ANGLES[index % CAM_ANGLES.length];
+  const h = CAM_HEIGHTS[boardFrameSeed(`camh#${key}`) % CAM_HEIGHTS.length];
+  return `CAMERA FRAMING (this board only, distinct camera setup): the camera is free, so shoot this ${shot} ${h}, ${a}. Do NOT reuse the previous board's framing — the shot scale, camera height and angle must visibly differ from the adjacent boards. One board = one shot = one camera setup.`;
+}
+
+/**
  * Localization — batch-translate every board's English `startFrame` sentence into natural Russian for UI
  * DISPLAY only (this is NOT a generation prompt, so translating it is allowed). Returns an array aligned 1:1
  * with `texts`, or null when the result is unavailable/untrustworthy (LLM error, wrong count, or a blank
@@ -722,8 +749,22 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
     const prevRow = siblingBoards
       .filter((b) => b.id !== board.id && b.index < board.index && validUrl(b.imageUrl))
       .sort((a, b) => b.index - a.index)[0];
-    const continuityUrl = prevRow ? (prevRow.imageUrl as string) : null;
-    const previousActionText = prevRow
+    // Stage 236 — ROOT CAUSE of "every storyboard board rendered from the same camera angle": in the single-frame
+    // storyboard model each board is its OWN shot (STRICT 1 board = 1 shot = 1 camera setup), yet the immediately
+    // previous board's rendered still was attached as a CONTINUITY image reference together with an "ONLY the camera
+    // angle changes / poses carry over" instruction. A strong image reference makes Seedream reproduce the SAME
+    // composition, so the per-board shot scale chosen by the planner (Stage 235) never reached the pixels — board
+    // after board came out identically framed. For per-scene boards we therefore DROP the continuity IMAGE so the
+    // composition is free to follow THIS board's SHOT SIZE line; character identity references + the location
+    // plate(s) still keep the person and the set consistent. A textual "previous action" hint is kept ONLY for
+    // continuation parts of the SAME source scene (the planner's `#pN` splits of one continuous moment) so a
+    // continuous beat does not visibly teleport — but it never pins the camera to a fixed vantage.
+    const baseSceneOf = (sid: string | null | undefined) => (sid ?? "").split("#")[0];
+    const sameSourceScene =
+      !!prevRow && baseSceneOf(board.sceneId) !== "" && baseSceneOf(prevRow.sceneId) === baseSceneOf(board.sceneId);
+    const continuityUrl = isPerScene ? null : (prevRow ? (prevRow.imageUrl as string) : null);
+    const keepPrevAction = isPerScene ? sameSourceScene : !!prevRow;
+    const previousActionText = keepPrevAction && prevRow
       ? (readBoardDirection(prevRow.directionJson)?.actionEnglish || prevRow.motionEn || prevRow.actionOrDialogue || "").trim()
       : "";
 
@@ -781,10 +822,15 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
       anchorRefIndex: composed.anchorRefIndex,
       ...(previousActionText ? { continuity: { previousActionText, continuityRefIndex: composed.continuityRefIndex } } : {}),
     });
+    // Stage 236 — append the deterministic per-board CAMERA directive so the freed composition actually rotates
+    // (height + angle) board-to-board. Only for per-scene single-frame boards and only for the auto-composed prompt
+    // (a manual override is rendered verbatim, untouched).
+    const cameraDirective = isPerScene ? boardCameraDirective(coverage.shotSize, board.index, board.id) : "";
+    const autoPrompt = cameraDirective ? `${built.prompt}\n${cameraDirective}` : built.prompt;
     // Stage 233 — a USER-EDITED frame prompt (imagePromptOverride) is rendered VERBATIM; the manual edit sticks
     // across re-renders. Empty/whitespace override falls back to the auto-composed prompt.
     const manualFramePrompt = (board.imagePromptOverride ?? "").trim();
-    const prompt = manualFramePrompt || built.prompt;
+    const prompt = manualFramePrompt || autoPrompt;
 
     await updateJob(jobId, { progress: 45, message: `Board ${board.index + 1}: rendering frame...` });
     const remote = await generateImage(
