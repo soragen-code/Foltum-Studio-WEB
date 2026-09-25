@@ -6,45 +6,19 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, charactersSchema } from "@/lib/validations";
-import { chatJSON } from "@/lib/ai";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
-import { runCharacterImagesJob } from "@/lib/workers/character-images-job";
-
-const SYSTEM = `You are a character designer for a short-form vertical drama series.
-
-Given a synopsis, extract and flesh out the main characters. Return ONLY valid JSON:
-
-{
-  "characters": [
-    {
-      "name": "Full Name",
-      "description": "1-2 sentence character summary and role in story",
-      "role": "Protagonist | Deuteragonist | Antagonist | Supporting | Recurring",
-      "personality": "Detailed personality traits, motivations, flaws, strengths (2-3 sentences)",
-      "appearance": "Detailed physical appearance for AI image generation: age, build, hair, eyes, skin tone, clothing style, distinguishing features (2-3 sentences)"
-    }
-  ]
-}
-
-Rules:
-- Extract 3-6 characters
-- Make appearances vivid and specific enough for AI image generation
-- Each character should have clear visual distinctiveness
-- Personality descriptions should reveal inner conflicts
-- Roles should follow classical story structure
-
-IMPORTANT LANGUAGE RULES:
-- Write name, description, role, personality in the SAME LANGUAGE as the synopsis. If synopsis is in Russian — write those fields in Russian.
-- EXCEPTION: The "appearance" field must ALWAYS be in English — it is used as a prompt for AI image generation and works best in English.`;
+import { CHARACTERS_FROM_SCRIPT_JOB_TYPE, runCharactersFromScriptJob } from "@/lib/workers/characters-from-script-job";
 
 /**
- * POST /api/ai/characters
+ * POST /api/ai/characters — References step (Step 5), MANUAL action "Create characters from script".
  *
- * 1. Generates character text profiles via OpenAI (fast, synchronous)
- * 2. Creates a GenerationJob (type "characters") and triggers the background
- *    image worker (fire-and-forget)
- * 3. Returns { jobId, characters } immediately — characters have empty images,
- *    the frontend polls GET /api/jobs/[jobId] for progress.
+ * Characters are created ONLY here, after the episode scripts exist: the background worker reads ALL saved
+ * episode scripts (+ synopsis for context), extracts the complete cast (incl. extras) with one streaming
+ * Claude Opus 5 call, persists the NEW characters (idempotent — existing rows are kept, never deleted) and links
+ * the episodes/scenes to them by name. Reference images are NOT started here (existing buttons do that).
+ *
+ * Returns { jobId, characters } immediately; the frontend polls GET /api/jobs/[jobId] (progress + live
+ * `streamedText` + current characters).
  */
 export async function POST(request: Request) {
   try {
@@ -57,79 +31,49 @@ export async function POST(request: Request) {
 
     const parsed = await parseBody(request, charactersSchema);
     if (!parsed.ok) return parsed.response;
-    const { projectId, synopsis } = parsed.data;
+    const { projectId } = parsed.data;
 
-    const project = await prisma.project.findUnique({ where: { id: projectId } });
+    const project = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: {
+        id: true,
+        user: { select: { email: true } },
+        seasons: { select: { episodes: { where: { script: { not: null } }, select: { id: true, script: true } } } },
+      },
+    });
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
-    const synopsisText = synopsis || project.synopsis || "";
-    if (!synopsisText)
-      return NextResponse.json({ error: "No synopsis available" }, { status: 400 });
+    if (project.user?.email && project.user.email !== session.user.email)
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+    const scriptedEpisodes = project.seasons.flatMap((s) => s.episodes).filter((e) => (e.script ?? "").trim().length > 0);
+    if (!scriptedEpisodes.length)
+      return NextResponse.json({ error: "No saved episode scripts yet. Write the script first (Step 4), then create the characters from it." }, { status: 400 });
 
     // Don't start a second run while one is still processing for this project
-    await failStaleJobs({ projectId, type: "characters" });
+    await failStaleJobs({ projectId, type: CHARACTERS_FROM_SCRIPT_JOB_TYPE });
     const active = await prisma.generationJob.findFirst({
-      where: { projectId, type: "characters", status: { in: ["pending", "processing"] } },
+      where: { projectId, type: CHARACTERS_FROM_SCRIPT_JOB_TYPE, status: { in: ["pending", "processing"] } },
       orderBy: { createdAt: "desc" },
     });
-    if (active) {
-      const characters = await prisma.character.findMany({ where: { projectId }, orderBy: { createdAt: "asc" } });
-      return NextResponse.json({ jobId: active.id, characters, resumed: true });
-    }
+    const characters = await prisma.character.findMany({ where: { projectId }, orderBy: { createdAt: "asc" } });
+    if (active) return NextResponse.json({ jobId: active.id, characters, resumed: true });
 
-    // Step 1: text profiles (fast)
-    await prisma.character.deleteMany({ where: { projectId } });
-
-    const data = await chatJSON<{ characters: any[] }>(
-      SYSTEM,
-      `Extract and design characters from this synopsis:\n\n${synopsisText}`,
-      { temperature: 0.85, maxTokens: 3000 }
-    );
-    const rawChars: any[] = Array.isArray(data?.characters) ? data.characters : [];
-    if (rawChars.length === 0)
-      return NextResponse.json({ error: "AI returned no characters" }, { status: 500 });
-
-    const characters: Awaited<ReturnType<typeof prisma.character.create>>[] = [];
-    for (const c of rawChars) {
-      characters.push(
-        await prisma.character.create({
-          data: {
-            projectId,
-            name: c.name,
-            description: c.description,
-            role: c.role,
-            personality: c.personality,
-            appearance: c.appearance,
-            imageFront: "",
-            imageProfile: "",
-            imageFull: "",
-          },
-        })
-      );
-    }
-
-    // Step 2: background image job
     const job = await prisma.generationJob.create({
       data: {
-        type: "characters",
+        type: CHARACTERS_FROM_SCRIPT_JOB_TYPE,
         status: "processing",
-        progress: 5,
-        message: "Character profiles ready. Starting image generation...",
+        progress: 2,
+        message: `Reading ${scriptedEpisodes.length} episode script(s)…`,
         projectId,
       },
     });
 
     // Runs after the response is flushed; Vercel keeps this invocation alive up to maxDuration
-    runInBackground(() =>
-      runCharacterImagesJob({
-        jobId: job.id,
-        projectId,
-        characterIds: characters.map((c) => c.id),
-      })
-    );
+    runInBackground(() => runCharactersFromScriptJob(job.id, projectId));
 
     return NextResponse.json({ jobId: job.id, characters });
   } catch (err: any) {
-    console.error("Character generation error:", err);
+    console.error("Character extraction error:", err);
     return NextResponse.json({ error: "Generation failed: " + (err?.message ?? "Unknown error") }, { status: 500 });
   }
 }

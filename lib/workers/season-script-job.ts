@@ -20,9 +20,8 @@ import type { GenerationJob } from "@prisma/client";
 import { z } from "zod";
 import { chatJSON, streamChatJSON, SCRIPT_MODEL, EPISODE_SCRIPT_MODEL, EPISODE_SCRIPT_MAX_TOKENS, EPISODE_SCRIPT_TEMPERATURE, startBackgroundJSON, pollBackgroundJSON, cancelBackgroundResponse, type BackgroundPollResult } from "@/lib/ai";
 import { maxDetailLevel, isLocationDetailLevel } from "@/lib/location-scale";
-import { completeJob, failJob, isCancelRequested, markCanceled, runInBackground, updateJob, heartbeatJob } from "@/lib/jobs";
+import { completeJob, failJob, isCancelRequested, markCanceled, updateJob, heartbeatJob } from "@/lib/jobs";
 import { makeJobStreamWriter, stripJsonForPreview, extractProseField } from "@/lib/stream-progress";
-import { runCharacterImagesJob } from "@/lib/workers/character-images-job";
 import { toCharacterCard, normalizeLanguage, seasonCastSystemPrompt, seasonCastUserPrompt, characterCardSchema, MAX_CAST, characterCardToData, sanitizeCharacterCard, sanitizeLocationCard, dedupeCast, hasFullSetInventory, setInventoryRetryNote, serializeSetInventory, parseSetInventory, locationsFromSynopsisSystemPrompt, locationsResultSchema, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
 import { parseStoredShortSynopsis, renderShortSynopsis } from "@/lib/short-synopsis";
 
@@ -374,7 +373,7 @@ export function validateEpisode(raw: unknown, episodeNumber: number, characters:
 /** Stage 110 — targeted correction appended to the episode brief on a retry after a rejected script. */
 export function episodeRetryNote(state: { attempt: number; lastFailure?: string }): string {
   if (state.attempt <= 0) return "";
-  return `\n\nCORRECTION (your previous script was REJECTED${state.lastFailure ? `: ${state.lastFailure}` : ""}). Fix it now: EVERY scene has on-camera dialogue — no "[NO DIALOGUE]", no narrator, no voice-over-only or "previously on" scene; "dialogue" is STRICTLY ENGLISH (Latin letters only) with the project's ENGLISH character names exactly as given in the cast as speaker labels; each scene has 3–6 lines NAME (cue): "line" (an action scene 3–4 short lines in the pauses); every videoPrompt has all 9 tags with a timed 0–10s / 10–20s / 20–30s choreography in [ACTION].`;
+  return `\n\nCORRECTION (your previous script was REJECTED${state.lastFailure ? `: ${state.lastFailure}` : ""}). Fix it now: EVERY scene has on-camera dialogue — no "[NO DIALOGUE]", no narrator, no voice-over-only or "previously on" scene; "dialogue" is STRICTLY ENGLISH (Latin letters only) with the project's ENGLISH character names exactly as given in the cast (or in the episode outline when there are no cast cards) as speaker labels; each scene has 3–6 lines NAME (cue): "line" (an action scene 3–4 short lines in the pauses); every videoPrompt has all 9 tags with a timed 0–10s / 10–20s / 20–30s choreography in [ACTION].`;
 }
 
 /** Stage 110 — translate any remaining non-English scene dialogue with the voiceover translator; never throws. */
@@ -619,7 +618,11 @@ export async function advanceSeasonJob(job: GenerationJob, deps: SeasonJobDeps =
  * cast appear live. The output is parsed with the tolerant schema (missing `role` etc. → defaults); a
  * parse failure gets ONE retry, then the step fails with a clear message.
  */
-async function generateSeasonCast(jobId: string, projectId: string, synopsis: string, language: IdeaLanguage, deps: SeasonJobDeps): Promise<void> {
+/**
+ * @deprecated NOT called by the season flow any more (characters are created on the References step from the
+ * finished scripts — see `lib/workers/characters-from-script-job.ts`). Kept as an export for tooling/tests only.
+ */
+export async function generateSeasonCast(jobId: string, projectId: string, synopsis: string, language: IdeaLanguage, deps: SeasonJobDeps): Promise<void> {
   await clearStreamedText(jobId);
   await updateJob(jobId, { status: "processing", progress: 2, message: "Creating the cast…" });
   const callModel = async (): Promise<unknown> => {
@@ -656,17 +659,14 @@ async function generateSeasonCast(jobId: string, projectId: string, synopsis: st
 }
 
 async function tick(jobId: string, projectId: string, state: SeasonJobState, deps: SeasonJobDeps): Promise<void> {
-  let project = await loadProject(projectId);
+  const project = await loadProject(projectId);
   if (!project?.synopsis) throw new Error("Project synopsis missing");
   const language = normalizeLanguage(project.language, project.synopsis);
-  // Stage 59: generate the season cast + locations from the approved synopsis before the structure step,
-  // when the project has none yet (new 4-step flow). Reload so the freshly-created rows are in scope.
-  if (project.characters.length === 0) {
-    await generateSeasonCast(jobId, projectId, project.synopsis, language, deps);
-    const reloaded = await loadProject(projectId);
-    if (!reloaded) throw new Error("Project disappeared after cast generation");
-    project = reloaded;
-  }
+  // Steps 3/4 are TEXT ONLY: the season structure and the episode scripts are written from the synopsis and
+  // name the characters themselves. No Character rows are created here any more — the cast is extracted
+  // from the finished scripts on the References step (POST /api/ai/characters → characters-from-script-job).
+  // When the project already has characters (legacy projects / manual cast) their cards are still passed
+  // to the prompts so names stay consistent; otherwise `cards` is simply empty.
   const cards = project.characters.map(toCharacterCard);
   let season = await loadSeason(projectId);
   const countDone = () => season ? season.episodes.filter((e) => e.script).length : 0;
@@ -1008,31 +1008,9 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
     const epLoc = ep.locationId ? project.locations.find((l) => l.id === ep.locationId) : matchLocation(project.locations, ep.locationName ?? "");
     const invWarnings = checkSceneSetInventory(script.scenes, epLoc?.setInventory);
     if (invWarnings.length) console.warn(`[season-job] episode ${ep.number} set inventory: ${invWarnings.join(" | ")}`);
-    // Stage 168 — AUTO-CREATE missing CHARACTERS from the finished script (the cast-side mirror of the Stage
-    // 162 per-episode LOCATION derivation below). In the auto-chain flow the up-front cast (generateSeasonCast)
-    // can miss characters the episode script actually introduces; any scene character name that does not match
-    // an existing project character is created here as a minimal draft row BEFORE persistEpisodeScript, so the
-    // scenes are linked to it (persistEpisodeScript silently drops names with no matching character). Dedup is
-    // case-insensitive via matchCharacter; the block never throws — a cast problem must never fail the episode job.
-    const newCharacterIds: string[] = [];
-    try {
-      const sceneNames = Array.from(
-        new Set(
-          script.scenes
-            .flatMap((s) => s.characters ?? [])
-            .map((n) => (typeof n === "string" ? n.trim() : ""))
-            .filter(Boolean),
-        ),
-      );
-      for (const name of sceneNames) {
-        if (matchCharacter(project.characters, name)) continue;
-        const created = await prisma.character.create({ data: { projectId, name, status: "draft", tier: "MAIN" } });
-        project.characters.push(created); // keep the in-memory project in step so persistEpisodeScript links scenes
-        newCharacterIds.push(created.id);
-      }
-    } catch (err) {
-      console.warn(`[season-job] episode ${ep.number} auto-create characters failed:`, err instanceof Error ? err.message : String(err));
-    }
+    // NOTE: no Character rows are created here (the former Stage 168 auto-create block is gone). The scenes are
+    // linked to characters ONLY when the project already has them (persistEpisodeScript matches by name and
+    // silently skips unknown names); the cast itself is extracted later on the References step from the scripts.
     // Stage 169 — DETERMINISTIC per-scene header for a MANUAL (author-provided) script. The LLM structuring step
     // was unreliable at carrying each authored scene's OWN sub-location into `title`/`subLocation`: it kept anchoring
     // every scene to the episode's single top-level LOCATION, so the Script stage rendered an identical
@@ -1112,27 +1090,6 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
       }
     } catch (err) {
       console.warn(`[season-job] episode ${ep.number} per-episode location derivation failed:`, err instanceof Error ? err.message : String(err));
-    }
-    // Stage 168 — best-effort reference images for the NEWLY auto-created characters only (existing characters
-    // keep their images). Mirrors the location-image enqueue above: a "characters" GenerationJob is created and
-    // runCharacterImagesJob runs in the background (idempotent, skips characters that already have a photo).
-    // The auto MAIN reference is free; any failure here is logged and swallowed and never fails the episode job.
-    if (newCharacterIds.length && project.user) {
-      try {
-        const charJob = await prisma.generationJob.create({
-          data: {
-            type: "characters",
-            status: "processing",
-            progress: 5,
-            message: `Starting reference generation for ${newCharacterIds.length} character(s)...`,
-            projectId,
-            resultData: JSON.stringify({ characterIds: newCharacterIds }),
-          },
-        });
-        runInBackground(() => runCharacterImagesJob({ jobId: charJob.id, projectId, characterIds: newCharacterIds }));
-      } catch (err) {
-        console.warn(`[season-job] episode ${ep.number} character image job failed to start:`, err instanceof Error ? err.message : String(err));
-      }
     }
     return loadSeason(projectId);
   }

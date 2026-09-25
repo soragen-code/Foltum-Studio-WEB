@@ -1,8 +1,8 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { useJobPolling, JobProgressBar } from './use-job-polling'
-import { Loader2, RefreshCw, Lock, Check, User, Wand2, ImageOff } from 'lucide-react'
+import { useJobPolling, JobProgressBar, StreamingText } from './use-job-polling'
+import { Loader2, RefreshCw, Lock, Check, User, ImageOff, ScrollText } from 'lucide-react'
 import { CharacterUserRefs } from './character-user-refs'
 import { CharacterFacePhoto } from './character-face-photo'
 
@@ -64,6 +64,28 @@ interface CharacterData {
 }
 
 const CHARACTERS_EXPECTED_SEC = 180 // ~9 FLUX images sequentially
+/** Poll faster while the cast-extraction text streams in (the job relays `streamedText` on every tick). */
+const CHARACTERS_POLL_MS = 1000
+
+/** Server-side job messages are English; show the cast-extraction ones bilingually (RU / EN). */
+function castMessageRuEn(message?: string | null): string {
+  const m = (message ?? '').trim()
+  if (!m) return 'Запускаем... / Starting...'
+  if (/^Reading/i.test(m)) return 'Читаем сценарии... / Reading the scripts...'
+  if (/^Extracting the cast/i.test(m)) return 'Извлекаем персонажей из сценария... / Extracting the cast from the scripts...'
+  if (/^Cast draft was incomplete/i.test(m)) return 'Черновик каста неполный — повторяем... / Cast draft was incomplete — retrying...'
+  if (/^Saving/i.test(m)) return 'Сохраняем персонажей... / Saving the characters...'
+  if (/^Linking/i.test(m)) return 'Привязываем персонажей к сценам... / Linking characters to the scenes...'
+  if (/^Characters created from the script/i.test(m)) return `Персонажи созданы из сценария / ${m}`
+  if (/^No new characters/i.test(m)) return `Новых персонажей нет — все уже существуют / ${m}`
+  return m
+}
+
+/** True when the project has at least one episode with a saved script (Step 4 done) — the cast can be extracted. */
+function projectHasScript(project: any): boolean {
+  const seasons: any[] = Array.isArray(project?.seasons) ? project.seasons : []
+  return seasons.some((s) => Array.isArray(s?.episodes) && s.episodes.some((e: any) => typeof e?.script === 'string' && e.script.trim().length > 0))
+}
 
 export function CharactersStage({ project, onRefresh, entitlements }: { project: any; onRefresh: () => void; entitlements?: import('@/lib/entitlements').Entitlements }) {
   const [characters, setCharacters] = useState<CharacterData[]>(project?.characters ?? [])
@@ -71,14 +93,16 @@ export function CharactersStage({ project, onRefresh, entitlements }: { project:
   const [locking, setLocking] = useState(false)
   const [error, setError] = useState('')
   const isLocked = project?.charactersLocked ?? false
+  const hasScript = projectHasScript(project)
 
   const { job, isActive, start: startPolling, clear: clearJob } = useJobPolling({
+    intervalMs: CHARACTERS_POLL_MS,
     onUpdate: (res) => {
       // The poll endpoint returns the current characters with image URLs so far
       if (Array.isArray(res.characters)) setCharacters(res.characters)
     },
     onFinish: (res) => {
-      if (res.job.status === 'failed') setError(res.job.error ?? 'Image generation failed')
+      if (res.job.status === 'failed') setError(res.job.error ?? 'Generation failed / Генерация не удалась')
       if (Array.isArray(res.characters)) setCharacters(res.characters)
       onRefresh()
       // Keep the finished bar visible briefly, then hide it
@@ -110,14 +134,14 @@ export function CharactersStage({ project, onRefresh, entitlements }: { project:
       const res = await fetch('/api/ai/characters', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: project?.id, synopsis: project?.synopsis }),
+        body: JSON.stringify({ projectId: project?.id }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || !data?.jobId) {
         setError(data?.error ?? 'Generation failed')
         return
       }
-      // Show the text profiles immediately; images arrive via polling
+      // Existing characters are shown immediately; the extracted cast arrives via polling (streamedText + characters)
       if (Array.isArray(data.characters)) setCharacters(data.characters)
       startPolling(data.jobId)
     } catch { setError('Network error') }
@@ -171,7 +195,9 @@ export function CharactersStage({ project, onRefresh, entitlements }: { project:
           )}
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
-          AI extracts characters from your synopsis. Review and approve them.
+          Персонажи создаются вручную из готового сценария (после этапа «Сценарий»): ИИ извлекает всех героев, включая эпизодических, и затем генерирует их референсы.
+          {' / '}
+          Characters are created manually from the finished script (after the Script step): the AI extracts every character incl. extras, then their references are generated.
         </p>
 
         {error && <div className="mt-4 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
@@ -182,15 +208,32 @@ export function CharactersStage({ project, onRefresh, entitlements }: { project:
           </div>
         )}
         {job && <JobProgressBar job={job} expectedTotalSec={CHARACTERS_EXPECTED_SEC} className="mt-4" />}
+        {/* Live cast extraction: bilingual step label + the streamed "Name (age) — role" preview while the model writes */}
+        {job && isActive && (
+          <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="h-3 w-3 animate-spin text-primary" />
+            <span className="truncate">{castMessageRuEn(job.message)}</span>
+          </div>
+        )}
+        {job?.streamedText && <StreamingText text={job.streamedText} active={isActive} className="mt-3" />}
 
-        {!isLocked && (characters?.length ?? 0) === 0 && (
+        {!isLocked && !hasScript && (characters?.length ?? 0) === 0 && (
+          <p className="mt-4 rounded-lg border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
+            Сначала создайте сценарий (этап «Сценарий») — персонажи извлекаются из готового текста сценария.
+            {' / '}
+            Write the script first (Script step) — characters are extracted from the finished script text.
+          </p>
+        )}
+
+        {!isLocked && hasScript && (
           <button
             onClick={generateCharacters}
             disabled={generating}
             className="mt-4 flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
+            title="Извлечь всех персонажей (включая эпизодических) из сохранённых сценариев серий / Extract every character (incl. extras) from the saved episode scripts"
           >
-            {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-            Generate Characters
+            {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScrollText className="h-4 w-4" />}
+            Создать персонажей из сценария / Create characters from script
           </button>
         )}
       </div>
@@ -235,14 +278,6 @@ export function CharactersStage({ project, onRefresh, entitlements }: { project:
 
           {!isLocked && (
             <div className="flex gap-3">
-              <button
-                onClick={generateCharacters}
-                disabled={generating}
-                className="flex items-center gap-2 rounded-lg bg-muted px-4 py-2.5 text-sm transition hover:bg-muted/80 disabled:opacity-50"
-              >
-                {generating ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                Regenerate All
-              </button>
               <button
                 onClick={lockCharacters}
                 disabled={locking || generating}
