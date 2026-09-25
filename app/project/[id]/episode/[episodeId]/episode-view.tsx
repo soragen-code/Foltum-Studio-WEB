@@ -33,7 +33,7 @@ import { episodeTotalSeconds, EPISODE_MAX_TOTAL_SECONDS, EPISODE_TOTAL_LABEL } f
 import { DEFAULT_SCENE_PROMPT_TEMPLATE } from '@/lib/scene-prompt-template'
 import { ASSEMBLE_QUALITIES, ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY, DEFAULT_ASSEMBLE_FPS, type AssembleQuality, type AssembleFps } from '@/lib/assemble-options'
 
-type EpisodePhase = 'script' | 'references' | 'scenes'
+type EpisodePhase = 'script' | 'references' | 'storyboard' | 'scenes'
 
 // Stage 238 — Storyboard is hidden behind a flag (kept in the codebase, not offered in the UI). While
 // false: the Сцены/Сториборд toggle drops the STORYBOARD option, StoryboardPanel is never rendered, and
@@ -1049,9 +1049,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     let saved: string | null = null
     try { saved = window.localStorage.getItem(phaseStorageKey) } catch { /* storage unavailable — ignore */ }
     if (saved === 'script') { router.replace(scriptHref); return }
-    if (saved !== 'references' && saved !== 'scenes') return
+    if (saved !== 'references' && saved !== 'storyboard' && saved !== 'scenes') return
     // Only restore a step the user can actually reach right now (mirrors the phase-step gating).
     if (saved === 'references' && !hasScript) return
+    if (saved === 'storyboard' && !(hasScript && canEnterProduction(refsReady, mode))) return
     if (saved === 'scenes' && !(hasScript && (canEnterProduction(refsReady, mode) || scenes.some((s) => validUrl(s.videoUrl))))) return
     setPhase(saved as EpisodePhase)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1456,12 +1457,14 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         {/* Stage 14 (D): guided steps — script → references → scenes. Stage 172: the Script step lives on its
             own page (/script); steps that belong to the OTHER page render as links that navigate between the two. */}
         <div className="mt-4 flex flex-wrap items-center gap-2 text-xs" data-testid="phase-steps">
-          {(([['script', '1 · Сценарий'], ['references', '2 · Референсы'], ['scenes', '3 · Видео']]) as [EpisodePhase, string][]).map(([key, label]) => {
+          {(([['script', '1 · Сценарий'], ['references', '2 · Референсы'], ['storyboard', '3 · Сториборд'], ['scenes', '4 · Видео']]) as [EpisodePhase, string][]).map(([key, label]) => {
             // Stage 107 — References and Scenes are locked until the episode has a script.
             // Stage 129 — the Scenes step is also locked until references are ready AND a production mode is
             // chosen (canEnterProduction); legacy episodes that already have generated scenes stay reachable.
+            // Storyboard (grid 5×5) is its own step, unlocked once references are ready and a mode is chosen.
             const reached = key === 'script'
               || (hasScript && key === 'references')
+              || (hasScript && key === 'storyboard' && canEnterProduction(refsReady, mode))
               || (hasScript && key === 'scenes' && (canEnterProduction(refsReady, mode) || scenes.some((s) => validUrl(s.videoUrl))))
             // Which page does this step belong to? Script → the /script page; References/Scenes → the production page.
             const onThisPage = view === 'script' ? key === 'script' : key !== 'script'
@@ -1668,55 +1671,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             )}
           </div>
           <p className="mt-1 text-sm text-muted-foreground">Characters (multiple angles) are generated with the "Generate characters" button. Locations are separate: one master frame using the button on the card, additional angles with "+". All images are tagged with C2PA. Click any frame to open it full screen.</p>
-
-          {/* SIMPLIFIED PIPELINE (steps 6 & 9) — episode PLATE (storyboard-only lighting reference) + all START FRAMES. */}
-          <div className="mt-4 grid gap-4 md:grid-cols-2">
-            {/* Step 6 — master plate */}
-            <div className="rounded-lg border border-border bg-background/40 p-3" data-testid="episode-plate-card">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="inline-flex items-center gap-2 text-sm font-semibold"><MapPin className="h-4 w-4" /> Плейт локации / Location plate</h3>
-                <span className="rounded bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-500">Только для сториборда / Storyboard only</span>
-              </div>
-              <div className="mt-2 aspect-[9/16] w-24 overflow-hidden rounded-md border border-border bg-muted">
-                {validUrl(plateUrl) ? <img src={plateUrl!} alt="plate" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-[10px] text-muted-foreground">нет / none</div>}
-              </div>
-              <button type="button" onClick={generatePlate} disabled={plateBusy} className="mt-2 inline-flex items-center gap-2 rounded-lg bg-secondary px-3 py-1.5 text-sm font-medium hover:brightness-110 disabled:opacity-50" data-testid="generate-plate">
-                {plateBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {validUrl(plateUrl) ? 'Пересоздать плейт / Regenerate plate' : 'Создать плейт / Generate plate'}
-              </button>
-              {plateBusy && platePoll.job && <JobProgressBar job={platePoll.job} expectedTotalSec={60} />}
-              {plateError && <p className="mt-2 text-xs text-red-500" data-testid="plate-error">{plateError}</p>}
-            </div>
-            {/* Step 9 — start frames */}
-            <div className="rounded-lg border border-border bg-background/40 p-3" data-testid="start-frames-card">
-              <h3 className="inline-flex items-center gap-2 text-sm font-semibold"><Images className="h-4 w-4" /> Стартовые кадры / Start frames</h3>
-              <p className="mt-1 text-xs text-muted-foreground">Один сплошной лист 5×5 (GPT Image 2.0) со стартовыми кадрами всех 25 сцен. Сначала генерируется грид, вы его проверяете и одобряете — только потом он нарезается на 25 полноразмерных кадров, и открывается экран сцен. Требуются шот-лист и референсы персонажей.</p>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <button type="button" onClick={generateGrid} disabled={gridBusy || sliceBusy || !hasShotList} className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50" data-testid="generate-grid" title={hasShotList ? '' : 'Сначала создайте шот-лист'}>
-                  {gridBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {gridUrl ? 'Перегенерировать грид 5×5 / Regenerate 5×5 grid' : 'Сгенерировать грид 5×5 / Generate 5×5 grid'}
-                </button>
-                <button type="button" onClick={() => setShowGridPrompt(true)} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm font-semibold hover:bg-muted" data-testid="view-grid-prompt">
-                  <FileText className="h-4 w-4" /> Промпт / Prompt
-                </button>
-              </div>
-              {gridBusy && gridPoll.job && <JobProgressBar job={gridPoll.job} expectedTotalSec={120} />}
-              {gridUrl && (
-                <div className="mt-3">
-                  <button type="button" onClick={() => openLightbox([gridUrl], 0, 'Лист сториборда 5×5 / Storyboard sheet')} className="group block w-full overflow-hidden rounded-lg border border-border bg-muted" data-testid="grid-image">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={gridUrl} alt="Storyboard 5×5" className="w-full object-contain transition group-hover:brightness-110" />
-                  </button>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <button type="button" onClick={approveGrid} disabled={!gridUrl || gridBusy || sliceBusy} className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-50" data-testid="approve-grid">
-                      {sliceBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Одобрить и нарезать 25 кадров / Approve & slice 25 frames
-                    </button>
-                    {gridApproved && !sliceBusy && <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-500"><Check className="h-3.5 w-3.5" /> Одобрено / Approved</span>}
-                  </div>
-                </div>
-              )}
-              {sliceBusy && slicePoll.job && <JobProgressBar job={slicePoll.job} expectedTotalSec={120} />}
-              {gridError && <p className="mt-2 text-xs text-red-500" data-testid="grid-error">{gridError}</p>}
-            </div>
-          </div>
 
           {/* Stage 91/93: Locations FIRST on the per-episode references screen.
               IMPORTANT: this is the screen the user actually sees (episode-view.tsx, phase === 'references').
@@ -1972,14 +1926,80 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             <Link href={scriptHref} onClick={() => rememberPhase('script')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="refs-to-script">
               <ArrowLeft className="h-4 w-4" /> Сценарий
             </Link>
-            <button onClick={() => goPhase('scenes')} disabled={!canEnterProduction(refsReady, mode)} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="refs-to-scenes" title={!refsReady ? 'Generate all episode references first' : !mode ? 'Choose a production mode to continue' : ''}>
-              To production <ArrowRight className="h-4 w-4" />
+            <button onClick={() => goPhase('storyboard')} disabled={!canEnterProduction(refsReady, mode)} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="refs-to-scenes" title={!refsReady ? 'Generate all episode references first' : !mode ? 'Choose a production mode to continue' : ''}>
+              К сториборду / To storyboard <ArrowRight className="h-4 w-4" />
             </button>
           </div>
         </section>
         )}
 
-        {/* Step 3 — scenes: per-scene generation + «Generate all scenes" (parallel, Stage 39) + assemble */}
+        {/* Step 3 — STORYBOARD: episode plate + the single 5×5 start-frame sheet (grid). References are on the
+            previous step; this page is dedicated to storyboard generation. Approve+slice auto-advances to Video. */}
+        {phase === 'storyboard' && hasScript && (
+        <section className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="episode-storyboard">
+          <h2 className="inline-flex items-center gap-2 font-display text-xl font-bold"><Grid3x3 className="h-5 w-5 text-primary" /> Сториборд / Storyboard</h2>
+          <p className="mt-1 text-sm text-muted-foreground">Генерация сториборда вынесена на отдельный шаг. Сначала — один сплошной лист 5×5 (GPT Image 2.0) со стартовыми кадрами всех сцен; после одобрения он нарезается на 25 полноразмерных кадров и открывается экран видео.</p>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            {/* Step 6 — master plate */}
+            <div className="rounded-lg border border-border bg-background/40 p-3" data-testid="episode-plate-card">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="inline-flex items-center gap-2 text-sm font-semibold"><MapPin className="h-4 w-4" /> Плейт локации / Location plate</h3>
+                <span className="rounded bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-500">Только для сториборда / Storyboard only</span>
+              </div>
+              <div className="mt-2 aspect-[9/16] w-24 overflow-hidden rounded-md border border-border bg-muted">
+                {validUrl(plateUrl) ? <img src={plateUrl!} alt="plate" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-[10px] text-muted-foreground">нет / none</div>}
+              </div>
+              <button type="button" onClick={generatePlate} disabled={plateBusy} className="mt-2 inline-flex items-center gap-2 rounded-lg bg-secondary px-3 py-1.5 text-sm font-medium hover:brightness-110 disabled:opacity-50" data-testid="generate-plate">
+                {plateBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {validUrl(plateUrl) ? 'Пересоздать плейт / Regenerate plate' : 'Создать плейт / Generate plate'}
+              </button>
+              {plateBusy && platePoll.job && <JobProgressBar job={platePoll.job} expectedTotalSec={60} />}
+              {plateError && <p className="mt-2 text-xs text-red-500" data-testid="plate-error">{plateError}</p>}
+            </div>
+            {/* Step 9 — start frames (single 5×5 sheet) */}
+            <div className="rounded-lg border border-border bg-background/40 p-3" data-testid="start-frames-card">
+              <h3 className="inline-flex items-center gap-2 text-sm font-semibold"><Images className="h-4 w-4" /> Стартовые кадры / Start frames</h3>
+              <p className="mt-1 text-xs text-muted-foreground">Один сплошной лист 5×5 (GPT Image 2.0) со стартовыми кадрами всех 25 сцен. Сначала генерируется грид, вы его проверяете и одобряете — только потом он нарезается на 25 полноразмерных кадров, и открывается экран сцен. Требуются шот-лист и референсы персонажей.</p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <button type="button" onClick={generateGrid} disabled={gridBusy || sliceBusy || !hasShotList} className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50" data-testid="generate-grid" title={hasShotList ? '' : 'Сначала создайте шот-лист'}>
+                  {gridBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {gridUrl ? 'Перегенерировать грид 5×5 / Regenerate 5×5 grid' : 'Сгенерировать грид 5×5 / Generate 5×5 grid'}
+                </button>
+                <button type="button" onClick={() => setShowGridPrompt(true)} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm font-semibold hover:bg-muted" data-testid="view-grid-prompt">
+                  <FileText className="h-4 w-4" /> Промпт / Prompt
+                </button>
+              </div>
+              {gridBusy && gridPoll.job && <JobProgressBar job={gridPoll.job} expectedTotalSec={120} />}
+              {gridUrl && (
+                <div className="mt-3">
+                  <button type="button" onClick={() => openLightbox([gridUrl], 0, 'Лист сториборда 5×5 / Storyboard sheet')} className="group block w-full overflow-hidden rounded-lg border border-border bg-muted" data-testid="grid-image">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={gridUrl} alt="Storyboard 5×5" className="w-full object-contain transition group-hover:brightness-110" />
+                  </button>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <button type="button" onClick={approveGrid} disabled={!gridUrl || gridBusy || sliceBusy} className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-50" data-testid="approve-grid">
+                      {sliceBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Одобрить и нарезать 25 кадров / Approve & slice 25 frames
+                    </button>
+                    {gridApproved && !sliceBusy && <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-500"><Check className="h-3.5 w-3.5" /> Одобрено / Approved</span>}
+                  </div>
+                </div>
+              )}
+              {sliceBusy && slicePoll.job && <JobProgressBar job={slicePoll.job} expectedTotalSec={120} />}
+              {gridError && <p className="mt-2 text-xs text-red-500" data-testid="grid-error">{gridError}</p>}
+            </div>
+          </div>
+
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+            <button onClick={() => goPhase('references')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="storyboard-to-references">
+              <ArrowLeft className="h-4 w-4" /> Референсы / References
+            </button>
+            <button onClick={() => goPhase('scenes')} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="storyboard-to-scenes" title={gridApproved ? '' : 'Одобрите грид, чтобы получить стартовые кадры сцен'}>
+              К видео / To video <ArrowRight className="h-4 w-4" />
+            </button>
+          </div>
+        </section>
+        )}
+
+        {/* Step 4 — scenes: per-scene generation + «Generate all scenes" (parallel, Stage 39) + assemble */}
         {phase === 'scenes' && hasScript && (
         <>
         {/* Stage 129 — the production mode is first CHOSEN in the References step (that is where the gate lives).
