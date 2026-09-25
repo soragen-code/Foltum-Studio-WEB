@@ -350,8 +350,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // Scope of the running reference session (Stage 46A): «Generate characters" (characters only —
   // locations are never touched) or a locations session started from ONE location card («Generate
   // master frame" / "+ Angle") — characters are never touched there.
-  const [refScope, setRefScope] = useState<'characters' | 'locations'>('characters')
-  const refScopeRef = useRef<'characters' | 'locations'>('characters')
+  const [refScope, setRefScope] = useState<'characters' | 'locations' | 'all'>('characters')
+  const refScopeRef = useRef<'characters' | 'locations' | 'all'>('characters')
+  // What the model picker modal starts on OK: 'all' (characters + locations), 'locations' only, or 'characters' only.
+  const refModalTargetRef = useRef<'characters' | 'locations' | 'all'>('all')
   // Server truth refreshed every tick: ids of locations with a running master-frame / extra-angle job,
   // whether a characters job is running, and whether at least one tick has been observed this session
   // (the session must not end before the first tick — the just-started job may not be visible yet).
@@ -486,6 +488,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const refsReady = refChars.every(hasAllImages) && refLocs.filter((l) => !l?.derived).every(locBaseReady)
   const refsCharsDone = refChars.filter(hasAllImages).length
   const refsLocsDone = refLocs.filter(locBaseReady).length
+  // Every episode location is a REAL row with a master frame (derived cards count as not ready here — they are what
+  // «Generate locations» turns into real rows). Used only to show/hide the generate buttons.
+  const refsLocsAllReady = refLocs.length > 0 && refLocs.every((l) => !l?.derived && locBaseReady(l))
+  const refsAllReady = refChars.length > 0 && refChars.every(hasAllImages) && refsLocsAllReady
 
   // Fullscreen carousel keyboard nav: Esc closes, ←/→ move between a reference's photos.
   useEffect(() => {
@@ -703,7 +709,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
 
       // Characters: resume any episode character that is not fully complete (missing base OR extras).
       // Skipped entirely in a locations-only session.
-      const incompleteChars = refScopeRef.current === 'characters' ? refChars.filter((c) => !hasAllImages(fresh.pchars.find((x: any) => x.id === c.id) ?? c)) : []
+      const incompleteChars = refScopeRef.current !== 'locations' ? refChars.filter((c) => !hasAllImages(fresh.pchars.find((x: any) => x.id === c.id) ?? c)) : []
       if (incompleteChars.length > 0 && !activeCharJob) {
         try {
           const res = await fetch('/api/ai/characters/references', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, characterIds: incompleteChars.map((c) => c.id), imageModel: imageModelRef.current, plateUrl: plateUrlRef.current }) })
@@ -777,13 +783,14 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
 
   /** «Generate characters" (Stage 46A): generate every missing photo of this episode's CHARACTERS only.
    *  Locations are never touched here. The AI image model chosen in the picker is threaded into the request. */
-  const generateCharacterRefs = async () => {
+  const generateCharacterRefs = async (opts?: { chars?: any[]; scope?: 'characters' | 'all' }) => {
     setRefModalOpen(false)
+    const scope = opts?.scope ?? 'characters'
     setError(''); setRefStarting(true); refCanceled.current = false; locCanceled.current = new Set()
-    refScopeRef.current = 'characters'; setRefScope('characters'); setTickSeen(false)
+    refScopeRef.current = scope; setRefScope(scope); setTickSeen(false)
     const model = imageModelRef.current
     try {
-      const missingChars = refChars.filter((c) => !hasAllImages(c))
+      const missingChars = (opts?.chars ?? refChars).filter((c) => !hasAllImages(c))
       if (missingChars.length === 0) return
       const res = await fetch('/api/ai/characters/references', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, characterIds: missingChars.map((c) => c.id), imageModel: model, plateUrl: plateUrlRef.current }) })
       const d = await res.json()
@@ -793,6 +800,52 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       setRefSession(true)
     } catch { setError('Network error') } finally { setRefStarting(false) }
   }
+
+  /** «Сгенерировать локации»: derive this episode's Location rows from its scenes (server: create + bind), then
+   *  generate the master frame of every episode location that has none. The derived (dashed) cards are replaced by
+   *  the real rows right after the request; frames stream in via the reference poll session. */
+  const generateEpisodeLocations = async (opts?: { scope?: 'locations' | 'all' }) => {
+    setRefModalOpen(false)
+    const scope = opts?.scope ?? 'locations'
+    setError(''); setRefStarting(true); refCanceled.current = false; locCanceled.current = new Set()
+    refScopeRef.current = scope; setRefScope(scope); setTickSeen(false)
+    try {
+      const res = await fetch(`/api/ai/episodes/${episode.id}/locations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageModel: imageModelRef.current }) })
+      const d = await res.json().catch(() => ({}))
+      if (typeof d?.creditsRemaining === 'number') setCredits(d.creditsRemaining)
+      // Rows may have been created/bound even when the image job could not start (e.g. 402) — show them.
+      if (d?.created || d?.bound || res.ok) await reloadEpisode({ refreshRefs: true })
+      if (!res.ok) { setError(d?.error ?? 'Не удалось сгенерировать локации'); return }
+      if (d?.jobId) {
+        for (const id of (Array.isArray(d.locationIds) ? d.locationIds : []) as string[]) refJobs.current.loc[id] = d.jobId
+        setRefSession(true)
+      }
+    } catch { setError('Ошибка сети') } finally { setRefStarting(false) }
+  }
+
+  /** «Сгенерировать все референсы»: one click → (a) extract the cast from the script when the episode has no
+   *  characters yet, (b) photos of every character still missing them, (c) locations (rows + master frames). */
+  const generateAllRefs = async () => {
+    setRefModalOpen(false)
+    setError('')
+    refScopeRef.current = 'all'; setRefScope('all'); setTickSeen(false)
+    let chars: any[] = refChars
+    if (chars.length === 0) {
+      const created = await createCharactersFromScript()
+      if (created && created.length) chars = created
+    }
+    if (chars.some((c) => !hasAllImages(c))) await generateCharacterRefs({ chars, scope: 'all' })
+    await generateEpisodeLocations({ scope: 'all' })
+  }
+
+  /** OK in the model picker → run whatever the picker was opened for. */
+  const runRefModal = () => {
+    const t = refModalTargetRef.current
+    if (t === 'characters') void generateCharacterRefs()
+    else if (t === 'locations') void generateEpisodeLocations()
+    else void generateAllRefs()
+  }
+  const openRefModal = (target: 'characters' | 'locations' | 'all') => { refModalTargetRef.current = target; setRefModalOpen(true) }
 
   /** SIMPLIFIED PIPELINE (step 6) — generate the episode master PLATE (Location.imageUrl). Storyboard-only. */
   const generatePlate = async () => {
@@ -827,7 +880,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     // Only take over the polling scope when characters aren't already generating — otherwise
     // keep 'characters' so the character resume loop / banner stay intact; the location job
     // runs concurrently, tracked via locActive.
-    const keepChars = refSession && refScope === 'characters' && !refsCharsReady
+    const keepChars = refSession && refScope !== 'locations' && !refsCharsReady
     if (!keepChars) { refScopeRef.current = 'locations'; setRefScope('locations') }
     setTickSeen(false)
     try {
@@ -847,7 +900,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const addLocationAngle = async (locationId: string) => {
     setError(''); setRefStarting(true); refCanceled.current = false; locCanceled.current = new Set()
     // Stage 60: allow adding a location angle without waiting for a running character session.
-    const keepChars = refSession && refScope === 'characters' && !refsCharsReady
+    const keepChars = refSession && refScope !== 'locations' && !refsCharsReady
     if (!keepChars) { refScopeRef.current = 'locations'; setRefScope('locations') }
     setTickSeen(false)
     try {
@@ -953,28 +1006,30 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
    * (background Claude Opus 5 worker), then polls GET /api/jobs/[jobId] until it finishes, streaming the
    * cast into the character cards. Reference IMAGES are not started here — that's the «Generate characters» button.
    */
-  const createCharactersFromScript = async () => {
-    if (createCharsBusy) return
+  const createCharactersFromScript = async (): Promise<any[] | null> => {
+    if (createCharsBusy) return null
+    let result: any[] | null = null
     setCreateCharsBusy(true); setError(''); setCreateCharsMsg('Извлечение персонажей из сценария...')
     try {
       const res = await fetch('/api/ai/characters', {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id }),
       })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok || !d?.jobId) { setError(d?.error ?? 'Не удалось создать персонажей'); setCreateCharsMsg(''); return }
-      if (Array.isArray(d.characters) && d.characters.length) setRefChars(d.characters)
+      if (!res.ok || !d?.jobId) { setError(d?.error ?? 'Не удалось создать персонажей'); setCreateCharsMsg(''); return null }
+      if (Array.isArray(d.characters) && d.characters.length) { setRefChars(d.characters); result = d.characters }
       for (let i = 0; i < 400; i++) {
         await new Promise((r) => setTimeout(r, 3000))
         const jr = await fetch(`/api/jobs/${d.jobId}`, { cache: 'no-store' }).catch(() => null)
         if (!jr || !jr.ok) continue
         const jd = await jr.json().catch(() => ({}))
-        if (Array.isArray(jd?.characters) && jd.characters.length) setRefChars(jd.characters)
+        if (Array.isArray(jd?.characters) && jd.characters.length) { setRefChars(jd.characters); result = jd.characters }
         if (jd?.job?.message) setCreateCharsMsg(String(jd.job.message))
         const st = jd?.job?.status
         if (st === 'completed') { setCreateCharsMsg(''); router.refresh(); break }
-        if (st === 'failed' || st === 'canceled') { setError(jd?.job?.error ?? 'Не удалось создать персонажей'); setCreateCharsMsg(''); break }
+        if (st === 'failed' || st === 'canceled') { setError(jd?.job?.error ?? 'Не удалось создать персонажей'); setCreateCharsMsg(''); result = null; break }
       }
-    } catch { setError('Ошибка сети'); setCreateCharsMsg('') } finally { setCreateCharsBusy(false) }
+    } catch { setError('Ошибка сети'); setCreateCharsMsg(''); result = null } finally { setCreateCharsBusy(false) }
+    return result
   }
 
   /** Prompt-edit a character's appearance (regenerates its references; C2PA preserved in the worker). */
@@ -1693,21 +1748,21 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             <h2 className="inline-flex items-center gap-2 font-display text-xl font-bold"><Images className="h-5 w-5 text-primary" /> Episode references</h2>
             {refSession ? (
               <span className="inline-flex items-center gap-2 text-xs text-muted-foreground" data-testid="refs-progress">
-                <Loader2 className="h-4 w-4 animate-spin text-primary" /> {refScope === 'locations' ? <>Generating location: {refsLocsDone}/{refLocs.length}</> : <>Generating characters: {refsCharsDone}/{refChars.length}</>}
+                <Loader2 className="h-4 w-4 animate-spin text-primary" /> {refScope === 'all' ? <>Персонажи {refsCharsDone}/{refChars.length} · Локации {refsLocsDone}/{refLocs.length}</> : refScope === 'locations' ? <>Generating location: {refsLocsDone}/{refLocs.length}</> : <>Generating characters: {refsCharsDone}/{refChars.length}</>}
                 <CancelButton onCancel={cancelRefs} testId="refs-cancel" label="Cancel" pendingLabel="Stopping…" />
               </span>
             ) : (
               <span className="inline-flex flex-wrap items-center gap-2">
                 {refsReady && <span className="text-xs font-medium text-emerald-500" data-testid="refs-status">All references are ready</span>}
-                {!refsCharsReady && (
-                  <button onClick={() => setRefModalOpen(true)} disabled={refStarting} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all-refs" title="Generate photos of all episode characters (locations — separately, on the location card)">
-                    {refStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Generate characters
+                {!refsAllReady && (
+                  <button onClick={() => openRefModal('all')} disabled={refStarting || createCharsBusy} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all-refs" title="Персонажи из сценария (если их нет), фото всех персонажей и кадры всех локаций эпизода">
+                    {refStarting || createCharsBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Сгенерировать все референсы
                   </button>
                 )}
               </span>
             )}
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">Characters (multiple angles) are generated with the "Generate characters" button. Locations are separate: one master frame using the button on the card, additional angles with "+". All images are tagged with C2PA. Click any frame to open it full screen.</p>
+          <p className="mt-1 text-sm text-muted-foreground">«Сгенерировать все референсы» создаёт персонажей из сценария (если их ещё нет), их фото и мастер-кадры всех локаций эпизода. Отдельно: «Сгенерировать локации» в блоке локаций; дополнительные ракурсы локации — кнопкой «+» на карточке. Все изображения помечены C2PA. Нажмите на кадр, чтобы открыть его на весь экран.</p>
 
           {/* Stage 91/93: Locations FIRST on the per-episode references screen.
               IMPORTANT: this is the screen the user actually sees (episode-view.tsx, phase === 'references').
@@ -1718,7 +1773,14 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               photos and the same button rows — with NO oversized/highlighted wrapper and no "base
               scene layer" badge, while keeping every location-specific control (generate/regenerate
               master frame, "+ Angle", cancel-generation + confirm dialog). Locations stay FIRST. */}
-          <h3 className="mt-4 flex items-center gap-2 text-sm font-semibold" data-testid="episode-location-block"><MapPin className="h-4 w-4" /> Locations ({refLocs.length})</h3>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+            <h3 className="flex items-center gap-2 text-sm font-semibold" data-testid="episode-location-block"><MapPin className="h-4 w-4" /> Locations ({refLocs.length})</h3>
+            {!refsLocsAllReady && (
+              <button type="button" onClick={() => openRefModal('locations')} disabled={refStarting || refSession} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm font-medium disabled:opacity-50" data-testid="generate-locations" title="Создать локации из сцен эпизода и сгенерировать их мастер-кадры">
+                {refStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPin className="h-4 w-4" />} Сгенерировать локации
+              </button>
+            )}
+          </div>
           <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {refLocs.map((l) => {
               // Stage 169 — a DERIVED (display-only) location has no DB row yet: it is aggregated on the fly from
@@ -1729,7 +1791,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                 return (
                   <div key={l.id} className="rounded-lg border border-dashed border-border/60 p-3" data-testid="ref-location-derived">
                     <div className="min-w-0 truncate text-sm font-medium" title={l.name}>{l.name}</div>
-                    <p className="mt-1 text-xs text-muted-foreground">Локация из сцен эпизода. Референсные кадры появятся после генерации референсов сцен.</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Локация из сцен эпизода. Нажмите «Сгенерировать локации», чтобы создать карточку и мастер-кадр.</p>
                   </div>
                 )
               }
@@ -1876,7 +1938,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           {createCharsMsg && <p className="mt-1.5 text-xs text-primary" data-testid="create-characters-notice">{createCharsMsg}</p>}
           <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {refChars.map((c) => {
-              const busy = !!charBusy[c.id] || (refSession && refScope === 'characters' && !hasAllImages(c))
+              const busy = !!charBusy[c.id] || (refSession && refScope !== 'locations' && !hasAllImages(c))
               // Stage 56: render ONLY the character's actual reference photos (usually one full-body imageFull),
               // with no padded empty placeholder slots. Each slot keeps its true url->shot mapping so
               // per-shot regen/download target the right image; the 9:16 photo fills the slot with object-cover.
@@ -2549,7 +2611,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             </select>
             <div className="mt-4 flex justify-end gap-2">
               <button onClick={() => setRefModalOpen(false)} className="rounded-lg border border-border px-3 py-1.5 text-sm">Cancel</button>
-              <button onClick={generateCharacterRefs} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="ref-model-ok">
+              <button onClick={runRefModal} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="ref-model-ok">
                 <Wand2 className="h-4 w-4" /> Generate
               </button>
             </div>
