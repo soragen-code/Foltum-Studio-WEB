@@ -35,7 +35,7 @@ export async function POST(request: Request) {
 
     const parsed = await parseBody(request, charactersReferencesSchema);
     if (!parsed.ok) return parsed.response;
-    const { projectId, tiers, characterIds, imageModel } = parsed.data;
+    const { projectId, tiers, characterIds, imageModel, plateUrl } = parsed.data;
 
     const user = await prisma.user.findUnique({ where: { email: session.user.email } });
     if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
@@ -71,7 +71,7 @@ export async function POST(request: Request) {
       data: { type: "characters", status: "processing", progress: 5, message: `Generating references for ${jobCharacterIds.length} characters…`, projectId },
     });
     runInBackground(async () => {
-      await runCharacterImagesJob({ jobId: job.id, projectId, characterIds: jobCharacterIds, imageModel: normalizeImageModel(imageModel) });
+      await runCharacterImagesJob({ jobId: job.id, projectId, characterIds: jobCharacterIds, imageModel: normalizeImageModel(imageModel), plateUrl: plateUrl ?? null });
       try {
         // Refund the CHARGED characters whose full-body photo never landed (Stage 53: imageFull is the
         // single generated shot; keep imageFront in the fallback so a legacy resume isn't refunded).

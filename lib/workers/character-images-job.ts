@@ -74,6 +74,12 @@ export interface CharacterImagesJobParams {
   characterIds: string[];
   /** Producer-picked image model (currently only "seedream-5-pro"); passed to the image model. */
   imageModel?: string;
+  /**
+   * SIMPLIFIED PIPELINE (step 7): the episode's master plate (Location.imageUrl). When given it is appended as
+   * the LAST reference image with an explicit "lighting and palette ONLY — background stays neutral" line, so
+   * every character height reference shares the episode's light without inheriting its background.
+   */
+  plateUrl?: string | null;
 }
 
 type C2paCheck = { characterId: string; shot: string; ok: boolean; signatures: string[]; bytes: number };
@@ -87,7 +93,7 @@ type C2paCheck = { characterId: string; shot: string; ok: boolean; signatures: s
  * (20) provider requests run in flight; every stored photo's C2PA metadata is verified. Idempotent:
  * a character that already has imageFull is skipped, so a resumed/retried job only fills the gaps.
  */
-export async function runCharacterImagesJob({ jobId, projectId, characterIds, imageModel }: CharacterImagesJobParams): Promise<void> {
+export async function runCharacterImagesJob({ jobId, projectId, characterIds, imageModel, plateUrl }: CharacterImagesJobParams): Promise<void> {
   try {
     const characters = await prisma.character.findMany({
       where: { id: { in: characterIds }, projectId },
@@ -123,18 +129,22 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
     const genBaseShot = async (char: (typeof characters)[number], shot: BaseShot, ref: string | null, refKind: CharacterRefKind = "face") => {
       if (await canceled()) return;
       const userRefs = combineFaceAndUserRefs((char as any).faceImageUrl, (char as any).userRefs);
-      const imageInput = mergeImageInput(userRefs, ref ? [ref] : [], 10);
-      const chained = imageInput.length > 0;
+      const identityInput = mergeImageInput(userRefs, ref ? [ref] : [], 9);
+      // `chained` = identity refs only (face/user photos); the plate is NOT an identity reference.
+      const chained = identityInput.length > 0;
+      const plate = plateUrl && /^https?:\/\//i.test(plateUrl) ? plateUrl : null;
+      const imageInput = plate ? [...identityInput, plate] : identityInput;
+      const plateNote = plate ? ` Image ${imageInput.length} is the episode's location plate: use it ONLY for the lighting direction, colour temperature and palette — do NOT copy its background or place the person in it; the background stays a plain neutral studio backdrop, full body head-to-toe visible.` : "";
       if (userRefs.length) userRefUse.push({ characterId: char.id, shot, userRefCount: userRefs.length });
       try {
         // Stage 125: pass the character's sex (explicit Character.gender, heuristic fallback from role) so the
         // reference prompt leads with the correct sex and never drifts (the "мать rendered as a man" bug).
-        const basePrompt = characterShotPrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize, chained, refKind, char.promptOverride, char.age, (char as any).gender ?? null, char.role);
+        const basePrompt = characterShotPrompt(char.appearance ?? "", shot, char.name, char.tier, char.groupSize, chained, refKind, char.promptOverride, char.age, (char as any).gender ?? null, char.role) + plateNote;
         // Stage 58: clamp the FINAL prompt (including any corrective retry suffix appended by the guard) so it
         // never exceeds the image provider's 4000-char hard limit (Seedream returns HTTP 422 otherwise, which
         // previously nulled the full-body photo). A prompt already within the limit is passed through unchanged.
         const gen = (prompt: string) => generateImage(
-          { prompt: clampPromptToLimit(prompt), aspect_ratio: ASPECT_RATIOS[shot], ...(chained ? { image_input: imageInput } : {}) },
+          { prompt: clampPromptToLimit(prompt), aspect_ratio: ASPECT_RATIOS[shot], ...(imageInput.length ? { image_input: imageInput } : {}) },
           { jobId, characterId: char.id, imageModel}
         );
         let providerUrl: string;

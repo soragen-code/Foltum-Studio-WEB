@@ -160,6 +160,8 @@ export const charactersReferencesSchema = z.object({
   characterIds: z.array(cuidSchema).max(100).optional(),
   /** Producer-picked image model (see lib/ai-models.ts). Currently only "seedream-5-pro". */
   imageModel: z.string().max(60).optional().nullable(),
+  /** SIMPLIFIED PIPELINE (step 7): episode master plate URL — lighting/palette reference for the height refs. */
+  plateUrl: z.string().url().max(2000).optional().nullable(),
 });
 
 export const locationCreateSchema = z.object({
