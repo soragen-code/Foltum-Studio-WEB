@@ -28,6 +28,7 @@ import {
   type GridLocation,
   type GridSceneBeat,
 } from "@/lib/storyboard-grid";
+import { parseBeatMeta } from "@/lib/simple-pipeline";
 
 export const STORYBOARD_GRID_JOB_TYPE = "storyboard_grid";
 export const STORYBOARD_GRID_SLICE_JOB_TYPE = "storyboard_grid_slice";
@@ -76,12 +77,20 @@ export async function loadGridInputs(episodeId: string): Promise<{
     ? { id: "episode-location", name: episode.locationName, imageUrl: null, keyObjects: episode.locationDesc || null }
     : null;
 
-  const scenes: GridSceneBeat[] = episode.scenes.map((s) => ({
-    number: s.number,
-    title: s.title,
-    action: s.action || s.startState || s.title || null,
-    shotType: s.shotType,
-  }));
+  // Simplified pipeline: beat scenes (Scene.beatMeta) describe each panel with the beat's shot + action + cut.
+  const scenes: GridSceneBeat[] = episode.scenes.map((s) => {
+    const beat = parseBeatMeta(s.beatMeta);
+    if (beat) {
+      const text = [beat.action, beat.cut ? `Cut: ${beat.cut}` : ""].filter(Boolean).join(" ");
+      return { number: s.number, title: `${beat.sceneTitle} — ${s.title}`, action: text || s.action || s.title || null, shotType: beat.shot || s.shotType };
+    }
+    return {
+      number: s.number,
+      title: s.title,
+      action: s.action || s.startState || s.title || null,
+      shotType: s.shotType,
+    };
+  });
 
   return { characters, location, scenes, keyElement: null };
 }

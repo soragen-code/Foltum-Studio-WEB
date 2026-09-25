@@ -133,6 +133,29 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       setShotListBusy(false)
     },
   })
+  // SIMPLIFIED PIPELINE (step 6) — the episode master PLATE (Location.imageUrl), used ONLY as a lighting/palette
+  // reference for character refs, start frames and the storyboard.
+  const [plateUrl, setPlateUrl] = useState<string | null>(validUrl(initial.location?.imageUrl) ? initial.location.imageUrl : null)
+  const plateUrlRef = useRef<string | null>(plateUrl); plateUrlRef.current = plateUrl
+  const [plateBusy, setPlateBusy] = useState(false)
+  const [plateError, setPlateError] = useState<string | null>(null)
+  const platePoll = useJobPolling({
+    onFinish: async (res) => {
+      const j = res.job
+      if (j.status === 'failed') setPlateError(j.error ?? 'Не удалось создать плейт / Plate failed')
+      await reloadEpisode({ refreshRefs: true }); router.refresh(); setPlateBusy(false)
+    },
+  })
+  // SIMPLIFIED PIPELINE (step 9) — one 9:16 START FRAME per beat scene (Scene.startFrameUrl).
+  const [framesBusy, setFramesBusy] = useState(false)
+  const [framesError, setFramesError] = useState<string | null>(null)
+  const framesPoll = useJobPolling({
+    onFinish: async (res) => {
+      const j = res.job
+      if (j.status === 'failed') setFramesError(j.error ?? 'Не удалось сгенерировать кадры / Start frames failed')
+      await reloadEpisode({ refreshRefs: true }); router.refresh(); setFramesBusy(false)
+    },
+  })
   // Stage 158 — "insert your own full episode script": the author pastes a complete script and it becomes the
   // authoritative source the season job structures into scenes. `showManual` toggles the textarea (both in the
   // no-script panel and above an existing script).
@@ -583,7 +606,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       const incompleteChars = refScopeRef.current === 'characters' ? refChars.filter((c) => !hasAllImages(fresh.pchars.find((x: any) => x.id === c.id) ?? c)) : []
       if (incompleteChars.length > 0 && !activeCharJob) {
         try {
-          const res = await fetch('/api/ai/characters/references', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, characterIds: incompleteChars.map((c) => c.id), imageModel: imageModelRef.current }) })
+          const res = await fetch('/api/ai/characters/references', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, characterIds: incompleteChars.map((c) => c.id), imageModel: imageModelRef.current, plateUrl: plateUrlRef.current }) })
           const d = await res.json().catch(() => ({}))
           if (res.ok && d?.jobId) refJobs.current.char = d.jobId
           else if (!res.ok && d?.error) setError(d.error)
@@ -662,13 +685,38 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     try {
       const missingChars = refChars.filter((c) => !hasAllImages(c))
       if (missingChars.length === 0) return
-      const res = await fetch('/api/ai/characters/references', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, characterIds: missingChars.map((c) => c.id), imageModel: model }) })
+      const res = await fetch('/api/ai/characters/references', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id, characterIds: missingChars.map((c) => c.id), imageModel: model, plateUrl: plateUrlRef.current }) })
       const d = await res.json()
       if (!res.ok) { setError(d?.error ?? 'Failed to start character generation'); return }
       if (d?.jobId) refJobs.current.char = d.jobId
       if (typeof d?.creditsRemaining === 'number') setCredits(d.creditsRemaining)
       setRefSession(true)
     } catch { setError('Network error') } finally { setRefStarting(false) }
+  }
+
+  /** SIMPLIFIED PIPELINE (step 6) — generate the episode master PLATE (Location.imageUrl). Storyboard-only. */
+  const generatePlate = async () => {
+    setPlateError(null); setPlateBusy(true)
+    try {
+      const res = await fetch(`/api/ai/episodes/${episode.id}/plate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ imageModel: imageModelRef.current }) })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) { setPlateError(d?.error ?? 'Failed to start plate generation'); setPlateBusy(false); return }
+      if (typeof d?.creditsRemaining === 'number') setCredits(d.creditsRemaining)
+      if (d?.jobId) platePoll.start(d.jobId)
+      else { setPlateBusy(false); await reloadEpisode({ refreshRefs: true }) }
+    } catch { setPlateError('Network error'); setPlateBusy(false) }
+  }
+
+  /** SIMPLIFIED PIPELINE (step 9) — generate ALL start frames (one 9:16 frame per beat scene). */
+  const generateAllFrames = async () => {
+    setFramesError(null); setFramesBusy(true)
+    try {
+      const res = await fetch(`/api/ai/episodes/${episode.id}/start-frames`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ all: true }) })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) { setFramesError(d?.error ?? 'Failed to start frame generation'); setFramesBusy(false); return }
+      if (d?.jobId) framesPoll.start(d.jobId)
+      else { setFramesBusy(false); await reloadEpisode({ refreshRefs: true }) }
+    } catch { setFramesError('Network error'); setFramesBusy(false) }
   }
 
   /** «Generate master frame" on ONE location card (Stage 46A): exactly ONE master frame of this location,
@@ -880,6 +928,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           ? epForRefs.characters.map((ec: any) => ec.character)
           : (project.characters ?? [])
         setRefChars(chars)
+        // Simplified pipeline: the episode plate = its bound location's master frame.
+        const locId = epForRefs?.locationId ?? epForRefs?.location?.id
+        const plateLoc = (freshLocations ?? project.locations ?? []).find((l: any) => l.id === locId)
+        const nextPlate = validUrl(epForRefs?.location?.imageUrl) ? epForRefs.location.imageUrl : validUrl(plateLoc?.imageUrl) ? plateLoc.imageUrl : null
+        if (nextPlate) setPlateUrl(nextPlate)
       }
     } catch {}
   }
@@ -1530,6 +1583,35 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             )}
           </div>
           <p className="mt-1 text-sm text-muted-foreground">Characters (multiple angles) are generated with the "Generate characters" button. Locations are separate: one master frame using the button on the card, additional angles with "+". All images are tagged with C2PA. Click any frame to open it full screen.</p>
+
+          {/* SIMPLIFIED PIPELINE (steps 6 & 9) — episode PLATE (storyboard-only lighting reference) + all START FRAMES. */}
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            {/* Step 6 — master plate */}
+            <div className="rounded-lg border border-border bg-background/40 p-3" data-testid="episode-plate-card">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="inline-flex items-center gap-2 text-sm font-semibold"><MapPin className="h-4 w-4" /> Плейт локации / Location plate</h3>
+                <span className="rounded bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-500">Только для сториборда / Storyboard only</span>
+              </div>
+              <div className="mt-2 aspect-[9/16] w-24 overflow-hidden rounded-md border border-border bg-muted">
+                {validUrl(plateUrl) ? <img src={plateUrl!} alt="plate" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-[10px] text-muted-foreground">нет / none</div>}
+              </div>
+              <button type="button" onClick={generatePlate} disabled={plateBusy} className="mt-2 inline-flex items-center gap-2 rounded-lg bg-secondary px-3 py-1.5 text-sm font-medium hover:brightness-110 disabled:opacity-50" data-testid="generate-plate">
+                {plateBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {validUrl(plateUrl) ? 'Пересоздать плейт / Regenerate plate' : 'Создать плейт / Generate plate'}
+              </button>
+              {plateBusy && platePoll.job && <JobProgressBar job={platePoll.job} expectedTotalSec={60} />}
+              {plateError && <p className="mt-2 text-xs text-red-500" data-testid="plate-error">{plateError}</p>}
+            </div>
+            {/* Step 9 — start frames */}
+            <div className="rounded-lg border border-border bg-background/40 p-3" data-testid="start-frames-card">
+              <h3 className="inline-flex items-center gap-2 text-sm font-semibold"><Images className="h-4 w-4" /> Стартовые кадры / Start frames</h3>
+              <p className="mt-1 text-xs text-muted-foreground">Один вертикальный кадр 9:16 на каждый бит шот-листа. Используются как первый кадр видеоклипа. Требуют шот-лист и референсы персонажей.</p>
+              <button type="button" onClick={generateAllFrames} disabled={framesBusy || !hasShotList} className="mt-2 inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50" data-testid="generate-all-frames" title={hasShotList ? '' : 'Сначала создайте шот-лист'}>
+                {framesBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Генерировать все кадры / Generate all frames
+              </button>
+              {framesBusy && framesPoll.job && <JobProgressBar job={framesPoll.job} expectedTotalSec={180} />}
+              {framesError && <p className="mt-2 text-xs text-red-500" data-testid="frames-error">{framesError}</p>}
+            </div>
+          </div>
 
           {/* Stage 91/93: Locations FIRST on the per-episode references screen.
               IMPORTANT: this is the screen the user actually sees (episode-view.tsx, phase === 'references').
