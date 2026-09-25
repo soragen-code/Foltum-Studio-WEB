@@ -294,6 +294,8 @@ export type BackgroundJSONOptions = {
   maxTokens?: number;
   reasoningEffort?: "low" | "medium" | "high";
   temperature?: number;
+  /** Relay each VISIBLE content delta to the UI (SSE / streamedText preview). No effect on the result. */
+  onDelta?: (delta: string, accumulated: string) => void;
 };
 
 export type BackgroundPollResult<T> =
@@ -313,6 +315,7 @@ export async function startBackgroundJSON(system: string, user: string, opts?: B
     reasoningEffort: opts?.reasoningEffort,
     temperature: opts?.temperature,
     json: true,
+    onDelta: opts?.onDelta,
     // A single generation can run for minutes — give it the full function budget.
     timeoutMs: 780_000,
     maxRetries: 1,

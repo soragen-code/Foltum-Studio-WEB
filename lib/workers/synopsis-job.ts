@@ -13,6 +13,7 @@
  */
 import { prisma } from "@/lib/db";
 import { updateJob, completeJob, failJob, heartbeatJob, markCanceled, isCancelRequested } from "@/lib/jobs";
+import { makeJobStreamWriter, flushStreamedText } from "@/lib/stream-progress";
 import { streamChatText, streamChatJSON, SCRIPT_MODEL } from "@/lib/ai";
 // Stage 1 (dramaBible) — generate + validate the structured story bible FIRST, then derive the prose synopsis
 // consistent with it; persist the bible on the Project. Best-effort: failure leaves the classic flow unchanged.
@@ -179,13 +180,18 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
       if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
       try {
         await heartbeatJob(jobId);
+        // Stream the VISIBLE synopsis prose to the job's streamedText column as it is generated, so the
+        // frontend shows it appearing progressively (and a reopened tab shows the accumulated partial).
+        // The model streams a JSON object; we extract the "synopsis" field tolerantly while it is unclosed.
+        await updateJob(jobId, { message: "Writing season synopsis…" });
+        const onDelta = makeJobStreamWriter(jobId, { field: "synopsis" });
         // streamChatJSON (not chatJSON): streaming survives the interleaved-thinking empty-content bug that
         // broke synopsis on complex genres (see bibleGen note above). Large budget avoids truncation.
         const raw = fromStory
-          ? await streamChatJSON(ideaFromStorySystemPrompt(storyLanguage), ideaFromStoryUserPrompt(storyText) + bibleBriefNote, { temperature: 0.6, maxTokens: 16000 })
+          ? await streamChatJSON(ideaFromStorySystemPrompt(storyLanguage), ideaFromStoryUserPrompt(storyText) + bibleBriefNote, { temperature: 0.6, maxTokens: 16000, onDelta })
           : auto
-          ? await streamChatJSON(ideaAutoSystemPrompt(autoLanguage), ideaAutoUserPrompt(genres, extras) + bibleBriefNote, { temperature: 0.95, maxTokens: 16000 })
-          : await streamChatJSON(ideaSystemPrompt(), ideaUserPrompt(idea ?? "") + bibleBriefNote, { temperature: 0.8, maxTokens: 16000 });
+          ? await streamChatJSON(ideaAutoSystemPrompt(autoLanguage), ideaAutoUserPrompt(genres, extras) + bibleBriefNote, { temperature: 0.95, maxTokens: 16000, onDelta })
+          : await streamChatJSON(ideaSystemPrompt(), ideaUserPrompt(idea ?? "") + bibleBriefNote, { temperature: 0.8, maxTokens: 16000, onDelta });
         result = normalizeIdeaResult(
           raw,
           fromStory ? storyText : auto ? (extras && extras.trim() ? extras : autoLanguage === "ru" ? "Russian history" : "story") : idea ?? ""
@@ -196,6 +202,9 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
       }
     }
     if (!result) { await failJob(jobId, "AI returned an invalid result: " + lastError); return; }
+
+    // Ensure the last poll sees the FULL final synopsis prose even if the throttle skipped the last delta.
+    await flushStreamedText(jobId, result.synopsis);
 
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
     await updateJob(jobId, { progress: 80, message: "Saving synopsis…" });
@@ -287,9 +296,11 @@ export async function runSynopsisCorrectionJob(jobId: string, projectId: string,
     await heartbeatJob(jobId);
     // STREAMING (not chat()): Claude Opus 5 on WaveSpeed emits hidden interleaved "thinking" tokens that on a
     // non-streaming call consume the whole budget and return truncated/empty prose. Streaming keeps only the
-    // visible content; a generous budget fits the thinking + the rewritten synopsis.
-    const synopsis = (await streamChatText(SYNOPSIS_SYSTEM, userMessage, { temperature: 0.9, maxTokens: 6000 })).trim();
+    // visible content; a generous budget fits the thinking + the rewritten synopsis. The correction returns
+    // PLAIN prose (no JSON), so relay the accumulated text straight to the job's streamedText preview.
+    const synopsis = (await streamChatText(SYNOPSIS_SYSTEM, userMessage, { temperature: 0.9, maxTokens: 6000, onDelta: makeJobStreamWriter(jobId) })).trim();
     if (!synopsis || !synopsis.trim()) { await failJob(jobId, "AI returned an empty synopsis"); return; }
+    await flushStreamedText(jobId, synopsis);
 
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
     await updateJob(jobId, { progress: 80, message: "Saving synopsis…" });

@@ -20,6 +20,7 @@ import type { GenerationJob } from "@prisma/client";
 import { chatJSON, SCRIPT_MODEL, EPISODE_SCRIPT_MODEL, EPISODE_SCRIPT_MAX_TOKENS, EPISODE_SCRIPT_TEMPERATURE, startBackgroundJSON, pollBackgroundJSON, cancelBackgroundResponse, type BackgroundPollResult } from "@/lib/ai";
 import { maxDetailLevel, isLocationDetailLevel } from "@/lib/location-scale";
 import { completeJob, failJob, isCancelRequested, markCanceled, runInBackground } from "@/lib/jobs";
+import { makeJobStreamWriter, stripJsonForPreview } from "@/lib/stream-progress";
 import { runCharacterImagesJob } from "@/lib/workers/character-images-job";
 import { toCharacterCard, normalizeLanguage, seasonCastSystemPrompt, seasonCastUserPrompt, seasonCastResultSchema, characterCardToData, sanitizeCharacterCard, sanitizeLocationCard, dedupeCast, hasFullSetInventory, setInventoryRetryNote, serializeSetInventory, parseSetInventory, locationsFromSynopsisSystemPrompt, locationsResultSchema, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
 import { parseStoredShortSynopsis, renderShortSynopsis } from "@/lib/short-synopsis";
@@ -663,7 +664,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
       ? season.episodes.map((e) => ({ number: e.number, title: e.title, description: e.description ?? null, cliffhanger: e.cliffhanger ?? null }))
       : undefined;
     const batchTokens = batch ? batch.to - batch.from + 1 : state.episodeCount;
-    responseId = await deps.start(seasonStructureSystemPrompt(language, state.episodeCount, batch), seasonStructureUserPrompt(project.synopsis ?? "", cards, project.locations, shortSynopsisOutline(project.shortSynopsis), prevEpisodes) + retryNote, { model: SCRIPT_MODEL, maxTokens: Math.min(64000, 4000 + 800 * batchTokens) });
+    responseId = await deps.start(seasonStructureSystemPrompt(language, state.episodeCount, batch), seasonStructureUserPrompt(project.synopsis ?? "", cards, project.locations, shortSynopsisOutline(project.shortSynopsis), prevEpisodes) + retryNote, { model: SCRIPT_MODEL, maxTokens: Math.min(64000, 4000 + 800 * batchTokens), onDelta: makeJobStreamWriter(jobId, { transform: stripJsonForPreview }) });
     message = batch ? `Writing episodes ${batch.from}–${batch.to}...` : "Building the season structure..."; progress = 3;
   } else if (planned.step === "fullStory") {
     // Unreachable since Stage 106 (handled deterministically above); kept so the state machine stays exhaustive.
@@ -729,7 +730,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
       }) + episodeRetryNote(state),
       // Stage 108 — the episode script is written by gpt-4o (EPISODE_SCRIPT_MODEL): non-reasoning →
       // temperature + max_output_tokens ≤ 16 384. Still a background response (same polling path).
-      { model: EPISODE_SCRIPT_MODEL, maxTokens: EPISODE_SCRIPT_MAX_TOKENS, temperature: EPISODE_SCRIPT_TEMPERATURE }
+      { model: EPISODE_SCRIPT_MODEL, maxTokens: EPISODE_SCRIPT_MAX_TOKENS, temperature: EPISODE_SCRIPT_TEMPERATURE, onDelta: makeJobStreamWriter(jobId, { transform: stripJsonForPreview }) }
     );
     message = planned.userScript
       ? `Building the script from your text... (usually 1-3 minutes)`

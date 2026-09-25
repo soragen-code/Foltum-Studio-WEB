@@ -611,6 +611,7 @@ model GenerationJob {
   characterId String?  // for character jobs
   sceneId     String?  // for video/scene jobs
   resultData  String?  @db.Text // JSON string
+  streamedText String? @db.Text // live incremental text (streaming preview) for text-generating stages
   error       String?  @db.Text
   cancelRequested Boolean @default(false) // stage 11: author asked to stop — workers check it and mark the job "canceled"
   createdAt   DateTime @default(now())

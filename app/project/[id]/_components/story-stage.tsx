@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Loader2, Wand2, ArrowRight, BookOpen, Copy, Check } from 'lucide-react'
-import { JOB_POLL_INTERVAL_MS, useJobPolling } from './use-job-polling'
+import { JOB_POLL_INTERVAL_MS, useJobPolling, StreamingText } from './use-job-polling'
 import { RewritePlaceholder } from './rewrite-placeholder'
 import { rewriteViewState } from '@/lib/rewrite-view-state'
 import { CancelButton } from './cancel-button'
@@ -25,7 +25,7 @@ const START_MARK = '═══'
 const END_MARK = '───'
 
 type SeasonData = { id: string; title?: string | null; logline?: string | null; status: string; fullStory?: string | null; episodeCount?: number | null; episodes: SeasonEpisode[] } | null
-type Job = { id: string; status: string; progress: number; message?: string | null; error?: string | null; resultData?: string | null } | null
+type Job = { id: string; status: string; progress: number; message?: string | null; error?: string | null; resultData?: string | null; streamedText?: string | null } | null
 
 /**
  * Render the season plot: the overview (text before the first ═══ marker) as paragraphs, then each episode block
@@ -406,6 +406,9 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
             <div className="h-2 w-full overflow-hidden rounded bg-muted">
               <div className="h-full rounded bg-primary transition-all duration-700" style={{ width: `${buildPct}%` }} />
             </div>
+            {/* Streaming preview: show the text being written live (accumulates on the server, so a
+                reload / return shows the partial-so-far even if the tab was closed). RU + EN. */}
+            <StreamingText text={job?.streamedText} active={jobActive} />
           </div>
         )}
         {job?.status === 'canceled' && !jobActive && (

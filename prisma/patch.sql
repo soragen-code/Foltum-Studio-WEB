@@ -690,3 +690,12 @@ ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "gridApproved" BOOLEAN NOT NULL D
 ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "gridJobId" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "startFrameUrl" TEXT;
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "gridPanelIndex" INTEGER;
+
+
+
+
+-- ─── STREAMING TEXT: incremental live preview for text-generating stages ───────────────────────
+-- Idea / synopsis / episode-synopsis / script jobs accumulate their visible generated text into this
+-- column as it streams from the model, so the frontend can show it appearing progressively (and a
+-- reopened tab shows the accumulated partial). Additive & idempotent; legacy jobs keep NULL.
+ALTER TABLE "GenerationJob" ADD COLUMN IF NOT EXISTS "streamedText" TEXT;

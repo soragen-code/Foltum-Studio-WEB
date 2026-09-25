@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { Wand2, Loader2, Check, PenLine } from 'lucide-react'
-import { useJobPolling } from './use-job-polling'
+import { useJobPolling, StreamingText } from './use-job-polling'
 import { RewritePlaceholder } from './rewrite-placeholder'
 import { rewriteViewState } from '@/lib/rewrite-view-state'
 
@@ -138,7 +138,11 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
 
           {/* Stage 77: while the rewrite job runs the OLD synopsis is hidden behind a placeholder. */}
           {rewriteViewState(generating, poll.job?.status) === 'placeholder' ? (
-            <RewritePlaceholder job={poll.job} expectedTotalSec={SYNOPSIS_CORRECTION_EXPECTED_SEC} label="Генерация синопсиса…" testId="synopsis-revise-progress" className="mb-4" />
+            <div className="mb-4 space-y-3">
+              <RewritePlaceholder job={poll.job} expectedTotalSec={SYNOPSIS_CORRECTION_EXPECTED_SEC} label="Генерация синопсиса…" testId="synopsis-revise-progress" />
+              {/* Стриминг: новый синопсис появляется постепенно по мере генерации. */}
+              <StreamingText text={poll.job?.streamedText} active={poll.job?.status === 'processing' || poll.job?.status === 'pending'} />
+            </div>
           ) : (
             <textarea
               rows={12}

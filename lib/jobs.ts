@@ -115,7 +115,7 @@ export async function failStaleJobs(where: { projectId?: string; sceneId?: strin
 /** Update job progress / message. Never throws (a failed progress write must not kill the worker). */
 export async function updateJob(
   jobId: string,
-  data: { progress?: number; message?: string; status?: string; resultData?: string | null; error?: string | null }
+  data: { progress?: number; message?: string; status?: string; resultData?: string | null; error?: string | null; streamedText?: string | null }
 ): Promise<void> {
   try {
     await prisma.generationJob.update({
@@ -125,6 +125,7 @@ export async function updateJob(
         ...(data.message !== undefined ? { message: data.message } : {}),
         ...(data.status !== undefined ? { status: data.status } : {}),
         ...(data.resultData !== undefined ? { resultData: data.resultData } : {}),
+        ...(data.streamedText !== undefined ? { streamedText: data.streamedText } : {}),
         ...(data.error !== undefined ? { error: data.error } : {}),
       },
     });

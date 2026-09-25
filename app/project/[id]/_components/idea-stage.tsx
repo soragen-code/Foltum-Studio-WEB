@@ -6,7 +6,7 @@ import { Loader2, Wand2, Check, Pencil, User, X, Lightbulb, MessageSquareText, U
 import { LocationCard, AddLocationForm, TierBadge, TIER_LABELS, groupByTier, type LocationCardData } from './cast-and-locations'
 import { parseStoredShortSynopsis, type ShortSynopsis } from '@/lib/short-synopsis'
 import { CancelButton } from './cancel-button'
-import { useJobPolling, SmoothProgress } from './use-job-polling'
+import { useJobPolling, SmoothProgress, StreamingText } from './use-job-polling'
 
 /** Roughly how long the synopsis step takes — drives the smooth 0→100 % progress bar. */
 const SYNOPSIS_EXPECTED_SEC = 60
@@ -580,17 +580,23 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
         : mode === 'upload'
         ? { projectId: project.id, fromStory: true, story: storyText }
         : { projectId: project.id, idea: idea.trim(), episodeCount }
-      // Stage 200 (STEP 1): first produce a short story IDEA (logline) — a cheap synchronous call. The
-      // route advances the project to stage="logline"; onRefresh() then renders the idea-approval screen
-      // (LoglineStage). The synopsis is NOT generated yet — that happens only after the idea is approved.
-      const res = await fetch('/api/ai/logline', {
+      // 7-ШАГОВЫЙ ФЛОУ (шаг 1 → шаг 2): идея генерирует СИНОПСИС напрямую, без отдельного экрана
+      // одобрения развёрнутой идеи (logline). POST /api/ai/idea создаёт фоновую задачу синопсиса
+      // (type "synopsis") и возвращает { jobId }; мы поллим её и показываем стриминг текста прямо здесь.
+      // Когда задача завершится, проект уже на stage="synopsis" и мастер отрисует шаг 2.
+      const res = await fetch('/api/ai/idea', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) { setError(data?.error ?? "Couldn't generate"); return }
-      onRefresh()
+      if (data?.jobId) {
+        activeJobIdRef.current = data.jobId
+        startPolling(data.jobId)
+      } else {
+        onRefresh()
+      }
     } catch {
       setError('Network error')
     }
@@ -635,7 +641,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
         <p className="mt-1 text-sm text-muted-foreground">
           {isUpload
             ? 'Загрузите готовый сюжет / сценарий файлом (.txt, .md, .docx, .pdf) или вставьте текстом. ИИ примет его за основу и структурирует в сезон: синопсис, разбивку по эпизодам, персонажей и локации.'
-            : 'Опишите свою идею — или выберите режим «Авто», и ИИ придумает оригинальную историю в выбранном жанре. Сначала мы создадим развёрнутую идею сезона (питч на 7–10 предложений): вы просмотрите и одобрите её, а затем сгенерируем синопсис, а позже — разбивку по эпизодам, персонажей, локации и сценарий.'}
+            : 'Опишите свою идею — или выберите режим «Авто», и ИИ придумает оригинальную историю в выбранном жанре. Из идеи мы сразу сгенерируем синопсис сезона (шаг 2, текст появляется постепенно), а далее — разбивку по эпизодам, сценарий, сториборд и оживление.'}
         </p>
 
         {/* Mode toggle: own idea / auto. ПРАВКА: показываем только для пути «Создать с нуля» (не upload) и
@@ -816,8 +822,10 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
             ) : (
               <p className="inline-flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin text-primary" /> Starting generation…</p>
             )}
+            {/* Стриминг: синопсис появляется на экране постепенно, по мере генерации моделью. */}
+            <StreamingText text={synopsisJob?.streamedText} active={jobActive} />
             <div className="flex items-center justify-between gap-2">
-              <p className="min-w-0 text-xs text-muted-foreground">Шаг 1 · придумываем идею истории. Это быстро — вы просмотрите и одобрите её перед генерацией синопсиса.</p>
+              <p className="min-w-0 text-xs text-muted-foreground">Шаг 1 → 2 · генерируем синопсис сезона. Текст появляется постепенно; вкладку можно закрыть — прогресс и текст сохранятся. / Generating the season synopsis; text streams in and is saved even if you leave.</p>
               <CancelButton onCancel={cancelIdea} testId="idea-cancel" className="flex-shrink-0" />
             </div>
           </div>

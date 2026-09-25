@@ -3,6 +3,41 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Loader2, Check, AlertCircle, Ban } from 'lucide-react'
 
+/**
+ * Live streaming-text preview. Renders the incremental text a text-generating job accumulates in
+ * `GenerationJob.streamedText` (relayed by the polling loop), appearing progressively as the model
+ * writes it. Auto-scrolls to the newest text while the job is still running, and shows a blinking
+ * caret. Bilingual empty/label handled by the caller. No effect when `text` is empty.
+ */
+export function StreamingText({
+  text,
+  active,
+  className = '',
+  maxHeight = 260,
+}: {
+  text?: string | null
+  active?: boolean
+  className?: string
+  maxHeight?: number
+}) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    // Keep the newest streamed text in view while generation is active.
+    if (active && ref.current) ref.current.scrollTop = ref.current.scrollHeight
+  }, [text, active])
+  if (!text || !text.trim()) return null
+  return (
+    <div
+      ref={ref}
+      className={`overflow-y-auto whitespace-pre-wrap rounded-lg border border-border/60 bg-muted/40 p-4 text-sm leading-relaxed text-foreground/90 ${className}`}
+      style={{ maxHeight }}
+    >
+      {text}
+      {active && <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-primary align-middle" aria-hidden />}
+    </div>
+  )
+}
+
 export interface JobInfo {
   id: string
   type: string
@@ -14,6 +49,8 @@ export interface JobInfo {
   sceneId?: string | null
   error?: string | null
   result?: any
+  /** Live incremental generated text (streaming preview) for text-generating stages. */
+  streamedText?: string | null
   createdAt: string
   updatedAt: string
 }
