@@ -78,9 +78,11 @@ const SHOT_SIZES = ["wide", "medium", "close-up", "medium", "wide"] as const;
  * placeholders in {curly braces} are replaced by fillGridTemplate. When a producer saves an override we
  * keep THEIR text and only substitute the placeholders that are still present.
  */
-export const DEFAULT_GRID_TEMPLATE = `Professional film storyboard sheet, 5 rows by 5 columns of equal 16:9 panels (25 total), thin black borders, white paper background, grayscale pencil-and-ink storyboard style. Colour accents ONLY for {KEY_ELEMENT}. Small panel numbers "1.1" to "5.5" in the top-left of each panel; bold row labels on the left margin: {ROW_LABELS}.
+export const DEFAULT_GRID_TEMPLATE = `Professional film storyboard sheet laid out as 5 rows by 5 columns of equal 16:9 panels (25 total), thin black borders between panels, dark charcoal background. EVERY PANEL IS A PHOTOREALISTIC LIVE-ACTION FILM STILL: real actors with natural skin texture, real fabric and props, cinematic lighting, shallow depth of field, natural colour grading with subtle film grain — these panels are the first frames of the finished video. NOT a drawing, NOT a sketch, NOT an illustration, NOT grayscale, NOT pencil or ink. Small panel numbers "1.1" to "5.5" in the top-left corner of each panel; bold row labels on the left margin: {ROW_LABELS}. No other text or captions.
 
-CONTINUITY RULE: the last panel of every row and the first panel of the next row show the SAME moment — same positions, same poses, same action — differing only in shot size. Each row opens and closes on a different shot size (wide / medium / close-up).
+STORY LEGIBILITY: each panel is ONE distinct story beat that must read without words — stage exactly the action described for that panel, make the key prop ({KEY_ELEMENT}) and the characters' reactions clearly visible, and let consecutive panels show visible progression (cause → effect). Never repeat a generic pose or a generic wide shot; follow the shot size given for each panel.
+
+CONTINUITY RULE: the last panel of every row and the first panel of the next row show the SAME moment — same positions, same poses, same action — differing only in shot size.
 
 CHARACTER REFERENCES — keep faces, hair and wardrobe consistent in every panel:
 {CHARACTER_REFERENCES}
@@ -88,7 +90,7 @@ CHARACTER REFERENCES — keep faces, hair and wardrobe consistent in every panel
 
 {ROWS}
 
-Clean layout, cinematic compositions, consistent character designs.`;
+Clean layout, cinematic compositions, consistent character designs, photoreal throughout.`;
 
 function short(text: string | null | undefined, max = 160): string {
   const t = (text ?? "").replace(/\s+/g, " ").trim();
@@ -119,7 +121,7 @@ export function normalizeToGridBeats(scenes: GridSceneBeat[]): GridSceneBeat[] {
 /** Row label for row r (1-based): use the first scene title in the row when present, else "BEAT r". */
 function rowLabel(beats: GridSceneBeat[], r: number): string {
   const first = beats[(r - 1) * GRID_COLS];
-  const t = short(first?.title, 30);
+  const t = short((first?.title ?? "").split(" — ")[0], 40);
   return (t || `BEAT ${r}`).toUpperCase();
 }
 
@@ -165,10 +167,10 @@ function buildRowsBlock(beats: GridSceneBeat[]): string {
     for (let c = 1; c <= GRID_COLS; c++) {
       const idx = (r - 1) * GRID_COLS + (c - 1);
       const beat = beats[idx];
-      const action = short(beat?.action, 120) || short(beat?.title, 60) || "continue the action";
+      const action = short(beat?.action, 240) || short(beat?.title, 60) || "continue the action";
       const isFirst = c === 1;
       const isLast = c === GRID_COLS;
-      const size = SHOT_SIZES[(r - 1 + c - 1) % SHOT_SIZES.length];
+      const size = short(beat?.shotType, 24).replace(/\.$/, "").toLowerCase() || SHOT_SIZES[(r - 1 + c - 1) % SHOT_SIZES.length];
       let text = `${r}.${c} ${size}: ${action}`;
       if (isFirst && r > 1) text = `${r}.${c} ${size}: same moment as ${r - 1}.${GRID_COLS} — ${action}`;
       if (isLast) text += ` (handoff moment)`;

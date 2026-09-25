@@ -170,11 +170,14 @@ export async function runStoryboardGridJob(
       `media/public/grid/${projectId}/${episodeId}/sheet-${Date.now()}.png`,
       "image/png",
     );
-    // Persist the sheet + the EXACT prompt used (so the modal shows what produced this render). Any new render
-    // resets approval — the freshly rendered sheet has not been sliced yet.
+    // Persist the sheet. The prompt is stored ONLY when the producer actually edited it (explicit override or a
+    // previously saved one): a run with the built-in DEFAULT template keeps gridPrompt = null, otherwise the
+    // auto-built (or moderation-softened) text would freeze as a stale "override" and later template/data
+    // changes would never reach the grid. Any new render resets approval — the sheet has not been sliced yet.
+    const hadOverride = Boolean((promptOverride && promptOverride.trim()) || episode.gridPrompt);
     await prisma.episode.update({
       where: { id: episodeId },
-      data: { gridUrl, gridPrompt: promptUsed, gridApproved: false },
+      data: { gridUrl, gridPrompt: hadOverride ? promptUsed : null, gridApproved: false },
     });
     await completeJob(jobId, { episodeId, gridUrl }, "Storyboard grid ready");
   } catch (err: any) {
