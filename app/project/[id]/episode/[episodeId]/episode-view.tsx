@@ -1623,6 +1623,26 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               </button>
               {framesBusy && framesPoll.job && <JobProgressBar job={framesPoll.job} expectedTotalSec={180} />}
               {framesError && <p className="mt-2 text-xs text-red-500" data-testid="frames-error">{framesError}</p>}
+              {(() => {
+                const total = beatRows.length
+                if (total === 0) return null
+                const frameRows = beatRows.filter((r) => validUrl(r.scene.startFrameUrl))
+                const urls = frameRows.map((r) => r.scene.startFrameUrl!)
+                return (
+                  <div className="mt-3" data-testid="start-frames-gallery">
+                    <p className="mb-1.5 text-[11px] font-medium text-muted-foreground">Готово {frameRows.length}/{total} кадров / {frameRows.length}/{total} frames ready{frameRows.length < total && !framesBusy ? ` · не хватает ${total - frameRows.length} / ${total - frameRows.length} missing` : ''}</p>
+                    {frameRows.length > 0 && (
+                      <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-5">
+                        {frameRows.map((r, i) => (
+                          <button key={r.scene.id} type="button" onClick={() => openLightbox(urls, i, `${r.scene.title || `Сцена / Scene ${r.scene.number}`}`)} className="group relative aspect-[9/16] overflow-hidden rounded bg-muted" title={r.scene.title ?? ''} data-testid="start-frame-thumb">
+                            <img src={r.scene.startFrameUrl!} alt="" className="h-full w-full object-cover transition group-hover:brightness-110" />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
             </div>
           </div>
 

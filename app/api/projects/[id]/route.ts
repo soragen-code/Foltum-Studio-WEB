@@ -23,6 +23,9 @@ export async function GET(
           include: {
             episodes: {
               include: {
+                // The episode's OWN cast (EpisodeCharacter) — so consumers derive the episode's characters
+                // from this (e.g. 3 scripted people) instead of falling back to the whole project roster.
+                characters: { include: { character: true } },
                 scenes: {
                   include: { characters: { include: { character: true } } },
                   orderBy: { number: 'asc' },
