@@ -6,7 +6,7 @@
  *                              producer-editable English prompt. References passed to the model: each character's
  *                              neutral-background portrait (up to GRID_MAX_CHAR_REFS) + the single location master
  *                              plate. Result → Episode.gridUrl + Episode.gridPrompt (the exact prompt used).
- *   2. storyboard_grid_slice — after the sheet is approved, slice it into 25 equal panels (sharp), upload each and
+ *   2. storyboard_grid_slice — after the sheet is approved, cut it strictly along the 5×5 grid (sharp), upload each and
  *                              assign it to the matching scene as its START FRAME (Scene.startFrameUrl +
  *                              Scene.gridPanelIndex). Sets Episode.gridApproved = true.
  *
@@ -40,77 +40,20 @@ const GRID_IMAGE_TIMEOUT_MS = 600_000;
 const PANEL_OUT_W = 1080;
 const PANEL_OUT_H = 1920;
 
-type Span = { start: number; size: number };
-
 /**
- * Find the GRID_COLS×GRID_ROWS panel spans by detecting the bright (white) gutter lines the template asks for
- * instead of blindly dividing the sheet into equal fifths. Works on the greyscale mean of every column / row:
- * consecutive lines brighter than the threshold form a gutter band, the gaps between bands are the panels.
- * Returns null when the detection does not yield exactly the expected number of plausible spans (caller falls
- * back to equal division).
+ * Strict 5×5 grid cut (the template asks for NO margins / NO labels, thin black borders): pw = W/5, ph = H/5 and
+ * an inset proportional to the panel width (≈ 6 px on a 432 px panel) eats the black border on every side.
  */
-function detectPanelSpans(
-  gray: Buffer,
-  width: number,
-  height: number,
-): { cols: Span[]; rows: Span[] } | null {
-  const colMean = new Float32Array(width);
-  const rowMean = new Float32Array(height);
-  for (let y = 0; y < height; y++) {
-    const off = y * width;
-    let rowSum = 0;
-    for (let x = 0; x < width; x++) {
-      const v = gray[off + x];
-      colMean[x] += v;
-      rowSum += v;
-    }
-    rowMean[y] = rowSum / width;
-  }
-  for (let x = 0; x < width; x++) colMean[x] /= height;
-
-  const spansFor = (means: Float32Array, total: number, expected: number): Span[] | null => {
-    const sorted = Array.from(means).sort((a, b) => a - b);
-    const median = sorted[Math.floor(sorted.length / 2)];
-    // Gutters are near-white lines across otherwise photographic (much darker on average) panels.
-    const threshold = Math.max(median + 40, 175);
-    const bands: Span[] = [];
-    let i = 0;
-    while (i < total) {
-      if (means[i] >= threshold) {
-        const start = i;
-        while (i < total && means[i] >= threshold) i++;
-        bands.push({ start, size: i - start });
-      } else i++;
-    }
-    // Panels are the gaps between bands (bands touching the edges act as the outer border).
-    const gaps: Span[] = [];
-    let cursor = 0;
-    for (const b of bands) {
-      if (b.start > cursor) gaps.push({ start: cursor, size: b.start - cursor });
-      cursor = b.start + b.size;
-    }
-    if (cursor < total) gaps.push({ start: cursor, size: total - cursor });
-    // Ignore slivers (< 40% of the nominal panel) — e.g. a thin dark line inside the border.
-    const nominal = total / expected;
-    const panels = gaps.filter((g) => g.size >= nominal * 0.4);
-    if (panels.length !== expected) return null;
-    if (panels.some((p) => p.size < nominal * 0.7 || p.size > nominal * 1.3)) return null;
-    return panels;
-  };
-
-  const cols = spansFor(colMean, width, GRID_COLS);
-  const rows = spansFor(rowMean, height, GRID_ROWS);
-  if (!cols || !rows) return null;
-  return { cols, rows };
+function gridPanelRect(totalW: number, totalH: number, row: number, col: number) {
+  const pw = totalW / GRID_COLS;
+  const ph = totalH / GRID_ROWS;
+  const inset = Math.max(4, Math.round(pw * 0.014));
+  const left = Math.round(col * pw + inset);
+  const top = Math.round(row * ph + inset);
+  const right = Math.round((col + 1) * pw - inset);
+  const bottom = Math.round((row + 1) * ph - inset);
+  return { left, top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) };
 }
-
-const equalSpans = (total: number, count: number): Span[] => {
-  const size = Math.floor(total / count);
-  return Array.from({ length: count }, (_, i) => ({
-    start: i * size,
-    size: i === count - 1 ? total - i * size : size,
-  }));
-};
 
 /** Shrink a panel rectangle to an exact 9:16 box centred inside it. */
 function fitNineSixteen(r: { left: number; top: number; width: number; height: number }) {
@@ -138,6 +81,8 @@ const validUrl = (u?: string | null): u is string =>
 export async function loadGridInputs(episodeId: string): Promise<{
   characters: GridCharacter[];
   location: GridLocation | null;
+  /** Per-scene bound locations grouped by grid row (several locations → one block line each). */
+  locations: GridLocation[];
   scenes: GridSceneBeat[];
   keyElement: string | null;
 }> {
@@ -146,7 +91,7 @@ export async function loadGridInputs(episodeId: string): Promise<{
     include: {
       location: true,
       characters: { include: { character: true }, orderBy: { createdAt: "asc" } },
-      scenes: { orderBy: { number: "asc" } },
+      scenes: { orderBy: { number: "asc" }, include: { location: true } },
     },
   });
   if (!episode) throw new Error("Episode not found");
@@ -172,12 +117,28 @@ export async function loadGridInputs(episodeId: string): Promise<{
     ? { id: "episode-location", name: episode.locationName, imageUrl: null, keyObjects: episode.locationDesc || null }
     : null;
 
-  // Simplified pipeline: beat scenes (Scene.beatMeta) describe each panel with the beat's shot + action + cut.
+  // Scene-bound locations (Scene.locationId) grouped by grid row: a row = 5 consecutive scenes. Rows whose
+  // scenes carry no own location fall back to the episode location. One entry per distinct location.
+  const byLocation = new Map<string, GridLocation>();
+  episode.scenes.slice(0, GRID_PANELS).forEach((s, i) => {
+    const row = Math.floor(i / GRID_COLS) + 1;
+    const l = s.location ?? loc;
+    const key = l ? l.id : location?.id ?? "";
+    if (!key) return;
+    const entry = byLocation.get(key) ?? (l
+      ? { id: l.id, name: l.name || episode.locationName || "Location", imageUrl: validUrl(l.imageUrl) ? l.imageUrl : null, keyObjects: l.setInventory || l.visualPrompt || l.description || null, rows: [] as number[] }
+      : { ...(location as GridLocation), rows: [] as number[] });
+    if (!entry.rows!.includes(row)) entry.rows!.push(row);
+    byLocation.set(key, entry);
+  });
+  const locations = Array.from(byLocation.values());
+
+  // Simplified pipeline: beat scenes (Scene.beatMeta) describe each panel with the beat's shot + action
+  // ("[Who] [position] [verb] [object]; [second] [position] [what]. Looks at [target]." — ONE verb per panel).
   const scenes: GridSceneBeat[] = episode.scenes.map((s) => {
     const beat = parseBeatMeta(s.beatMeta);
     if (beat) {
-      const text = [beat.action, beat.cut ? `Cut: ${beat.cut}` : ""].filter(Boolean).join(" ");
-      return { number: s.number, title: `${beat.sceneTitle} — ${s.title}`, action: text || s.action || s.title || null, shotType: beat.shot || s.shotType };
+      return { number: s.number, title: `${beat.sceneTitle} — ${s.title}`, action: beat.action || s.action || s.title || null, shotType: beat.shot || s.shotType };
     }
     return {
       number: s.number,
@@ -187,7 +148,7 @@ export async function loadGridInputs(episodeId: string): Promise<{
     };
   });
 
-  return { characters, location, scenes, keyElement: null };
+  return { characters, location, locations, scenes, keyElement: null };
 }
 
 /* ───────────── 1) storyboard_grid — render the 5×5 sheet ───────────── */
@@ -205,13 +166,13 @@ export async function runStoryboardGridJob(
     const episode = await prisma.episode.findUnique({ where: { id: episodeId }, select: { id: true, gridPrompt: true } });
     if (!episode) { await failJob(jobId, "Episode not found"); return; }
 
-    const { characters, location, scenes, keyElement } = await loadGridInputs(episodeId);
+    const { characters, location, locations, scenes, keyElement } = await loadGridInputs(episodeId);
     if (scenes.length === 0) { await failJob(jobId, "У эпизода ещё нет сцен для сториборда"); return; }
 
     // Template priority: an explicit per-request override (edited in the modal just now) → the saved episode
     // prompt (a previously edited template) → the built-in DEFAULT (handled inside buildGridPrompt when absent).
     const template = (promptOverride && promptOverride.trim()) || episode.gridPrompt || null;
-    const { prompt, refs } = buildGridPrompt({ characters, location, scenes, keyElement, template });
+    const { prompt, refs } = buildGridPrompt({ characters, location, locations, scenes, keyElement, template });
 
     await updateJob(jobId, { progress: 40, message: "Рисуем лист 5×5 (25 панелей) в GPT Image 2.0..." });
     const imageInput = refs.map((r) => r.url).filter(validUrl);
@@ -310,14 +271,8 @@ export async function runStoryboardGridSliceJob(
     const totalW = meta.width ?? 0;
     const totalH = meta.height ?? 0;
     if (totalW < GRID_COLS || totalH < GRID_ROWS) { await failJob(jobId, "Лист сториборда повреждён"); return; }
-    // Panel geometry: follow the white gutter lines of the sheet (exact contour cut); when they cannot be
-    // detected reliably fall back to equal division, where the last row/column absorbs the rounding remainder.
-    const { data: gray } = await sharp(sheet).greyscale().raw().toBuffer({ resolveWithObject: true });
-    const detected = detectPanelSpans(gray, totalW, totalH);
-    const colSpans = detected?.cols ?? equalSpans(totalW, GRID_COLS);
-    const rowSpans = detected?.rows ?? equalSpans(totalH, GRID_ROWS);
-    if (!detected) console.warn("[storyboard-grid-slice] gutter detection failed — using equal division");
-
+    // Panel geometry: strict 5×5 grid cut (see gridPanelRect) — the sheet has no margins and no labels, so the
+    // borders sit exactly on the fifths; the inset eats the thin black border. Then a centred 9:16 crop → 1080×1920.
     const scenes = episode.scenes;
     const ts = Date.now();
     let assigned = 0;
@@ -326,13 +281,8 @@ export async function runStoryboardGridSliceJob(
       if (await canceled()) throw new GenerationCanceledError();
       const row = Math.floor(i / GRID_COLS);
       const col = i % GRID_COLS;
-      // Each panel is trimmed to an exact 9:16 box and normalised to 1080×1920 so every start frame is uniform.
-      const rect = fitNineSixteen({
-        left: colSpans[col].start,
-        top: rowSpans[row].start,
-        width: colSpans[col].size,
-        height: rowSpans[row].size,
-      });
+      // Each panel is trimmed to an exact 9:16 box (center-crop) and normalised to 1080×1920 so every start frame is uniform.
+      const rect = fitNineSixteen(gridPanelRect(totalW, totalH, row, col));
 
       const scene = scenes[i];
       if (!scene) break; // fewer than 25 scenes — only slice what maps to a scene
@@ -359,7 +309,7 @@ export async function runStoryboardGridSliceJob(
     }
 
     await prisma.episode.update({ where: { id: episodeId }, data: { gridApproved: true } });
-    await completeJob(jobId, { episodeId, panelsAssigned: assigned }, `Sliced ${assigned} start frames from the grid (${detected ? "contour" : "equal"} cut)`);
+    await completeJob(jobId, { episodeId, panelsAssigned: assigned }, `Sliced ${assigned} start frames from the grid (grid cut)`);
   } catch (err: any) {
     if (err instanceof GenerationCanceledError) { await markCanceled(jobId); return; }
     console.error("[storyboard-grid-slice] failed:", err);

@@ -1,5 +1,5 @@
 /**
- * Grid storyboard (Stage 240) — the storyboard is ONE 5×5 sheet of 25 equal 16:9 panels rendered as a
+ * Grid storyboard (Stage 240) — the storyboard is ONE 5×5 sheet of 25 equal PORTRAIT 9:16 panels rendered as a
  * single image by GPT Image 2.0 from an EDITABLE English prompt template. Placeholders are filled from the
  * project data (characters with their reference-image numbers + short appearance, the single location master
  * frame with its key objects, and the 25 scene beats grouped into 5 rows with a continuity hand-off between
@@ -45,6 +45,8 @@ export interface GridLocation {
   imageUrl?: string | null;
   /** Short description of the key objects (visualPrompt / description / set inventory). */
   keyObjects?: string | null;
+  /** Grid rows (1..5) that take place in this location; empty/absent = the whole sheet. */
+  rows?: number[];
 }
 
 export interface GridSceneBeat {
@@ -58,6 +60,8 @@ export interface GridSceneBeat {
 export interface BuildGridPromptInput {
   characters: GridCharacter[];
   location?: GridLocation | null;
+  /** Several locations (one per group of rows). When present and non-empty it wins over `location`. */
+  locations?: GridLocation[] | null;
   scenes: GridSceneBeat[];
   /** Optional plot/magic element that may carry a colour accent. */
   keyElement?: string | null;
@@ -74,27 +78,25 @@ export interface BuiltGridPrompt {
 
 /** Shot-size rotation so each row opens/closes on a different size (wide → medium → close-up). */
 const SHOT_SIZES = ["wide", "medium", "close-up", "medium", "wide"] as const;
+/** Per-panel beat text cap — long enough for "[Who] [position] [verb] [object]; [second] [position] [what]. Looks at [target]." */
+export const GRID_BEAT_MAX_CHARS = 320;
+/** Soft prompt cap (GPT Image 2.0 accepts up to 32 000 chars); beats are shortened progressively to fit. */
+export const GRID_PROMPT_MAX_CHARS = 30_000;
 
 /**
  * The editable English DEFAULT template. It is stored verbatim so a producer can tweak wording; the
  * placeholders in {curly braces} are replaced by fillGridTemplate. When a producer saves an override we
  * keep THEIR text and only substitute the placeholders that are still present.
  */
-export const DEFAULT_GRID_TEMPLATE = `A single vertical 9:16 contact sheet made of exactly 25 VERTICAL 9:16 panels arranged in 5 rows by 5 columns, all panels identical in size, filling the whole image edge to edge. Panels are separated only by thin, straight, uniform PURE WHITE gutter lines (about 1% of the sheet width) running the full height and width of the sheet, plus the same thin white line along the outer edge. ABSOLUTELY NO TEXT anywhere: no panel numbers, no row labels, no captions, no titles, no subtitles, no watermarks, no logos — the panels contain only the photographed scene.
+export const DEFAULT_GRID_TEMPLATE = `Photorealistic live-action film storyboard sheet: 5 rows × 5 columns of equal PORTRAIT 9:16 panels (25 total), thin black borders, dark grey background, NO margins, NO labels, NO text of any kind inside or outside panels — only the panels edge to edge. Each panel is a cinematic photoreal film still: real skin, real fabric, physically correct light, film grain. NOT drawing, NOT illustration.
 
-EVERY PANEL IS A PHOTOREALISTIC LIVE-ACTION FILM STILL in vertical 9:16 framing: real actors with natural skin texture, real fabric and props, cinematic lighting, shallow depth of field, natural colour grading with subtle film grain — these panels are the first frames of the finished vertical video. NOT a drawing, NOT a sketch, NOT an illustration, NOT grayscale, NOT pencil or ink.
+CONTINUITY: the last panel of every row and the first panel of the next row show the SAME moment (same positions, poses, hands, gaze) — only the shot size differs. Within a row nobody changes position unless a bit says so. Each panel adds exactly ONE new action to the previous panel.
 
-STORY LEGIBILITY: each panel is ONE distinct story beat that must read without words — stage exactly the action described for that panel, make the key prop ({KEY_ELEMENT}) and the characters' reactions clearly visible, and let consecutive panels show visible progression (cause → effect). Never repeat a generic pose or a generic wide shot; follow the shot size given for each panel. Reading order: left to right, then top to bottom (panel 1.1 is top-left, 5.5 is bottom-right).
+CHARACTERS (identical face, hair, wardrobe in every panel): {CHARACTER_REFERENCES}
 
-CONTINUITY RULE: the last panel of every row and the first panel of the next row show the SAME moment — same positions, same poses, same action — differing only in shot size.
-
-CHARACTER REFERENCES — keep faces, hair and wardrobe consistent in every panel:
-{CHARACTER_REFERENCES}
 {LOCATION_REFERENCE}
 
-{ROWS}
-
-Clean layout, cinematic vertical compositions, consistent character designs, photoreal throughout, no text.`;
+{ROWS}`;
 
 function short(text: string | null | undefined, max = 160): string {
   const t = (text ?? "").replace(/\s+/g, " ").trim();
@@ -122,13 +124,6 @@ export function normalizeToGridBeats(scenes: GridSceneBeat[]): GridSceneBeat[] {
   return out.map((s, i) => ({ ...s, number: s.number || i + 1 }));
 }
 
-/** Row label for row r (1-based): use the first scene title in the row when present, else "BEAT r". */
-function rowLabel(beats: GridSceneBeat[], r: number): string {
-  const first = beats[(r - 1) * GRID_COLS];
-  const t = short((first?.title ?? "").split(" — ")[0], 40);
-  return (t || `BEAT ${r}`).toUpperCase();
-}
-
 /** Build the CHARACTER REFERENCES block and the ordered ref list (image 1..K for characters). */
 function buildCharacterBlock(characters: GridCharacter[]): { block: string; refs: GridRef[] } {
   const refs: GridRef[] = [];
@@ -137,50 +132,68 @@ function buildCharacterBlock(characters: GridCharacter[]): { block: string; refs
     const desc = short(c.appearance, 180) || short(c.role, 80) || "character";
     if (c.refUrl && refs.length < GRID_MAX_CHAR_REFS) {
       refs.push({ url: c.refUrl, kind: "character", label: c.name });
-      lines.push(`${c.name} = image ${refs.length}: ${desc}.`);
+      lines.push(`${c.name} = image ${refs.length}.`);
     } else {
-      lines.push(`${c.name} (no reference): ${desc}.`);
+      lines.push(`${c.name} (no reference image) = ${desc}.`);
     }
   }
   if (!lines.length) lines.push("(no named characters — infer neutral figures from the beats).");
-  return { block: lines.join("\n"), refs };
+  return { block: lines.join(" "), refs };
 }
 
-/** Build the LOCATION reference line; the location master is the next image number after the characters. */
-function buildLocationBlock(location: GridLocation | null | undefined, nextImageNumber: number): { line: string; ref: GridRef | null } {
-  if (location?.imageUrl) {
-    const objs = short(location.keyObjects, 200) || "the key objects of the set";
-    return {
-      line: `LOCATION = image ${nextImageNumber}: ${objs}. Use this layout throughout; do not invent rooms or objects not in the reference.`,
-      ref: { url: location.imageUrl, kind: "location", label: location.name || "Location" },
-    };
+/** "ROWS 1–3" / "ROW 2" / "ROWS 1, 3" label for a location's rows. */
+function rowsLabel(rows: number[] | undefined): string {
+  const r = Array.from(new Set((rows ?? []).filter((n) => n >= 1 && n <= GRID_ROWS))).sort((a, b) => a - b);
+  if (!r.length || r.length === GRID_ROWS) return "";
+  if (r.length === 1) return `ROW ${r[0]}`;
+  const contiguous = r.every((n, i) => i === 0 || n === r[i - 1] + 1);
+  return contiguous ? `ROWS ${r[0]}–${r[r.length - 1]}` : `ROWS ${r.join(", ")}`;
+}
+
+/**
+ * Build the LOCATION block; each location master is the next image number after the characters (in the
+ * exact order the refs are passed to the model). Several locations → one line each, with the rows it covers.
+ */
+function buildLocationBlock(
+  locations: GridLocation[],
+  nextImageNumber: number,
+  maxRefs: number,
+): { line: string; refs: GridRef[] } {
+  const refs: GridRef[] = [];
+  const lines: string[] = [];
+  const multi = locations.length > 1;
+  for (const location of locations) {
+    const name = short(location.name, 60) || "location";
+    const layout = short(location.keyObjects, 320);
+    const rows = multi ? rowsLabel(location.rows) : "";
+    const head = rows ? `LOCATION for ${rows}` : "LOCATION";
+    const fixed = `Fixed layout: ${layout || "keep the room and its objects exactly as in the reference"}. Nobody leaves this space.`;
+    if (location.imageUrl && refs.length < maxRefs) {
+      refs.push({ url: location.imageUrl, kind: "location", label: location.name || "Location" });
+      lines.push(`${head} = image ${nextImageNumber + refs.length - 1} (${name}). ${fixed}`);
+    } else {
+      lines.push(`${head} (no reference image): ${name}. ${fixed}`);
+    }
   }
-  const objs = short(location?.keyObjects, 200);
-  return {
-    line: `LOCATION (no reference): ${objs || "a single consistent location"}. Keep the same room and objects throughout; do not invent new rooms.`,
-    ref: null,
-  };
+  if (!lines.length) lines.push("LOCATION (no reference): a single consistent location. Keep the same room and objects throughout; do not invent new rooms. Nobody leaves this space.");
+  return { line: lines.join("\n"), refs };
 }
 
-/** Build the five ROW blocks with per-panel beats and the continuity hand-off between rows. */
-function buildRowsBlock(beats: GridSceneBeat[]): string {
+/** Build the five ROW blocks: "ROW r: r.1 size: beat. r.2 size: beat. …" (no labels — the sheet carries no text). */
+function buildRowsBlock(beats: GridSceneBeat[], beatMax = GRID_BEAT_MAX_CHARS): string {
   const rows: string[] = [];
   for (let r = 1; r <= GRID_ROWS; r++) {
-    const label = rowLabel(beats, r);
     const panels: string[] = [];
     for (let c = 1; c <= GRID_COLS; c++) {
       const idx = (r - 1) * GRID_COLS + (c - 1);
       const beat = beats[idx];
-      const action = short(beat?.action, 240) || short(beat?.title, 60) || "continue the action";
-      const isFirst = c === 1;
-      const isLast = c === GRID_COLS;
+      const action = short(beat?.action, beatMax) || short(beat?.title, 60) || "continue the action";
       const size = short(beat?.shotType, 24).replace(/\.$/, "").toLowerCase() || SHOT_SIZES[(r - 1 + c - 1) % SHOT_SIZES.length];
       let text = `${r}.${c} ${size}: ${action}`;
-      if (isFirst && r > 1) text = `${r}.${c} ${size}: same moment as ${r - 1}.${GRID_COLS} — ${action}`;
-      if (isLast) text += ` (handoff moment)`;
+      if (c === 1 && r > 1) text = `${r}.${c} ${size}: same moment as ${r - 1}.${GRID_COLS} — ${action}`;
       panels.push(text.replace(/\.$/, "") + ".");
     }
-    rows.push(`ROW ${r} ${label}: ${panels.join(" ")}`);
+    rows.push(`ROW ${r}: ${panels.join(" ")}`);
   }
   return rows.join("\n");
 }
@@ -193,17 +206,26 @@ export function buildGridPrompt(input: BuildGridPromptInput): BuiltGridPrompt {
   const template = (input.template && input.template.trim()) ? input.template : DEFAULT_GRID_TEMPLATE;
   const beats = normalizeToGridBeats(input.scenes ?? []);
   const { block: charBlock, refs: charRefs } = buildCharacterBlock(input.characters ?? []);
-  const { line: locLine, ref: locRef } = buildLocationBlock(input.location, charRefs.length + 1);
-  const refs: GridRef[] = locRef ? [...charRefs, locRef] : [...charRefs];
-  const rowLabels = Array.from({ length: GRID_ROWS }, (_, i) => `"${rowLabel(beats, i + 1)}"`).join(", ");
+  const locations: GridLocation[] = input.locations?.length ? input.locations : input.location ? [input.location] : [];
+  // GPT Image 2.0 accepts at most 10 image inputs: characters first (numbered 1..K), then the location plates.
+  const { line: locLine, refs: locRefs } = buildLocationBlock(locations, charRefs.length + 1, Math.max(0, 10 - charRefs.length));
+  const refs: GridRef[] = [...charRefs, ...locRefs];
   const keyElement = short(input.keyElement, 80) || "the single most important plot object";
 
-  const prompt = template
+  const fill = (beatMax: number) => template
     .replace(/\{KEY_ELEMENT\}/g, keyElement)
-    .replace(/\{ROW_LABELS\}/g, rowLabels)
+    .replace(/\{ROW_LABELS\}/g, "")
     .replace(/\{CHARACTER_REFERENCES\}/g, charBlock)
     .replace(/\{LOCATION_REFERENCE\}/g, locLine)
-    .replace(/\{ROWS\}/g, buildRowsBlock(beats));
+    .replace(/\{ROWS\}/g, buildRowsBlock(beats, beatMax));
+
+  // Stay under the model's prompt limit: shorten the per-beat text progressively (never below 120 chars).
+  let beatMax = GRID_BEAT_MAX_CHARS;
+  let prompt = fill(beatMax);
+  while (prompt.length > GRID_PROMPT_MAX_CHARS && beatMax > 120) {
+    beatMax -= 40;
+    prompt = fill(beatMax);
+  }
 
   return { prompt, refs };
 }

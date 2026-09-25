@@ -145,7 +145,7 @@ Return ONLY valid JSON (no markdown, no commentary) of this exact shape:
       "characters": ["<Latin character name>", ...],
       "beats": [
         { "shot": "wide" | "medium" | "close-up" | "over-the-shoulder",
-          "action": "<ONE continuous physical action lasting 4–5 seconds, English, present tense, who does what where>",
+          "action": "<ONE storyboard panel, English, present tense, in the exact format: [Who] [position in the location] [verb] [object]; [second character] [position] [what they do]. Looks at [gaze target].>",
           "cut": "<the state the clip ends in / how it links to the next beat, English, one sentence>" }
       ]
     }
@@ -153,8 +153,13 @@ Return ONLY valid JSON (no markdown, no commentary) of this exact shape:
 }
 
 HARD RULES:
-- EXACTLY 5 scenes, EXACTLY 5 beats per scene (25 beats total). Follow the script's 5 scenes in order.
-- Every beat is ONE action of 4–5 seconds — never two actions, never a summary of a minute.
+- EXACTLY 5 scenes, EXACTLY 5 beats per scene (25 beats total). Follow the script's 5 scenes in order. A scene = one ROW of 5 consecutive panels.
+- ONE PANEL = ONE VERB. Every beat answers "what changed since the previous frame" with ONE sentence. If nothing changed, the beat is redundant — replace it with the next real change. If two things changed, split them across two beats. A beat never contains two actions and never summarises a minute.
+- THREE MANDATORY FIELDS in every beat's "action": (1) where each present character stands/sits in the location (position), (2) what is in their hands, (3) where they look ("Looks at …"). A field is INHERITED from the previous beat unless the change is stated explicitly — so state every change, and only changes.
+- NO JUMPS IN SPACE WITHIN A SCENE: within a row nobody teleports, changes place or turns around unless a beat says so. A location change happens ONLY at the row boundary (between beat 5 of scene N and beat 1 of scene N+1), and BOTH panels show the same moment ALREADY in the new place with identical positions, hands and gaze (never "walks to", never "on the way").
+- ONE-OFF CHARACTERS: either remove them or introduce them through the protagonist's gaze in the PREVIOUS beat ("Looks at the porter by the door") before they act.
+- KEY / CLIMAX BEAT: describe it comparatively against an earlier beat ("unlike 1.3, the hand now …").
+- "action" FORMAT (strict): "[Who] [position in location] [verb] [object]; [second character] [position] [what they do]. Looks at [target]." — e.g. "Marta kneels at the cot's right side, scalpel in hand, cutting the shirt; Kemp lies on the cot, belt in his teeth. Looks at Kemp's ribs." Do NOT prefix the shot size inside "action" — it goes in the "shot" field.
 - All text is ENGLISH. Character names stay in LATIN letters exactly as in the script's cast.
 - Only characters listed in the scene's "characters" may appear in its beats.
 - Each beat's "shot" is one of: wide, medium, close-up, over-the-shoulder. Vary shots; never four identical shots in a row.

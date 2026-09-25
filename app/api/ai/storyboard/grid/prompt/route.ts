@@ -25,8 +25,8 @@ async function ownedEpisode(userId: string, episodeId: string) {
 
 /** Build the default (auto) grid prompt from the episode's current data. */
 async function buildDefault(episodeId: string): Promise<string> {
-  const { characters, location, scenes, keyElement } = await loadGridInputs(episodeId);
-  const { prompt } = buildGridPrompt({ characters, location, scenes, keyElement, template: null });
+  const { characters, location, locations, scenes, keyElement } = await loadGridInputs(episodeId);
+  const { prompt } = buildGridPrompt({ characters, location, locations, scenes, keyElement, template: null });
   return prompt;
 }
 
