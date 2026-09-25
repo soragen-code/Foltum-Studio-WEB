@@ -15,21 +15,25 @@ import { prisma } from "@/lib/db";
 import { updateJob, completeJob, failJob, heartbeatJob, markCanceled, isCancelRequested } from "@/lib/jobs";
 import { makeJobStreamWriter, flushStreamedText } from "@/lib/stream-progress";
 import { streamChatText, streamChatJSON, SCRIPT_MODEL } from "@/lib/ai";
-// Stage 1 (dramaBible) — generate + validate the structured story bible FIRST, then derive the prose synopsis
-// consistent with it; persist the bible on the Project. Best-effort: failure leaves the classic flow unchanged.
+// Stage 1 (dramaBible) — structured story bible, persisted on the Project. Approach "A": it now runs AFTER the
+// synopsis is saved and the job completed (best-effort, off the critical path) — never before the synopsis.
 import { generateDramaBible, type DramaBible, type GenerateDramaBibleResult } from "@/lib/drama-bible";
 import { dramaBibleBrief, DRAMA_BIBLE_PROMPT_VERSION } from "@/lib/prompts/drama-bible";
 // Stage 172 (Stage 7) — critic-driven generation: best-of-N variants → critique → targeted improve.
 import { generateBestOfN, critiqueCandidate, buildGenerationLog, CRITIC_PROMPT_VERSION } from "@/lib/critic";
 import {
-  ideaSystemPrompt,
-  ideaUserPrompt,
-  ideaAutoSystemPrompt,
-  ideaAutoUserPrompt,
-  ideaFromStorySystemPrompt,
-  ideaFromStoryUserPrompt,
+  synopsisProseSystemPrompt,
+  synopsisProseUserPrompt,
+  synopsisProseAutoSystemPrompt,
+  synopsisProseAutoUserPrompt,
+  synopsisProseFromStorySystemPrompt,
+  synopsisProseFromStoryUserPrompt,
+  synopsisMetaSchema,
+  synopsisMetaSystemPrompt,
+  synopsisMetaUserPrompt,
   genresToEnglish,
-  normalizeIdeaResult,
+  normalizeLanguage,
+  stripMarkup,
   detectLanguage,
   type IdeaLanguage,
 } from "@/lib/idea";
@@ -51,25 +55,33 @@ export interface SynopsisJobParams {
   episodeCount?: number;
 }
 
+/** Fallback title when the metadata call fails: the first line of the prose, capped to a few words. */
+function titleFromFirstLine(prose: string): string {
+  const line = prose.split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? "";
+  const words = line.replace(/^[\s"'«»“”\-—–*#]+/, "").split(/\s+/).filter(Boolean).slice(0, 5);
+  return words.join(" ").replace(/[\s,;:.!?…"'«»“”\-—–]+$/g, "");
+}
+
 /**
- * Run the synopsis generation in the background of the calling serverless invocation.
- * Progress is coarse (a single LLM call): we mark the job "processing" at ~15 % and let the
- * client's SmoothProgress ease it toward 100 % on a time curve; on save we bump to 80 %.
+ * Approach "A" — the synopsis prose is the FIRST and only LLM action before the producer sees text:
+ *   1. streamChatText(prose prompt) with onDelta → GenerationJob.streamedText (partial committed to the DB
+ *      from the very first chunk, so the frontend prints it live from the first seconds);
+ *   2. a short streamChatJSON for {title, language} on the finished prose (failure → fallbacks, never fatal);
+ *   3. save the project (stage="synopsis") and completeJob;
+ *   4. ONLY THEN the drama-bible best-of-3 (minutes of LLM work) runs best-effort in the tail of this same
+ *      background invocation — the job is already completed, so nothing waits on it.
  */
 export async function runSynopsisJob(jobId: string, projectId: string, params: SynopsisJobParams): Promise<void> {
-  // Stage 175 — keep the job's updatedAt fresh throughout the whole generation. The drama-bible best-of-3
-  // block (generateBestOfN → per-variant generate/critique/improve) runs 3–4.5 min of sequential LLM calls
-  // with no per-step heartbeat, so GET polling's failStaleJobs (STALE_JOB_MS = 3 min) would reap this LIVE
-  // job and surface a false "Generation timed out". A 60 s background ping (well under 3 min) prevents that;
-  // it is cleared in finally on every path. heartbeatJob never throws.
+  // Keep the job's updatedAt fresh so GET polling's failStaleJobs (STALE_JOB_MS = 3 min) never reaps a live job.
   let hb: ReturnType<typeof setInterval> | null = null;
+  let synopsisForBible: string | null = null;
   try {
     const { idea, auto, genres = [], extras, fromStory, story, episodeCount } = params;
     // Stage 14 (B): only persist a producer-chosen episode count outside story-upload mode.
     const episodeCountToStore = !fromStory && typeof episodeCount === "number" ? episodeCount : undefined;
 
     // STORY mode: language auto-detected from the uploaded story. AUTO: from extras (default ru).
-    // MANUAL: language is detected from the idea text inside normalizeIdeaResult.
+    // MANUAL: language is detected from the idea text (metadata call + normalizeLanguage fallback).
     const storyText = (story ?? "").trim();
     const storyLanguage: IdeaLanguage = storyText ? detectLanguage(storyText) : "ru";
     const autoLanguage: IdeaLanguage = extras && extras.trim() ? detectLanguage(extras) : "ru";
@@ -78,134 +90,62 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
       : auto
       ? `[Auto] Genre: ${genresToEnglish(genres).join(", ") || "—"}${extras && extras.trim() ? `\nRequests: ${extras.trim()}` : ""}`
       : idea ?? "";
-
-    if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
-    await updateJob(jobId, { status: "processing", progress: 15, message: "Drafting season synopsis…" });
-
-    // Start the heartbeat now — everything below (drama-bible best-of-3 + synopsis attempt loop) is the slow part.
-    hb = setInterval(() => { heartbeatJob(jobId).catch(() => {}); }, 60_000);
-
-    // Stage 1 (dramaBible) — design the structured STORY BIBLE FIRST (generate → validate → targeted retry).
-    // On success we (a) persist it on the Project and (b) thread a compact brief into the synopsis prompt so
-    // the prose synopsis is DERIVED consistently from the bible. Best-effort: any failure (LLM / transport /
-    // persistently-invalid) is swallowed and the classic idea→synopsis flow runs unchanged (backward compat).
-    const bibleGenres = auto ? genresToEnglish(genres) : null;
-    const bibleIdeaText = fromStory
+    // Text used for the language fallback heuristic (same as the old normalizeIdeaResult call).
+    const languageHintText = fromStory
       ? storyText
       : auto
-      ? [bibleGenres?.join(", ") ?? "", (extras ?? "").trim()].filter(Boolean).join("\n")
+      ? (extras && extras.trim() ? extras : "")
       : idea ?? "";
-    const bibleEpisodeCount = typeof episodeCount === "number" && episodeCount > 0 ? episodeCount : null;
-    let bibleBriefNote = "";
-    let bibleToPersist: DramaBible | null = null;
-    try {
-      await heartbeatJob(jobId);
-      // A single bible generation at a given temperature; `note` is appended to the idea on the improve pass.
-      // NOTE: streamChatJSON (not chatJSON). Claude Opus 5 on WaveSpeed now does interleaved "thinking" that
-      // can consume the whole non-streaming budget and return EMPTY content on complex genres (post-apocalypse
-      // etc.) — the root cause of the "AI returned an invalid result" synopsis failure. Streaming accumulates
-      // only visible content and survives the multi-minute wait; the larger budget keeps the bible from truncating.
-      const bibleGen = (ideaText: string, temperature: number): Promise<GenerateDramaBibleResult> =>
-        generateDramaBible(
-          { idea: ideaText, genres: bibleGenres, episodeCount: bibleEpisodeCount },
-          (sys, usr, o) => streamChatJSON(sys, usr, { ...o, temperature, maxTokens: 8000 }),
-          { model: SCRIPT_MODEL, maxRetries: 2 }
-        );
 
-      // Stage 172 (Stage 7) — critic-driven best-of-3: generate 3 parallel variants @0.9, critique each on
-      // its brief, pick the best, then run ONE targeted-improve pass built from the winner's notes. Every
-      // LLM call is the injected chatJSON, so no new transport. Fully defensive: any throw (e.g. every
-      // variant invalid) falls back to a single classic generation below.
-      let bibleOutcome: Awaited<ReturnType<typeof generateBestOfN<GenerateDramaBibleResult>>> | null = null;
-      try {
-        bibleOutcome = await generateBestOfN<GenerateDramaBibleResult>({
-          variantCount: 3,
-          kind: "dramaBible",
-          generate: async () => {
-            const r = await bibleGen(bibleIdeaText, 0.9);
-            if (!r.valid) throw new Error("invalid drama bible variant");
-            return r;
-          },
-          render: (r) => dramaBibleBrief(r.bible),
-          critique: (rendered) => critiqueCandidate(streamChatJSON, "dramaBible", rendered),
-          improve: async (_best, fix) => {
-            const r = await bibleGen(`${bibleIdeaText}\n\n${fix}`, 0.7);
-            if (!r.valid) throw new Error("invalid improved drama bible");
-            return r;
-          },
-        });
-      } catch (e) {
-        console.warn(`[synopsis] critic best-of-3 skipped: ${e instanceof Error ? e.message : String(e)}`);
-        bibleOutcome = null;
-      }
+    if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
+    await updateJob(jobId, { status: "processing", progress: 15, message: "Writing synopsis…" });
+    hb = setInterval(() => { heartbeatJob(jobId).catch(() => {}); }, 60_000);
 
-      // Fallback to a single classic generation when the critic flow produced nothing valid.
-      const bibleRes = bibleOutcome?.best ?? (await bibleGen(bibleIdeaText, 0.7));
-      if (bibleRes.valid) {
-        bibleToPersist = bibleRes.bible;
-        bibleBriefNote = `\n\nSTORY BIBLE (make the synopsis consistent with it):\n${dramaBibleBrief(bibleRes.bible)}`;
-      } else {
-        console.warn(`[synopsis] drama bible advisory after ${bibleRes.attempts} attempt(s); outstanding: ${bibleRes.errors.map((e) => e.field).join(", ")}`);
-      }
-
-      // Stage 172 — best-effort GenerationLog row (never breaks the job). Logs the critic outcome (or the
-      // fallback failure) so persistently-invalid / low-score generations are auditable.
-      try {
-        const logRec = buildGenerationLog({
-          projectId,
-          kind: "dramaBible",
-          model: SCRIPT_MODEL,
-          promptVersion: CRITIC_PROMPT_VERSION,
-          attempts: bibleOutcome?.attempts ?? bibleRes.attempts ?? 1,
-          finalScore: bibleOutcome?.critique.overall ?? null,
-          accepted: !!bibleOutcome?.accepted && bibleRes.valid,
-          notes: bibleOutcome?.notes ?? null,
-          error: bibleRes.valid ? null : "drama bible invalid after critic loop",
-        });
-        await prisma.generationLog.create({
-          // `notes` is a nullable Json column — omit it (undefined) rather than pass a bare null.
-          data: { ...logRec, notes: logRec.notes ?? undefined },
-        });
-      } catch (e) {
-        console.warn(`[synopsis] GenerationLog skipped: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    } catch (e) {
-      console.warn(`[synopsis] drama bible generation skipped: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
-    // One retry if the model returns malformed JSON / schema violations (same as the old sync route).
-    let result: ReturnType<typeof normalizeIdeaResult> | null = null;
+    // ── 1. FIRST LLM ACTION: stream the synopsis PROSE (plain text, no JSON) straight into streamedText. ──
+    // makeJobStreamWriter starts with lastWriteAt=0 / lastLen=0, so the very first chunk (≥ 12 chars) is
+    // committed to the DB immediately; later chunks are throttled to ~4 writes/s.
+    let synopsis = "";
     let lastError = "";
-    for (let attempt = 0; attempt < 2 && !result; attempt++) {
+    for (let attempt = 0; attempt < 2 && !synopsis; attempt++) {
       if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
       try {
-        await heartbeatJob(jobId);
-        // Stream the VISIBLE synopsis prose to the job's streamedText column as it is generated, so the
-        // frontend shows it appearing progressively (and a reopened tab shows the accumulated partial).
-        // The model streams a JSON object; we extract the "synopsis" field tolerantly while it is unclosed.
-        await updateJob(jobId, { message: "Writing season synopsis…" });
-        const onDelta = makeJobStreamWriter(jobId, { field: "synopsis" });
-        // streamChatJSON (not chatJSON): streaming survives the interleaved-thinking empty-content bug that
-        // broke synopsis on complex genres (see bibleGen note above). Large budget avoids truncation.
+        const onDelta = makeJobStreamWriter(jobId);
         const raw = fromStory
-          ? await streamChatJSON(ideaFromStorySystemPrompt(storyLanguage), ideaFromStoryUserPrompt(storyText) + bibleBriefNote, { temperature: 0.6, maxTokens: 16000, onDelta })
+          ? await streamChatText(synopsisProseFromStorySystemPrompt(storyLanguage), synopsisProseFromStoryUserPrompt(storyText), { temperature: 0.6, maxTokens: 6000, onDelta })
           : auto
-          ? await streamChatJSON(ideaAutoSystemPrompt(autoLanguage), ideaAutoUserPrompt(genres, extras) + bibleBriefNote, { temperature: 0.95, maxTokens: 16000, onDelta })
-          : await streamChatJSON(ideaSystemPrompt(), ideaUserPrompt(idea ?? "") + bibleBriefNote, { temperature: 0.8, maxTokens: 16000, onDelta });
-        result = normalizeIdeaResult(
-          raw,
-          fromStory ? storyText : auto ? (extras && extras.trim() ? extras : autoLanguage === "ru" ? "Russian history" : "story") : idea ?? ""
-        );
+          ? await streamChatText(synopsisProseAutoSystemPrompt(autoLanguage), synopsisProseAutoUserPrompt(genres, extras), { temperature: 0.95, maxTokens: 6000, onDelta })
+          : await streamChatText(synopsisProseSystemPrompt(), synopsisProseUserPrompt(idea ?? ""), { temperature: 0.8, maxTokens: 6000, onDelta });
+        const cleaned = stripMarkup(raw ?? "").trim();
+        if (cleaned.length < 80) throw new Error("synopsis prose too short / empty");
+        synopsis = cleaned;
       } catch (e: any) {
         lastError = e?.message ?? String(e);
-        console.warn(`[synopsis] attempt ${attempt + 1} failed:`, lastError);
+        console.warn(`[synopsis] prose attempt ${attempt + 1} failed:`, lastError);
       }
     }
-    if (!result) { await failJob(jobId, "AI returned an invalid result: " + lastError); return; }
+    if (!synopsis) { await failJob(jobId, "AI returned an invalid result: " + lastError); return; }
+    // Ensure the last poll sees the FULL final prose even if the throttle skipped the last delta.
+    await flushStreamedText(jobId, synopsis);
 
-    // Ensure the last poll sees the FULL final synopsis prose even if the throttle skipped the last delta.
-    await flushStreamedText(jobId, result.synopsis);
+    // ── 2. Short metadata call on the finished prose: {title, language}. Never fatal. ──
+    if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
+    await updateJob(jobId, { progress: 70, message: "Naming the series…" });
+    let title = "";
+    let language: IdeaLanguage | null = null;
+    try {
+      await heartbeatJob(jobId);
+      const metaRaw = await streamChatJSON(synopsisMetaSystemPrompt(), synopsisMetaUserPrompt(synopsis), { temperature: 0.4, maxTokens: 2000 });
+      const meta = synopsisMetaSchema.parse(metaRaw);
+      title = stripMarkup(meta.title ?? "").replace(/\s+/g, " ").trim();
+      if (meta.language) language = normalizeLanguage(meta.language, languageHintText || synopsis);
+    } catch (e) {
+      console.warn(`[synopsis] metadata call failed, using fallbacks: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (!title) title = titleFromFirstLine(synopsis);
+    // Language fallback: mode-specific known language, else script heuristic (Cyrillic → ru, otherwise en).
+    if (!language) language = fromStory ? storyLanguage : auto ? autoLanguage : detectLanguage(languageHintText || synopsis);
 
+    // ── 3. Save + complete (unchanged persistence contract). ──
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
     await updateJob(jobId, { progress: 80, message: "Saving synopsis…" });
 
@@ -216,16 +156,13 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
         where: { id: projectId },
         data: {
           idea: ideaForStore,
-          synopsis: result!.synopsis,
-          language: result!.language,
+          synopsis,
+          language,
           synopsisApproved: false,
           stage: "synopsis",
           // Stage 40: the project is named automatically from the plot.
-          name: resolveProjectName(result!.title, fromStory ? storyText : idea && idea.trim() ? idea : result!.synopsis),
+          name: resolveProjectName(title, fromStory ? storyText : idea && idea.trim() ? idea : synopsis),
           ...(episodeCountToStore !== undefined ? { episodeCount: episodeCountToStore } : {}),
-          // Stage 1 (dramaBible) — persist the validated bible + its prompt version alongside the synopsis.
-          // Only written when a VALID bible was produced; otherwise the column stays NULL (classic flow).
-          ...(bibleToPersist ? { dramaBible: bibleToPersist as unknown as object, dramaBibleVersion: DRAMA_BIBLE_PROMPT_VERSION } : {}),
         },
       });
     }, { timeout: 30_000 });
@@ -233,14 +170,109 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
     const renamed = await prisma.project.findUnique({ where: { id: projectId }, select: { name: true } });
     await completeJob(
       jobId,
-      { synopsis: result.synopsis, language: result.language, projectName: renamed?.name ?? null },
+      { synopsis, language, projectName: renamed?.name ?? null },
       "Synopsis ready"
     );
+    synopsisForBible = synopsis;
   } catch (err: any) {
     console.error("[synopsis] job error:", err);
     await failJob(jobId, "Generation failed: " + (err?.message ?? "Unknown error"));
   } finally {
     if (hb) clearInterval(hb);
+  }
+
+  // ── 4. AFTER completeJob: drama-bible best-of-3 in the background tail (best-effort, any failure = warn). ──
+  // The job is already "completed" and the project saved, so the producer is never waiting on this. We await it
+  // here (rather than a detached promise) only so the serverless invocation stays alive until it settles.
+  if (synopsisForBible) {
+    try {
+      await generateDramaBibleInBackground(projectId, params, synopsisForBible);
+    } catch (e) {
+      console.warn(`[synopsis] background drama bible failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+}
+
+/**
+ * Drama-bible best-of-3 (generate 3 parallel variants @0.9 → critique → targeted improve → fallback single
+ * generation) built from the FINISHED synopsis. On success writes project.dramaBible/dramaBibleVersion and a
+ * GenerationLog row, exactly as before; every failure is swallowed with console.warn. Never touches the job.
+ */
+async function generateDramaBibleInBackground(projectId: string, params: SynopsisJobParams, synopsis: string): Promise<void> {
+  const { idea, auto, genres = [], extras, fromStory, story, episodeCount } = params;
+  const storyText = (story ?? "").trim();
+  const bibleGenres = auto ? genresToEnglish(genres) : null;
+  const sourceText = fromStory
+    ? storyText
+    : auto
+    ? [bibleGenres?.join(", ") ?? "", (extras ?? "").trim()].filter(Boolean).join("\n")
+    : idea ?? "";
+  // The bible is now derived FROM the approved-for-now synopsis so it stays consistent with what the producer read.
+  const bibleIdeaText = `${sourceText}\n\nSEASON SYNOPSIS (the bible must be consistent with it):\n${synopsis}`;
+  const bibleEpisodeCount = typeof episodeCount === "number" && episodeCount > 0 ? episodeCount : null;
+
+  // streamChatJSON (not chatJSON): survives Claude's interleaved-thinking empty-content behaviour on WaveSpeed.
+  const bibleGen = (ideaText: string, temperature: number): Promise<GenerateDramaBibleResult> =>
+    generateDramaBible(
+      { idea: ideaText, genres: bibleGenres, episodeCount: bibleEpisodeCount },
+      (sys, usr, o) => streamChatJSON(sys, usr, { ...o, temperature, maxTokens: 8000 }),
+      { model: SCRIPT_MODEL, maxRetries: 2 }
+    );
+
+  let bibleOutcome: Awaited<ReturnType<typeof generateBestOfN<GenerateDramaBibleResult>>> | null = null;
+  try {
+    bibleOutcome = await generateBestOfN<GenerateDramaBibleResult>({
+      variantCount: 3,
+      kind: "dramaBible",
+      generate: async () => {
+        const r = await bibleGen(bibleIdeaText, 0.9);
+        if (!r.valid) throw new Error("invalid drama bible variant");
+        return r;
+      },
+      render: (r) => dramaBibleBrief(r.bible),
+      critique: (rendered) => critiqueCandidate(streamChatJSON, "dramaBible", rendered),
+      improve: async (_best, fix) => {
+        const r = await bibleGen(`${bibleIdeaText}\n\n${fix}`, 0.7);
+        if (!r.valid) throw new Error("invalid improved drama bible");
+        return r;
+      },
+    });
+  } catch (e) {
+    console.warn(`[synopsis] critic best-of-3 skipped: ${e instanceof Error ? e.message : String(e)}`);
+    bibleOutcome = null;
+  }
+
+  const bibleRes = bibleOutcome?.best ?? (await bibleGen(bibleIdeaText, 0.7));
+  if (bibleRes.valid) {
+    const bibleToPersist: DramaBible = bibleRes.bible;
+    try {
+      await prisma.project.update({
+        where: { id: projectId },
+        data: { dramaBible: bibleToPersist as unknown as object, dramaBibleVersion: DRAMA_BIBLE_PROMPT_VERSION },
+      });
+    } catch (e) {
+      console.warn(`[synopsis] drama bible persist failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  } else {
+    console.warn(`[synopsis] drama bible advisory after ${bibleRes.attempts} attempt(s); outstanding: ${bibleRes.errors.map((e) => e.field).join(", ")}`);
+  }
+
+  // Best-effort GenerationLog row (never throws out).
+  try {
+    const logRec = buildGenerationLog({
+      projectId,
+      kind: "dramaBible",
+      model: SCRIPT_MODEL,
+      promptVersion: CRITIC_PROMPT_VERSION,
+      attempts: bibleOutcome?.attempts ?? bibleRes.attempts ?? 1,
+      finalScore: bibleOutcome?.critique.overall ?? null,
+      accepted: !!bibleOutcome?.accepted && bibleRes.valid,
+      notes: bibleOutcome?.notes ?? null,
+      error: bibleRes.valid ? null : "drama bible invalid after critic loop",
+    });
+    await prisma.generationLog.create({ data: { ...logRec, notes: logRec.notes ?? undefined } });
+  } catch (e) {
+    console.warn(`[synopsis] GenerationLog skipped: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 

@@ -624,6 +624,102 @@ export function ideaFromStoryUserPrompt(story: string): string {
   return `UPLOADED STORY (CANON — structure this, do not replace it):\n\n${story}\n\nStructure this uploaded story into the season synopsis, main cast and locations now, staying faithful to it.`;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Streaming synopsis PROSE (approach "A")                            */
+/*  The idea→synopsis job streams ONLY the prose first (plain text,     */
+/*  no JSON) so the producer sees it typing from the first seconds;     */
+/*  title/language come from a short follow-up metadata call.          */
+/* ------------------------------------------------------------------ */
+
+const PROSE_ONLY_FORMAT =
+  "OUTPUT FORMAT (strict): return ONLY the synopsis prose — 300-600 words, 3-6 short paragraphs separated by blank lines. " +
+  "No title, no JSON, no markdown, no headings, no bullet lists, no labels like \"Setup:\", no preamble or closing remarks. " +
+  "Start directly with the first sentence of the synopsis. Do not deliberate at length before writing — decide the premise quickly and begin the prose immediately.\n" +
+  "It must convey the whole season arc: the setup (world, hero, hook), the development (rising stakes, relationships), the key turning points, and the finale of the season. Write it as prose a producer can read in one minute.";
+
+/** Compact originality rules for the prose-only call (the full card-level rules apply later to characters/locations). */
+const PROSE_ORIGINALITY_RULES =
+  "ORIGINALITY: all characters, names and places are invented and original — never real people, celebrities, brands, landmarks or existing franchises. " +
+  "Character names are ALWAYS English first name + surname in Latin letters (A-Z), regardless of the story's setting or language.";
+
+/** MANUAL mode — the producer wrote an idea; language = the idea's language. */
+export function synopsisProseSystemPrompt(): string {
+  return `You are a head writer for a short-form vertical drama series. From the user's idea write the season synopsis.
+
+LANGUAGE: detect the language of the idea and write the synopsis in THAT language.
+
+${PROSE_ONLY_FORMAT}
+${SYNOPSIS_CRAFT_RULES}
+
+${GENRE_DIVERSITY_RULES}
+
+${PROSE_ORIGINALITY_RULES}`;
+}
+
+export function synopsisProseUserPrompt(idea: string): string {
+  return `IDEA:\n${idea.trim()}\n\nWrite the season synopsis prose now.`;
+}
+
+/** AUTO mode — invent a story from the genre(s); language = autoLanguage (from extras, default ru). */
+export function synopsisProseAutoSystemPrompt(language: IdeaLanguage): string {
+  const lang = LANGUAGE_NAMES[language] ?? "Russian";
+  return `You are an award-winning head writer for a short-form vertical drama series. The producer has NOT written a story — INVENT one from scratch in the chosen genre(s) and write its season synopsis.
+
+INVENT A GRIPPING, ORIGINAL STORY: a fresh premise with a strong hook, a clear protagonist with a want and a fear, an escalating conflict, real turning points and a season finale with a twist. It must honour the chosen genre(s). AVOID clichés and predictable, generic plots — no "chosen one wakes with amnesia", no tired tropes; surprise the viewer while staying coherent. Combine the genres if more than one is given.
+
+LANGUAGE: write the synopsis in ${lang}.
+
+${PROSE_ONLY_FORMAT}
+${SYNOPSIS_CRAFT_RULES}
+
+${GENRE_DIVERSITY_RULES}
+
+${PROSE_ORIGINALITY_RULES}`;
+}
+
+export function synopsisProseAutoUserPrompt(genres: string[], extras?: string): string {
+  // Same genre / template / wishes block as the JSON prompt, only the closing instruction differs.
+  return ideaAutoUserPrompt(genres, extras).replace(/Invent the original season now\.$/, "Invent the original season and write its synopsis prose now.");
+}
+
+/** FROM-STORY mode — the uploaded story is canon; language = storyLanguage (detected from the upload). */
+export function synopsisProseFromStorySystemPrompt(language: IdeaLanguage): string {
+  const lang = LANGUAGE_NAMES[language] ?? "Russian";
+  return `You are an award-winning head writer for a short-form vertical drama series. The producer has UPLOADED a finished story. Your job is NOT to invent a new plot — treat the uploaded story as CANON. Preserve its premise, characters, events, tone and ending, and write the season synopsis of it, rewriting the essence as LITTLE as possible.
+
+CANON FIDELITY: do NOT change the story's plot, characters or ending. Keep the same names, relationships and events. Do not add new major plot lines.
+
+LANGUAGE: write the synopsis in ${lang} (the same language as the uploaded story).
+
+${PROSE_ONLY_FORMAT}
+${SYNOPSIS_CRAFT_RULES}
+
+${PROSE_ORIGINALITY_RULES}`;
+}
+
+export function synopsisProseFromStoryUserPrompt(story: string): string {
+  return `UPLOADED STORY (CANON — summarise this, do not replace it):\n\n${story}\n\nWrite the season synopsis prose of this uploaded story now, staying faithful to it.`;
+}
+
+/** Short follow-up call after the prose: title + language only. */
+export const synopsisMetaSchema = z.object({
+  title: z.string().max(120).optional().nullable(),
+  language: z.string().optional().nullable(),
+});
+
+export function synopsisMetaSystemPrompt(): string {
+  return `You are a head writer. Given a finished season synopsis of a short-form vertical drama series, return ONLY valid JSON:
+{
+  "title": "<short catchy series title, 1-4 words, in the SAME language as the synopsis, no quotes>",
+  "language": "<ISO 639-1 code of the language the synopsis is written in, e.g. \\"ru\\" or \\"en\\">"
+}
+No other keys, no prose, no markdown.`;
+}
+
+export function synopsisMetaUserPrompt(synopsis: string): string {
+  return `SYNOPSIS:\n${synopsis.trim()}\n\nReturn the title and language JSON now.`;
+}
+
 export function reviseSynopsisSystemPrompt(language: IdeaLanguage): string {
   const lang = LANGUAGE_NAMES[language] ?? "the same language as the current synopsis";
   return `You are a head writer revising a season synopsis of a short-form vertical drama series according to the producer's instruction.
