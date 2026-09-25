@@ -28,19 +28,30 @@ export function styledVisualPrompt(input: string, names: string[] = []): string 
   return /\[VISUAL STYLE\]:/i.test(clean) ? clean : `[VISUAL STYLE]: ${VISUAL_STYLE}\n${clean}`;
 }
 
+/**
+ * Stage 241 — every character reference (main cast AND crowd/extras) is generated on a plain neutral
+ * background with NO objects, props, furniture, location or environment of any kind. Extras simply stand
+ * next to each other on the same empty neutral background. This single strong line replaces the old
+ * "Neutral unobtrusive background" wording so the image model never adds a set or props.
+ */
+export const NEUTRAL_BACKGROUND_LINE =
+  "Plain neutral studio background (solid neutral grey), completely empty — no objects, no props, no furniture, no location or environment of any kind, only the character(s). No text or logos.";
+
 /** What the chained reference image shows: a face close-up (legacy anchor) or a full-length figure (Stage 46A anchor). */
 export type CharacterRefKind = "face" | "full";
 
 export function characterImagePrompt(appearance: string, shot: "front" | "profile" | "full", name = "", tier?: string | null, groupSize?: number | null, chained = false, refKind: CharacterRefKind = "face"): string {
   if (tier === "CROWD") {
     // A crowd group is one reference: the whole group in frame, so Seedance can reuse the same extras.
+    // Stage 241: extras (crowd) are generated on the SAME plain neutral background as the main cast —
+    // they simply stand next to each other, no environment, no props, no location.
     const framing = {
-      front: "Wide group shot, the whole group facing the camera, everyone fully visible, natural candid expressions.",
-      profile: "Candid medium-wide shot of the group from the side, people interacting with each other, nobody looking at camera.",
-      full: "Full wide establishing shot of the entire group in their environment, all bodies visible head to toe.",
+      front: "Wide group shot, the whole group standing side by side and facing the camera, everyone fully visible, natural candid expressions.",
+      profile: "Medium-wide shot of the group standing next to each other, seen slightly from the side, nobody looking at camera.",
+      full: "Full wide shot of the entire group standing side by side, all bodies visible head to toe.",
     }[shot];
     const size = groupSize ? ` (${groupSize} people)` : "";
-    return `${VISUAL_STYLE}\nGroup of people${size}: ${sanitizeVideoPrompt(appearance, { keep: [name] }).prompt}. ${framing} Realistic environment matching the group. No text or logos.`;
+    return `${VISUAL_STYLE}\nGroup of people${size}: ${sanitizeVideoPrompt(appearance, { keep: [name] }).prompt}. ${framing} The people simply stand next to each other. ${NEUTRAL_BACKGROUND_LINE}`;
   }
   // Stage 16: the 3 base shots of the fixed 5-angle set → face close-up, LEFT profile,
   // full-body FRONT. (The 2 extras — RIGHT profile + full-body BACK — are in CHARACTER_EXTRA_VARIANTS.)
@@ -71,9 +82,9 @@ export function characterImagePrompt(appearance: string, shot: "front" | "profil
     // The template's own LIGHT/BACKGROUND/QUALITY block defines the neutral technical-reference look, so the
     // cinematic VISUAL_STYLE (film grain + colour grading) is deliberately omitted here: it would both
     // contradict that block and waste ~560 chars of the provider's 4000-character budget.
-    return `${framing}\nCHARACTER: ${who}. ${CHARACTER_EXPRESSION_NOTE}${identityLock}\n${FULL_BODY_CLOTHING_RULE}\n${fullBodyProportionsFor(appearance)}\nNeutral unobtrusive background. No text or logos.`;
+    return `${framing}\nCHARACTER: ${who}. ${CHARACTER_EXPRESSION_NOTE}${identityLock}\n${FULL_BODY_CLOTHING_RULE}\n${fullBodyProportionsFor(appearance)}\n${NEUTRAL_BACKGROUND_LINE}`;
   }
-  return `${VISUAL_STYLE}\nCharacter: ${who}. ${framing}${identityLock} Neutral unobtrusive background. No text or logos.`;
+  return `${VISUAL_STYLE}\nCharacter: ${who}. ${framing}${identityLock} ${NEUTRAL_BACKGROUND_LINE}`;
 }
 
 /**
@@ -177,7 +188,7 @@ export function characterExtraAnglePrompt(appearance: string, name = "", index =
   const who = sanitizeVideoPrompt(appearance, { keep: [name] }).prompt;
   const variant = CHARACTER_EXTRA_VARIANTS[((index % CHARACTER_EXTRA_VARIANTS.length) + CHARACTER_EXTRA_VARIANTS.length) % CHARACTER_EXTRA_VARIANTS.length];
   const note = refKind === "full" ? ` ${FULL_BODY_SAME_FIGURE_NOTE}` : "";
-  return `${VISUAL_STYLE}\nThe SAME person as the reference image: ${who}. ${variant}${note} Neutral unobtrusive background. No text or logos.`;
+  return `${VISUAL_STYLE}\nThe SAME person as the reference image: ${who}. ${variant}${note} ${NEUTRAL_BACKGROUND_LINE}`;
 }
 
 /**

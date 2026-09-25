@@ -18,6 +18,7 @@ import {
   FULL_BODY_PROPORTIONS_CHILD,
   CHARACTER_EXPRESSION_NOTE,
   FULL_BODY_CLOTHING_RULE,
+  NEUTRAL_BACKGROUND_LINE,
   isChildAppearance,
   type CharacterRefKind,
 } from "@/lib/visual-style";
@@ -316,6 +317,7 @@ const WRAPPER_FRAGMENTS = [
   FULL_BODY_CLOTHING_RULE,
   // Stage 190: the fixed sex-assertion sentences are re-added per shot, so strip them from a saved override.
   ...GENDER_ASSERT_CLAUSES,
+  NEUTRAL_BACKGROUND_LINE,
   "Neutral unobtrusive background. No text or logos.",
 ];
 
