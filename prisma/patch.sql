@@ -699,3 +699,6 @@ ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "gridPanelIndex" INTEGER;
 -- column as it streams from the model, so the frontend can show it appearing progressively (and a
 -- reopened tab shows the accumulated partial). Additive & idempotent; legacy jobs keep NULL.
 ALTER TABLE "GenerationJob" ADD COLUMN IF NOT EXISTS "streamedText" TEXT;
+
+-- ─── SIMPLIFIED PIPELINE: shot-list beat metadata per Scene row (one Scene = one 5-second beat) ────
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "beatMeta" JSONB;

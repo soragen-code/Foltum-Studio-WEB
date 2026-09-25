@@ -504,6 +504,9 @@ model Scene {
   // the classic pipeline is unchanged; when set, the video job uses the panel as the scene's first frame.
   startFrameUrl   String?
   gridPanelIndex  Int?
+  // SIMPLIFIED PIPELINE (shot list 5×5): one Scene row per beat. beatMeta = { v:1, sceneIndex, beatIndex, sceneTitle,
+  // location, characters[], shot, action, cut, nextStart, startFramePrompt? }. Null on legacy scenes → classic pipeline.
+  beatMeta        Json?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

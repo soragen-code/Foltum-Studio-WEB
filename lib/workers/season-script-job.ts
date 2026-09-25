@@ -18,12 +18,13 @@
 import { prisma } from "@/lib/db";
 import type { GenerationJob } from "@prisma/client";
 import { z } from "zod";
-import { chatJSON, streamChatJSON, SCRIPT_MODEL, EPISODE_SCRIPT_MODEL, EPISODE_SCRIPT_MAX_TOKENS, EPISODE_SCRIPT_TEMPERATURE, startBackgroundJSON, pollBackgroundJSON, cancelBackgroundResponse, type BackgroundPollResult } from "@/lib/ai";
+import { chatJSON, streamChatJSON, streamChatText, SCRIPT_MODEL, EPISODE_SCRIPT_MODEL, EPISODE_SCRIPT_MAX_TOKENS, EPISODE_SCRIPT_TEMPERATURE, startBackgroundJSON, pollBackgroundJSON, cancelBackgroundResponse, type BackgroundPollResult } from "@/lib/ai";
 import { maxDetailLevel, isLocationDetailLevel } from "@/lib/location-scale";
 import { completeJob, failJob, isCancelRequested, markCanceled, updateJob, heartbeatJob } from "@/lib/jobs";
 import { makeJobStreamWriter, stripJsonForPreview, extractProseField } from "@/lib/stream-progress";
 import { toCharacterCard, normalizeLanguage, seasonCastSystemPrompt, seasonCastUserPrompt, characterCardSchema, MAX_CAST, characterCardToData, sanitizeCharacterCard, sanitizeLocationCard, dedupeCast, hasFullSetInventory, setInventoryRetryNote, serializeSetInventory, parseSetInventory, locationsFromSynopsisSystemPrompt, locationsResultSchema, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
 import { parseStoredShortSynopsis, renderShortSynopsis } from "@/lib/short-synopsis";
+import { episodeScreenplaySystemPrompt, episodeScreenplayUserPrompt, SCREENPLAY_MAX_TOKENS } from "@/lib/simple-pipeline";
 
 /** Stage 46A: the stored short synopsis (JSON) rendered as the outline block of the structure prompt. */
 function shortSynopsisOutline(stored: string | null | undefined): string | null {
@@ -232,8 +233,13 @@ export type SeasonJobDeps = {
    * chatJSON) keep working — when absent the worker falls back to `chatJSON` (no live preview).
    */
   streamJSON?: typeof streamChatJSON;
+  /**
+   * SIMPLIFIED PIPELINE (step 4): streaming PLAIN-TEXT chat for the episode screenplay (no JSON, no scene
+   * schema). Optional so tests injecting only chatJSON keep working — absent ⇒ `streamChatText`.
+   */
+  streamText?: typeof streamChatText;
 };
-const defaultDeps: SeasonJobDeps = { start: startBackgroundJSON, poll: pollBackgroundJSON, cancel: cancelBackgroundResponse, chatJSON, streamJSON: streamChatJSON };
+const defaultDeps: SeasonJobDeps = { start: startBackgroundJSON, poll: pollBackgroundJSON, cancel: cancelBackgroundResponse, chatJSON, streamJSON: streamChatJSON, streamText: streamChatText };
 
 /** Heartbeat interval while a long LLM call is running (STALE_JOB_MS is 3 min — keep updatedAt fresh). */
 const HEARTBEAT_MS = 20_000;
@@ -788,31 +794,17 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
     // Unreachable since Stage 106 (handled deterministically above); kept so the state machine stays exhaustive.
     throw new Error("fullStory step is built from the structure, not generated");
   } else {
+    // SIMPLIFIED PIPELINE (step 4) — the episode script is a PLAIN-TEXT screenplay written by Claude Opus 5
+    // in ONE streaming call (no JSON scenes, no zod per-scene schema, no background response id). The step runs
+    // fully inline here: stream → persist Episode.script → drop the derived Scene rows (the 5×5 shot list is
+    // built separately, POST /api/ai/episodes/[id]/shot-list) → pop the episode from the revise queue → plan
+    // the next step. Previous episodes are passed with their FULL scripts for continuity.
     const ep = season!.episodes.find((e) => e.id === planned.episodeId)!;
     const next = season!.episodes.find((e) => e.number === ep.number + 1);
-    // Stage 88: cross-episode continuity — thread the immediately-preceding episode's concrete ENDING
-    // (its last scene's end state + closing beats) into this episode's brief, so it is written as a
-    // direct continuation rather than a fresh start.
-    const prevEp = season!.episodes.find((e) => e.number === ep.number - 1);
-    const previousEnding = await loadPreviousEnding(season!.id, prevEp ? { id: prevEp.id, number: prevEp.number, title: prevEp.title, cliffhanger: prevEp.cliffhanger ?? null } : null);
-    // Stage 113 — the episode location's set inventory (written at the idea stage) is the only prop world the
-    // script may use; legacy locations without it → no block (script written exactly as before).
-    const epLocation = ep.locationId ? project.locations.find((l) => l.id === ep.locationId) : matchLocation(project.locations, ep.locationName ?? "");
-    const locationInventory = parseSetInventory(epLocation?.setInventory);
-    // Stage 3 (seasonMap) — thread THIS episode's assigned season-map cell into the outline brief so the
-    // script fulfils it (beat / cliffhanger / escalation / time-skip / locations / threads / secret). Reads
-    // the persisted map defensively: absent (old seasons) or no matching cell → "" ⇒ prompt unchanged.
     const seasonMapCells = Array.isArray(season!.seasonMap) ? (season!.seasonMap as unknown as SeasonMapCell[]) : null;
     const seasonMapCell = seasonMapCells?.find((c) => c && c.episode === ep.number) ?? null;
     const seasonMapCellBlock = seasonMapCellBrief(seasonMapCell);
-    // Stage 1 (dramaBible) — thread the persisted story bible into the script prompt so the episode stays
-    // consistent with the theme / arcs / escalation / secrets / midpoint / finale question / B-line / relationships.
-    // Reads the bible defensively: absent (old projects) → "" ⇒ prompt unchanged.
     const dramaBibleBlock = dramaBibleBrief(readDramaBible(project));
-    // Stage 4 (task Stage 4) — feed the season's LIVE WORLD-STATE into the episode prompt instead of the old
-    // ~1200-char previous-episode text tail. Read defensively: the newest SeasonState row for this season is
-    // rendered into a compact block; absent (episode 1 / old seasons / no row yet) → "" ⇒ the prompt falls
-    // back to previousEnding exactly as before. Wrapped so a state/DB hiccup can never break script generation.
     let seasonStateBlock = "";
     try {
       const row = await prisma.seasonState.findFirst({ where: { seasonId: season!.id }, orderBy: { updatedAt: "desc" } });
@@ -821,48 +813,76 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
       seasonStateBlock = "";
     }
     message = planned.userScript
-      ? `Building the script from your text... (usually 1-3 minutes)`
+      ? `Saving your script...`
       : planned.instruction
       ? `Rewriting the script for episode ${ep.number}... (usually 1-3 minutes)`
       : `Writing the episode script... (usually 1-3 minutes)`;
     progress = episodeProgress(done, curTotal);
-    // Approach A: publish the step message before the blocking call, clean preview, heartbeat while writing.
     await clearStreamedText(jobId);
+    // NOTE: updateJob (not saveState) — the CAS advance lock in resultData must stay held during the blocking call.
     await updateJob(jobId, { status: "processing", progress, message });
-    responseId = await withHeartbeat(jobId, () => deps.start(
-      episodeScriptSystemPrompt(language, ep.number),
-      episodeScriptUserPrompt({
-        synopsis: project.synopsis ?? "", season: seasonStruct!, episode: outlineFromEpisode(ep), characters: cards,
-        previous: season!.episodes.filter((p) => p.number < ep.number).map((p) => ({ number: p.number, title: p.title, logline: p.logline ?? "", cliffhanger: p.cliffhanger ?? "" })),
-        previousEnding,
-        locationInventory,
-        // Stage 155 — when the author uploaded their own plot file, it is stored in Season.fullStory and
-        // becomes the AUTHORITATIVE source for the script (selectPlotSource: uploaded plot wins, else none →
-        // the outline is used as before). This also carries through the per-episode script reset (Stage 151).
-        plotSource: season!.userPlotUploaded ? selectPlotSource({ uploadedPlot: season!.fullStory, autoStory: null }) : null,
-        // Stage 158 — the author pasted a FULL episode script for THIS episode: the AUTHORITATIVE source the
-        // model must only structure into the shooting-script JSON (dialogue/action verbatim). Wins over plotSource.
-        userScript: planned.userScript,
-        seasonMapCellBlock,
-        dramaBibleBlock,
-        seasonStateBlock,
-        // Stage 8 (final) — project dialogue language (default "en" → no-op directive; old rows resolve to en).
-        dialogueLanguage: getDialogueLanguage(project),
-        // Stage 173 (task 3) — the per-episode PLOT (written on the episode-plot page before the script) is the
-        // AUTHORITATIVE BASIS for the shooting script: the script must contain every event / character /
-        // location / sub-location / scene-order from the plot, then add dialogue + camera. Read defensively:
-        // absent (old episodes / plot not yet generated) → null ⇒ the prompt block is omitted (script unchanged).
-        episodePlot: (ep as { plot?: string | null }).plot ?? null,
-        ...(planned.instruction ? { instruction: reviseInstruction(planned.instruction, next) } : {}),
-      }) + episodeRetryNote(state),
-      // Stage 108 — the episode script is written by gpt-4o (EPISODE_SCRIPT_MODEL): non-reasoning →
-      // temperature + max_output_tokens ≤ 16 384. Still a background response (same polling path).
-      { model: EPISODE_SCRIPT_MODEL, maxTokens: EPISODE_SCRIPT_MAX_TOKENS, temperature: EPISODE_SCRIPT_TEMPERATURE, onDelta: makeJobStreamWriter(jobId, { transform: stripJsonForPreview }) }
-    ));
+    let text: string;
+    if (planned.userScript?.trim()) {
+      text = planned.userScript.trim();
+    } else {
+      const streamText = deps.streamText ?? streamChatText;
+      const retryNote = state.attempt > 0 && state.lastFailure ? `\n\nThe previous attempt failed: ${state.lastFailure}. Write the complete screenplay (all 5 scenes) this time.` : "";
+      const raw = await withHeartbeat(jobId, () => streamText(
+        episodeScreenplaySystemPrompt(language, ep.number),
+        episodeScreenplayUserPrompt({
+          season: { title: season!.title ?? "", logline: season!.logline ?? "" },
+          synopsis: project.synopsis ?? "",
+          episode: {
+            number: ep.number, title: ep.title, logline: ep.logline ?? null, cliffhanger: ep.cliffhanger ?? null, description: ep.description ?? null,
+            locationName: ep.locationName ?? null, locationDesc: ep.locationDesc ?? null,
+            characters: ep.characters.map((c) => c.character.name),
+          },
+          previousEpisodes: season!.episodes.filter((p) => p.number < ep.number).map((p) => ({ number: p.number, title: p.title, logline: p.logline ?? null, cliffhanger: p.cliffhanger ?? null, script: p.script ?? null })),
+          characterNames: project.characters.map((c) => c.name),
+          instruction: planned.instruction ? reviseInstruction(planned.instruction, next) : null,
+          extraBlocks: [seasonMapCellBlock, dramaBibleBlock, seasonStateBlock],
+        }) + retryNote,
+        { model: EPISODE_SCRIPT_MODEL, maxTokens: SCREENPLAY_MAX_TOKENS, temperature: EPISODE_SCRIPT_TEMPERATURE, timeoutMs: 780_000, onDelta: makeJobStreamWriter(jobId) }
+      ));
+      text = (raw ?? "").replace(/^```[a-z]*\s*/i, "").replace(/\s*```\s*$/, "").trim();
+    }
+    if (text.length < 200) {
+      // Too short to be a screenplay — count as a failed attempt (the state machine retries via the poll route).
+      const failure = `The screenplay came back empty or too short (${text.length} chars).`;
+      const decision = retryDecision({ step: "episode", attempt: state.attempt });
+      if (decision === "fail") {
+        await saveState(jobId, { ...state, responseId: undefined, episodeId: undefined, stepStartedAt: undefined });
+        await failJob(jobId, `${failure} Restart generation to try again.`);
+        return;
+      }
+      await saveState(jobId, { ...state, attempt: state.attempt + 1, lastFailure: failure, responseId: undefined, episodeId: undefined, stepStartedAt: undefined }, { status: "processing", progress, message: "Script draft was incomplete — retrying…" });
+      return;
+    }
+    await prisma.$transaction(async (tx) => {
+      await tx.scene.deleteMany({ where: { episodeId: ep.id } });
+      await tx.episode.update({ where: { id: ep.id }, data: { script: text, status: "script_ready", videoUrl: null, gridUrl: null, gridApproved: false } });
+    }, { timeout: 30_000 });
+    await updateJob(jobId, { streamedText: text.slice(0, 60000) });
+    state = {
+      ...state,
+      attempt: 0, lastFailure: undefined, responseId: undefined, episodeId: undefined, stepStartedAt: undefined,
+      ...(state.revise ? { revise: { ...state.revise, episodeIds: state.revise.episodeIds.filter((id) => id !== ep.id) } } : {}),
+    };
+    season = await loadSeason(projectId);
+    const after = planNextStep(season, state);
+    if (after.step === "done") {
+      if (season) await prisma.season.update({ where: { id: season.id }, data: { status: "script_ready" } });
+      await saveState(jobId, { ...state, step: "done", remaining: 0, total: curTotal, done: true });
+      await completeJob(jobId, { ...state, step: "done", remaining: 0, total: curTotal, done: true, lockedAt: undefined }, `Episode ${ep.number} script ready`);
+      return;
+    }
+    // Another episode is queued (multi-episode revise) — release the lock; the next poll starts it.
+    await saveState(jobId, { ...state, step: "episode", responseId: undefined, total: curTotal, remaining: Math.max(0, remaining - 1), done: false }, { status: "processing", progress: episodeProgress(done + 1, curTotal), message: `Episode ${ep.number} script ready. Next episode…` });
+    return;
   }
   await saveState(
     jobId,
-    { ...state, step: planned.step, episodeId: planned.step === "episode" ? planned.episodeId : undefined, responseId, stepStartedAt: new Date().toISOString(), total: curTotal, remaining, done: false },
+    { ...state, step: planned.step, episodeId: undefined, responseId, stepStartedAt: new Date().toISOString(), total: curTotal, remaining, done: false },
     { status: "processing", progress, message }
   );
 }

@@ -11,10 +11,10 @@ import { FeatureLockBadge } from '@/app/project/[id]/_components/feature-lock'
 import { referenceFileName } from '@/lib/download-name'
 import { DownloadVideoButton } from '@/app/project/[id]/_components/download-video-button'
 import { postJobStart, SceneVideoPlayer } from '../../_components/scenes-stage'
-import { BookScript, bookScriptToText } from '../../_components/season-stage'
 import { StickyReviseBar } from '../../_components/sticky-revise-bar'
 import { EpisodeFootage } from '../../_components/episode-footage'
-import { JobProgressBar, SmoothProgress, useJobPolling, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
+import { JobProgressBar, SmoothProgress, StreamingText, useJobPolling, type JobInfo, type JobPollResponse, JOB_POLL_INTERVAL_MS } from '../../_components/use-job-polling'
+import { parseBeatMeta, type BeatMeta } from '@/lib/simple-pipeline'
 import { RewritePlaceholder } from '../../_components/rewrite-placeholder'
 import { isEpisodeRevisePending } from '@/lib/episode-revise-state'
 import { SCENE_RESET_CONFIRM_MESSAGE, needsSceneResetConfirm } from '@/lib/scene-reset-confirm'
@@ -99,7 +99,7 @@ const locationFrames = (l: any): number => [l?.imageUrl, l?.imageReverse, l?.ima
 // Stage 167 — a persisted Shot of a scene (the atomic unit of generation). The episode card shows each
 // shot's per-shot status / videoUrl so producers can watch the shot chain progress.
 type Shot = { id: string; index: number; shotType?: string | null; size?: string | null; duration?: number | null; line?: string | null; status: string; videoUrl?: string | null; error?: string | null }
-type Scene = { id: string; number: number; title?: string | null; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; subLocation?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; lookStale?: boolean | null; videoModel?: string | null; status: string; hasUndo?: boolean | null; shots?: Shot[]; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
+type Scene = { id: string; number: number; title?: string | null; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; subLocation?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; startFrameUrl?: string | null; keyframePrompt?: string | null; beatMeta?: unknown; lookStale?: boolean | null; videoModel?: string | null; status: string; hasUndo?: boolean | null; shots?: Shot[]; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null; hasScript?: boolean }
 
 export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits, entitlements, view = 'production' }: { episode: any; project: any; siblings?: Sibling[]; credits: number; entitlements?: import('@/lib/entitlements').Entitlements; view?: 'production' | 'script' }) {
@@ -118,6 +118,21 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [reviseText, setReviseText] = useState('')
   const [revising, setRevising] = useState(false)
   const [reviseNotice, setReviseNotice] = useState<string | null>(null)
+  // SIMPLIFIED PIPELINE (step 5) — the 5×5 shot list is a separate shot_list job started from the Script step.
+  const [shotListBusy, setShotListBusy] = useState(false)
+  const [shotListError, setShotListError] = useState<string | null>(null)
+  const shotListPoll = useJobPolling({
+    onFinish: async (res) => {
+      const j = res.job
+      if (j.status === 'completed') {
+        await reloadEpisode({ refreshRefs: true })
+        router.refresh()
+      } else if (j.status === 'failed') {
+        setShotListError(j.error ?? 'Не удалось построить шот-лист / Shot list failed')
+      }
+      setShotListBusy(false)
+    },
+  })
   // Stage 158 — "insert your own full episode script": the author pastes a complete script and it becomes the
   // authoritative source the season job structures into scenes. `showManual` toggles the textarea (both in the
   // no-script panel and above an existing script).
@@ -939,6 +954,24 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       await reloadEpisode(); setRevising(false)
     } catch (e) { setError(e instanceof Error ? e.message : 'Failed to start the script job'); setRevising(false) }
   }
+  // SIMPLIFIED PIPELINE (step 5) — POST /api/ai/episodes/[id]/shot-list → shot_list job → 25 beat rows.
+  const buildShotList = async () => {
+    if (shotListBusy || revising) return
+    if (scenes.length && !confirm('Текущий шот-лист и все кадры/клипы серии будут удалены. Продолжить? / The current shot list and all frames/clips will be removed. Continue?')) return
+    setShotListBusy(true); setShotListError(null)
+    try {
+      const res = await fetch(`/api/ai/episodes/${episode.id}/shot-list`, { method: 'POST' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error ?? 'Failed to start the shot list job')
+      if (data?.jobId) { shotListPoll.start(data.jobId); return }
+      await reloadEpisode(); setShotListBusy(false)
+    } catch (e) { setShotListError(e instanceof Error ? e.message : 'Failed to start the shot list job'); setShotListBusy(false) }
+  }
+  // Beat rows (Scene.beatMeta) grouped into 5 scenes for the shot-list table; empty for legacy scenes.
+  const beatRows = scenes.map((sc) => ({ scene: sc, beat: parseBeatMeta(sc.beatMeta) })).filter((r): r is { scene: Scene; beat: BeatMeta } => !!r.beat)
+  const beatScenes = Array.from(beatRows.reduce((m, r) => { const arr = m.get(r.beat.sceneIndex) ?? []; arr.push(r); m.set(r.beat.sceneIndex, arr); return m }, new Map<number, typeof beatRows>()).entries()).sort((a, b) => a[0] - b[0])
+  const hasShotList = beatRows.length > 0
+
   const reviseEpisode = async (force = false) => {
     const instruction = reviseText.trim(); if (!instruction) return
     setRevising(true); setError(null); setReviseNotice(null)
@@ -1155,7 +1188,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // Copy the ENTIRE episode script (all scenes: heading, action, every dialogue turn) and flash «Скопировано».
   const copyScript = async () => {
     try {
-      await navigator.clipboard.writeText(bookScriptToText(scenes as any, episode.script))
+      await navigator.clipboard.writeText(String(episode.script ?? ''))
       setScriptCopied(true)
       setTimeout(() => setScriptCopied(false), 1500)
     } catch {}
@@ -1343,11 +1376,57 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             </div>
             {/* Stage 77: while the rewrite job runs the OLD script is hidden behind a placeholder. */}
             {rewriteViewState(revising, revisePoll.job?.status) === 'placeholder' ? (
-              <RewritePlaceholder job={revisePoll.job} expectedTotalSec={EPISODE_REVISE_EXPECTED_SEC} label={hasScript ? 'Rewriting episode script…' : 'Writing the episode script…'} testId="episode-revise-progress" />
+              /* SIMPLIFIED PIPELINE (step 4): the plain-text screenplay streams in live (Claude Opus 5). */
+              <div>
+                <RewritePlaceholder job={revisePoll.job} expectedTotalSec={EPISODE_REVISE_EXPECTED_SEC} label={hasScript ? 'Rewriting episode script…' : 'Writing the episode script…'} testId="episode-revise-progress" />
+                <StreamingText text={revisePoll.job?.streamedText} active className="mt-4 font-mono text-xs" maxHeight={520} />
+              </div>
             ) : hasScript ? (
               /* Stage 110 — the script re-generation button was removed; the script is generated once when missing. */
               <>
-                <BookScript text={episode.script} scenes={scenes} />
+                {/* SIMPLIFIED PIPELINE (step 4): the script is PLAIN TEXT (no JSON scenes) — shown verbatim. */}
+                <pre className="whitespace-pre-wrap rounded-lg border border-border/60 bg-background p-4 font-sans text-sm leading-relaxed text-foreground/90" data-testid="episode-script-text">{String(episode.script)}</pre>
+                {/* SIMPLIFIED PIPELINE (step 5): 5 scenes × 5 beats shot list → 25 Scene rows (one per beat). */}
+                <div className="mt-6 rounded-lg border border-border bg-background p-4" data-testid="shot-list-section">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <h3 className="font-display text-lg font-bold">Шот-лист · 5 сцен × 5 битов</h3>
+                    <button type="button" onClick={buildShotList} disabled={shotListBusy || revising} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50" data-testid="build-shot-list">
+                      {shotListBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Grid3x3 className="h-4 w-4" />} {hasShotList ? 'Пересобрать шот-лист / Rebuild shot list' : 'Создать шот-лист / Build shot list'}
+                    </button>
+                  </div>
+                  <p className="mt-1.5 text-xs text-muted-foreground">Каждый бит — один клип 5 с (вертикаль 9:16). Бит 5.5 переходит в 1.1 следующей серии.</p>
+                  {shotListBusy && shotListPoll.job && (
+                    <div className="mt-3">
+                      <JobProgressBar job={shotListPoll.job} expectedTotalSec={120} />
+                      <StreamingText text={shotListPoll.job.streamedText} active className="mt-3 text-xs" maxHeight={240} />
+                    </div>
+                  )}
+                  {shotListError && <p className="mt-2 text-sm text-destructive" data-testid="shot-list-error">{shotListError}</p>}
+                  {hasShotList && !shotListBusy && (
+                    <div className="mt-4 space-y-4" data-testid="shot-list-table">
+                      {beatScenes.map(([sceneIndex, rows]) => (
+                        <div key={sceneIndex} className="rounded-lg border border-border/60">
+                          <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-border/60 bg-muted/40 px-3 py-2">
+                            <span className="text-sm font-semibold">Сцена {sceneIndex} · {rows[0].beat.sceneTitle}</span>
+                            <span className="text-xs text-muted-foreground">{rows[0].beat.location}{rows[0].beat.characters.length ? ` · ${rows[0].beat.characters.join(', ')}` : ''}</span>
+                          </div>
+                          <table className="w-full text-xs">
+                            <tbody>
+                              {rows.map(({ scene: sc, beat }) => (
+                                <tr key={sc.id} className="border-t border-border/40 align-top">
+                                  <td className="w-12 px-3 py-2 font-mono text-muted-foreground">{beat.sceneIndex}.{beat.beatIndex}</td>
+                                  <td className="w-28 px-2 py-2 uppercase tracking-wide text-muted-foreground">{beat.shot}</td>
+                                  <td className="px-2 py-2">{beat.action}</td>
+                                  <td className="w-1/4 px-3 py-2 italic text-muted-foreground">→ {beat.cut}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 {/* Regenerate the whole script from scratch (wipes scenes/clips → confirm first), next to the manual paste option. */}
                 <div className="mt-4 rounded-lg border border-border bg-background p-3">
                   <button type="button" onClick={askRegenerate} disabled={revising} className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground disabled:opacity-50" data-testid="regenerate-script">

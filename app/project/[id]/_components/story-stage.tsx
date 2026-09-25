@@ -325,11 +325,11 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
            generates the next episode's plot. */}
         {firstEpisode && (
           <Link
-            href={`/project/${project.id}/plot/${firstEpisode.id}`}
+            href={`/project/${project.id}/episode/${firstEpisode.id}/script`}
             className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
             data-testid="go-first-episode-top"
           >
-            Аппрув / К сюжету серий <ArrowRight className="h-4 w-4" />
+            Аппрув / К сценарию серий <ArrowRight className="h-4 w-4" />
           </Link>
         )}
 

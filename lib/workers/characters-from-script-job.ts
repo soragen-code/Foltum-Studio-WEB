@@ -5,6 +5,7 @@ import { completeJob, failJob, heartbeatJob, updateJob } from "@/lib/jobs";
 import { flushStreamedText, makeJobStreamWriter } from "@/lib/stream-progress";
 import { characterCardSchema, characterCardToData, dedupeCast, MAX_CAST, normalizeLanguage, sanitizeCharacterCard, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
 import { dialogueSpeakers, matchCharacter } from "@/lib/season";
+import { parseBeatMeta } from "@/lib/simple-pipeline";
 import { castPreview, sanitizeRawCast } from "@/lib/workers/season-script-job";
 
 /**
@@ -80,7 +81,7 @@ export function charactersFromScriptUserPrompt(
   return `SYNOPSIS (context only):\n${synopsis.slice(0, 12_000)}${existing}\n\n${scripts}\n\nExtract the COMPLETE cast of these scripts (everyone incl. extras and crowd groups) as JSON.`;
 }
 
-type SceneRow = { id: string; dialogue: string | null; dialogueEn: string | null; action: string | null; presence: string | null; entrances: string | null; videoPrompt: string | null };
+type SceneRow = { id: string; dialogue: string | null; dialogueEn: string | null; action: string | null; presence: string | null; entrances: string | null; videoPrompt: string | null; beatMeta?: unknown };
 
 /** Names of the characters present in a scene — dialogue speakers + names mentioned in the action/presence/prompt text. */
 export function sceneCharacterIds(scene: SceneRow, characters: { id: string; name: string }[]): string[] {
@@ -91,6 +92,12 @@ export function sceneCharacterIds(scene: SceneRow, characters: { id: string; nam
       const hit = matchCharacter(characters, speaker);
       if (hit) ids.add(hit.id);
     }
+  }
+  // SIMPLIFIED PIPELINE: shot-list beat rows carry the scene's cast explicitly in beatMeta.characters.
+  const beat = parseBeatMeta(scene.beatMeta);
+  for (const name of beat?.characters ?? []) {
+    const hit = matchCharacter(characters, name);
+    if (hit) ids.add(hit.id);
   }
   const haystack = [scene.presence, scene.entrances, scene.action, scene.videoPrompt].filter(Boolean).join("\n").toLowerCase();
   if (haystack) {
@@ -127,7 +134,7 @@ export async function runCharactersFromScriptJob(jobId: string, projectId: strin
             episodes: {
               where: { script: { not: null } },
               orderBy: { number: "asc" },
-              select: { id: true, number: true, title: true, script: true, scenes: { orderBy: { number: "asc" }, select: { id: true, dialogue: true, dialogueEn: true, action: true, presence: true, entrances: true, videoPrompt: true } } },
+              select: { id: true, number: true, title: true, script: true, scenes: { orderBy: { number: "asc" }, select: { id: true, dialogue: true, dialogueEn: true, action: true, presence: true, entrances: true, videoPrompt: true, beatMeta: true } } },
             },
           },
         },
