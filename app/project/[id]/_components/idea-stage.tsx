@@ -498,8 +498,13 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   // 'upload' = the producer uploads / pastes a finished story (Stage 12).
   // ПРАВКА 1: путь «Загрузить готовый сценарий» открывает экран с ?source=upload — сразу активен режим загрузки.
   const searchParams = useSearchParams()
+  // ПРАВКА: экран строго соответствует выбранному на предыдущем шаге типу проекта.
+  //  • «Загрузить готовый сценарий» (?source=upload) → isUpload=true: показываем ТОЛЬКО загрузку/вставку
+  //    сценария, без ввода идеи и без выбора жанров; переключатель режимов скрыт.
+  //  • «Создать с нуля» (без ?source) → isUpload=false: показываем ввод идеи / автожанр, БЕЗ загрузки файла.
+  const isUpload = searchParams?.get('source') === 'upload'
   const [mode, setMode] = useState<'manual' | 'auto' | 'upload'>(
-    searchParams?.get('source') === 'upload' ? 'upload' : 'manual'
+    isUpload ? 'upload' : 'manual'
   )
   // Stage 46A: short synopsis shown between the idea and the season script (approve / rework).
   const [shortSynopsis, setShortSynopsis] = useState<ShortSynopsis | null>(() => parseStoredShortSynopsis(project?.shortSynopsis))
@@ -625,42 +630,38 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
     <div className="space-y-6">
       <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
         <h2 className="flex items-center gap-2 font-display text-xl font-bold">
-          <Lightbulb className="h-5 w-5 text-primary" /> Step 1 — Idea
+          <Lightbulb className="h-5 w-5 text-primary" /> {isUpload ? 'Step 1 — Upload your script' : 'Step 1 — Idea'}
         </h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Опишите свою идею — или выберите режим «Авто», и ИИ придумает оригинальную историю в выбранном жанре. Сначала мы создадим развёрнутую идею сезона (питч на 7–10 предложений): вы просмотрите и одобрите её, а затем сгенерируем синопсис, а позже — разбивку по эпизодам, персонажей, локации и сценарий.
+          {isUpload
+            ? 'Загрузите готовый сюжет / сценарий файлом (.txt, .md, .docx, .pdf) или вставьте текстом. ИИ примет его за основу и структурирует в сезон: синопсис, разбивку по эпизодам, персонажей и локации.'
+            : 'Опишите свою идею — или выберите режим «Авто», и ИИ придумает оригинальную историю в выбранном жанре. Сначала мы создадим развёрнутую идею сезона (питч на 7–10 предложений): вы просмотрите и одобрите её, а затем сгенерируем синопсис, а позже — разбивку по эпизодам, персонажей, локации и сценарий.'}
         </p>
 
-        {/* Mode toggle: own idea / auto */}
-        <div className="mt-4 flex flex-wrap gap-1 rounded-lg border border-border bg-muted/40 p-1" role="tablist" data-testid="idea-mode-toggle">
-          <button
-            type="button"
-            onClick={() => setMode('manual')}
-            disabled={busy}
-            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${mode === 'manual' ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}
-            data-testid="idea-mode-manual"
-          >
-            Custom idea
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('auto')}
-            disabled={busy}
-            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${mode === 'auto' ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}
-            data-testid="idea-mode-auto"
-          >
-            Auto by genre
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('upload')}
-            disabled={busy}
-            className={`rounded-md px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${mode === 'upload' ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}
-            data-testid="idea-mode-upload"
-          >
-            Upload your own plot as a file
-          </button>
-        </div>
+        {/* Mode toggle: own idea / auto. ПРАВКА: показываем только для пути «Создать с нуля» (не upload) и
+            без вкладки загрузки; на пути «Загрузить готовый сценарий» переключатель скрыт целиком. */}
+        {!isUpload && (
+          <div className="mt-4 flex flex-wrap gap-1 rounded-lg border border-border bg-muted/40 p-1" role="tablist" data-testid="idea-mode-toggle">
+            <button
+              type="button"
+              onClick={() => setMode('manual')}
+              disabled={busy}
+              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${mode === 'manual' ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}
+              data-testid="idea-mode-manual"
+            >
+              Custom idea
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('auto')}
+              disabled={busy}
+              className={`rounded-md px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${mode === 'auto' ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}
+              data-testid="idea-mode-auto"
+            >
+              Auto by genre
+            </button>
+          </div>
+        )}
 
         {error && <div className="mt-4 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive">{error}</div>}
         {notice && <div className="mt-4 rounded-lg bg-primary/10 px-4 py-2 text-xs text-primary">{notice}</div>}
