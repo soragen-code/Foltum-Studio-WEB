@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Header } from '@/components/header'
-import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, ChevronDown, Copy, Check, FileText, RotateCcw, Save, Plus, Undo2, AlertTriangle } from 'lucide-react'
+import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Copy, Check, FileText, RotateCcw, Save, Plus, Undo2, AlertTriangle } from 'lucide-react'
 import { FrameToolbar, DownloadAllButton } from '@/app/project/[id]/_components/frame-toolbar'
 import { PromptModal, CHARACTER_PROMPT_DESCRIPTION, LOCATION_PROMPT_DESCRIPTION } from '@/app/project/[id]/_components/prompt-modal'
 import { FeatureLockBadge } from '@/app/project/[id]/_components/feature-lock'
@@ -169,26 +169,12 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   const [promptSaved, setPromptSaved] = useState(false)     // flashed «"Saved" inside the modal
   // Reference strategy the builder resolved for this scene (character_references | new_scene_reference | text_only).
   const [promptRefKind, setPromptRefKind] = useState<string | null>(null)
-  // Stage 205 — the ordered reference images actually submitted with the scene's most recent generation
-  // (from the API's `references`). Shown as thumbnails in the «View prompt» modal so the [Image1]…[ImageN]
-  // notes in the prompt map to real pictures. Empty until the scene has been generated at least once.
-  const [promptRefs, setPromptRefs] = useState<SubmittedReference[]>([])
-  // Stage 238 — pre-generation prompt preview: before the FIRST scene generation the author sees the exact
-  // prompt the worker will submit plus the ordered reference list (image 1 = LOCATION, image 2 = START FRAME
-  // for scenes after the first, then the characters). Every thumbnail opens fullscreen 9:16 via openLightbox.
-  type PreviewRef = { index: number; url: string; kind?: string; note?: string }
-  const [scenePreview, setScenePreview] = useState<
-    { sceneId: string; number: number; loading: boolean; error: string | null; prompt: string; references: PreviewRef[]; onConfirm: () => void } | null
-  >(null)
-  // Once the author confirms the preview, the rest of this session's generations run without re-showing it.
-  const previewAcknowledged = useRef(false)
-  // Stage 239 — the SAME prompt + ordered references, but shown INLINE inside each scene card (expandable),
-  // so the author can review the exact submitted prompt and the reference order at any time — not only in the
-  // one-time confirm modal. Keyed by scene id; `promptSig` tracks the scene's current videoPrompt so a script
-  // regeneration is reflected (the next open refetches). Every thumbnail opens fullscreen 9:16 via openLightbox.
-  const [inlinePreview, setInlinePreview] = useState<
-    Record<string, { open: boolean; loading: boolean; error: string | null; prompt: string; references: PreviewRef[]; promptSig: string }>
-  >({})
+  // Stage 240 — the ORDERED reference list the video worker actually submits, exactly as returned by
+  // /api/ai/scenes/[id]/video-prompt (buildScenePrompt): image 1 = LOCATION, image 2 = START FRAME (the
+  // previous scene's last frame; omitted for the first scene with the numbering shifted up), image 3…N =
+  // characters. Shown as 9:16 thumbnails in the «View prompt» modal; each opens fullscreen via openLightbox.
+  type PromptRef = { index: number; url: string; kind?: string; note?: string }
+  const [promptRefs, setPromptRefs] = useState<PromptRef[]>([])
   // «"Assemble" — pure concatenation of the ready scene clips into one episode (no audit / no polish / no re-gen).
   const [stitching, setStitching] = useState(false)
   // Stage 46B: «"Assemble" opens a dialog — production quality / fps of the FINAL file (scenes are always 480p);
@@ -1074,22 +1060,23 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     finally { setGenAllStarting(false) }
   }
 
-  // Stage 31 — open the "View prompt" modal and load the scene's FINAL prompt (override if set,
-  // else the auto-assembled prompt). The prompt is exactly what the worker submits (with [ImageN]
-  // placeholders instead of real reference URLs and no LLM translation).
+  // Stage 240 — open the "View prompt" modal and load the scene's ACTUAL final prompt + ordered reference
+  // list from /api/ai/scenes/[id]/video-prompt (buildScenePrompt + finalVideoPrompt) — the EXACT text and
+  // image order the video worker submits. A manual override, if set, is reflected verbatim (the builder uses
+  // it). References map to image 1 = LOCATION, image 2 = START FRAME (omitted for the first scene), 3…N =
+  // characters — each opens fullscreen 9:16 via openLightbox.
   const openPromptModal = async (scene: Scene) => {
     setPromptModal({ sceneId: scene.id, number: scene.number })
     setPromptText(''); setPromptErr(null); setPromptHasOverride(false)
     setPromptCopied(false); setPromptSaved(false); setPromptLoading(true)
     setPromptRefKind(null); setPromptRefs([])
     try {
-      const res = await fetch(`/api/ai/scenes/${scene.id}/prompt`)
+      const res = await fetch(`/api/ai/scenes/${scene.id}/video-prompt`)
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data?.error || 'Failed to load prompt')
       setPromptText(String(data.prompt ?? ''))
       setPromptHasOverride(!!data.hasOverride)
-      setPromptRefKind(typeof data.referenceKind === 'string' ? data.referenceKind : null)
-      setPromptRefs(Array.isArray(data.references) ? (data.references as SubmittedReference[]).filter((r) => r && typeof r.url === 'string') : [])
+      setPromptRefs(Array.isArray(data.references) ? (data.references as PromptRef[]).filter((r) => r && typeof r.url === 'string') : [])
     } catch (e: any) {
       setPromptErr(e?.message ?? 'Failed to load prompt')
     } finally {
@@ -1097,86 +1084,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     }
   }
 
-  // Stage 238 — open the pre-generation preview for a scene and load its ACTUAL submitted prompt + ordered
-  // references from /api/ai/scenes/[id]/video-prompt (the same builder the video worker uses). `onConfirm`
-  // runs the real generation once the author approves.
-  const openScenePreview = async (sceneId: string, number: number, onConfirm: () => void) => {
-    setScenePreview({ sceneId, number, loading: true, error: null, prompt: '', references: [], onConfirm })
-    try {
-      const res = await fetch(`/api/ai/scenes/${sceneId}/video-prompt`)
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data?.error || 'Не удалось загрузить промпт')
-      const refs = Array.isArray(data.references)
-        ? (data.references as PreviewRef[]).filter((r) => r && typeof r.url === 'string')
-        : []
-      setScenePreview((p) => (p && p.sceneId === sceneId ? { ...p, loading: false, prompt: String(data.prompt ?? ''), references: refs } : p))
-    } catch (e: any) {
-      setScenePreview((p) => (p && p.sceneId === sceneId ? { ...p, loading: false, error: e?.message ?? 'Ошибка загрузки' } : p))
-    }
-  }
-  const confirmScenePreview = () => {
-    const p = scenePreview
-    setScenePreview(null)
-    previewAcknowledged.current = true
-    p?.onConfirm()
-  }
-  // Per-scene «Generate»: show the preview before the very first generation of this session, then proceed.
-  const requestGenerateScene = (scene: Scene) => {
-    if (!previewAcknowledged.current) { void openScenePreview(scene.id, scene.number, () => generateScene(scene.id, true)); return }
-    generateScene(scene.id, true)
-  }
-  // «Generate all scenes»: after the cost dialog, preview the first not-yet-rendered scene, then start the chain.
-  const requestGenerateAll = () => {
-    if (!previewAcknowledged.current) {
-      const first = scenes.find((s) => !validUrl(s.videoUrl)) ?? scenes[0]
-      if (first) { setGenAllAsk(null); void openScenePreview(first.id, first.number, () => generateAllScenes()); return }
-    }
-    generateAllScenes()
-  }
-
-  // Stage 239 — expand / collapse the inline prompt + ordered references shown directly in a scene card.
-  // Lazily fetches /api/ai/scenes/[id]/video-prompt on the first open and refetches whenever the scene's
-  // videoPrompt has changed since the cached copy (so a script/prompt regeneration is always reflected).
-  const toggleInlinePreview = (scene: Scene) => {
-    const cur = inlinePreview[scene.id]
-    const sig = scene.videoPrompt ?? ''
-    if (cur?.open) {
-      setInlinePreview((m) => ({ ...m, [scene.id]: { ...cur, open: false } }))
-      return
-    }
-    const needFetch = !cur || cur.promptSig !== sig || (!cur.prompt && !cur.error)
-    setInlinePreview((m) => ({
-      ...m,
-      [scene.id]: {
-        open: true,
-        loading: needFetch,
-        error: null,
-        prompt: cur?.prompt ?? '',
-        references: cur?.references ?? [],
-        promptSig: sig,
-      },
-    }))
-    if (!needFetch) return
-    void (async () => {
-      try {
-        const res = await fetch(`/api/ai/scenes/${scene.id}/video-prompt`)
-        const data = await res.json().catch(() => ({}))
-        if (!res.ok) throw new Error(data?.error || 'Не удалось загрузить промпт')
-        const refs = Array.isArray(data.references)
-          ? (data.references as PreviewRef[]).filter((r) => r && typeof r.url === 'string')
-          : []
-        setInlinePreview((m) => ({
-          ...m,
-          [scene.id]: { open: true, loading: false, error: null, prompt: String(data.prompt ?? ''), references: refs, promptSig: sig },
-        }))
-      } catch (e: any) {
-        setInlinePreview((m) => ({
-          ...m,
-          [scene.id]: { open: true, loading: false, error: e?.message ?? 'Ошибка загрузки', prompt: '', references: [], promptSig: sig },
-        }))
-      }
-    })()
-  }
+  // Per-scene «Generate» / «Generate all» — Stage 240: run generation directly (the prompt + references are
+  // reviewable any time via the «View prompt» button, so no separate pre-generation confirm step).
+  const requestGenerateScene = (scene: Scene) => { generateScene(scene.id, true) }
+  const requestGenerateAll = () => { generateAllScenes() }
 
   // Copy the ENTIRE episode script (all scenes: heading, action, every dialogue turn) and flash «Скопировано».
   const copyScript = async () => {
@@ -1217,10 +1128,13 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       // Reflect the override flag on the scene card without an extra fetch.
       setScenes((list) => list.map((s) => (s.id === sceneId ? { ...s, promptOverride: savedPrompt } : s)))
       if (reset) {
-        // Reload the freshly-auto-assembled prompt into the textarea.
-        const g = await fetch(`/api/ai/scenes/${sceneId}/prompt`)
+        // Reload the freshly-rebuilt auto prompt (new template + ordered references) into the textarea.
+        const g = await fetch(`/api/ai/scenes/${sceneId}/video-prompt`)
         const gd = await g.json().catch(() => ({}))
-        if (g.ok) { setPromptText(String(gd.prompt ?? '')); setPromptHasOverride(!!gd.hasOverride) }
+        if (g.ok) {
+          setPromptText(String(gd.prompt ?? '')); setPromptHasOverride(!!gd.hasOverride)
+          setPromptRefs(Array.isArray(gd.references) ? (gd.references as PromptRef[]).filter((r) => r && typeof r.url === 'string') : [])
+        }
       } else {
         // Stage 35: a successful manual save closes the modal right away (the card badge reflects it).
         setPromptSaved(false)
@@ -1895,65 +1809,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                 </div>
                 </div>
 
-                {/* Stage 239 — the exact prompt + ordered reference list shown INLINE in the card (expandable),
-                    so it is visible before/after any generation and reflects the latest script/prompt. image 1 =
-                    LOCATION, image 2 = START FRAME (scenes after the first), then the characters. Each thumbnail
-                    opens fullscreen 9:16 via the shared openLightbox. */}
-                {(() => {
-                  const ip = inlinePreview[scene.id]
-                  const open = !!ip?.open
-                  return (
-                    <div className="mt-3 rounded-lg border border-border bg-muted/20" data-testid="scene-inline-preview">
-                      <button
-                        type="button"
-                        onClick={() => toggleInlinePreview(scene)}
-                        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs font-semibold text-muted-foreground hover:text-foreground"
-                        aria-expanded={open}
-                        data-testid="scene-inline-preview-toggle"
-                        title="Показать промпт и порядок референсов, которые уйдут в модель"
-                      >
-                        <span className="inline-flex items-center gap-1.5"><FileText className="h-3.5 w-3.5 shrink-0" /> Промпт и референсы</span>
-                        <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
-                      </button>
-                      {open && (
-                        <div className="border-t border-border px-3 py-3">
-                          {ip?.loading ? (
-                            <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Загрузка промпта…</div>
-                          ) : ip?.error ? (
-                            <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive" data-testid="scene-inline-preview-error">{ip.error}</p>
-                          ) : (
-                            <>
-                              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Промпт</p>
-                              <pre className="mb-3 max-h-64 w-full overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-background px-3 py-2 font-mono text-[11px] leading-relaxed" data-testid="scene-inline-preview-text">{ip?.prompt}</pre>
-                              {(ip?.references.length ?? 0) > 0 && (
-                                <div data-testid="scene-inline-preview-refs">
-                                  <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Референсы по порядку ({ip!.references.length}) — image 1…image {ip!.references.length}</p>
-                                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-                                    {ip!.references.map((r, i) => (
-                                      <button
-                                        key={`${r.url}-${i}`}
-                                        type="button"
-                                        onClick={() => openLightbox(ip!.references.map((x) => x.url), i, `image ${r.index}${r.note ? ` — ${r.note}` : ''}`)}
-                                        className="group relative aspect-[9/16] overflow-hidden rounded bg-muted"
-                                        title={r.note ? `image ${r.index} — ${r.note}` : `image ${r.index}`}
-                                        data-testid="scene-inline-preview-ref"
-                                      >
-                                        <img src={r.url} alt={`image ${r.index}`} className="h-full w-full object-cover transition group-hover:opacity-90" />
-                                        <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">image {r.index}</span>
-                                        {r.note && <span className="absolute inset-x-0 bottom-0 truncate bg-black/60 px-1 py-0.5 text-center text-[10px] text-white">{r.note}</span>}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })()}
-
                 {/* Stage 167 — per-shot generation progress. The shot is the atomic unit: the shot chain
                     generates one clip per shot (status / videoUrl below), then the assembly job stitches
                     them into the final Episode.videoUrl shown at the top of the page.
@@ -2267,7 +2122,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               <div>
                 <h3 className="flex items-center gap-2 font-display text-lg font-bold"><FileText className="h-5 w-5" /> Full prompt · Scene {promptModal.number}</h3>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  This is the exact text sent to the model. References are shown as <code className="rounded bg-muted px-1">[Image1]…[ImageN]</code>. You can copy it, edit it with your AI, and save it — the saved text will be used the next time the scene is generated (frame stitching is preserved).
+                  This is the exact prompt and the ordered reference images sent to the model: image 1 = location, image 2 = start frame (the previous scene's last frame; omitted for the first scene), then the characters. Click any reference to open it fullscreen (9:16). You can copy the text, edit it with your AI, and save it — the saved text is used the next time the scene is generated (the reference order is preserved).
                 </p>
                 {promptHasOverride && (
                   <p className="mt-2 inline-flex items-center gap-1 rounded bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary" data-testid="scene-prompt-override-indicator">Prompt changed manually</p>
@@ -2294,25 +2149,26 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   {!canManualPromptEdit && (
                     <FeatureLockBadge text="Ручная правка промпта доступна по подписке Basic" className="mt-2" />
                   )}
-                  {/* Stage 205 — the reference images actually passed to the model with this scene's last
-                      generation. They map 1:1 to the [Image1]…[ImageN] notes in the prompt above, so the
-                      author can see exactly which pictures each placeholder refers to. */}
+                  {/* Stage 240 — the ORDERED reference images the worker submits with this scene, in the exact
+                      order the model receives them (image 1 = location, image 2 = start frame, then characters).
+                      Every thumbnail opens fullscreen 9:16 via the shared openLightbox. */}
                   {promptRefs.length > 0 && (
                     <div className="mt-4" data-testid="scene-prompt-refs">
-                      <p className="mb-2 text-xs font-semibold text-muted-foreground">Passed references ({promptRefs.length}) — map to [Image1]…[Image{promptRefs.length}]</p>
-                      <div className="flex flex-wrap gap-2">
+                      <p className="mb-2 text-xs font-semibold text-muted-foreground">References in order ({promptRefs.length}) — image 1…image {promptRefs.length}</p>
+                      <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
                         {promptRefs.map((r, i) => (
-                          <figure key={`${r.url}-${i}`} className="w-20">
-                            <img
-                              src={r.url}
-                              alt={referenceKindLabel(r.kind)}
-                              title={`[Image${i + 1}] · ${referenceKindLabel(r.kind)}`}
-                              className="h-24 w-20 rounded-md border border-border object-cover"
-                            />
-                            <figcaption className="mt-1 truncate text-center text-[10px] leading-tight text-muted-foreground" title={`[Image${i + 1}] · ${referenceKindLabel(r.kind)}`}>
-                              [Image{i + 1}] {referenceKindLabel(r.kind)}
-                            </figcaption>
-                          </figure>
+                          <button
+                            key={`${r.url}-${i}`}
+                            type="button"
+                            onClick={() => openLightbox(promptRefs.map((x) => x.url), i, `image ${r.index}${r.note ? ` — ${r.note}` : ''}`)}
+                            className="group relative aspect-[9/16] overflow-hidden rounded bg-muted"
+                            title={r.note ? `image ${r.index} — ${r.note}` : `image ${r.index}`}
+                            data-testid="scene-prompt-ref"
+                          >
+                            <img src={r.url} alt={`image ${r.index}`} className="h-full w-full object-cover transition group-hover:opacity-90" />
+                            <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">image {r.index}</span>
+                            {r.note && <span className="absolute inset-x-0 bottom-0 truncate bg-black/60 px-1 py-0.5 text-center text-[10px] text-white">{r.note}</span>}
+                          </button>
                         ))}
                       </div>
                     </div>
@@ -2348,72 +2204,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                 {promptSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : promptSaved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />} {promptSaved ? 'Saved' : 'Save'}
               </button>
               <button onClick={() => setPromptModal(null)} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted">Close</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Stage 238 — pre-generation preview: the exact prompt the worker will submit + the ordered reference
-          list (image 1 = LOCATION, image 2 = START FRAME for scenes after the first, then the characters).
-          Every thumbnail opens fullscreen 9:16 via the shared openLightbox. Shown once before the first
-          generation; «Начать генерацию» proceeds, «Отмена» closes without starting. */}
-      {scenePreview && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" data-testid="scene-preview-modal">
-          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-xl border border-border bg-card shadow-xl">
-            <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
-              <div>
-                <h3 className="flex items-center gap-2 font-display text-lg font-bold"><FileText className="h-5 w-5" /> Промпт сцены {scenePreview.number}</h3>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Проверьте промпт и порядок референсов перед запуском. Это ровно тот текст и те изображения, которые уйдут в модель. Нажмите на превью, чтобы открыть его на весь экран (9:16).
-                </p>
-              </div>
-              <button onClick={() => setScenePreview(null)} className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Закрыть" data-testid="scene-preview-close"><X className="h-5 w-5" /></button>
-            </div>
-
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-              {scenePreview.loading ? (
-                <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /> Загрузка промпта…</div>
-              ) : scenePreview.error ? (
-                <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive" data-testid="scene-preview-error">{scenePreview.error}</p>
-              ) : (
-                <>
-                  <p className="mb-2 text-xs font-semibold text-muted-foreground">Промпт</p>
-                  <pre className="mb-4 max-h-[38vh] w-full overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-background px-3 py-2 font-mono text-xs leading-relaxed" data-testid="scene-preview-text">{scenePreview.prompt}</pre>
-                  {scenePreview.references.length > 0 && (
-                    <div data-testid="scene-preview-refs">
-                      <p className="mb-2 text-xs font-semibold text-muted-foreground">Референсы по порядку ({scenePreview.references.length}) — image 1…image {scenePreview.references.length}</p>
-                      <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-                        {scenePreview.references.map((r, i) => (
-                          <button
-                            key={`${r.url}-${i}`}
-                            type="button"
-                            onClick={() => openLightbox(scenePreview.references.map((x) => x.url), i, `image ${r.index}${r.note ? ` — ${r.note}` : ''}`)}
-                            className="group relative aspect-[9/16] overflow-hidden rounded bg-muted"
-                            title={r.note ? `image ${r.index} — ${r.note}` : `image ${r.index}`}
-                            data-testid="scene-preview-ref"
-                          >
-                            <img src={r.url} alt={`image ${r.index}`} className="h-full w-full object-cover transition group-hover:opacity-90" />
-                            <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">image {r.index}</span>
-                            {r.note && <span className="absolute inset-x-0 bottom-0 truncate bg-black/60 px-1 py-0.5 text-center text-[10px] text-white">{r.note}</span>}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-
-            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-5 py-4">
-              <button onClick={() => setScenePreview(null)} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted" data-testid="scene-preview-cancel">Отмена</button>
-              <button
-                onClick={confirmScenePreview}
-                disabled={scenePreview.loading || !!scenePreview.error}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50"
-                data-testid="scene-preview-confirm"
-              >
-                <Wand2 className="h-4 w-4" /> Начать генерацию
-              </button>
             </div>
           </div>
         </div>
