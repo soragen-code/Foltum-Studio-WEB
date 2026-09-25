@@ -475,6 +475,19 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     }).catch(() => {})
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Resume the START-FRAMES ("сториборд") job after a reload. The render already runs in the background
+  // (start_frames GenerationJob + runInBackground on the server), so on mount we re-attach the progress
+  // bar to any active job instead of losing it — the frames keep rendering while the page is away.
+  useEffect(() => {
+    fetch(`/api/ai/episodes/${episode.id}/start-frames`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const j = d?.job
+        if (j && (j.status === 'pending' || j.status === 'processing')) { setFramesBusy(true); framesPoll.start(j.id) }
+      })
+      .catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
 
   // ---- References: refresh characters + locations from the project, drive extra-angle follow-ups ----
   const refreshRefs = useCallback(async () => {
