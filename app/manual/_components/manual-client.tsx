@@ -91,7 +91,12 @@ function RefSlots({
       const data = await res.json()
       if (typeof data?.url === 'string') onChange([...urls, data.url].slice(0, max))
     } catch (e: any) {
-      setErr(e?.message || t('manual.uploadFailed'))
+      const code = e?.message
+      const msg =
+        code === 'DECODE_FAILED' ? t('manual.uploadDecodeFailed') :
+        code === 'TOO_LARGE' ? t('manual.uploadTooLarge') :
+        (code || t('manual.uploadFailed'))
+      setErr(msg)
     } finally {
       setUploading(false)
       if (fileRef.current) fileRef.current.value = ''

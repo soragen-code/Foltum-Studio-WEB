@@ -20,10 +20,17 @@ export async function POST(request: Request) {
   if (!ALLOWED.has(type)) return NextResponse.json({ error: "Only PNG, JPEG or WebP images are allowed" }, { status: 400 });
   if (file.size > MAX_BYTES) return NextResponse.json({ error: "File is too large (max 15 MB)" }, { status: 400 });
   const ext = type === "image/png" ? "png" : type === "image/webp" ? "webp" : "jpg";
-  const buffer = Buffer.from(await file.arrayBuffer());
-  // RULE: public assets must live under `${folderPrefix}public/...` (otherwise the bucket returns 403).
-  const { folderPrefix } = getBucketConfig();
-  const key = `${folderPrefix}public/manual/${authed.user.id}/refs/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-  const url = await uploadBufferToS3(buffer, key, type);
-  return NextResponse.json({ url });
+  // Wrap the S3 write so an infra failure surfaces as our JSON `{ error }` (not a bare
+  // 500 HTML page, which the client can't parse and shows the generic "upload failed").
+  try {
+    const buffer = Buffer.from(await file.arrayBuffer());
+    // RULE: public assets must live under `${folderPrefix}public/...` (otherwise the bucket returns 403).
+    const { folderPrefix } = getBucketConfig();
+    const key = `${folderPrefix}public/manual/${authed.user.id}/refs/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const url = await uploadBufferToS3(buffer, key, type);
+    return NextResponse.json({ url });
+  } catch (err) {
+    console.error("[manual/upload] S3 upload failed:", err);
+    return NextResponse.json({ error: "Не удалось сохранить файл на сервере. Повторите попытку." }, { status: 500 });
+  }
 }
