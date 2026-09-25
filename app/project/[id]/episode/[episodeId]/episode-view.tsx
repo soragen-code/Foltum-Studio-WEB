@@ -1371,7 +1371,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         {/* Stage 14 (D): guided steps — script → references → scenes. Stage 172: the Script step lives on its
             own page (/script); steps that belong to the OTHER page render as links that navigate between the two. */}
         <div className="mt-4 flex flex-wrap items-center gap-2 text-xs" data-testid="phase-steps">
-          {(([['script', '1 · Сценарий'], ['references', '2 · Референсы'], ['scenes', '3 · Сцены']]) as [EpisodePhase, string][]).map(([key, label]) => {
+          {(([['script', '1 · Сценарий'], ['references', '2 · Референсы'], ['scenes', '3 · Видео']]) as [EpisodePhase, string][]).map(([key, label]) => {
             // Stage 107 — References and Scenes are locked until the episode has a script.
             // Stage 129 — the Scenes step is also locked until references are ready AND a production mode is
             // chosen (canEnterProduction); legacy episodes that already have generated scenes stay reachable.
@@ -1976,7 +1976,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             </button>
           )}
           <button onClick={() => setAssembleDialogOpen(true)} disabled={!allReady || stitching} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? 'Join completed scenes into one episode' : 'Available when all scenes are ready'}>
-            {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Assemble
+            {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Монтаж
           </button>
           <span className="text-xs text-muted-foreground" data-testid="batch-status">{scenes.filter((s) => validUrl(s.videoUrl)).length} of {scenes.length} scenes ready{generatingCount > 0 ? ` · generating: ${generatingCount}` : ''}{isAssembled ? ' · episode assembled' : ''}</span>
           {/* Stage 89 — «Quality & speed» (power tier) chosen right here, before generating. One selector

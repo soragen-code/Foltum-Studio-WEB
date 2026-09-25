@@ -14,6 +14,7 @@ import { styledVisualPrompt, isStyledAsset, locationAngleImages, parseLocationEx
 import { normalizeVideoModel, videoModelSlug, type VideoModelId } from "@/lib/ai-models";
 import { matchPropsInText, type PropRegistryEntry } from "@/lib/prop-registry";
 import { stagingContinuityBlock } from "@/lib/staging-map";
+import { parseBeatMeta, buildBeatVideoPrompt } from "@/lib/simple-pipeline";
 
 /** Seedance limit. Stage 112 order: re-angle (if predecessor), cast, wide, layout, crowd. */
 export const REFERENCE_IMAGE_CAP = 30;
@@ -87,6 +88,10 @@ export interface ScenePromptScene {
    * has no effect. Kept optional so older callers / stored rows still type-check.
    */
   skipPreviousFrame?: boolean | null;
+  /** SIMPLIFIED PIPELINE — the beat descriptor (Scene.beatMeta). When present the scene uses the beat video path. */
+  beatMeta?: unknown;
+  /** SIMPLIFIED PIPELINE — this beat's start frame (Scene.startFrameUrl); the video clip's first frame. */
+  startFrameUrl?: string | null;
 }
 
 export interface ScenePromptCharacterLink {
@@ -676,6 +681,57 @@ export interface BuildScenePromptResult {
 
 export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePromptResult {
   const { scene, characters, location, previous } = input;
+
+  // ─── SIMPLIFIED PIPELINE — BEAT scene branch. ───────────────────────────────────────────────
+  // A beat scene (Scene.beatMeta) drives its clip from its own START FRAME (Scene.startFrameUrl) plus the
+  // cast's appearance anchors — NO location plate/angles are sent (the location already lives in the start
+  // frame). References ship in the order the beat prompt names: image 1 = START FRAME, image 2.. = characters.
+  const beat = parseBeatMeta(scene.beatMeta);
+  if (beat) {
+    const externalForbiddenB = new Set((input.forbiddenReferenceUrls ?? []).filter(Boolean) as string[]);
+    const refsB: (SceneReference & { id: string })[] = [];
+    const startUrl = (scene.startFrameUrl ?? "").trim();
+    const hasStart = !!startUrl && !externalForbiddenB.has(startUrl);
+    if (hasStart) refsB.push({ url: startUrl, kind: "scene", id: scene.id, note: "START FRAME — the beat's first frame (composition, location, poses, wardrobe, lighting)." });
+    const styledB = characters.filter(c => isStyledAsset(c.imageFull) || isStyledAsset(c.imageFront));
+    const orderedB = [...styledB.filter(c => c.tier !== "CROWD"), ...styledB.filter(c => c.tier === "CROWD")];
+    for (const c of orderedB) {
+      if (refsB.length >= REFERENCE_IMAGE_CAP) break;
+      refsB.push({ url: characterAnchorUrl(c), kind: c.tier === "CROWD" ? "crowd" : "character", id: c.characterId, note: characterReferenceNote(c.name) });
+    }
+    const overrideB = (scene.promptOverride ?? "").trim();
+    const hasOverrideB = overrideB.length > 0;
+    const beatPrompt = hasOverrideB
+      ? stripReferenceList(refreshCharacterLine(overrideB, characters, false)).replace(/^REFERENCE MAP:.*$/gm, "").trim()
+      : buildBeatVideoPrompt({ beat, characterNames: orderedB.map(c => c.name), hasStartFrame: hasStart });
+    const finalizeB = (p: string) => transliterateCyrillic(neutralizeTransition(p));
+    const promptB = finalizeB(beatPrompt);
+    const resolvedB = input.resolvedDialogueEn ?? (scene.dialogueEn ?? "").trim() ?? "";
+    const modelB = normalizeVideoModel(input.provider);
+    return {
+      prompt: promptB,
+      basePrompt: promptB,
+      visualPrompt: styledVisualPrompt(refreshCharacterLine(scene.videoPrompt ?? "", characters), characters.map(c => c.name)),
+      model: modelB,
+      modelSlug: videoModelSlug(modelB),
+      referenceKind: refsB.length ? "character_references" : "text_only",
+      hasOverride: hasOverrideB,
+      openingState: (beat.action ?? "").trim(),
+      endState: (beat.nextStart ?? "").trim(),
+      reference: refsB.length
+        ? { mode: "beat_references", kinds: refsB.map(r => r.kind), characterIds: refsB.filter(r => r.kind === "character" || r.kind === "crowd").map(r => r.id), locationId: null, startFrameSceneId: hasStart ? scene.id : null, beat: true }
+        : { mode: "text_only", sceneId: scene.id, reason: "beat_no_references" },
+      referenceImages: refsB.map(r => r.url),
+      retryRefs: refsB.map(({ url, kind, note }) => ({ url, kind, note })),
+      fallbackRefs: refsB.map(({ url, kind, note }) => ({ url, kind, note })),
+      previousFrameSceneId: null,
+      newSceneReference: false,
+      referencePrompt: undefined,
+      newSceneReferenceNote: undefined,
+      dialogue: resolvedB,
+      isNarration: false,
+    };
+  }
 
   // Stage 46B-0: the [CHARACTER] line always reflects the CURRENT saved character rows, never the script-time copy.
   const visualPrompt = styledVisualPrompt(refreshCharacterLine(scene.videoPrompt ?? "", characters), characters.map(c => c.name));

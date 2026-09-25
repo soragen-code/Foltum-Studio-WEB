@@ -28,6 +28,7 @@ import { runAssemblyJob } from "@/lib/workers/assembly-job";
 import { getDialogueLanguage } from "@/lib/dialogue-language";
 import { getOpenAI } from "@/lib/ai";
 import { REFERENCE_IMAGE_CAP as SHOT_REFERENCE_IMAGE_CAP, buildScenePrompt, resolveOpeningState, type SceneReference } from "@/lib/scene-prompt";
+import { parseBeatMeta } from "@/lib/simple-pipeline";
 import { finalVideoPrompt } from "@/lib/video-prompt-final";
 import type { PlannedShot } from "@/lib/prompts/shot-plan";
 import type { ShotCharacterLike } from "@/lib/prompts/shot";
@@ -343,7 +344,10 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
     // and for models that do not accept reference images (text-only path already emptied referenceImages above).
     {
       const isHttp = (u?: string | null): u is string => typeof u === "string" && u.startsWith("http") && u.length > 10;
-      if (videoDef.refImages && built.referenceKind !== "text_only" && isHttp(scene.startFrameUrl)) {
+      // SIMPLIFIED PIPELINE: a beat scene already carries its start frame (image 1) + cast from buildScenePrompt's
+      // beat branch, and its clip is location-free — so it must NOT get the grid-storyboard prepend/append here.
+      const isBeatScene = !!parseBeatMeta((scene as any).beatMeta);
+      if (!isBeatScene && videoDef.refImages && built.referenceKind !== "text_only" && isHttp(scene.startFrameUrl)) {
         const extras = [scene.startFrameUrl, ...(isHttp(episodeLoc?.gridUrl) ? [episodeLoc!.gridUrl as string] : [])];
         const scaled = await downscaleReferences(extras, projectId);
         const panelRef = scaled[0];

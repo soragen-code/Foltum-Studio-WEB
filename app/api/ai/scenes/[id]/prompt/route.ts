@@ -14,6 +14,7 @@ import {
   type SceneBlockInput,
 } from "@/lib/prompts";
 import { requireFeature } from "@/lib/entitlements";
+import { parseBeatMeta, buildBeatVideoPrompt } from "@/lib/simple-pipeline";
 
 /**
  * GET /api/ai/scenes/[id]/prompt
@@ -56,6 +57,17 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
   // Manual override wins verbatim — the worker submits it as-is.
   if (hasOverride) {
     return NextResponse.json({ prompt: scene.promptOverride!.trim(), hasOverride: true, version: scene.promptVersion ?? PROMPT_VERSION, references });
+  }
+
+  // SIMPLIFIED PIPELINE: a beat scene (Scene.beatMeta present) uses the location-free beat video prompt
+  // (start frame + cast) rather than the nine-block assembly, mirroring buildScenePrompt's beat branch.
+  const beat = parseBeatMeta((scene as { beatMeta?: unknown }).beatMeta);
+  if (beat) {
+    const startFrameUrl = (scene as { startFrameUrl?: string | null }).startFrameUrl;
+    const hasStartFrame = typeof startFrameUrl === "string" && startFrameUrl.startsWith("http");
+    const characterNames = scene.characters.map(l => l.character.name).filter(Boolean);
+    const prompt = buildBeatVideoPrompt({ beat, characterNames, hasStartFrame });
+    return NextResponse.json({ prompt, hasOverride: false, version: "beat-v1", references });
   }
 
   // No override → assemble deterministically from the nine ordered blocks.
