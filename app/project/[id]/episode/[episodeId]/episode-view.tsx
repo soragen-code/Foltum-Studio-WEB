@@ -34,6 +34,10 @@ import { ASSEMBLE_QUALITIES, ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY, DEFAULT_ASS
 
 type EpisodePhase = 'script' | 'references' | 'scenes'
 
+// Stage 238 — Storyboard is hidden behind a flag (kept in the codebase, not offered in the UI). While
+// false: the Сцены/Сториборд toggle drops the STORYBOARD option, StoryboardPanel is never rendered, and
+// any episode saved with mode==='STORYBOARD' falls back to the Scenes surface.
+const STORYBOARD_ENABLED = false
 const VIDEO_EXPECTED_SEC = 600
 // Stage 77: rough duration of a whole-episode script rewrite (drives the smooth 0→100 % bar).
 const EPISODE_REVISE_EXPECTED_SEC = 180
@@ -169,6 +173,15 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // (from the API's `references`). Shown as thumbnails in the «View prompt» modal so the [Image1]…[ImageN]
   // notes in the prompt map to real pictures. Empty until the scene has been generated at least once.
   const [promptRefs, setPromptRefs] = useState<SubmittedReference[]>([])
+  // Stage 238 — pre-generation prompt preview: before the FIRST scene generation the author sees the exact
+  // prompt the worker will submit plus the ordered reference list (image 1 = LOCATION, image 2 = START FRAME
+  // for scenes after the first, then the characters). Every thumbnail opens fullscreen 9:16 via openLightbox.
+  type PreviewRef = { index: number; url: string; kind?: string; note?: string }
+  const [scenePreview, setScenePreview] = useState<
+    { sceneId: string; number: number; loading: boolean; error: string | null; prompt: string; references: PreviewRef[]; onConfirm: () => void } | null
+  >(null)
+  // Once the author confirms the preview, the rest of this session's generations run without re-showing it.
+  const previewAcknowledged = useRef(false)
   // «"Assemble" — pure concatenation of the ready scene clips into one episode (no audit / no polish / no re-gen).
   const [stitching, setStitching] = useState(false)
   // Stage 46B: «"Assemble" opens a dialog — production quality / fps of the FINAL file (scenes are always 480p);
@@ -282,7 +295,12 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // swaps the Scenes UI for the storyboard panel and lifts the keyframe/i2v ban; `null` (legacy) → SCENES.
   // Stage 129 — the fork is offered ONLY after references are ready (see the References step), and production
   // stays locked until a mode is chosen (canChooseMode / canEnterProduction).
-  const [mode, setMode] = useState<ProductionMode | null>((initial.mode as any) ?? null)
+  // Stage 238 — a legacy episode saved as STORYBOARD falls back to SCENES while the storyboard is disabled.
+  const [mode, setMode] = useState<ProductionMode | null>(() => {
+    const saved = (initial.mode as any) ?? null
+    if (!STORYBOARD_ENABLED && saved === 'STORYBOARD') return 'SCENES'
+    return saved
+  })
   const [modeSaving, setModeSaving] = useState(false)
   const chooseMode = async (m: ProductionMode) => {
     if (m === mode || modeSaving) return
@@ -299,7 +317,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // Video generation mode (available AFTER the storyboard): "scene" (default — 1 scene = 1 clip) or the
   // optional «Шоты» mode (the shot is the atomic unit). Switching to «Шоты» builds the shot plan up front
   // (a FREE text-only LLM call) — it NEVER starts paid rendering; the producer generates video afterwards.
-  const [genMode, setGenMode] = useState<'scene' | 'shots'>(((initial.generationMode as any) === 'shots') ? 'shots' : 'scene')
+  // Stage 238 — «Шоты» is removed from the UI: generation is always scene-with-references (genMode='scene').
+  // The shot pipeline stays in the codebase, it is simply no longer offered as a choice.
+  const [genMode, setGenMode] = useState<'scene' | 'shots'>('scene')
   const [genModeSaving, setGenModeSaving] = useState(false)
   const [genModeNote, setGenModeNote] = useState<string | null>(null)
   const chooseGenerationMode = async (m: 'scene' | 'shots') => {
@@ -1070,6 +1090,43 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     }
   }
 
+  // Stage 238 — open the pre-generation preview for a scene and load its ACTUAL submitted prompt + ordered
+  // references from /api/ai/scenes/[id]/video-prompt (the same builder the video worker uses). `onConfirm`
+  // runs the real generation once the author approves.
+  const openScenePreview = async (sceneId: string, number: number, onConfirm: () => void) => {
+    setScenePreview({ sceneId, number, loading: true, error: null, prompt: '', references: [], onConfirm })
+    try {
+      const res = await fetch(`/api/ai/scenes/${sceneId}/video-prompt`)
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || 'Не удалось загрузить промпт')
+      const refs = Array.isArray(data.references)
+        ? (data.references as PreviewRef[]).filter((r) => r && typeof r.url === 'string')
+        : []
+      setScenePreview((p) => (p && p.sceneId === sceneId ? { ...p, loading: false, prompt: String(data.prompt ?? ''), references: refs } : p))
+    } catch (e: any) {
+      setScenePreview((p) => (p && p.sceneId === sceneId ? { ...p, loading: false, error: e?.message ?? 'Ошибка загрузки' } : p))
+    }
+  }
+  const confirmScenePreview = () => {
+    const p = scenePreview
+    setScenePreview(null)
+    previewAcknowledged.current = true
+    p?.onConfirm()
+  }
+  // Per-scene «Generate»: show the preview before the very first generation of this session, then proceed.
+  const requestGenerateScene = (scene: Scene) => {
+    if (!previewAcknowledged.current) { void openScenePreview(scene.id, scene.number, () => generateScene(scene.id, true)); return }
+    generateScene(scene.id, true)
+  }
+  // «Generate all scenes»: after the cost dialog, preview the first not-yet-rendered scene, then start the chain.
+  const requestGenerateAll = () => {
+    if (!previewAcknowledged.current) {
+      const first = scenes.find((s) => !validUrl(s.videoUrl)) ?? scenes[0]
+      if (first) { setGenAllAsk(null); void openScenePreview(first.id, first.number, () => generateAllScenes()); return }
+    }
+    generateAllScenes()
+  }
+
   // Copy the ENTIRE episode script (all scenes: heading, action, every dialogue turn) and flash «Скопировано».
   const copyScript = async () => {
     try {
@@ -1559,7 +1616,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             <div className="mt-5 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-background p-4" data-testid="mode-selector">
               <span className="text-sm font-medium">Режим сборки эпизода:</span>
               <div className="inline-flex overflow-hidden rounded-lg border border-border text-sm" role="group" aria-label="Режим сборки">
-                {([['SCENES', 'Сцены'], ['STORYBOARD', 'Сториборд']] as const).map(([val, label]) => {
+                {(([['SCENES', 'Сцены'], ['STORYBOARD', 'Сториборд']] as const).filter(([val]) => STORYBOARD_ENABLED || val !== 'STORYBOARD')).map(([val, label]) => {
                   const active = mode === val
                   return (
                     <button key={val} type="button" onClick={() => chooseMode(val)} disabled={modeSaving} aria-pressed={active}
@@ -1572,7 +1629,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               </div>
               {modeSaving && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
               <p className="w-full text-xs text-muted-foreground">
-                <b>Сцены</b> — классический режим: 9 сцен со сменой ракурса, без стартового кадра (text-to-video). <b>Сториборд</b> — история делится на 12–15 кадров, каждый кадр-изображение оживляется в клип через image-to-video и склеивается в ролик ~90с. Выберите режим, чтобы продолжить.
+                {STORYBOARD_ENABLED
+                  ? <><b>Сцены</b> — классический режим: 9 сцен со сменой ракурса, без стартового кадра (text-to-video). <b>Сториборд</b> — история делится на 12–15 кадров, каждый кадр-изображение оживляется в клип через image-to-video и склеивается в ролик ~90с. Выберите режим, чтобы продолжить.</>
+                  : <><b>Сцены</b> — сцены с референсами: локация и персонажи подаются в строгом порядке, каждая сцена продолжает предыдущую по стартовому кадру. Нажмите «Сцены», чтобы продолжить.</>}
               </p>
             </div>
           )}
@@ -1601,7 +1660,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4" data-testid="mode-indicator">
           <span className="text-sm font-medium">Режим сборки эпизода:</span>
           <div className="inline-flex overflow-hidden rounded-lg border border-border text-sm" role="group" aria-label="Режим сборки">
-            {([['SCENES', 'Сцены'], ['STORYBOARD', 'Сториборд']] as const).map(([val, label]) => {
+            {(([['SCENES', 'Сцены'], ['STORYBOARD', 'Сториборд']] as const).filter(([val]) => STORYBOARD_ENABLED || val !== 'STORYBOARD')).map(([val, label]) => {
               const active = productionSurface(mode) === productionSurface(val)
               return (
                 <button key={val} type="button" onClick={() => chooseMode(val)} disabled={modeSaving} aria-pressed={active}
@@ -1614,40 +1673,17 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           </div>
           {modeSaving && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
           <span className="text-xs text-muted-foreground" data-testid="mode-current" data-mode={productionSurface(mode)}>
-            Текущий режим: <b>{productionSurface(mode) === 'storyboard' ? 'Сториборд' : 'Сцены'}</b>. Выбор сохраняется автоматически.
+            Текущий режим: <b>{STORYBOARD_ENABLED && productionSurface(mode) === 'storyboard' ? 'Сториборд' : 'Сцены'}</b>. Выбор сохраняется автоматически.
           </span>
         </div>
 
-        {productionSurface(mode) === 'storyboard' ? (
+        {STORYBOARD_ENABLED && productionSurface(mode) === 'storyboard' ? (
           <StoryboardPanel projectId={project.id} episodeId={episode.id} initialVideoUrl={episode.videoUrl} />
         ) : (
         <>
-        {/* Video generation mode — offered after the storyboard. Default «Сцены»: 1 сцена = 1 клип.
-            Optional «Шоты»: shot-by-shot control. Switching to «Шоты» only builds the (free) shot plan —
-            it never starts paid rendering; the producer runs generation with the buttons below. */}
-        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4" data-testid="generation-mode-indicator">
-          <span className="text-sm font-medium">Режим генерации видео:</span>
-          <div className="inline-flex overflow-hidden rounded-lg border border-border text-sm" role="group" aria-label="Режим генерации">
-            {([['scene', 'Сцены'], ['shots', 'Шоты']] as const).map(([val, label]) => {
-              const active = genMode === val
-              return (
-                <button key={val} type="button" onClick={() => chooseGenerationMode(val)} disabled={genModeSaving || chainRunActive} aria-pressed={active}
-                  className={`px-4 py-1.5 font-medium transition disabled:opacity-50 ${active ? 'bg-primary text-primary-foreground' : 'bg-card hover:bg-muted'}`}
-                  data-testid={`generation-mode-${val}`}
-                  title={val === 'shots' ? 'Покадровый контроль: эпизод разбивается на шоты (по одному шоту за раз)' : 'По умолчанию: одна сцена = один клип'}>
-                  {label}
-                </button>
-              )
-            })}
-          </div>
-          {genModeSaving && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-          <span className="text-xs text-muted-foreground" data-testid="generation-mode-current" data-genmode={genMode}>
-            {genMode === 'shots'
-              ? 'Режим «Шоты»: эпизод генерируется по шотам. Единица генерации — шот.'
-              : 'Режим «Сцены» (по умолчанию): одна сцена = один клип.'}
-          </span>
-          {genModeNote && <span className="w-full text-xs text-muted-foreground" data-testid="generation-mode-note">{genModeNote}</span>}
-        </div>
+        {/* Stage 238 — the «Сцены»/«Шоты» generation-mode selector is removed: generation is always
+            scene-with-references (genMode is fixed to 'scene'). The shot pipeline remains in the codebase but
+            is no longer offered in the UI. chooseGenerationMode / genModeNote are kept for the shot code path. */}
 
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
           {/* Stage 59 navigation — Scenes is step 3: back to references. */}
@@ -1874,7 +1910,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                     ) : !ready ? (
                       <div className="flex w-full flex-col gap-1">
                         <button
-                          onClick={() => generateScene(scene.id, true)}
+                          onClick={() => requestGenerateScene(scene)}
                           disabled={sceneLocked}
                           className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
                           data-testid="scene-generate"
@@ -2024,7 +2060,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             </p>
             <div className="mt-4 flex justify-end gap-2">
               <button onClick={() => setGenAllAsk(null)} className="rounded-lg border border-border px-3 py-1.5 text-sm">Cancel</button>
-              <button onClick={generateAllScenes} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="generate-all-ok">
+              <button onClick={requestGenerateAll} className="inline-flex items-center gap-1 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50" data-testid="generate-all-ok">
                 <Wand2 className="h-4 w-4" /> Start
               </button>
             </div>
@@ -2202,6 +2238,72 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                 {promptSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : promptSaved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />} {promptSaved ? 'Saved' : 'Save'}
               </button>
               <button onClick={() => setPromptModal(null)} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Stage 238 — pre-generation preview: the exact prompt the worker will submit + the ordered reference
+          list (image 1 = LOCATION, image 2 = START FRAME for scenes after the first, then the characters).
+          Every thumbnail opens fullscreen 9:16 via the shared openLightbox. Shown once before the first
+          generation; «Начать генерацию» proceeds, «Отмена» closes without starting. */}
+      {scenePreview && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" data-testid="scene-preview-modal">
+          <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-xl border border-border bg-card shadow-xl">
+            <div className="flex items-start justify-between gap-3 border-b border-border px-5 py-4">
+              <div>
+                <h3 className="flex items-center gap-2 font-display text-lg font-bold"><FileText className="h-5 w-5" /> Промпт сцены {scenePreview.number}</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Проверьте промпт и порядок референсов перед запуском. Это ровно тот текст и те изображения, которые уйдут в модель. Нажмите на превью, чтобы открыть его на весь экран (9:16).
+                </p>
+              </div>
+              <button onClick={() => setScenePreview(null)} className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground" aria-label="Закрыть" data-testid="scene-preview-close"><X className="h-5 w-5" /></button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+              {scenePreview.loading ? (
+                <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /> Загрузка промпта…</div>
+              ) : scenePreview.error ? (
+                <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive" data-testid="scene-preview-error">{scenePreview.error}</p>
+              ) : (
+                <>
+                  <p className="mb-2 text-xs font-semibold text-muted-foreground">Промпт</p>
+                  <pre className="mb-4 max-h-[38vh] w-full overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-background px-3 py-2 font-mono text-xs leading-relaxed" data-testid="scene-preview-text">{scenePreview.prompt}</pre>
+                  {scenePreview.references.length > 0 && (
+                    <div data-testid="scene-preview-refs">
+                      <p className="mb-2 text-xs font-semibold text-muted-foreground">Референсы по порядку ({scenePreview.references.length}) — image 1…image {scenePreview.references.length}</p>
+                      <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                        {scenePreview.references.map((r, i) => (
+                          <button
+                            key={`${r.url}-${i}`}
+                            type="button"
+                            onClick={() => openLightbox(scenePreview.references.map((x) => x.url), i, `image ${r.index}${r.note ? ` — ${r.note}` : ''}`)}
+                            className="group relative aspect-[9/16] overflow-hidden rounded bg-muted"
+                            title={r.note ? `image ${r.index} — ${r.note}` : `image ${r.index}`}
+                            data-testid="scene-preview-ref"
+                          >
+                            <img src={r.url} alt={`image ${r.index}`} className="h-full w-full object-cover transition group-hover:opacity-90" />
+                            <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">image {r.index}</span>
+                            {r.note && <span className="absolute inset-x-0 bottom-0 truncate bg-black/60 px-1 py-0.5 text-center text-[10px] text-white">{r.note}</span>}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-5 py-4">
+              <button onClick={() => setScenePreview(null)} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-muted" data-testid="scene-preview-cancel">Отмена</button>
+              <button
+                onClick={confirmScenePreview}
+                disabled={scenePreview.loading || !!scenePreview.error}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-sm text-primary-foreground disabled:opacity-50"
+                data-testid="scene-preview-confirm"
+              >
+                <Wand2 className="h-4 w-4" /> Начать генерацию
+              </button>
             </div>
           </div>
         </div>

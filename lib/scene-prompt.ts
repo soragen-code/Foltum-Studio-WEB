@@ -667,10 +667,36 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     : ((scene.dialogueEn ?? "").trim() || scene.dialogue || "");
   const dialogue = isNarration ? "" : resolved;
 
-  // Stage 51/53 — reference SELECTION (single full-body anchor per character, all location angles,
-  // crowds). Moved up in Stage 54 so the REFERENCE MAP / PEOPLE / PROPS sections can name what is sent.
-  // The selection logic itself is UNCHANGED (see the strategy note further down).
-  const anchorUrl = characterAnchorUrl;
+  // ─── Stage 238 — NEW scene prompt template + strict reference order. ──────────────────────────
+  // The scene prompt is now a fixed, self-contained English template. References ship in a strict
+  // order that matches the "image N" numbers written into the prompt:
+  //   image 1 = LOCATION (the room-layout plate),
+  //   image 2 = START FRAME (the previous scene's last frame; OMITTED for the first scene → the
+  //             numbering shifts up so characters begin at image 2),
+  //   image 3..N = the scene's characters (appearance-only anchors).
+  // No AUDIO / PACE / NEGATIVES / REFERENCE MAP blocks are appended — the template is complete.
+  type NewRef = SceneReference & { id: string };
+  const externalForbidden = new Set((input.forbiddenReferenceUrls ?? []).filter(Boolean) as string[]);
+  const refs: NewRef[] = [];
+  const settingLines: string[] = [];
+  const characterLines: string[] = [];
+
+  // image 1 — LOCATION (master wide plate; layout plate as fallback).
+  const locationUrl = location ? ((location.imageUrl ?? "").trim() || (location.imageReverse ?? "").trim()) : "";
+  if (locationUrl && !externalForbidden.has(locationUrl)) {
+    refs.push({ url: locationUrl, kind: "location", id: location!.id, note: `LOCATION plate for "${location!.name}".` });
+    settingLines.push(`image ${refs.length} — LOCATION: the only source of the room layout. Read strictly from it where every object is relative to the others. Do not add, remove or move anything.`);
+  }
+
+  // image 2 — START FRAME (the previous scene's last frame). Omitted for the first scene.
+  const startFrameUrl = (previous?.lastFrameUrl ?? "").trim();
+  const hasStartFrame = !!startFrameUrl && !externalForbidden.has(startFrameUrl);
+  if (hasStartFrame) {
+    refs.push({ url: startFrameUrl, kind: "scene", id: previous!.id, note: "START FRAME — the last frame of the previous scene." });
+    settingLines.push(`image ${refs.length} — START FRAME: the last frame of the previous scene. Take from it ONLY the characters' positions in the location, their poses and the action they are in the middle of at the first frame. Do not take appearance, wardrobe, lighting or framing from it.`);
+  }
+
+  // image 3..N — characters (appearance only). Mentioned individuals first, then the rest, then crowds.
   const styled = characters.filter(c => isStyledAsset(c.imageFull) || isStyledAsset(c.imageFront));
   const individualsAll = styled.filter(c => c.tier !== "CROWD");
   const crowds = styled.filter(c => c.tier === "CROWD");
@@ -679,269 +705,76 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     const n = name.trim().toLowerCase();
     return n.length > 0 && mentionText.includes(n);
   };
-  const mentioned = individualsAll.filter(c => isMentioned(c.name));
-  const unmentioned = individualsAll.filter(c => !isMentioned(c.name));
-  const individuals = [...mentioned, ...unmentioned];
-  const locationAngles = location ? [{ url: location.imageUrl, angle: "wide" }, { url: location.imageReverse, angle: "layout" }].filter((a): a is { url: string; angle: string } => !!a.url) : [];
-  // Stage 44 — the extra angles of the same photographed place are references too (within the cap).
-  const locationExtras: string[] = []; // Only the mandatory wide + layout plates.
-  const effectiveLocation = locationAngles.length ? location : null;
-  type Ref = SceneReference & { id: string };
-  const characterRefs: Ref[] = individuals.map(c => ({ url: anchorUrl(c), kind: "character", id: c.characterId, note: characterReferenceNote(c.name) }));
-  const locationRefs: Ref[] = [
-    ...locationAngles.map(a => ({ url: a.url, angle: a.angle as string })),
-    ...(effectiveLocation ? locationExtras.map((url, i) => ({ url, angle: locationExtraLabel(i) })) : []),
-  ].map(a => ({ url: a.url, kind: "location" as const, id: effectiveLocation!.id, note: locationReferenceNote(effectiveLocation!.name, a.angle) }));
-  // Stage 116 — in an ACTION scene a crowd that actually takes part in the fight (its name appears in the
-  // scene's action / prompt / dialogue) is an ACTIVE OPPONENT in contact with the hero, NOT background: its
-  // reference is promoted next to the leads (ahead of the location plates) and carries an opponent note, so the
-  // model animates the creature / pack fighting the hero rather than treating it as a backdrop of extras.
-  const isActionScene = !isNarration && scene.sceneKind === "action";
-  const combatMentionText = `${scene.videoPrompt ?? ""}\n${dialogue}\n${scene.action ?? ""}`.toLowerCase();
-  const isCombatCrowd = (c: ScenePromptCharacterLink) => {
-    const n = c.name.trim().toLowerCase();
-    return isActionScene && n.length > 0 && combatMentionText.includes(n);
-  };
-  const combatCrowds = crowds.filter(isCombatCrowd);
-  const backgroundCrowds = crowds.filter(c => !isCombatCrowd(c));
-  const crowdRefOf = (c: ScenePromptCharacterLink): Ref => ({
-    url: anchorUrl(c),
-    kind: "crowd",
-    id: c.characterId,
-    note: isCombatCrowd(c)
-      ? `defines the look of "${c.name}" — an ACTIVE OPPONENT in this fight, in direct physical contact with the hero (advancing, lunging, swiping, grabbing, surrounding), NOT background extras: stage them attacking and colliding with the hero in the same frame.`
-      : `defines the look of the group "${c.name}" (extras): who they are and how they are dressed.`,
-  });
-  const combatCrowdRefs: Ref[] = combatCrowds.map(crowdRefOf);
-  const backgroundCrowdRefs: Ref[] = backgroundCrowds.map(crowdRefOf);
-  // Stage 44 — the BASE photographed angles vs the extra angles are separated so the Stage 62 last-frame
-  // ref can be prioritized above the extras (and above crowds) but not above the base angles.
-  const baseLocationRefs = locationRefs.slice(0, locationAngles.length);
-  // TZ: only one location ref ships per scene now, so the former "extra angles" tier is no longer
-  // assembled into the batch; the master wide plate is the lowest-priority location fallback.
-  const forbidden = new Set([previous?.lastFrameUrl, ...(input.forbiddenReferenceUrls ?? [])].filter(Boolean));
-  const reangleUrl = (input.reangleUrl ?? "").trim();
-  if (reangleUrl && forbidden.has(reangleUrl)) throw new Error("The raw last frame cannot be a video reference.");
-  const openingRefs: Ref[] = reangleUrl ? [{ url: reangleUrl, kind: "reangle", id: scene.id, note: REANGLE_REFERENCE_NOTE }] : [];
-  // Stage 122 — the pre-generated REGION PLATE (when present) leads the location-geometry tier as the PRIMARY,
-  // non-droppable environment/background authority for this scene's part of the room, ahead of the master plates.
-  // It is not forbidden, not a duplicate of the re-angle frame, and never the first frame; it imposes no pose/camera.
-  const regionPlateUrl = (input.regionPlateUrl ?? "").trim();
-  const hasRegionPlate = !!regionPlateUrl && !forbidden.has(regionPlateUrl) && regionPlateUrl !== reangleUrl;
-  const regionPlateRefs: Ref[] = hasRegionPlate && effectiveLocation
-    ? [{ url: regionPlateUrl, kind: "location", id: effectiveLocation.id, note: REGION_PLATE_NOTE }]
-    : [];
-  // Stage 123 — the pre-generated SUB-LOCATION angle reference (when present) is an additional non-droppable
-  // LOCATION VISUAL reference for the exact spot of this scene, placed AFTER the region plate (which stays the
-  // primary geometry authority) and ahead of the master plates. Skipped when it duplicates the region plate or the
-  // re-angle frame, or is forbidden — so the same environment image is never attached twice.
-  const subLocationRefUrl = (input.subLocationRefUrl ?? "").trim();
-  const hasSubLocationRef =
-    !!subLocationRefUrl &&
-    !forbidden.has(subLocationRefUrl) &&
-    subLocationRefUrl !== reangleUrl &&
-    subLocationRefUrl !== regionPlateUrl;
-  const subLocationRefs: Ref[] = hasSubLocationRef && effectiveLocation
-    ? [{ url: subLocationRefUrl, kind: "location", id: effectiveLocation.id, note: SUB_LOCATION_REF_NOTE }]
-    : [];
-  // Stage 116 — combat crowds sit right after the leads (ahead of the location plates) so they are treated as
-  // fighters and are never the first refs dropped at the cap; passive background crowds stay last as extras.
-  // Stage 119 — reference priority tiers for the cap. The master location plates (wide + layout) join the
-  // re-angle frame, the cast and the combat opponents as NON-DROPPABLE environment anchors, so every clip is
-  // reconstructed from the SAME plates and the room never drifts. Only passive background-crowd extras (then
-  // any extra location angles) are trimmed to fit REFERENCE_IMAGE_CAP — instead of failing the whole build.
-  // Stage 122 — the region plate (if any) leads the location tier, ahead of the master wide/layout plates, and is
-  // itself non-droppable: it is the primary environment authority, the masters remain as backing geometry truth.
-  // TZ: EXACTLY ONE location reference per scene. The three location tiers — the SUB-LOCATION angle of the
-  // exact spot (Stage 123), the REGION PLATE of this part of the room (Stage 122) and the master WIDE plate —
-  // are all controlled re-frames of the SAME photographed location, so historically up to three near-identical
-  // location images shipped with every clip (the "location ref passed 3 times" the producer sees). Collapse
-  // them to a single, most scene-specific plate: sub-location ref → region plate → master wide. The kept ref's
-  // own note (SUB_LOCATION_REF_NOTE / REGION_PLATE_NOTE / location angle note) still travels in the REFERENCE MAP.
-  const locationTier = [...subLocationRefs, ...regionPlateRefs, ...baseLocationRefs].slice(0, 1);
-  const keptLocationKind: "subloc" | "region" | "master" | "none" =
-    subLocationRefs.length ? "subloc" : regionPlateRefs.length ? "region" : baseLocationRefs.length ? "master" : "none";
-  const anchorRefs = [...openingRefs, ...characterRefs, ...combatCrowdRefs, ...locationTier].filter(r => !forbidden.has(r.url));
-  const droppableRefs = [...backgroundCrowdRefs].filter(r => !forbidden.has(r.url));
-  if (anchorRefs.length > REFERENCE_IMAGE_CAP) throw new Error("Too many required video references. Reduce the scene cast.");
-  const room = Math.max(0, REFERENCE_IMAGE_CAP - anchorRefs.length);
-  const ordered = [...anchorRefs, ...droppableRefs.slice(0, room)];
-  const fallbackRefs: SceneReference[] = ordered.map(({ url, kind, note }) => ({ url, kind, note }));
-
-  // Stage 54 — deterministic sectioned signals injected into the auto prompt (see helpers above):
-  //  • REFERENCE MAP  — which attached image is who (identity binding before the action);
-  //  • PEOPLE IN FRAME — the exact people counter from the ACTUAL cast (main "how many" signal);
-  //  • CLOTHING & PROPS — the episode registry props shown in THIS scene, substituted VERBATIM;
-  //  • NEGATIVES — the fixed do-not block (appended after the body).
-  const skipReferences = false; // Legacy text-only switches cannot bypass the approved chain.
-  const matchedProps = matchPropsInText(input.props ?? [], mentionText);
-  const referenceMap = ""; // Generated from the ACTUAL ordered refs below, including overrides.
-  const peopleCounter = buildPeopleCounter(characters.filter(c => c.tier !== "CROWD"), characters.some(c => c.tier === "CROWD"));
-  const propsSection = buildPropsSection(matchedProps);
-  // Stage 113 — the location's set objects this scene uses (matched against the scene text), with placement.
-  const setSection = buildSetObjectsSection(matchSetInventoryInText(location?.setInventory, `${mentionText}\n${scene.action ?? ""}`.toLowerCase()));
-  const structureBlock = [referenceMap, peopleCounter, propsSection, setSection].filter(Boolean).join("\n");
-  const negativesBlock = buildNegatives(isNarration);
-
-  // Stage 38: an "action" scene (fight / duel / chase / physical struggle) gets the combat pace &
-  // staging block INSTEAD of the talking-scene PACE_DIRECTION; a dialogue scene gets PACE_DIRECTION
-  // plus the universal "confrontation is staged face to face" sentence. Narration is unchanged.
-  const isAction = !isNarration && scene.sceneKind === "action";
-  // Stage 149 — modular direction tail. The full two-party dialogue staging (PACE_DIRECTION with its
-  // eyeline / framing / performance rules) is emitted only when 2+ DISTINCT speakers actually converse;
-  // a single-speaker / soliloquy clip gets the compact SINGLE_SPEAKER_DIRECTION instead. The
-  // CONFRONTATION staging sentence is added only for a confrontation / fight beat, never on calm talk.
-  const speakerCount = distinctSpeakerCount(dialogue);
-  const twoParty = speakerCount >= 2;
-  const confront = !isNarration && isConfrontation(scene);
-  const interior = isInteriorLocation(scene.locationDesc, locationAngles.length > 0);
-  // Stage 150 — proxemics for a SHORT line delivered in passing: when a moving/passing character has a
-  // single short line, emit PASSING_SHORT_LINE_DIRECTION so they call it over the shoulder instead of
-  // closing to point-blank range and freezing the other person into a face-off (Scene-3 bug). Conservative:
-  // normal stationary dialogue, long lines and multi-line exchanges are unaffected.
-  const passingLine = !isNarration && isPassingShortLine({ dialogue, action: scene.action, videoPrompt: scene.videoPrompt });
-  // Stage 164 — a TALKING scene is any on-screen dialogue clip (not pure narration/voiceover, not an
-  // action/fight beat). While anyone speaks the shot must stay a close dialogue framing — never a wide /
-  // establishing / group shot — and only two or three characters converse (no crowd). Emitted as a tail module.
-  const talking = !isNarration && !isAction;
-  const direction = isNarration
-    ? PACE_DIRECTION
-    : isAction
-      ? ACTION_PACE_DIRECTION
-      : twoParty
-        ? (confront ? `${PACE_DIRECTION} ${CONFRONTATION_STAGING_SENTENCE}` : PACE_DIRECTION)
-        : (confront ? `${SINGLE_SPEAKER_DIRECTION} ${CONFRONTATION_STAGING_SENTENCE}` : SINGLE_SPEAKER_DIRECTION);
-  // Stage 40 — scripted / actual end-state hand-off: when this scene continues the previous one
-  // (not a location-change / new-sequence), the previous scene's end state opens the prompt so the
-  // model starts frame 1 exactly where the last clip ended. The previous frame IMAGE is still never sent.
-  // Stage 41 — the scene's own scripted END STATE follows the OPENING STATE block so the model knows
-  // both where frame 1 starts and where the last frame must end.
-  const openingState = reangleUrl ? oneLine(previous?.endStateActual) || null : resolveOpeningState(scene, previous);
-  const endState = resolveEndState(scene);
-  // Stage 44 — match cut on action: on a continuous seam the opening WORLD is the previous shot's final
-  // instant while the CAMERA is new; the directive line makes that explicit for the video model.
-  const continuousSeam = !!previous && !breaksSequence(scene.continuesFrom) && !!openingState;
-  const stateBlocks = [
-    // Fix 1 — SINGLE camera authority: this line opens the block so it is read before any continuity /
-    // environment / staging rule, subordinating every "camera is free" phrase below to the one PACE/CAMERA/
-    // FRAMING direction that closes the prompt. The match-cut engine (NEW_CAMERA_ON_CUT_LINE) is preserved.
-    CAMERA_AUTHORITY_LINE,
-    // Stage 149 — the emitted OPENING/END STATE keeps only the positive "IN FRAME" roster; the
-    // screenwriter's "NOT IN FRAME: <names>" clause is stripped so the absent cast is never named
-    // (naming them tends to summon them). The stored state (returned below) is untouched.
-    openingState ? `${OPENING_STATE_PREFIX}${stripNotInFrame(openingState)}` : "",
-    continuousSeam && !reangleUrl ? NEW_CAMERA_ON_CUT_LINE : "",
-    endState ? `${END_STATE_PREFIX}${stripNotInFrame(endState)}` : "",
-    // Stage 118 — enforce cast continuity whenever this shot continues from a previous one
-    // (continuous seam) or is a re-angle of an existing frame: the on-screen group never silently swaps.
-    continuousSeam || reangleUrl ? CAST_CONTINUITY_LINE : "",
-    // Stage 120 — on a continuing shot the action is NOT reset on the seam: the motion carries on from the
-    // same phase/direction through the hard cut (no fade), the dialogue may continue, only the camera jumps.
-    continuousSeam || reangleUrl ? ACTION_CONTINUES_ACROSS_CUT_LINE : "",
-    // Fix 2 — prop / object continuity across the cut: hand-held and moveable objects carry over the seam
-    // unchanged (same items, same hands / spots); nothing vanishes, swaps or teleports between clips unless the
-    // action shows it. Complements CAST_CONTINUITY_LINE (people) and SURFACE_PROPS_IMMUTABLE_LINE (set dressing).
-    continuousSeam || reangleUrl ? PROP_CONTINUITY_LINE : "",
-    // Stage 126 — on a continuing shot the characters KEEP their screen sides (line of action / 180-degree rule):
-    // the left/right arrangement is carried over from the previous shot's last frame (read from openingState),
-    // and the axis rule forbids the camera from crossing the line so people swap sides — WITHOUT locking the
-    // camera (any angle/height/scale stays allowed) and without breaking EYELINES CONNECT.
-    continuousSeam || reangleUrl
-      ? stagingContinuityBlock(openingState, characters.filter(c => c.tier !== "CROWD").map(c => c.name))
-      : "",
-    SPEECH_BEFORE_CUT_LINE,
-    NO_FROZEN_PADDING_LINE,
-    REFERENCE_APPEARANCE_ONLY_LINE,
-    // Stage 120 — in a dialogue shot, eyelines connect: the speaker looks at whoever they address (head/eyes
-    // turned to the listener, natural angles, never to camera, never a static face-to-face stand-off).
-    // Stage 149 — EYELINES CONNECT is a two-party rule: only emit it when 2+ distinct speakers converse.
-    twoParty ? GAZE_AT_LISTENER_LINE : "",
-    // Stage 150 — proxemics for a short line in passing: the moving speaker calls the line over the
-    // shoulder at a natural distance instead of closing to point-blank range and freezing the listener
-    // into a face-off. Emitted ONLY for the passing-short-line case; stationary dialogue is unaffected.
-    passingLine ? PASSING_SHORT_LINE_DIRECTION : "",
-    // Stage 164 — universal no-wide-shot-while-speaking rule: for every talking scene the shot stays a close
-    // dialogue framing (never wide / establishing / group), and only two or three characters converse (no crowd).
-    // Emitted for talking scenes only; narration and action beats are unaffected.
-    talking ? DIALOGUE_FRAMING_RULE : "",
-    // Stage 119/122 — whenever the shot has master location plates attached, anchor the environment so the
-    // fixed set objects (bench, floor, columns, fixtures, large props) stay identical across every clip. When a
-    // pre-generated REGION PLATE is also attached, it becomes the PRIMARY environment authority for this part of
-    // the room (it already re-frames the master plates onto this region), so its stronger line REPLACES the master
-    // anchor line here — this keeps the prompt from carrying two overlapping environment blocks.
-    // Stage 149 — the wall / architecture / layout constancy anchor is an INTERIOR-only rule: emit it
-    // only for interior locations (exteriors — streets, rooftops — have no fixed room to hold constant).
-    // TZ: only ONE location ref ships, so the anchor line must describe the ref that was actually kept
-    // (keptLocationKind). Claiming "the attached region plate" while the region image was dropped would
-    // point the model at an image that is not in the batch. Region line only when the region plate is kept.
-    interior && keptLocationKind === "region" ? REGION_PLATE_ANCHOR_LINE : (interior && keptLocationKind !== "none" ? LOCATION_ANCHOR_LINE : ""),
-    // Stage 126 — whenever the environment is anchored (region plate or master plates), the small props resting
-    // on tables/counters/desks/shelves are immutable set dressing: the same objects in the same spots in every
-    // shot, re-invented never, changing only when the on-screen action moves them. Carried between scenes of the
-    // same location because the location's fixed inventory is identical in every scene there.
-    // Stage 149 — TABLE/SURFACE props constancy is likewise interior-only.
-    interior && keptLocationKind !== "none" ? SURFACE_PROPS_IMMUTABLE_LINE : "",
-  ].filter(Boolean);
-  // Stage 54 — the deterministic structure block (reference map + people counter + clothing&props)
-  // sits AFTER the state blocks and BEFORE the reused 9-tag body, so the prompt still opens with the
-  // OPENING/END STATE prefixes (Stage 40/41) and the body still begins with "\n\n[SHOT TYPE]".
-  const statesJoined = stateBlocks.length ? stateBlocks.join("\n") : "";
-  const preBody = [statesJoined, structureBlock].filter(Boolean).join("\n\n");
-  const visualWithOpening = preBody
-    ? `${preBody}\n\n${stripSlowDirections(visualPrompt)}`
-    : stripSlowDirections(visualPrompt);
-  // Sanitize visual descriptions BEFORE adding speech: never rewrite scripted dialogue / narration.
-  let prompt = isNarration
-    ? `${buildNarrationAudioPrompt(visualWithOpening, scene.voiceover)}\n\n${direction}`
-    : `${buildNativeAudioPrompt(visualWithOpening, dialogue, characters.map(c => ({ name: c.name })), targetLanguage, { action: isAction })}\n\n${direction}`;
-  // Stage 32: the assembled prompt is submitted VERBATIM — no moderation softening. The season
-  // script now writes the real physical/dramatic action on purpose, so auto-softening here would
-  // undo it. If the provider rejects an individual shot (E005) the job fails fast and the producer
-  // fixes that scene by hand via a manual per-scene override (Stage 30/31).
-  // A manual override replaces the auto-assembled TEXT verbatim and suppresses the `[ImageN]` notes
-  // appended below; the reference image set is still computed (and sent) as usual either way.
-  const override = (scene.promptOverride ?? "").trim();
-  const hasOverride = override.length > 0;
-  if (hasOverride) {
-    // Stage 46B-0: the producer's text is kept verbatim, except a [CHARACTER] line it still carries —
-    // that one is rebuilt from the live character rows too (no line → nothing is added). A manual
-    // override is authored end-to-end, so Stage 54's fixed NEGATIVES block is NOT appended to it.
-    prompt = buildNativeAudioPrompt(stripReferenceList(refreshCharacterLine(override, characters, false)).replace(/^REFERENCE MAP:.*$/gm, ""), dialogue, characters.map(c => ({ name: c.name })), targetLanguage);
-  } else {
-    // Stage 54 — the fixed do-not block closes the auto-assembled prompt (after the AUDIO TRACK and the
-    // pace direction), covering logos/watermarks/subtitles/extra people plus the narration-only bits.
-    prompt = `${prompt}\n\n${negativesBlock}`;
+  const orderedChars = [
+    ...individualsAll.filter(c => isMentioned(c.name)),
+    ...individualsAll.filter(c => !isMentioned(c.name)),
+    ...crowds,
+  ];
+  for (const c of orderedChars) {
+    if (refs.length >= REFERENCE_IMAGE_CAP) break;
+    refs.push({ url: characterAnchorUrl(c), kind: c.tier === "CROWD" ? "crowd" : "character", id: c.characterId, note: characterReferenceNote(c.name) });
+    characterLines.push(`image ${refs.length} — ${c.name}.`);
   }
-  let basePrompt = prompt;
+
+  // ACTIONS body — the English descriptive action, drawn from the scene's English video-prompt tags
+  // (blocking / action / gaze / non-verbal) with a plain-text fallback. Dialogue is appended as
+  // NAME: "line"; a narration scene appends the off-screen narrator line instead.
+  const extractTag = (vp: string, tag: string): string => {
+    const re = new RegExp(`\\[${tag}\\]\\s*:?\\s*([\\s\\S]*?)(?=\\n?\\[[A-Z][A-Z /]*\\]|$)`, "i");
+    const m = vp.match(re);
+    return m ? m[1].replace(/\s+/g, " ").trim() : "";
+  };
+  const stripBracketLabels = (s: string) => s.replace(/\[[A-Z][A-Z /]*\]\s*:?/g, " ").replace(/\s*\n\s*/g, " ").replace(/\s{2,}/g, " ").trim();
+  const rawVideoPrompt = refreshCharacterLine(scene.videoPrompt ?? "", characters);
+  const actionParts = ["BLOCKING", "ACTION", "GAZE", "NON-VERBAL"].map(t => extractTag(rawVideoPrompt, t)).filter(Boolean);
+  let actionsBody = actionParts.join(" ").trim();
+  if (!actionsBody) actionsBody = stripBracketLabels(rawVideoPrompt);
+  const dialogueLines = isNarration ? [] : parseDialogue(dialogue).map(l => `${(l.speaker ?? "Character").trim()}: "${l.text.trim()}"`);
+  const narrationLine = isNarration ? `Off-screen narrator (voiceover): "${(scene.voiceover ?? "").trim()}"`.trim() : "";
+  const actionsSection = [actionsBody, ...dialogueLines, narrationLine].filter(Boolean).join("\n");
+
+  const FRAMING_LINE = "FRAMING: the scene must end on a shot size different from the one it opens with (wide / medium / close-up). If it opens wide, it ends medium or close; if it opens close, it ends medium or wide. Never return to the opening framing.";
+
+  const sections: string[] = [];
+  if (settingLines.length) sections.push(`Setting:\n${settingLines.join("\n")}`);
+  if (characterLines.length) sections.push(`Characters (appearance only):\n${characterLines.join("\n")}`);
+  sections.push(`ACTIONS:\n${actionsSection}`);
+  sections.push(FRAMING_LINE);
+
+  // Stage 40/41 — opening/end state kept for return-shape compatibility (not injected into the template).
+  const openingState = resolveOpeningState(scene, previous);
+  const endState = resolveEndState(scene);
 
   const model = normalizeVideoModel(input.provider);
   const modelSlug = videoModelSlug(model);
 
-  let referenceImages: string[] = [];
-  let retryRefs: SceneReference[] = [];
-  let reference: Record<string, unknown>;
-  let referenceKind: ScenePromptReferenceKind;
-  let newSceneReference = false;
-  let referencePrompt: string | undefined;
-  let newSceneReferenceNote: string | undefined;
-  // Stage 62: set to the previous scene's id when its last frame is sent as a continuity reference; else null.
-  let previousFrameSceneId: string | null = null;
+  // A manual per-scene override still REPLACES the whole prompt text verbatim (producer-authored),
+  // while the reference set computed above is still sent unchanged.
+  const override = (scene.promptOverride ?? "").trim();
+  const hasOverride = override.length > 0;
+  let prompt = hasOverride
+    ? stripReferenceList(refreshCharacterLine(override, characters, false)).replace(/^REFERENCE MAP:.*$/gm, "").trim()
+    : sections.join("\n\n");
+  let basePrompt = prompt;
 
-  if (ordered.length) {
-    const refs = ordered;
-    referenceImages = refs.map(r => r.url);
-    retryRefs = refs.map(({ url, kind, note }) => ({ url, kind, note }));
-    previousFrameSceneId = reangleUrl ? previous?.id ?? null : null;
-    reference = { mode: "character_references", kinds: refs.map(r => r.kind),
-      characterIds: refs.filter(r => r.kind === "character" || r.kind === "crowd").map(r => r.id),
-      locationId: refs.some(r => r.kind === "location") ? location?.id : null,
-      previousFrameSceneId };
-    referenceKind = "character_references";
-    prompt += "\nREFERENCE MAP:\n" + refs.map((r, i) => `[Image${i + 1}] ${r.note}`).join("\n");
-  } else {
-    reference = { mode: "text_only", sceneId: scene.id, reason: "no_references" };
-    referenceKind = "text_only";
-  }
+  const referenceImages: string[] = refs.map(r => r.url);
+  const retryRefs: SceneReference[] = refs.map(({ url, kind, note }) => ({ url, kind, note }));
+  const fallbackRefs: SceneReference[] = retryRefs;
+  const previousFrameSceneId: string | null = hasStartFrame ? (previous?.id ?? null) : null;
+  const newSceneReference = false;
+  const referencePrompt: string | undefined = undefined;
+  const newSceneReferenceNote: string | undefined = undefined;
+  const referenceKind: ScenePromptReferenceKind = refs.length ? "character_references" : "text_only";
+  const reference: Record<string, unknown> = refs.length
+    ? {
+        mode: "character_references",
+        kinds: refs.map(r => r.kind),
+        characterIds: refs.filter(r => r.kind === "character" || r.kind === "crowd").map(r => r.id),
+        locationId: refs.some(r => r.kind === "location") ? location?.id ?? null : null,
+        startFrameSceneId: previousFrameSceneId,
+        previousFrameSceneId,
+      }
+    : { mode: "text_only", sceneId: scene.id, reason: "no_references" };
 
   // Stage 149 — final emitted-copy pass: guard [TRANSITION] against rendering next-shot
   // content (neutral hard-cut note) and force ASCII English (romanize any residual Cyrillic,

@@ -279,27 +279,17 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
     const isTestProject = Boolean(episodeLoc?.season?.project?.isTest);
     const characters = links.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier,
       imageFront: l.character.imageFront, imageFull: l.character.imageFull, appearance: l.character.appearance, age: l.character.age }));
-    const forbiddenReferenceUrls = [scene.keyframeUrl, previousRow?.lastFrameUrl, (previousRow as any)?.keyframeUrl].filter((u): u is string => !!u);
-    const support = buildScenePrompt({ scene, characters, location: scene.location ?? episodeLoc?.location ?? null, previous,
-      forbiddenReferenceUrls }).retryRefs;
-    // Stage 122: resolve (or lazily generate once) this scene's REGION PLATE. Non-blocking.
-    const regionPlateUrl = await ensureSceneRegionPlate({ sceneId, jobId, imageModel: undefined }).catch(() => null);
-    // Stage 123: resolve (or lazily generate once) this scene's SUB-LOCATION angle reference. Non-blocking.
-    const subLocationRefUrl = await ensureSceneSubLocationRef({ sceneId, jobId, imageModel: undefined }).catch(() => null);
-    let reangleUrl: string | null = null;
-    let reangleInfo: VideoJobState["reangle"];
-    let reangleRequest: ReturnType<typeof buildReangleRequest> | null = null;
-    if (previousRow) {
-      if (!episodeLoc?.location?.imageUrl)
-        throw new Error("Add the location's wide master reference before generating this transition.");
-      await updateJob(jobId, { progress: 8, message: "Re-angling the previous video's last frame (Seedream camera edit)..." });
-      reangleRequest = buildReangleRequest({ sceneId, number: scene.number, startState: scene.startState,
-        videoPrompt: scene.videoPrompt, promptOverride: scene.promptOverride, previous: previousRow, refs: support, castState: characters,
-        regionPlateUrl });
-      const edited = await ensureReangle(reangleRequest, { jobId, sceneId, projectId });
-      reangleUrl = edited.url;
-      reangleInfo = { cacheId: reangleRequest.cacheId, cacheHit: edited.cacheHit, sourceSceneId: previousRow.id, camera: reangleRequest.camera };
-    }
+    // Stage 238 — the previous scene's LAST FRAME is now sent as image 2 (START FRAME), so it must NOT be
+    // forbidden as a reference; only this scene's own keyframe and the predecessor's keyframe stay forbidden.
+    const forbiddenReferenceUrls = [scene.keyframeUrl, (previousRow as any)?.keyframeUrl].filter((u): u is string => !!u);
+    // Stage 238 — the re-angle preprocessing and the region / sub-location plates were part of the old
+    // location-tier assembly. The new template uses the RAW previous last frame as START FRAME and a single
+    // LOCATION plate, so neither is generated any more (saves the extra Seedream edits per scene).
+    const regionPlateUrl: string | null = null;
+    const subLocationRefUrl: string | null = null;
+    const reangleUrl: string | null = null;
+    const reangleInfo: VideoJobState["reangle"] = undefined;
+    const reangleRequest: ReturnType<typeof buildReangleRequest> | null = null;
     const built = buildScenePrompt({
       scene: lookScene,
       reangleUrl, regionPlateUrl, subLocationRefUrl, forbiddenReferenceUrls,
