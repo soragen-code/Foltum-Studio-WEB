@@ -76,7 +76,22 @@ export type ChatOptions = {
   timeoutMs?: number;
   /** Per-request retry count (overrides DEFAULT_MAX_RETRIES). */
   maxRetries?: number;
+  /**
+   * Streaming helpers only: invoked with each VISIBLE content delta (never the hidden reasoning tokens)
+   * as it arrives, plus the running accumulated text. Used to relay generation to the UI token-by-token
+   * (SSE). No effect on the final return value.
+   */
+  onDelta?: (delta: string, accumulated: string) => void;
 };
+
+/**
+ * Default completion budget for STREAMING JSON generation (idea / drama-bible / synopsis). Claude Opus 5 on
+ * WaveSpeed now does interleaved "thinking" that, on a non-streaming call, can silently consume the whole
+ * budget and return EMPTY content (→ "AI returned an invalid result" on complex genres like post-apocalypse).
+ * Streaming accumulates only the visible content deltas and survives the multi-minute wait, and a large budget
+ * keeps the JSON from truncating. See streamChatJSON.
+ */
+export const STREAM_JSON_MAX_TOKENS = 16000;
 
 /**
  * Generic chat completion helper.
@@ -223,9 +238,39 @@ export async function streamChatText(
   );
   let text = "";
   for await (const chunk of stream) {
-    text += chunk.choices[0]?.delta?.content ?? "";
+    const piece = chunk.choices[0]?.delta?.content ?? "";
+    if (piece) {
+      text += piece;
+      if (opts?.onDelta) {
+        try { opts.onDelta(piece, text); } catch { /* never let a UI relay break generation */ }
+      }
+    }
   }
   return text.trim();
+}
+
+/**
+ * STREAMING JSON generation. Same contract as chatJSON but goes over a streaming request so it only ever
+ * accumulates the model's VISIBLE content (Claude Opus 5 on WaveSpeed emits hidden "thinking" tokens on a
+ * separate delta field; a non-streaming call can spend the whole budget on those and return EMPTY content,
+ * which is the root cause of the "AI returned an invalid result" synopsis failure). Parses with the same
+ * robust safeJsonParse (fence-strip + truncation repair). Defaults to a LARGE budget so structured story
+ * output does not truncate. Pass `onDelta` to relay tokens to the UI (SSE).
+ */
+export async function streamChatJSON<T = any>(
+  system: string,
+  user: string,
+  opts?: ChatOptions,
+): Promise<T> {
+  const raw = await streamChatText(system, user, {
+    ...opts,
+    json: true,
+    maxTokens: opts?.maxTokens ?? STREAM_JSON_MAX_TOKENS,
+    // A single structured generation can run for minutes on the gateway — give it a generous cap.
+    timeoutMs: opts?.timeoutMs ?? 480_000,
+  });
+  if (!raw) throw new Error("The model returned an empty response. Please try again.");
+  return safeJsonParse<T>(raw);
 }
 
 // ---------------------------------------------------------------------------

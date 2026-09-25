@@ -13,7 +13,7 @@
  */
 import { prisma } from "@/lib/db";
 import { updateJob, completeJob, failJob, heartbeatJob, markCanceled, isCancelRequested } from "@/lib/jobs";
-import { chat, chatJSON, SCRIPT_MODEL } from "@/lib/ai";
+import { chat, streamChatJSON, SCRIPT_MODEL } from "@/lib/ai";
 // Stage 1 (dramaBible) — generate + validate the structured story bible FIRST, then derive the prose synopsis
 // consistent with it; persist the bible on the Project. Best-effort: failure leaves the classic flow unchanged.
 import { generateDramaBible, type DramaBible, type GenerateDramaBibleResult } from "@/lib/drama-bible";
@@ -100,10 +100,14 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
     try {
       await heartbeatJob(jobId);
       // A single bible generation at a given temperature; `note` is appended to the idea on the improve pass.
+      // NOTE: streamChatJSON (not chatJSON). Claude Opus 5 on WaveSpeed now does interleaved "thinking" that
+      // can consume the whole non-streaming budget and return EMPTY content on complex genres (post-apocalypse
+      // etc.) — the root cause of the "AI returned an invalid result" synopsis failure. Streaming accumulates
+      // only visible content and survives the multi-minute wait; the larger budget keeps the bible from truncating.
       const bibleGen = (ideaText: string, temperature: number): Promise<GenerateDramaBibleResult> =>
         generateDramaBible(
           { idea: ideaText, genres: bibleGenres, episodeCount: bibleEpisodeCount },
-          (sys, usr, o) => chatJSON(sys, usr, { ...o, temperature, maxTokens: 3000 }),
+          (sys, usr, o) => streamChatJSON(sys, usr, { ...o, temperature, maxTokens: 8000 }),
           { model: SCRIPT_MODEL, maxRetries: 2 }
         );
 
@@ -122,7 +126,7 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
             return r;
           },
           render: (r) => dramaBibleBrief(r.bible),
-          critique: (rendered) => critiqueCandidate(chatJSON, "dramaBible", rendered),
+          critique: (rendered) => critiqueCandidate(streamChatJSON, "dramaBible", rendered),
           improve: async (_best, fix) => {
             const r = await bibleGen(`${bibleIdeaText}\n\n${fix}`, 0.7);
             if (!r.valid) throw new Error("invalid improved drama bible");
@@ -175,11 +179,13 @@ export async function runSynopsisJob(jobId: string, projectId: string, params: S
       if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
       try {
         await heartbeatJob(jobId);
+        // streamChatJSON (not chatJSON): streaming survives the interleaved-thinking empty-content bug that
+        // broke synopsis on complex genres (see bibleGen note above). Large budget avoids truncation.
         const raw = fromStory
-          ? await chatJSON(ideaFromStorySystemPrompt(storyLanguage), ideaFromStoryUserPrompt(storyText) + bibleBriefNote, { temperature: 0.6, maxTokens: 6000 })
+          ? await streamChatJSON(ideaFromStorySystemPrompt(storyLanguage), ideaFromStoryUserPrompt(storyText) + bibleBriefNote, { temperature: 0.6, maxTokens: 16000 })
           : auto
-          ? await chatJSON(ideaAutoSystemPrompt(autoLanguage), ideaAutoUserPrompt(genres, extras) + bibleBriefNote, { temperature: 0.95, maxTokens: 6000 })
-          : await chatJSON(ideaSystemPrompt(), ideaUserPrompt(idea ?? "") + bibleBriefNote, { temperature: 0.8, maxTokens: 6000 });
+          ? await streamChatJSON(ideaAutoSystemPrompt(autoLanguage), ideaAutoUserPrompt(genres, extras) + bibleBriefNote, { temperature: 0.95, maxTokens: 16000 })
+          : await streamChatJSON(ideaSystemPrompt(), ideaUserPrompt(idea ?? "") + bibleBriefNote, { temperature: 0.8, maxTokens: 16000 });
         result = normalizeIdeaResult(
           raw,
           fromStory ? storyText : auto ? (extras && extras.trim() ? extras : autoLanguage === "ru" ? "Russian history" : "story") : idea ?? ""
