@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Header } from '@/components/header'
-import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Copy, Check, FileText, RotateCcw, Save, Plus, Undo2, AlertTriangle } from 'lucide-react'
+import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, ChevronDown, Copy, Check, FileText, RotateCcw, Save, Plus, Undo2, AlertTriangle } from 'lucide-react'
 import { FrameToolbar, DownloadAllButton } from '@/app/project/[id]/_components/frame-toolbar'
 import { PromptModal, CHARACTER_PROMPT_DESCRIPTION, LOCATION_PROMPT_DESCRIPTION } from '@/app/project/[id]/_components/prompt-modal'
 import { FeatureLockBadge } from '@/app/project/[id]/_components/feature-lock'
@@ -182,6 +182,13 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   >(null)
   // Once the author confirms the preview, the rest of this session's generations run without re-showing it.
   const previewAcknowledged = useRef(false)
+  // Stage 239 — the SAME prompt + ordered references, but shown INLINE inside each scene card (expandable),
+  // so the author can review the exact submitted prompt and the reference order at any time — not only in the
+  // one-time confirm modal. Keyed by scene id; `promptSig` tracks the scene's current videoPrompt so a script
+  // regeneration is reflected (the next open refetches). Every thumbnail opens fullscreen 9:16 via openLightbox.
+  const [inlinePreview, setInlinePreview] = useState<
+    Record<string, { open: boolean; loading: boolean; error: string | null; prompt: string; references: PreviewRef[]; promptSig: string }>
+  >({})
   // «"Assemble" — pure concatenation of the ready scene clips into one episode (no audit / no polish / no re-gen).
   const [stitching, setStitching] = useState(false)
   // Stage 46B: «"Assemble" opens a dialog — production quality / fps of the FINAL file (scenes are always 480p);
@@ -1127,6 +1134,50 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     generateAllScenes()
   }
 
+  // Stage 239 — expand / collapse the inline prompt + ordered references shown directly in a scene card.
+  // Lazily fetches /api/ai/scenes/[id]/video-prompt on the first open and refetches whenever the scene's
+  // videoPrompt has changed since the cached copy (so a script/prompt regeneration is always reflected).
+  const toggleInlinePreview = (scene: Scene) => {
+    const cur = inlinePreview[scene.id]
+    const sig = scene.videoPrompt ?? ''
+    if (cur?.open) {
+      setInlinePreview((m) => ({ ...m, [scene.id]: { ...cur, open: false } }))
+      return
+    }
+    const needFetch = !cur || cur.promptSig !== sig || (!cur.prompt && !cur.error)
+    setInlinePreview((m) => ({
+      ...m,
+      [scene.id]: {
+        open: true,
+        loading: needFetch,
+        error: null,
+        prompt: cur?.prompt ?? '',
+        references: cur?.references ?? [],
+        promptSig: sig,
+      },
+    }))
+    if (!needFetch) return
+    void (async () => {
+      try {
+        const res = await fetch(`/api/ai/scenes/${scene.id}/video-prompt`)
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(data?.error || 'Не удалось загрузить промпт')
+        const refs = Array.isArray(data.references)
+          ? (data.references as PreviewRef[]).filter((r) => r && typeof r.url === 'string')
+          : []
+        setInlinePreview((m) => ({
+          ...m,
+          [scene.id]: { open: true, loading: false, error: null, prompt: String(data.prompt ?? ''), references: refs, promptSig: sig },
+        }))
+      } catch (e: any) {
+        setInlinePreview((m) => ({
+          ...m,
+          [scene.id]: { open: true, loading: false, error: e?.message ?? 'Ошибка загрузки', prompt: '', references: [], promptSig: sig },
+        }))
+      }
+    })()
+  }
+
   // Copy the ENTIRE episode script (all scenes: heading, action, every dialogue turn) and flash «Скопировано».
   const copyScript = async () => {
     try {
@@ -1843,6 +1894,65 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   )}
                 </div>
                 </div>
+
+                {/* Stage 239 — the exact prompt + ordered reference list shown INLINE in the card (expandable),
+                    so it is visible before/after any generation and reflects the latest script/prompt. image 1 =
+                    LOCATION, image 2 = START FRAME (scenes after the first), then the characters. Each thumbnail
+                    opens fullscreen 9:16 via the shared openLightbox. */}
+                {(() => {
+                  const ip = inlinePreview[scene.id]
+                  const open = !!ip?.open
+                  return (
+                    <div className="mt-3 rounded-lg border border-border bg-muted/20" data-testid="scene-inline-preview">
+                      <button
+                        type="button"
+                        onClick={() => toggleInlinePreview(scene)}
+                        className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs font-semibold text-muted-foreground hover:text-foreground"
+                        aria-expanded={open}
+                        data-testid="scene-inline-preview-toggle"
+                        title="Показать промпт и порядок референсов, которые уйдут в модель"
+                      >
+                        <span className="inline-flex items-center gap-1.5"><FileText className="h-3.5 w-3.5 shrink-0" /> Промпт и референсы</span>
+                        <ChevronDown className={`h-4 w-4 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+                      </button>
+                      {open && (
+                        <div className="border-t border-border px-3 py-3">
+                          {ip?.loading ? (
+                            <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Загрузка промпта…</div>
+                          ) : ip?.error ? (
+                            <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive" data-testid="scene-inline-preview-error">{ip.error}</p>
+                          ) : (
+                            <>
+                              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Промпт</p>
+                              <pre className="mb-3 max-h-64 w-full overflow-y-auto whitespace-pre-wrap rounded-lg border border-border bg-background px-3 py-2 font-mono text-[11px] leading-relaxed" data-testid="scene-inline-preview-text">{ip?.prompt}</pre>
+                              {(ip?.references.length ?? 0) > 0 && (
+                                <div data-testid="scene-inline-preview-refs">
+                                  <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Референсы по порядку ({ip!.references.length}) — image 1…image {ip!.references.length}</p>
+                                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                                    {ip!.references.map((r, i) => (
+                                      <button
+                                        key={`${r.url}-${i}`}
+                                        type="button"
+                                        onClick={() => openLightbox(ip!.references.map((x) => x.url), i, `image ${r.index}${r.note ? ` — ${r.note}` : ''}`)}
+                                        className="group relative aspect-[9/16] overflow-hidden rounded bg-muted"
+                                        title={r.note ? `image ${r.index} — ${r.note}` : `image ${r.index}`}
+                                        data-testid="scene-inline-preview-ref"
+                                      >
+                                        <img src={r.url} alt={`image ${r.index}`} className="h-full w-full object-cover transition group-hover:opacity-90" />
+                                        <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">image {r.index}</span>
+                                        {r.note && <span className="absolute inset-x-0 bottom-0 truncate bg-black/60 px-1 py-0.5 text-center text-[10px] text-white">{r.note}</span>}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })()}
 
                 {/* Stage 167 — per-shot generation progress. The shot is the atomic unit: the shot chain
                     generates one clip per shot (status / videoUrl below), then the assembly job stitches

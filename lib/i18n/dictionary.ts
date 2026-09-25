@@ -279,6 +279,13 @@ const ru: Dict = {
   'refs.addFrameGenerate': 'Сгенерировать ({n} кр.)',
   'refs.addFrameDelete': 'Удалить кадр',
   'refs.addFrameConfirmDelete': 'Удалить этот кадр?',
+  // ── scene: inline prompt + ordered references preview (Stage 239) ──────────
+  'scene.preview.toggle': 'Промпт и референсы',
+  'scene.preview.toggleTitle': 'Показать промпт и порядок референсов, которые уйдут в модель',
+  'scene.preview.promptLabel': 'Промпт',
+  'scene.preview.refsLabel': 'Референсы по порядку',
+  'scene.preview.loading': 'Загрузка промпта…',
+  'scene.preview.error': 'Ошибка загрузки',
 }
 
 const en: Dict = {
@@ -535,6 +542,13 @@ const en: Dict = {
   'refs.addFrameGenerate': 'Generate ({n} cr.)',
   'refs.addFrameDelete': 'Delete frame',
   'refs.addFrameConfirmDelete': 'Delete this frame?',
+  // ── scene: inline prompt + ordered references preview (Stage 239) ──────────
+  'scene.preview.toggle': 'Prompt & references',
+  'scene.preview.toggleTitle': 'Show the prompt and the reference order that will be sent to the model',
+  'scene.preview.promptLabel': 'Prompt',
+  'scene.preview.refsLabel': 'References in order',
+  'scene.preview.loading': 'Loading the prompt…',
+  'scene.preview.error': 'Failed to load',
 }
 
 export const DICTIONARIES: Record<Locale, Dict> = { ru, en }
