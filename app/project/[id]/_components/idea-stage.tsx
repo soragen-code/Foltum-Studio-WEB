@@ -457,6 +457,7 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   // Stage 67: synopsis generation is a background GenerationJob (type "synopsis"). We poll it instead
   // of holding an open fetch, so leaving the page no longer aborts the request / shows «Network error.
   const { job: synopsisJob, start: startPolling, clear: clearSynopsisJob } = useJobPolling({
+    intervalMs: 800,
     onFinish: (res) => {
       activeJobIdRef.current = null
       if (res.job.status === 'completed') {

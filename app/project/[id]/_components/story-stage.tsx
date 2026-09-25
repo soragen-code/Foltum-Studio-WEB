@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Loader2, Wand2, ArrowRight, BookOpen, Copy, Check } from 'lucide-react'
-import { JOB_POLL_INTERVAL_MS, useJobPolling, StreamingText } from './use-job-polling'
+import { useJobPolling, StreamingText } from './use-job-polling'
 import { RewritePlaceholder } from './rewrite-placeholder'
 import { rewriteViewState } from '@/lib/rewrite-view-state'
 import { CancelButton } from './cancel-button'
@@ -127,7 +127,10 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
   useEffect(() => { load() }, [load])
   useEffect(() => {
     if (!jobActive) return
-    const id = setInterval(load, JOB_POLL_INTERVAL_MS)
+    // Poll faster than the shared 3 s constant so the streamed partial script (streamedText) shows up in
+    // near-real-time. Concurrent reads that hit the CAS-locked advance still return the current row with
+    // the latest partial, so the extra ticks are cheap and only surface fresher text.
+    const id = setInterval(load, 1500)
     return () => clearInterval(id)
   }, [jobActive, load])
 

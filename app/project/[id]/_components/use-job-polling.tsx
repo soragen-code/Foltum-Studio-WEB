@@ -71,10 +71,13 @@ export const JOB_POLL_INTERVAL_MS = 3000
 export function useJobPolling({
   onUpdate,
   onFinish,
+  intervalMs,
 }: {
   onUpdate?: (res: JobPollResponse) => void
   onFinish?: (res: JobPollResponse) => void
+  intervalMs?: number
 }) {
+  const pollInterval = intervalMs ?? JOB_POLL_INTERVAL_MS
   const [job, setJob] = useState<JobInfo | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const activeIdRef = useRef<string | null>(null)
@@ -111,11 +114,11 @@ export function useJobPolling({
         } catch {
           // transient network error — keep polling
         }
-        if (activeIdRef.current === jobId) timerRef.current = setTimeout(tick, JOB_POLL_INTERVAL_MS)
+        if (activeIdRef.current === jobId) timerRef.current = setTimeout(tick, pollInterval)
       }
       tick()
     },
-    [stop]
+    [stop, pollInterval]
   )
 
   useEffect(() => stop, [stop])

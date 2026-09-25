@@ -30,8 +30,8 @@ export function makeJobStreamWriter(
   jobId: string,
   opts?: { field?: string; minIntervalMs?: number; minGrowth?: number; transform?: (s: string) => string },
 ): JobStreamWriter {
-  const minIntervalMs = opts?.minIntervalMs ?? 900;
-  const minGrowth = opts?.minGrowth ?? 40;
+  const minIntervalMs = opts?.minIntervalMs ?? 250;
+  const minGrowth = opts?.minGrowth ?? 12;
   let lastWriteAt = 0;
   let lastLen = 0;
   let inFlight = false;

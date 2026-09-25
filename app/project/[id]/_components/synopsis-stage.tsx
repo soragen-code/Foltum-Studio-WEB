@@ -22,6 +22,7 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
   // holds an open fetch (which broke on navigation and showed no progress). We poll the job and show a
   // smooth 0→100 % bar; on finish the new synopsis is written into the textarea.
   const poll = useJobPolling({
+    intervalMs: 800,
     onFinish: (res) => {
       const job = res.job
       if (job.status === 'completed') {
