@@ -480,7 +480,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // Stage 46A: a location is "ready" with its MASTER frame alone — extra angles are optional and are
   // added one by one with the «+ "Angle" button. The scenes step unlocks as soon as every character
   // has its full photo set and every episode location has a master frame.
-  const refsReady = refChars.every(hasAllImages) && refLocs.every(locBaseReady)
+  // Stage 242b — DERIVED locations (display-only cards synthesized from scene text, no Location row, no image
+  // controls) can never get a master frame, so they must not block the Storyboard / Video steps. Only real
+  // Location rows participate in readiness. (Root cause of «К сториборду» staying disabled with 0 DB locations.)
+  const refsReady = refChars.every(hasAllImages) && refLocs.filter((l) => !l?.derived).every(locBaseReady)
   const refsCharsDone = refChars.filter(hasAllImages).length
   const refsLocsDone = refLocs.filter(locBaseReady).length
 
