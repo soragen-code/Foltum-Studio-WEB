@@ -340,6 +340,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // (characters + locations) and regenerate them via the existing pipelines. Busy while the request runs.
   const [regenRefsBusy, setRegenRefsBusy] = useState(false)
   const [regenRefsNotice, setRegenRefsNotice] = useState('')
+  // «Создать персонажей из сценария» — extract the cast from the saved episode script(s) when the
+  // episode has no linked characters yet (POST /api/ai/characters), poll the job, stream the cast in.
+  const [createCharsBusy, setCreateCharsBusy] = useState(false)
+  const [createCharsMsg, setCreateCharsMsg] = useState('')
   // Scope of the running reference session (Stage 46A): «Generate characters" (characters only —
   // locations are never touched) or a locations session started from ONE location card («Generate
   // master frame" / "+ Angle") — characters are never touched there.
@@ -930,6 +934,36 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       rememberPhase('references')
       router.push(episodeBase)
     } catch { setError('Ошибка сети') } finally { setRegenRefsBusy(false) }
+  }
+
+  /**
+   * «Создать персонажей из сценария» — shown on the References step when the episode has no linked
+   * characters. Extracts the full cast from the saved episode script(s) via POST /api/ai/characters
+   * (background Claude Opus 5 worker), then polls GET /api/jobs/[jobId] until it finishes, streaming the
+   * cast into the character cards. Reference IMAGES are not started here — that's the «Generate characters» button.
+   */
+  const createCharactersFromScript = async () => {
+    if (createCharsBusy) return
+    setCreateCharsBusy(true); setError(''); setCreateCharsMsg('Извлечение персонажей из сценария...')
+    try {
+      const res = await fetch('/api/ai/characters', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id }),
+      })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok || !d?.jobId) { setError(d?.error ?? 'Не удалось создать персонажей'); setCreateCharsMsg(''); return }
+      if (Array.isArray(d.characters) && d.characters.length) setRefChars(d.characters)
+      for (let i = 0; i < 400; i++) {
+        await new Promise((r) => setTimeout(r, 3000))
+        const jr = await fetch(`/api/jobs/${d.jobId}`, { cache: 'no-store' }).catch(() => null)
+        if (!jr || !jr.ok) continue
+        const jd = await jr.json().catch(() => ({}))
+        if (Array.isArray(jd?.characters) && jd.characters.length) setRefChars(jd.characters)
+        if (jd?.job?.message) setCreateCharsMsg(String(jd.job.message))
+        const st = jd?.job?.status
+        if (st === 'completed') { setCreateCharsMsg(''); router.refresh(); break }
+        if (st === 'failed' || st === 'canceled') { setError(jd?.job?.error ?? 'Не удалось создать персонажей'); setCreateCharsMsg(''); break }
+      }
+    } catch { setError('Ошибка сети'); setCreateCharsMsg('') } finally { setCreateCharsBusy(false) }
   }
 
   /** Prompt-edit a character's appearance (regenerates its references; C2PA preserved in the worker). */
@@ -1830,7 +1864,13 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           </div>
 
           {/* Characters — rendered BELOW the location block (locations stay first; both cards are the same size). */}
-          <h3 className="mt-6 flex items-center gap-2 text-sm font-semibold"><Users className="h-4 w-4" /> Characters ({refChars.length})</h3>
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-2">
+            <h3 className="flex items-center gap-2 text-sm font-semibold"><Users className="h-4 w-4" /> Characters ({refChars.length})</h3>
+            <button type="button" onClick={createCharactersFromScript} disabled={createCharsBusy} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm font-medium disabled:opacity-50" data-testid="create-characters-from-script" title="Извлечь персонажей из сценария эпизода">
+              {createCharsBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Users className="h-4 w-4" />} {refChars.length === 0 ? 'Создать персонажей из сценария' : 'Дополнить персонажей из сценария'}
+            </button>
+          </div>
+          {createCharsMsg && <p className="mt-1.5 text-xs text-primary" data-testid="create-characters-notice">{createCharsMsg}</p>}
           <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {refChars.map((c) => {
               const busy = !!charBusy[c.id] || (refSession && refScope === 'characters' && !hasAllImages(c))
