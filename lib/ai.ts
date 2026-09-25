@@ -250,23 +250,36 @@ export async function streamChatText(
         : { temperature: opts?.temperature ?? 0.85, max_tokens: budget }),
       ...thinkingParams(model, budget),
       ...(opts?.json ? { response_format: { type: "json_object" } } : {}),
+      stream_options: { include_usage: true },
     },
     { timeout: opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS, maxRetries: opts?.maxRetries ?? DEFAULT_MAX_RETRIES },
   );
   let text = "";
   let finishReason: string | null = null;
+  const t0 = Date.now();
+  let chunks = 0;
+  let firstContentMs = -1;
+  let completionTokens: number | null = null;
   for await (const chunk of stream) {
+    chunks++;
     const piece = chunk.choices[0]?.delta?.content ?? "";
     if (chunk.choices[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
+    if (chunk.usage?.completion_tokens != null) completionTokens = chunk.usage.completion_tokens;
     if (piece) {
+      if (firstContentMs < 0) firstContentMs = Date.now() - t0;
       text += piece;
       if (opts?.onDelta) {
         try { opts.onDelta(piece, text); } catch { /* never let a UI relay break generation */ }
       }
     }
   }
-  // Empty visible output with finish_reason "length" = the whole budget went to hidden thinking — name it.
-  if (!text.trim() && finishReason === "length") throw new Error("model spent the whole token budget on hidden thinking (finish_reason=length) and produced no visible output");
+  if (!text.trim()) {
+    // Empty visible output: name the mechanism so the job error is diagnosable (hidden thinking ate the
+    // budget → finish_reason "length"; a gateway cut → no finish_reason after ~N s with few/no chunks).
+    const diag = `elapsed=${Math.round((Date.now() - t0) / 1000)}s chunks=${chunks} finish=${finishReason ?? "none"} completion_tokens=${completionTokens ?? "?"} prompt_chars=${system.length + user.length}`;
+    if (finishReason === "length") throw new Error(`model spent the whole token budget on hidden thinking and produced no visible output (${diag})`);
+    throw new Error(`model returned empty output (${diag})`);
+  }
   return text.trim();
 }
 
