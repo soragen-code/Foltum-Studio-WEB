@@ -169,6 +169,8 @@ export interface GenerateImageContext {
   /** Ignored (the model is fixed); kept so existing call sites compile. */
   imageModel?: string;
   shouldCancel?: () => Promise<boolean>;
+  /** Poll budget in ms (default 180 s). Large multi-reference renders (the 5×5 storyboard sheet) need more. */
+  timeoutMs?: number;
 }
 
 /**
@@ -176,7 +178,8 @@ export interface GenerateImageContext {
  * Returns the URL of the generated image. Logs each attempt; no paid automatic retries.
  */
 export async function generateImage(input: FluxInput, context: GenerateImageContext = {}): Promise<string> {
-  const { imageModel: _ignored, shouldCancel, ...logContext } = context;
+  const { imageModel: _ignored, shouldCancel, timeoutMs, ...logContext } = context;
+  const pollBudgetMs = timeoutMs && timeoutMs > 0 ? timeoutMs : 180_000;
   void _ignored;
   // Cancel is checked BEFORE the task is created so a canceled job never pays for a new one.
   if (shouldCancel && (await shouldCancel())) throw new GenerationCanceledError();
@@ -206,7 +209,7 @@ export async function generateImage(input: FluxInput, context: GenerateImageCont
       const st = await getImageGenerationState(attempt.predictionId);
       if (st.status === "succeeded" && st.outputUrl) { attempt.status = "succeeded"; logAttempt(attempt); return st.outputUrl; }
       if (st.status === "failed") throw new Error(st.error || "Image model failed");
-      if (Date.now() - started > 180_000) throw new Error("Image model timed out; no automatic resubmission");
+      if (Date.now() - started > pollBudgetMs) throw new Error("Image model timed out; no automatic resubmission");
       await sleep(2_000);
     }
   } catch (error) {

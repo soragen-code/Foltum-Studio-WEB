@@ -33,6 +33,8 @@ import { softenPromptForModeration, isModerationError } from "@/lib/moderation-s
 
 export const STORYBOARD_GRID_JOB_TYPE = "storyboard_grid";
 export const STORYBOARD_GRID_SLICE_JOB_TYPE = "storyboard_grid_slice";
+/** Poll budget for the single big sheet render (see runStoryboardGridJob). */
+const GRID_IMAGE_TIMEOUT_MS = 480_000;
 
 const validUrl = (u?: string | null): u is string =>
   typeof u === "string" && u.startsWith("http") && u.length > 10;
@@ -141,7 +143,9 @@ export async function runStoryboardGridJob(
       try {
         remote = await generateImage(
           { prompt: a.prompt, aspect_ratio: GRID_ASPECT_RATIO, ...(a.image_input.length ? { image_input: a.image_input } : {}) },
-          { jobId, shouldCancel: canceled },
+          // A 2K 5×5 sheet with up to 9 reference images regularly takes GPT Image 2.0 longer than the default
+          // 180 s poll budget (observed ~4+ min); the route's maxDuration (800 s) leaves room for 8 min + upload.
+          { jobId, shouldCancel: canceled, timeoutMs: GRID_IMAGE_TIMEOUT_MS },
         );
         promptUsed = a.prompt;
         break;
