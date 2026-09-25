@@ -1465,7 +1465,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               if (l.derived) {
                 return (
                   <div key={l.id} className="rounded-lg border border-dashed border-border/60 p-3" data-testid="ref-location-derived">
-                    <div className="min-w-0 break-words [overflow-wrap:anywhere] text-sm font-medium">{l.name}</div>
+                    <div className="min-w-0 truncate text-sm font-medium" title={l.name}>{l.name}</div>
                     <p className="mt-1 text-xs text-muted-foreground">Локация из сцен эпизода. Референсные кадры появятся после генерации референсов сцен.</p>
                   </div>
                 )
@@ -1480,7 +1480,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               return (
                 <div key={l.id} className="rounded-lg border border-border/60 p-3" data-testid="ref-location">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="min-w-0 break-words [overflow-wrap:anywhere] text-sm font-medium">{l.name} <span className="font-normal text-muted-foreground">· {locationFrames(l)} {locationFrames(l) === 1 ? 'frame' : 'frames'}</span></div>
+                    {/* Locations often carry a full paragraph in `name` (the AI writes the visual description there).
+                        Show it as a single truncated line — no large description block above the image — with the
+                        full text on hover. */}
+                    <div className="flex min-w-0 items-baseline gap-1 text-sm font-medium"><span className="truncate" title={l.name}>{l.name}</span><span className="shrink-0 font-normal text-muted-foreground">· {locationFrames(l)} {locationFrames(l) === 1 ? 'frame' : 'frames'}</span></div>
                     <span className="shrink-0 rounded bg-muted px-2 py-0.5 text-[10px] text-muted-foreground" title="The recommended number of frames depends on the required location detail; add angles with '+' as needed" data-testid="location-detail-badge">detail: {locationDetailLabel(detail)} · recommended {desiredTotalFrames(l)}</span>
                   </div>
                   <div className="mt-2">

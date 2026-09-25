@@ -1,11 +1,11 @@
 /**
  * Stage 234 — image model catalog for "Manual mode" (/manual) and the "+ Add frame" tile on reference cards.
  *
- * Seedream 5.0 Pro is the app's proven default (same slugs as lib/providers/image-provider.ts). The other
+ * GPT Image 2.0 is the app's proven default (same slugs as lib/providers/image-provider.ts). The other
  * entries are dispatched through the generic WaveSpeed transport (`wavespeedSubmit` / `wavespeedResult`);
  * a wrong/unsupported slug surfaces as a clear provider error and the credit is refunded.
  */
-// NOTE: slugs are inlined (identical to WAVESPEED_SEEDREAM_T2I / _EDIT in lib/providers/image-provider.ts) so this
+// NOTE: slugs are inlined (identical to WAVESPEED_GPT_IMAGE_T2I / _EDIT in lib/providers/image-provider.ts) so this
 // module stays free of server-only imports and can be shared with client components.
 
 export interface ManualImageModelDef {
@@ -17,13 +17,21 @@ export interface ManualImageModelDef {
   slugEdit: string;
   /** Max reference images accepted by the edit endpoint. */
   maxRefs: number;
-  bodyStyle: "seedream" | "nano-banana" | "flux2";
+  bodyStyle: "gpt-image" | "seedream" | "nano-banana" | "flux2";
 }
 
 export const MANUAL_IMAGE_MODELS: ManualImageModelDef[] = [
   {
+    id: "gpt-image-2",
+    label: "GPT Image 2.0 (OpenAI) — default",
+    slugT2I: "openai/gpt-image-2/text-to-image",
+    slugEdit: "openai/gpt-image-2/edit",
+    maxRefs: 10,
+    bodyStyle: "gpt-image",
+  },
+  {
     id: "seedream-v5.0-pro",
-    label: "Seedream 5.0 Pro (ByteDance) — default",
+    label: "Seedream 5.0 Pro (ByteDance)",
     slugT2I: "bytedance/seedream-v5.0-pro",
     slugEdit: "bytedance/seedream-v5.0-pro/edit",
     maxRefs: 10,
@@ -79,6 +87,14 @@ export function buildManualImageRequest(
   const body: Record<string, unknown> = { prompt };
 
   switch (def.bodyStyle) {
+    case "gpt-image":
+      body.aspect_ratio = "9:16";
+      body.resolution = "2k";
+      body.quality = "high";
+      body.output_format = "png";
+      body.enable_sync_mode = false;
+      if (edit) body.images = refs;
+      break;
     case "seedream":
       body.aspect_ratio = "9:16";
       body.resolution = "2k";

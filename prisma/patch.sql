@@ -669,3 +669,11 @@ END $$;
 ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "shotType" TEXT;
 
 ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "scenePromptTemplate" TEXT;
+
+
+-- ─── 4-ANGLE LOCATION REFERENCES: scripted accent camera angle per scene ───────────────────────
+-- The episode-script writer now emits a short ENGLISH "cameraAngle" per scene (the distinctive camera
+-- vantage inside the constant location). The distinct accent angles collected across a location's scenes
+-- drive that location's extra reference plates (up to 4 angles of the SAME place). Additive & idempotent;
+-- legacy scenes keep NULL and fall back to the default shot plan.
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "cameraAngle" TEXT;

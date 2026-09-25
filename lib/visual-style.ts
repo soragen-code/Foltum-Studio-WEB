@@ -331,6 +331,21 @@ export function locationExtraAnglePrompt(visualPrompt: string, name = "", index 
     `Same architecture, materials, colour palette, props, time of day, weather and light direction as the reference — only the camera position, height and framing change; do NOT reproduce the earlier framing. Vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;
 }
 
+/**
+ * 4-ANGLE REFERENCES — build the edit prompt for ONE extra angle of the SAME place from a FREE-FORM angle
+ * description: either a scripted ACCENT camera angle (season.ts S17 "cameraAngle") or a default shot-plan
+ * phrase. Like locationExtraAnglePrompt it is ALWAYS generated FROM the existing photographs of the place
+ * (attached as image_input), so the model re-photographs the SAME location from the new camera position and
+ * never invents new architecture, materials or layout.
+ */
+export function locationAccentAnglePrompt(visualPrompt: string, name = "", angleDescription = ""): string {
+  const place = sanitizeVideoPrompt(visualPrompt, { keep: [name] }).prompt;
+  const noPeople = "no people, no animals, no text, no signs with readable words, no logos. Real physical environment with authentic wear and detail.";
+  const angle = (angleDescription ?? "").replace(/\s+/g, " ").trim() || "a different camera position of the same space at eye level, a fresh vantage not shown in the earlier frames";
+  return `${VISUAL_STYLE}\n${SAME_PLACE_ANCHOR}: ${angle}: ${place}. ` +
+    `Same architecture, materials, colour palette, props, time of day, weather and light direction as the reference — only the camera position, height and framing change; do NOT reproduce the earlier framing. Vertical 9:16, ${noPeople} ${LIGHT_LOCK}`;
+}
+
 /** Parse the stored imageExtra JSON array into a clean list of styled URLs. */
 export function parseLocationExtra(imageExtra?: string | null): string[] {
   if (!imageExtra) return [];

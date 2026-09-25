@@ -5,7 +5,7 @@ import { ensureEnglishPrompt } from "@/lib/english-prompt";
 import { heartbeatJob } from "@/lib/jobs";
 
 /* ------------------------------------------------------------------ */
-/*  Reference-image generation — Seedream 5.0 Pro on WaveSpeed ONLY.    */
+/*  Reference-image generation — GPT Image 2.0 on WaveSpeed ONLY.       */
 /*  (Stage 104: the per-project provider switch was removed; every      */
 /*  image goes through WaveSpeed t2i, or /edit when reference images    */
 /*  are present; max 10 refs.)                                          */
@@ -36,12 +36,20 @@ export interface ImageGenerationState {
   error?: string;
 }
 
-/** WaveSpeed Seedream 5.0 Pro endpoints (text-to-image / multi-reference edit). */
-export const WAVESPEED_SEEDREAM_T2I = "bytedance/seedream-v5.0-pro";
-export const WAVESPEED_SEEDREAM_EDIT = "bytedance/seedream-v5.0-pro/edit";
+/** WaveSpeed GPT Image 2.0 endpoints (text-to-image / multi-reference edit). */
+export const WAVESPEED_GPT_IMAGE_T2I = "openai/gpt-image-2/text-to-image";
+export const WAVESPEED_GPT_IMAGE_EDIT = "openai/gpt-image-2/edit";
+/**
+ * Backward-compat aliases. The whole codebase imports these SEEDREAM_* symbols
+ * (keyframe / reangle / region-plate / sub-location / storyboard / visual-style);
+ * pointing them at the GPT Image 2.0 slugs switches every image worker to the new
+ * model in one place without churning every call site.
+ */
+export const WAVESPEED_SEEDREAM_T2I = WAVESPEED_GPT_IMAGE_T2I;
+export const WAVESPEED_SEEDREAM_EDIT = WAVESPEED_GPT_IMAGE_EDIT;
 export const WAVESPEED_IMAGE_MAX_REFS = 10;
 /** Model name recorded in generation diagnostics. */
-export const SEEDREAM_MODEL = WAVESPEED_SEEDREAM_T2I;
+export const SEEDREAM_MODEL = WAVESPEED_GPT_IMAGE_T2I;
 
 /** Explicit pixel size closest to the requested aspect ratio (2K class) as "W*H". */
 export function seedreamImageSize(aspect?: string): string {
@@ -58,23 +66,20 @@ export function seedreamImageSize(aspect?: string): string {
   }
 }
 
-/** Pure body/slug builder for the WaveSpeed Seedream request (exported for tests). */
+/** Pure body/slug builder for the WaveSpeed GPT Image 2.0 request (exported for tests). */
 export function buildWaveSpeedImageRequest(input: ImageGenerationInput): { slug: string; body: Record<string, unknown> } {
   const refs = (input.image_input ?? []).filter((u) => typeof u === "string" && u.length > 0).slice(0, WAVESPEED_IMAGE_MAX_REFS);
-  // Seedream v5.0 Pro (and Pro/edit) take `aspect_ratio` + `resolution`, NOT `size`.
-  // (`size` is a v5.0 Lite parameter; Pro silently ignores it and falls back to 1:1 → square.)
+  // GPT Image 2.0 (text-to-image / edit) take `aspect_ratio` + `resolution` (1k/2k/4k) + `quality`.
   const aspect_ratio = (input.aspect_ratio ?? "9:16").trim() || "9:16";
-  const body: Record<string, unknown> = { prompt: input.prompt, aspect_ratio, resolution: "2k", output_format: "png", enable_sync_mode: false };
-  // Reproducibility: forward a fixed seed when the caller supplies one so re-rendering the same board with the
-  // same prompt/refs yields a stable frame. Additive — omitted entirely when no seed is given (Seedream then
-  // picks a random one). NOTE: Seedream v5.0 Pro may treat `seed` as best-effort, so identical output is not
-  // guaranteed by the provider; the value is still persisted and surfaced for transparency.
-  if (typeof input.seed === "number" && Number.isFinite(input.seed)) body.seed = Math.floor(input.seed);
+  // `quality: "high"` = best fidelity tier; `resolution: "2k"` keeps parity with the previous 2K plates.
+  // NOTE: GPT Image 2.0 has NO `seed` parameter, so the caller-supplied seed is intentionally dropped
+  // (extra keys are silently ignored by the API — output is provider-random).
+  const body: Record<string, unknown> = { prompt: input.prompt, aspect_ratio, resolution: "2k", quality: "high", output_format: "png", enable_sync_mode: false };
   if (refs.length) {
     body.images = refs;
-    return { slug: WAVESPEED_SEEDREAM_EDIT, body };
+    return { slug: WAVESPEED_GPT_IMAGE_EDIT, body };
   }
-  return { slug: WAVESPEED_SEEDREAM_T2I, body };
+  return { slug: WAVESPEED_GPT_IMAGE_T2I, body };
 }
 
 function wsUnwrap(body: any): any {

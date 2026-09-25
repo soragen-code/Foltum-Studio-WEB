@@ -372,6 +372,10 @@ export async function persistEpisodeScript(
           // unique sub-locations per location are extracted and their 9:16 angle references pre-generated later;
           // a freshly scripted scene stores just the normalized key here (null when the model left it empty).
           subLocation: normalizeSubLocation(s.subLocation) || null,
+          // 4-ANGLE REFERENCES — the scripted accent camera angle (English) for this scene inside the
+          // constant location. The distinct accent angles across a location's scenes drive its extra
+          // reference plates (up to 4 angles per location). Null when the model left it empty / legacy scripts.
+          cameraAngle: (s.cameraAngle ?? "").trim() || null,
           // Stage 12 (Commit D) — off-screen narration: `voiceover` = English narration voiced by the model,
           // `voiceoverLocal` = the same narration translated for the UI. `sceneKind` distinguishes narration from dialogue.
           sceneKind: s.sceneKind ?? "dialogue",

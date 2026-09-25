@@ -698,11 +698,28 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const settingLines: string[] = [];
   const characterLines: string[] = [];
 
-  // image 1 — LOCATION (master wide plate; layout plate as fallback).
-  const locationUrl = location ? ((location.imageUrl ?? "").trim() || (location.imageReverse ?? "").trim()) : "";
-  if (locationUrl && !externalForbidden.has(locationUrl)) {
-    refs.push({ url: locationUrl, kind: "location", id: location!.id, note: `LOCATION plate for "${location!.name}".` });
-    settingLines.push(`image ${refs.length} — LOCATION: the only source of the room layout. Read strictly from it where every object is relative to the others. Do not add, remove or move anything.`);
+  // image 1..4 — LOCATION: up to FOUR different camera positions of the SAME place — the master wide plate
+  // first, then the layout / detail / accent angles (all photographs of one location). Sending several
+  // vantages keeps the video model's characters truly INSIDE the space instead of in front of a flat plate.
+  if (location) {
+    const angleUrls: string[] = [];
+    for (const a of locationAngleImages(location)) {
+      if (a.url && !externalForbidden.has(a.url) && !angleUrls.includes(a.url)) angleUrls.push(a.url);
+    }
+    for (const u of parseLocationExtra(location.imageExtra)) {
+      if (u && !externalForbidden.has(u) && !angleUrls.includes(u)) angleUrls.push(u);
+    }
+    const locationUrls = angleUrls.slice(0, 4);
+    locationUrls.forEach((url, i) => {
+      if (refs.length >= REFERENCE_IMAGE_CAP) return;
+      if (i === 0) {
+        refs.push({ url, kind: "location", id: location.id, note: `LOCATION plate for "${location.name}" — master wide view.` });
+        settingLines.push(`image ${refs.length} — LOCATION: the master view and the only source of the room layout. Read strictly from it where every object is relative to the others. Do not add, remove or move anything.`);
+      } else {
+        refs.push({ url, kind: "location", id: location.id, note: `LOCATION "${location.name}" — another camera position of the SAME place.` });
+        settingLines.push(`image ${refs.length} — LOCATION (same place, another camera position): the SAME location photographed from a different angle. Use it together with the master to keep the space, light, objects and palette consistent; do not add, remove or move anything.`);
+      }
+    });
   }
 
   // image 2 — START FRAME (the previous scene's last frame). Omitted for the first scene.
