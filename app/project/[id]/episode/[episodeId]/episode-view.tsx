@@ -33,7 +33,7 @@ import { episodeTotalSeconds, EPISODE_MAX_TOTAL_SECONDS, EPISODE_TOTAL_LABEL } f
 import { DEFAULT_SCENE_PROMPT_TEMPLATE } from '@/lib/scene-prompt-template'
 import { ASSEMBLE_QUALITIES, ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY, DEFAULT_ASSEMBLE_FPS, type AssembleQuality, type AssembleFps } from '@/lib/assemble-options'
 
-type EpisodePhase = 'script' | 'references' | 'storyboard' | 'scenes'
+type EpisodePhase = 'script' | 'shotlist' | 'references' | 'storyboard' | 'scenes'
 
 // Stage 238 — Storyboard is hidden behind a flag (kept in the codebase, not offered in the UI). While
 // false: the Сцены/Сториборд toggle drops the STORYBOARD option, StoryboardPanel is never rendered, and
@@ -102,11 +102,13 @@ type Shot = { id: string; index: number; shotType?: string | null; size?: string
 type Scene = { id: string; number: number; title?: string | null; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; subLocation?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; startFrameUrl?: string | null; keyframePrompt?: string | null; beatMeta?: unknown; lookStale?: boolean | null; videoModel?: string | null; status: string; hasUndo?: boolean | null; shots?: Shot[]; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null; hasScript?: boolean }
 
-export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits, entitlements, view = 'production' }: { episode: any; project: any; siblings?: Sibling[]; credits: number; entitlements?: import('@/lib/entitlements').Entitlements; view?: 'production' | 'script' | 'storyboard' | 'video' }) {
+export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits, entitlements, view = 'production' }: { episode: any; project: any; siblings?: Sibling[]; credits: number; entitlements?: import('@/lib/entitlements').Entitlements; view?: 'production' | 'script' | 'shotlist' | 'storyboard' | 'video' }) {
   // Stage 172 — the episode SCRIPT lives on its own page (/script), separate from references + scenes.
   // `view` selects which surface this instance renders; the nav links the two pages together.
   const episodeBase = `/project/${project.id}/episode/${initial.id}`
   const scriptHref = `${episodeBase}/script`
+  // Shot list lives on its own page (/shotlist), between Script and References.
+  const shotlistHref = `${episodeBase}/shotlist`
   // Stage 242 — Storyboard and Video are REAL routes (own URLs), so moving between steps is a plain link.
   const storyboardHref = `${episodeBase}/storyboard`
   const videoHref = `${episodeBase}/video`
@@ -389,6 +391,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     // Stage 172 — the script page always shows the script; the production page never opens on the script
     // step (the script lives on its own route), so it opens on References (or Scenes when video exists).
     if (view === 'script') return 'script'
+    if (view === 'shotlist') return 'shotlist'
     // Stage 242 — each step is its own route: /storyboard → Storyboard, /video → Video, base → References.
     if (view === 'storyboard') return 'storyboard'
     if (view === 'video') return 'scenes'
@@ -1131,8 +1134,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // this page (deep link, refresh, back button), the last-step key reflects "Script". Safe — the production page
   // restores 'script' by redirecting here, so there is no redirect loop from writing it here.
   useEffect(() => {
-    if (view !== 'script') return
-    rememberPhase('script')
+    if (view !== 'script' && view !== 'shotlist') return
+    rememberPhase(view === 'shotlist' ? 'shotlist' : 'script')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -1149,6 +1152,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     let saved: string | null = null
     try { saved = window.localStorage.getItem(phaseStorageKey) } catch { /* storage unavailable — ignore */ }
     if (saved === 'script') { router.replace(scriptHref); return }
+    if (saved === 'shotlist' && hasScript) { router.replace(shotlistHref); return }
     // Stage 242 — Storyboard / Video live on their own routes: restore = redirect (only when reachable).
     if (saved === 'storyboard' && hasScript && canEnterProduction(refsReady, mode)) { router.replace(storyboardHref); return }
     if (saved === 'scenes' && hasScript && (canEnterProduction(refsReady, mode) || scenes.some((s) => validUrl(s.videoUrl)))) { router.replace(videoHref); return }
@@ -1548,18 +1552,20 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         {/* Stage 14 (D): guided steps — script → references → scenes. Stage 172: the Script step lives on its
             own page (/script); steps that belong to the OTHER page render as links that navigate between the two. */}
         <div className="mt-4 flex flex-wrap items-center gap-2 text-xs" data-testid="phase-steps">
-          {(([['script', '1 · Сценарий'], ['references', '2 · Референсы'], ['storyboard', '3 · Сториборд'], ['scenes', '4 · Видео']]) as [EpisodePhase, string][]).map(([key, label]) => {
+          {(([['script', '1 · Сценарий'], ['shotlist', '2 · Шот-лист'], ['references', '3 · Референсы'], ['storyboard', '4 · Сториборд'], ['scenes', '5 · Видео']]) as [EpisodePhase, string][]).map(([key, label]) => {
             // Stage 107 — References and Scenes are locked until the episode has a script.
             // Stage 129 — the Scenes step is also locked until references are ready AND a production mode is
             // chosen (canEnterProduction); legacy episodes that already have generated scenes stay reachable.
             // Storyboard (grid 5×5) is its own step, unlocked once references are ready and a mode is chosen.
+            // Shot list unlocks after the script; References (and everything after) unlock after the shot list.
             const reached = key === 'script'
-              || (hasScript && key === 'references')
-              || (hasScript && key === 'storyboard' && canEnterProduction(refsReady, mode))
-              || (hasScript && key === 'scenes' && (canEnterProduction(refsReady, mode) || scenes.some((s) => validUrl(s.videoUrl))))
+              || (hasScript && key === 'shotlist')
+              || (hasScript && hasShotList && key === 'references')
+              || (hasScript && hasShotList && key === 'storyboard' && canEnterProduction(refsReady, mode))
+              || (hasScript && key === 'scenes' && ((hasShotList && canEnterProduction(refsReady, mode)) || scenes.some((s) => validUrl(s.videoUrl))))
             // Which page does this step belong to? Script → the /script page; References/Scenes → the production page.
             // Stage 242 — every step is its own route; only the current page's step renders as an in-page button.
-            const onThisPage = view === 'script' ? key === 'script' : view === 'storyboard' ? key === 'storyboard' : view === 'video' ? key === 'scenes' : key === 'references'
+            const onThisPage = view === 'script' ? key === 'script' : view === 'shotlist' ? key === 'shotlist' : view === 'storyboard' ? key === 'storyboard' : view === 'video' ? key === 'scenes' : key === 'references'
             const active = onThisPage && phase === key
             const cls = `rounded-full border px-3 py-1 font-medium transition ${active ? 'border-primary bg-primary text-primary-foreground' : reached ? 'border-border hover:bg-muted' : 'border-border/50 text-muted-foreground/50'}`
             if (onThisPage) {
@@ -1578,7 +1584,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               )
             }
             // Step lives on the other page → a link (or a disabled-looking span when not yet reachable).
-            const href = key === 'script' ? scriptHref : key === 'storyboard' ? storyboardHref : key === 'scenes' ? videoHref : episodeBase
+            const href = key === 'script' ? scriptHref : key === 'shotlist' ? shotlistHref : key === 'storyboard' ? storyboardHref : key === 'scenes' ? videoHref : episodeBase
             if (!reached) return <span key={key} data-testid={`phase-step-${key}`} aria-disabled="true" className={cls}>{label}</span>
             // Stage 241 — record the TARGET step before navigating to the other page, so on arrival the restore
             // effect keeps the user here (and, from the production page, the 'script' link is not bounced back).
@@ -1619,47 +1625,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               <>
                 {/* SIMPLIFIED PIPELINE (step 4): the script is PLAIN TEXT (no JSON scenes) — shown verbatim. */}
                 <pre className="whitespace-pre-wrap rounded-lg border border-border/60 bg-background p-4 font-sans text-sm leading-relaxed text-foreground/90" data-testid="episode-script-text">{String(episode.script)}</pre>
-                {/* SIMPLIFIED PIPELINE (step 5): 5 scenes × 5 beats shot list → 25 Scene rows (one per beat). */}
-                <div className="mt-6 rounded-lg border border-border bg-background p-4" data-testid="shot-list-section">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <h3 className="font-display text-lg font-bold">Шот-лист · 5 сцен × 5 битов</h3>
-                    <button type="button" onClick={buildShotList} disabled={shotListBusy || revising} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50" data-testid="build-shot-list">
-                      {shotListBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Grid3x3 className="h-4 w-4" />} {hasShotList ? 'Пересобрать шот-лист / Rebuild shot list' : 'Создать шот-лист / Build shot list'}
-                    </button>
-                  </div>
-                  <p className="mt-1.5 text-xs text-muted-foreground">Каждый бит — один клип 5 с (вертикаль 9:16). Бит 5.5 переходит в 1.1 следующей серии.</p>
-                  {shotListBusy && shotListPoll.job && (
-                    <div className="mt-3">
-                      <JobProgressBar job={shotListPoll.job} expectedTotalSec={120} />
-                      <StreamingText text={shotListPoll.job.streamedText} active className="mt-3 text-xs" maxHeight={240} />
-                    </div>
-                  )}
-                  {shotListError && <p className="mt-2 text-sm text-destructive" data-testid="shot-list-error">{shotListError}</p>}
-                  {hasShotList && !shotListBusy && (
-                    <div className="mt-4 space-y-4" data-testid="shot-list-table">
-                      {beatScenes.map(([sceneIndex, rows]) => (
-                        <div key={sceneIndex} className="rounded-lg border border-border/60">
-                          <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-border/60 bg-muted/40 px-3 py-2">
-                            <span className="text-sm font-semibold">Сцена {sceneIndex} · {rows[0].beat.sceneTitle}</span>
-                            <span className="text-xs text-muted-foreground">{rows[0].beat.location}{rows[0].beat.characters.length ? ` · ${rows[0].beat.characters.join(', ')}` : ''}</span>
-                          </div>
-                          <table className="w-full text-xs">
-                            <tbody>
-                              {rows.map(({ scene: sc, beat }) => (
-                                <tr key={sc.id} className="border-t border-border/40 align-top">
-                                  <td className="w-12 px-3 py-2 font-mono text-muted-foreground">{beat.sceneIndex}.{beat.beatIndex}</td>
-                                  <td className="w-28 px-2 py-2 uppercase tracking-wide text-muted-foreground">{beat.shot}</td>
-                                  <td className="px-2 py-2">{beat.action}</td>
-                                  <td className="w-1/4 px-3 py-2 italic text-muted-foreground">→ {beat.cut}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
                 {/* Regenerate the whole script from scratch (wipes scenes/clips → confirm first), next to the manual paste option. */}
                 <div className="mt-4 rounded-lg border border-border bg-background p-3">
                   <button type="button" onClick={askRegenerate} disabled={revising} className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground disabled:opacity-50" data-testid="regenerate-script">
@@ -1729,19 +1694,86 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             {/* Stage 172 — Script is on its own page: the forward step links to the references/scenes page. */}
             <div className="mt-5 flex flex-wrap items-center justify-end gap-3 border-t border-border pt-4">
               {hasScript ? (
-                <Link href={episodeBase} onClick={() => rememberPhase('references')} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:brightness-110" data-testid="script-to-references">
-                  К референсам и сценам <ArrowRight className="h-4 w-4" />
+                <Link href={shotlistHref} onClick={() => rememberPhase('shotlist')} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:brightness-110" data-testid="script-to-shotlist">
+                  К шот-листу <ArrowRight className="h-4 w-4" />
                 </Link>
               ) : (
-                <span className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground opacity-50" data-testid="script-to-references" aria-disabled="true">
-                  К референсам и сценам <ArrowRight className="h-4 w-4" />
+                <span className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground opacity-50" data-testid="script-to-shotlist" aria-disabled="true">
+                  К шот-листу <ArrowRight className="h-4 w-4" />
                 </span>
               )}
             </div>
           </div>
         )}
 
-        {/* Step 2 — Stage 12: references of THIS episode + single "generate all" */}
+        {/* Step 2 — SHOT LIST on its own page (/shotlist): 5 scenes × 5 beats → 25 Scene rows. */}
+        {phase === 'shotlist' && (
+          <div className="mt-4 rounded-xl border border-border bg-card p-5 sm:p-8" data-testid="phase-shotlist">
+            <h2 className="mb-4 font-display text-xl font-bold">Шот-лист / Shot list</h2>
+            {hasScript ? (
+            <div className="mt-2 rounded-lg border border-border bg-background p-4" data-testid="shot-list-section">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h3 className="font-display text-lg font-bold">Шот-лист · 5 сцен × 5 битов</h3>
+                <button type="button" onClick={buildShotList} disabled={shotListBusy || revising} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50" data-testid="build-shot-list">
+                  {shotListBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Grid3x3 className="h-4 w-4" />} {hasShotList ? 'Пересобрать шот-лист / Rebuild shot list' : 'Создать шот-лист / Build shot list'}
+                </button>
+              </div>
+              <p className="mt-1.5 text-xs text-muted-foreground">Каждый бит — один клип 5 с (вертикаль 9:16). Бит 5.5 переходит в 1.1 следующей серии.</p>
+              {shotListBusy && shotListPoll.job && (
+                <div className="mt-3">
+                  <JobProgressBar job={shotListPoll.job} expectedTotalSec={120} />
+                  <StreamingText text={shotListPoll.job.streamedText} active className="mt-3 text-xs" maxHeight={240} />
+                </div>
+              )}
+              {shotListError && <p className="mt-2 text-sm text-destructive" data-testid="shot-list-error">{shotListError}</p>}
+              {hasShotList && !shotListBusy && (
+                <div className="mt-4 space-y-4" data-testid="shot-list-table">
+                  {beatScenes.map(([sceneIndex, rows]) => (
+                    <div key={sceneIndex} className="rounded-lg border border-border/60">
+                      <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-border/60 bg-muted/40 px-3 py-2">
+                        <span className="text-sm font-semibold">Сцена {sceneIndex} · {rows[0].beat.sceneTitle}</span>
+                        <span className="text-xs text-muted-foreground">{rows[0].beat.location}{rows[0].beat.characters.length ? ` · ${rows[0].beat.characters.join(', ')}` : ''}</span>
+                      </div>
+                      <table className="w-full text-xs">
+                        <tbody>
+                          {rows.map(({ scene: sc, beat }) => (
+                            <tr key={sc.id} className="border-t border-border/40 align-top">
+                              <td className="w-12 px-3 py-2 font-mono text-muted-foreground">{beat.sceneIndex}.{beat.beatIndex}</td>
+                              <td className="w-28 px-2 py-2 uppercase tracking-wide text-muted-foreground">{beat.shot}</td>
+                              <td className="px-2 py-2">{beat.action}</td>
+                              <td className="w-1/4 px-3 py-2 italic text-muted-foreground">→ {beat.cut}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            ) : (
+              <div className="rounded-lg border border-dashed border-border bg-background p-6 text-center" data-testid="no-script-shotlist">
+                <p className="text-sm text-muted-foreground">Сначала создайте сценарий — шот-лист собирается по нему.</p>
+              </div>
+            )}
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+              <Link href={scriptHref} onClick={() => rememberPhase('script')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="shotlist-to-script">
+                <ArrowLeft className="h-4 w-4" /> Сценарий
+              </Link>
+              {hasShotList ? (
+                <Link href={episodeBase} onClick={() => rememberPhase('references')} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:brightness-110" data-testid="shotlist-to-references">
+                  К референсам <ArrowRight className="h-4 w-4" />
+                </Link>
+              ) : (
+                <span className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground opacity-50" data-testid="shotlist-to-references" aria-disabled="true" title="Сначала создайте шот-лист">
+                  К референсам <ArrowRight className="h-4 w-4" />
+                </span>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Step 3 — Stage 12: references of THIS episode + single "generate all" */}
         {phase === 'references' && hasScript && (
         <section className="mt-4 rounded-xl border border-border bg-card p-4" data-testid="episode-references">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2028,8 +2060,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           {/* Stage 59 navigation — References is step 2: back to script · forward to scenes.
               Stage 129 — the forward button unlocks only once references are ready AND a mode is chosen. */}
           <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-            <Link href={scriptHref} onClick={() => rememberPhase('script')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="refs-to-script">
-              <ArrowLeft className="h-4 w-4" /> Сценарий
+            <Link href={shotlistHref} onClick={() => rememberPhase('shotlist')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="refs-to-shotlist">
+              <ArrowLeft className="h-4 w-4" /> Шот-лист
             </Link>
             {canEnterProduction(refsReady, mode) ? (
               <Link href={storyboardHref} onClick={() => rememberPhase('storyboard')} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" data-testid="refs-to-scenes">
