@@ -156,6 +156,59 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       await reloadEpisode({ refreshRefs: true }); router.refresh(); setFramesBusy(false)
     },
   })
+  // GRID STORYBOARD (step 9, grid-first) — the "Start frames" card now renders ONE 5×5 sheet with GPT Image 2.0
+  // (grid job), the producer reviews it, and ONLY after "Approve" the sheet is sliced into per-scene full-size
+  // start frames (slice job). On slice completion the user is taken straight to the Scenes step, where every
+  // scene already shows its start frame + a short beat description + View prompt/references + "Generate all".
+  const [gridUrl, setGridUrl] = useState<string | null>(validUrl(initial.gridUrl) ? initial.gridUrl : null)
+  const [gridApproved, setGridApproved] = useState<boolean>(!!initial.gridApproved)
+  const [gridBusy, setGridBusy] = useState(false)
+  const [sliceBusy, setSliceBusy] = useState(false)
+  const [gridError, setGridError] = useState<string | null>(null)
+  const [showGridPrompt, setShowGridPrompt] = useState(false)
+  const loadGrid = async () => {
+    try {
+      const r = await fetch(`/api/ai/storyboard/grid?episodeId=${initial.id}`, { cache: 'no-store' })
+      if (!r.ok) return null
+      const d = await r.json()
+      setGridUrl(validUrl(d?.gridUrl) ? d.gridUrl : null)
+      setGridApproved(!!d?.gridApproved)
+      return d
+    } catch { return null }
+  }
+  const gridPoll = useJobPolling({
+    onFinish: async (res) => {
+      const j = res.job
+      if (j.status === 'failed') setGridError(j.error ?? 'Не удалось сгенерировать грид / Grid failed')
+      await loadGrid(); setGridBusy(false)
+    },
+  })
+  const slicePoll = useJobPolling({
+    onFinish: async (res) => {
+      const j = res.job
+      if (j.status === 'failed') { setGridError(j.error ?? 'Не удалось нарезать грид / Slice failed'); setSliceBusy(false); return }
+      await loadGrid(); await reloadEpisode({ refreshRefs: true }); router.refresh(); setSliceBusy(false)
+      goPhase('scenes')
+    },
+  })
+  const generateGrid = async () => {
+    setGridError(null); setGridBusy(true)
+    try {
+      const r = await fetch('/api/ai/storyboard/grid', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ episodeId: initial.id }) })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(d?.error || 'Ошибка')
+      if (d?.jobId) gridPoll.start(d.jobId)
+    } catch (e: any) { setGridError(e?.message ?? 'Ошибка'); setGridBusy(false) }
+  }
+  const approveGrid = async () => {
+    setGridError(null); setSliceBusy(true)
+    try {
+      const r = await fetch('/api/ai/storyboard/grid/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ episodeId: initial.id }) })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(d?.error || 'Ошибка')
+      if (d?.jobId) slicePoll.start(d.jobId)
+    } catch (e: any) { setGridError(e?.message ?? 'Ошибка'); setSliceBusy(false) }
+  }
   // Stage 158 — "insert your own full episode script": the author pastes a complete script and it becomes the
   // authoritative source the season job structures into scenes. `showManual` toggles the textarea (both in the
   // no-script panel and above an existing script).
@@ -484,6 +537,25 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       .then((d) => {
         const j = d?.job
         if (j && (j.status === 'pending' || j.status === 'processing')) { setFramesBusy(true); framesPoll.start(j.id) }
+      })
+      .catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Resume the GRID / SLICE job after a reload. Both the 5×5 sheet render (storyboard_grid) and the
+  // approve-and-slice pass (storyboard_grid_slice) run in the background on the server, so on mount we
+  // re-attach the correct progress bar to any active job and refresh the current sheet + approval state.
+  useEffect(() => {
+    fetch(`/api/ai/storyboard/grid?episodeId=${episode.id}`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d) return
+        setGridUrl(validUrl(d.gridUrl) ? d.gridUrl : null)
+        setGridApproved(!!d.gridApproved)
+        const j = d.job
+        if (j && (j.status === 'pending' || j.status === 'processing')) {
+          if (j.type === 'storyboard_grid_slice') { setSliceBusy(true); slicePoll.start(j.id) }
+          else { setGridBusy(true); gridPoll.start(j.id) }
+        }
       })
       .catch(() => {})
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1617,32 +1689,32 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             {/* Step 9 — start frames */}
             <div className="rounded-lg border border-border bg-background/40 p-3" data-testid="start-frames-card">
               <h3 className="inline-flex items-center gap-2 text-sm font-semibold"><Images className="h-4 w-4" /> Стартовые кадры / Start frames</h3>
-              <p className="mt-1 text-xs text-muted-foreground">Один вертикальный кадр 9:16 на каждый бит шот-листа. Используются как первый кадр видеоклипа. Требуют шот-лист и референсы персонажей.</p>
-              <button type="button" onClick={generateAllFrames} disabled={framesBusy || !hasShotList} className="mt-2 inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50" data-testid="generate-all-frames" title={hasShotList ? '' : 'Сначала создайте шот-лист'}>
-                {framesBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Генерировать все кадры / Generate all frames
-              </button>
-              {framesBusy && framesPoll.job && <JobProgressBar job={framesPoll.job} expectedTotalSec={180} />}
-              {framesError && <p className="mt-2 text-xs text-red-500" data-testid="frames-error">{framesError}</p>}
-              {(() => {
-                const total = beatRows.length
-                if (total === 0) return null
-                const frameRows = beatRows.filter((r) => validUrl(r.scene.startFrameUrl))
-                const urls = frameRows.map((r) => r.scene.startFrameUrl!)
-                return (
-                  <div className="mt-3" data-testid="start-frames-gallery">
-                    <p className="mb-1.5 text-[11px] font-medium text-muted-foreground">Готово {frameRows.length}/{total} кадров / {frameRows.length}/{total} frames ready{frameRows.length < total && !framesBusy ? ` · не хватает ${total - frameRows.length} / ${total - frameRows.length} missing` : ''}</p>
-                    {frameRows.length > 0 && (
-                      <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-5">
-                        {frameRows.map((r, i) => (
-                          <button key={r.scene.id} type="button" onClick={() => openLightbox(urls, i, `${r.scene.title || `Сцена / Scene ${r.scene.number}`}`)} className="group relative aspect-[9/16] overflow-hidden rounded bg-muted" title={r.scene.title ?? ''} data-testid="start-frame-thumb">
-                            <img src={r.scene.startFrameUrl!} alt="" className="h-full w-full object-cover transition group-hover:brightness-110" />
-                          </button>
-                        ))}
-                      </div>
-                    )}
+              <p className="mt-1 text-xs text-muted-foreground">Один сплошной лист 5×5 (GPT Image 2.0) со стартовыми кадрами всех 25 сцен. Сначала генерируется грид, вы его проверяете и одобряете — только потом он нарезается на 25 полноразмерных кадров, и открывается экран сцен. Требуются шот-лист и референсы персонажей.</p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <button type="button" onClick={generateGrid} disabled={gridBusy || sliceBusy || !hasShotList} className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground hover:brightness-110 disabled:opacity-50" data-testid="generate-grid" title={hasShotList ? '' : 'Сначала создайте шот-лист'}>
+                  {gridBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} {gridUrl ? 'Перегенерировать грид 5×5 / Regenerate 5×5 grid' : 'Сгенерировать грид 5×5 / Generate 5×5 grid'}
+                </button>
+                <button type="button" onClick={() => setShowGridPrompt(true)} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-sm font-semibold hover:bg-muted" data-testid="view-grid-prompt">
+                  <FileText className="h-4 w-4" /> Промпт / Prompt
+                </button>
+              </div>
+              {gridBusy && gridPoll.job && <JobProgressBar job={gridPoll.job} expectedTotalSec={120} />}
+              {gridUrl && (
+                <div className="mt-3">
+                  <button type="button" onClick={() => openLightbox([gridUrl], 0, 'Лист сториборда 5×5 / Storyboard sheet')} className="group block w-full overflow-hidden rounded-lg border border-border bg-muted" data-testid="grid-image">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={gridUrl} alt="Storyboard 5×5" className="w-full object-contain transition group-hover:brightness-110" />
+                  </button>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <button type="button" onClick={approveGrid} disabled={!gridUrl || gridBusy || sliceBusy} className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-50" data-testid="approve-grid">
+                      {sliceBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Одобрить и нарезать 25 кадров / Approve & slice 25 frames
+                    </button>
+                    {gridApproved && !sliceBusy && <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-500"><Check className="h-3.5 w-3.5" /> Одобрено / Approved</span>}
                   </div>
-                )
-              })()}
+                </div>
+              )}
+              {sliceBusy && slicePoll.job && <JobProgressBar job={slicePoll.job} expectedTotalSec={120} />}
+              {gridError && <p className="mt-2 text-xs text-red-500" data-testid="grid-error">{gridError}</p>}
             </div>
           </div>
 
@@ -2131,6 +2203,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                     {scene.lookStale && validUrl(scene.videoUrl) && (
                       <div className="mt-1 inline-flex items-center rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] font-medium text-amber-700" data-testid="scene-look-stale">Character appearance changed — regenerate</div>
                     )}
+                    {(() => {
+                      const desc = parseBeatMeta(scene.beatMeta)?.action || scene.action
+                      return desc ? <p className="mt-1 line-clamp-2 text-xs text-muted-foreground" data-testid="scene-desc" title={desc}>{desc}</p> : null
+                    })()}
                   </div>
                   <div className="flex -space-x-1">{scene.characters?.map(({ character: c }) => validUrl(c.imageFront) ? <img key={c.id} src={c.imageFront as string} alt={c.name} title={c.name} className="h-6 w-6 rounded-full border border-background object-cover" /> : null)}</div>
                 </div>
@@ -2149,6 +2225,12 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       {/* Stage 120 — the last-frame zoom button is removed from the UI. The real last frame is
                           still extracted and used internally as the reangle / continuity source (unchanged). */}
                       <SceneVideoPlayer videoUrl={scene.videoUrl as string} poster={scene.lastFrameUrl} className="h-full w-full object-contain" />
+                    </>
+                  ) : validUrl(scene.startFrameUrl) ? (
+                    <>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={scene.startFrameUrl as string} alt={`Scene ${scene.number} start frame`} className="h-full w-full object-cover" data-testid="scene-start-frame" />
+                      <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">Стартовый кадр / Start frame</span>
                     </>
                   ) : (
                     <div className="flex h-full items-center justify-center text-xs text-muted-foreground">The video has not been generated yet</div>
@@ -2442,6 +2524,19 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             </div>
           </div>
         </div>
+      )}
+
+      {/* Storyboard 5×5 grid prompt (shared editable English prompt). */}
+      {showGridPrompt && (
+        <PromptModal
+          title="Промпт сториборда / Storyboard prompt"
+          description="Редактируемый английский промпт для листа 5×5. Плейсхолдеры подставляются из данных проекта."
+          endpoint={`/api/ai/storyboard/grid/prompt?episodeId=${initial.id}`}
+          resetBody={{ prompt: '' }}
+          alwaysShowReset
+          testId="grid-prompt-modal"
+          onClose={() => setShowGridPrompt(false)}
+        />
       )}
 
       {/* Stage 46E — character / location prompt modal (shared component). */}
