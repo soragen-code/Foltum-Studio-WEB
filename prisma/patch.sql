@@ -667,3 +667,5 @@ END $$;
 -- storyboard boards rotate wide / medium / close-up / two-shot board-to-board instead of a count-based single
 -- size. Additive & idempotent; legacy boards keep NULL.
 ALTER TABLE "Board" ADD COLUMN IF NOT EXISTS "shotType" TEXT;
+
+ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "scenePromptTemplate" TEXT;

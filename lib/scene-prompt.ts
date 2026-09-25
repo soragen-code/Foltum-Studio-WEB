@@ -24,6 +24,16 @@ export const LOCATION_INSIDE_NOTE =
   "Camera stays inside this location across the whole shot; lighting, weather, time of day and palette identical to the location references. Only the camera angle changes between shots. These frames are the SAME real place photographed from different positions — the characters are INSIDE this space: floor under their feet, walls/objects beside and behind them, real depth in front and behind; frame them inside this space at the shot scale the scene calls for (a dialogue shot stays close on the people), never as figures placed in front of a picture of the place. They interact with its objects and surfaces; the cuts show the same location from different angles with real depth (foreground, characters, background) — never a flat backdrop.";
 /** @deprecated alias kept for older imports — use REFERENCE_IMAGE_CAP. */
 export const MAX_REFERENCE_IMAGES = REFERENCE_IMAGE_CAP;
+
+/**
+ * Stage 242 — the EDITABLE scene-prompt template (project-level). The default template string and the
+ * pure render helper live in the import-light ./scene-prompt-template module so client components can
+ * import them without pulling this whole module graph into the browser bundle; they are re-exported here
+ * for existing server-side callers. buildScenePrompt() renders the NON-override final prompt from the
+ * template instead of a hard-coded block structure.
+ */
+export { DEFAULT_SCENE_PROMPT_TEMPLATE, renderSceneTemplate } from "@/lib/scene-prompt-template";
+import { DEFAULT_SCENE_PROMPT_TEMPLATE, renderSceneTemplate } from "@/lib/scene-prompt-template";
 /** Stage 112: only a camera edit of the ACTUAL predecessor frame can lead video references. */
 export const REANGLE_REFERENCE_NOTE = "the OPENING FRAME: the actual previous video's final instant already re-rendered from THIS shot's new camera. Match this camera/composition at frame 1; do not re-angle it again. Then immediately perform this scene's action and dialogue, without freezing.";
 /** Stage 122 — the note attached to the pre-generated REGION PLATE reference: the authoritative environment /
@@ -608,6 +618,13 @@ export interface BuildScenePromptInput {
   subLocationRefUrl?: string | null;
   /** URLs forbidden from video, even if accidentally assigned to cast/location. */
   forbiddenReferenceUrls?: string[];
+  /**
+   * Stage 242 — the project-level EDITABLE scene-prompt template. When set (non-empty after trim) it
+   * REPLACES the default block structure for the NON-override prompt via {{SETTING}}/{{CHARACTERS}}/
+   * {{ACTIONS}} token substitution. Omitted / null / blank → DEFAULT_SCENE_PROMPT_TEMPLATE (byte-for-byte
+   * identical to the previous hard-coded output). The manual per-scene override path is unaffected.
+   */
+  template?: string | null;
 }
 
 export interface BuildScenePromptResult {
@@ -733,13 +750,15 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const narrationLine = isNarration ? `Off-screen narrator (voiceover): "${(scene.voiceover ?? "").trim()}"`.trim() : "";
   const actionsSection = [actionsBody, ...dialogueLines, narrationLine].filter(Boolean).join("\n");
 
-  const FRAMING_LINE = "FRAMING: the scene must end on a shot size different from the one it opens with (wide / medium / close-up). If it opens wide, it ends medium or close; if it opens close, it ends medium or wide. Never return to the opening framing.";
-
-  const sections: string[] = [];
-  if (settingLines.length) sections.push(`Setting:\n${settingLines.join("\n")}`);
-  if (characterLines.length) sections.push(`Characters (appearance only):\n${characterLines.join("\n")}`);
-  sections.push(`ACTIONS:\n${actionsSection}`);
-  sections.push(FRAMING_LINE);
+  // Stage 242 — the NON-override text is rendered from the project's editable template (or the default,
+  // which is byte-for-byte identical to the previous hard-coded structure). Empty Setting/Characters
+  // blocks are dropped by renderSceneTemplate, so reference-less scenes match the old output exactly.
+  const tpl = (input.template && input.template.trim()) ? input.template : DEFAULT_SCENE_PROMPT_TEMPLATE;
+  const templatedPrompt = renderSceneTemplate(tpl, {
+    SETTING: settingLines.join("\n"),
+    CHARACTERS: characterLines.join("\n"),
+    ACTIONS: actionsSection,
+  });
 
   // Stage 40/41 — opening/end state kept for return-shape compatibility (not injected into the template).
   const openingState = resolveOpeningState(scene, previous);
@@ -754,7 +773,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
   const hasOverride = override.length > 0;
   let prompt = hasOverride
     ? stripReferenceList(refreshCharacterLine(override, characters, false)).replace(/^REFERENCE MAP:.*$/gm, "").trim()
-    : sections.join("\n\n");
+    : templatedPrompt;
   let basePrompt = prompt;
 
   const referenceImages: string[] = refs.map(r => r.url);

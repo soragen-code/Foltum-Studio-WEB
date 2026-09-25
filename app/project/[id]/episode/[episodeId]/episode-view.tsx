@@ -30,6 +30,7 @@ import { StoryboardPanel } from './storyboard-panel'
 import { canChooseMode, canEnterProduction, productionSurface, type ProductionMode } from '@/lib/production-mode'
 import { locationExtraLabel } from '@/lib/visual-style'
 import { episodeTotalSeconds, EPISODE_MAX_TOTAL_SECONDS, EPISODE_TOTAL_LABEL } from '@/lib/season'
+import { DEFAULT_SCENE_PROMPT_TEMPLATE } from '@/lib/scene-prompt-template'
 import { ASSEMBLE_QUALITIES, ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY, DEFAULT_ASSEMBLE_FPS, type AssembleQuality, type AssembleFps } from '@/lib/assemble-options'
 
 type EpisodePhase = 'script' | 'references' | 'scenes'
@@ -175,6 +176,15 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // characters. Shown as 9:16 thumbnails in the «View prompt» modal; each opens fullscreen via openLightbox.
   type PromptRef = { index: number; url: string; kind?: string; note?: string }
   const [promptRefs, setPromptRefs] = useState<PromptRef[]>([])
+  // Stage 242 — the project-level, EDITABLE scene-prompt template. Edited in ONE place on the Scenes
+  // page; on save it applies to EVERY scene prompt (both the «View prompt» preview and generation),
+  // because the final NON-override prompt is assembled on the fly from this template. Empty/blank means
+  // "use the built-in default" (which reproduces the previous output byte-for-byte).
+  const [tplText, setTplText] = useState<string>(project?.scenePromptTemplate ?? DEFAULT_SCENE_PROMPT_TEMPLATE)
+  const [tplOpen, setTplOpen] = useState(false)      // panel expanded
+  const [tplSaving, setTplSaving] = useState(false)  // POST in flight
+  const [tplSaved, setTplSaved] = useState(false)    // flashed «Сохранено»
+  const [tplErr, setTplErr] = useState<string | null>(null)
   // «"Assemble" — pure concatenation of the ready scene clips into one episode (no audit / no polish / no re-gen).
   const [stitching, setStitching] = useState(false)
   // Stage 46B: «"Assemble" opens a dialog — production quality / fps of the FINAL file (scenes are always 480p);
@@ -1200,6 +1210,31 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     }
   }
 
+  // Stage 242 — persist the project-level scene-prompt template. Saving a blank/whitespace value resets
+  // to the built-in default (stored as null). On success the new template applies to every scene prompt
+  // immediately (prompts are assembled on the fly), so router.refresh() re-pulls fresh server data.
+  const saveTemplate = async (reset = false) => {
+    const next = reset ? DEFAULT_SCENE_PROMPT_TEMPLATE : tplText
+    setTplSaving(true); setTplErr(null); setTplSaved(false)
+    try {
+      const res = await fetch(`/api/projects/${project.id}/scene-prompt-template`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ template: reset ? '' : tplText }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data?.error || 'Не удалось сохранить')
+      if (reset) setTplText(DEFAULT_SCENE_PROMPT_TEMPLATE)
+      else setTplText(next)
+      setTplSaved(true)
+      setTimeout(() => setTplSaved(false), 2500)
+      router.refresh()
+    } catch (e: any) {
+      setTplErr(e?.message ?? 'Не удалось сохранить')
+    } finally {
+      setTplSaving(false)
+    }
+  }
+
   const allReady = scenes.length > 0 && scenes.every((s) => validUrl(s.videoUrl) && !activeGen[s.id])
 
   // «"Assemble" — pure concatenation of the ready scene clips into a single episode video.
@@ -1701,6 +1736,60 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <StoryboardPanel projectId={project.id} episodeId={episode.id} initialVideoUrl={episode.videoUrl} />
         ) : (
         <>
+        {/* Stage 242 — EDITABLE scene-prompt template (project-level). Edited in ONE place here; on save
+            it applies to EVERY scene prompt (preview + generation). Collapsed by default. The tokens
+            {{SETTING}} / {{CHARACTERS}} / {{ACTIONS}} are substituted per scene; the rest is fixed
+            instruction text. Leaving it at the default reproduces the previous prompts byte-for-byte. */}
+        <div className="mt-4 rounded-xl border border-border bg-card">
+          <button type="button" onClick={() => setTplOpen((v) => !v)}
+            className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
+            data-testid="scene-template-toggle" aria-expanded={tplOpen}>
+            <span className="flex items-center gap-2 text-sm font-medium">
+              <FileText className="h-4 w-4 text-muted-foreground" /> Шаблон промпта сцен
+            </span>
+            <span className="flex items-center gap-2 text-xs text-muted-foreground">
+              {tplText.trim() === DEFAULT_SCENE_PROMPT_TEMPLATE.trim() ? 'Стандартный' : 'Изменён'}
+              <ChevronRight className={`h-4 w-4 transition-transform ${tplOpen ? 'rotate-90' : ''}`} />
+            </span>
+          </button>
+          {tplOpen && (
+            <div className="border-t border-border p-4">
+              <p className="mb-2 text-xs text-muted-foreground">
+                Общий шаблон для всех сцен эпизода. При сохранении он применяется ко всем промптам сцен
+                (и в предпросмотре «Показать промпт», и при генерации). Подстановки:{' '}
+                <code className="rounded bg-muted px-1 py-0.5">{'{{SETTING}}'}</code>{' '}
+                <code className="rounded bg-muted px-1 py-0.5">{'{{CHARACTERS}}'}</code>{' '}
+                <code className="rounded bg-muted px-1 py-0.5">{'{{ACTIONS}}'}</code>{' '}
+                — остальной текст добавляется к каждой сцене без изменений. Пустой блок (без содержимого
+                подстановки) автоматически убирается. Сцены с ручным промптом («Показать промпт» → сохранён
+                свой текст) шаблоном не затрагиваются.
+              </p>
+              <textarea
+                value={tplText}
+                onChange={(e) => setTplText(e.target.value)}
+                spellCheck={false}
+                rows={14}
+                className="w-full rounded-lg border border-border bg-background p-3 font-mono text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-primary/40"
+                data-testid="scene-template-textarea"
+              />
+              {tplErr && <p className="mt-2 text-xs text-destructive">{tplErr}</p>}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button type="button" onClick={() => saveTemplate(false)} disabled={tplSaving}
+                  className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:opacity-90 disabled:opacity-50"
+                  data-testid="scene-template-save">
+                  {tplSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : tplSaved ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
+                  {tplSaved ? 'Сохранено' : 'Сохранить'}
+                </button>
+                <button type="button" onClick={() => saveTemplate(true)} disabled={tplSaving}
+                  className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium transition hover:bg-muted disabled:opacity-50"
+                  data-testid="scene-template-reset">
+                  <RotateCcw className="h-4 w-4" /> Сбросить к стандартному
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Stage 238 — the «Сцены»/«Шоты» generation-mode selector is removed: generation is always
             scene-with-references (genMode is fixed to 'scene'). The shot pipeline remains in the codebase but
             is no longer offered in the UI. chooseGenerationMode / genModeNote are kept for the shot code path. */}

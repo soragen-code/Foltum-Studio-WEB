@@ -117,6 +117,9 @@ model Project {
   // Stage 104: the only media provider is WaveSpeed (columns kept for compatibility, always "wavespeed")
   imageProvider String @default("wavespeed")
   videoProvider String @default("wavespeed")
+  // Stage 242 — project-level EDITABLE scene-prompt template. NULL = use DEFAULT_SCENE_PROMPT_TEMPLATE
+  // (byte-for-byte the previous hard-coded structure). Applied to every scene's non-override prompt.
+  scenePromptTemplate String? @db.Text
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

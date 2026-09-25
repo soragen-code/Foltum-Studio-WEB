@@ -35,7 +35,8 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     include: {
       location: true,
       characters: { include: { character: true }, orderBy: { characterId: "asc" } },
-      episode: { select: { location: true } },
+      // Stage 242 — pull the project's editable scene-prompt template alongside the episode location.
+      episode: { select: { location: true, season: { select: { project: { select: { scenePromptTemplate: true } } } } } },
     },
   });
   if (!scene) return NextResponse.json({ error: "Scene not found" }, { status: 404 });
@@ -74,6 +75,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     location: location as never,
     previous: previous as never,
     forbiddenReferenceUrls,
+    template: scene.episode?.season?.project?.scenePromptTemplate ?? null,
   });
 
   const prompt = finalVideoPrompt(built);

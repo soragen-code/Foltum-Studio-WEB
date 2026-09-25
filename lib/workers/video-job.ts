@@ -234,8 +234,11 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
       script: true, // Stage 54: source text the prop registry is extracted from
       propRegistry: true, // Stage 54: cached registry JSON ({hash, props}) reused across the episode's scenes
       location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true, setInventory: true, regionPlates: true } },
-      season: { select: { project: { select: { isTest: true } } } },
+      season: { select: { project: { select: { isTest: true, scenePromptTemplate: true } } } },
     } });
+    // Stage 242 — the project's editable scene-prompt template (null → DEFAULT_SCENE_PROMPT_TEMPLATE). Threaded
+    // into BOTH buildScenePrompt calls below (initial build + fresh rebuild) so generation and preview agree.
+    const scenePromptTemplate = episodeLoc?.season?.project?.scenePromptTemplate ?? null;
 
     // Stage 4: speech is ALWAYS English. `dialogueEn` holds the voiced lines; legacy scenes written in
     // another language are translated once HERE (worker-only, network) and the translation is saved.
@@ -301,6 +304,7 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
       props: episodeProps, // Stage 54: canonical episode props, substituted VERBATIM per scene
       textOnlyWhenNoReferences: isTestProject,
       chainMode: "chain",
+      template: scenePromptTemplate, // Stage 242: project-level editable scene-prompt template
     });
     const prompt = finalVideoPrompt(built);
     const continuity = reangleUrl ? "reangled_frame" : "none";
@@ -367,7 +371,7 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
       tier: l.character.tier, imageFront: l.character.imageFront, imageFull: l.character.imageFull,
       appearance: l.character.appearance, age: l.character.age }));
     const freshRefs = buildScenePrompt({ scene: freshScene, characters: freshCharacters, location: freshScene.location ?? freshScene.episode.location,
-      previous: currentPrevious, forbiddenReferenceUrls }).retryRefs;
+      previous: currentPrevious, forbiddenReferenceUrls, template: scenePromptTemplate }).retryRefs;
     if (reangleRequest && (!currentPrevious || buildReangleRequest({ sceneId, number: freshScene.number,
       startState: freshScene.startState, videoPrompt: freshScene.videoPrompt, promptOverride: freshScene.promptOverride,
       previous: currentPrevious, refs: freshRefs, castState: freshCharacters, regionPlateUrl }).hash !== reangleRequest.hash))
