@@ -282,7 +282,18 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     const anyScene = ((initial.scenes ?? []) as Scene[]).some((s) => validUrl(s.videoUrl))
     return anyScene || validUrl(initial.videoUrl) ? 'scenes' : 'references'
   })
-  const goPhase = (p: EpisodePhase) => { setPhase(p); if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' }) }
+  // Stage 241 — remember the last active step PER EPISODE, so reopening the episode returns the user to where
+  // they left off instead of always resetting to the computed default. The script lives on its own /script
+  // route (view === 'script'), which always shows the script and is never persisted. The value is written only
+  // in this client handler and read only in a mount effect (below) — never during render — so it is SSR-safe.
+  const phaseStorageKey = `foltum:episode-phase:${initial.id}`
+  const goPhase = (p: EpisodePhase) => {
+    setPhase(p)
+    if (view !== 'script' && typeof window !== 'undefined') {
+      try { window.localStorage.setItem(phaseStorageKey, p) } catch { /* quota / storage unavailable — ignore */ }
+    }
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
 
   // Stage 127 — production mode: SCENES (classic 9-scene) or STORYBOARD (12–15 i2v boards). Only STORYBOARD
   // swaps the Scenes UI for the storyboard panel and lifts the keyframe/i2v ban; `null` (legacy) → SCENES.
@@ -841,6 +852,22 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // season_script job (no instruction = write from the 60-second footage; an existing script is fully
   // regenerated and its scenes/videos reset). Polled through the same revisePoll as the rewrite.
   const hasScript = !!(episode.script && String(episode.script).trim())
+
+  // Stage 241 — on mount, return to the last active step the user left this episode on (References / Scenes),
+  // if it is currently reachable. Runs once after hydration (never during SSR / the initial render, so there
+  // is no hydration mismatch) and never on the /script route (which always shows the script).
+  useEffect(() => {
+    if (view === 'script' || typeof window === 'undefined') return
+    let saved: string | null = null
+    try { saved = window.localStorage.getItem(phaseStorageKey) } catch { /* storage unavailable — ignore */ }
+    if (saved !== 'references' && saved !== 'scenes') return
+    // Only restore a step the user can actually reach right now (mirrors the phase-step gating).
+    if (saved === 'references' && !hasScript) return
+    if (saved === 'scenes' && !(hasScript && (canEnterProduction(refsReady, mode) || scenes.some((s) => validUrl(s.videoUrl))))) return
+    setPhase(saved as EpisodePhase)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const generateScript = async () => {
     if (revising) return
     setRevising(true); setError(null); setReviseNotice(null)
