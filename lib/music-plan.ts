@@ -69,7 +69,7 @@ export async function buildMusicPlan(
     const raw = await chatJSON<{ scenes?: Array<{ index?: number; mood?: string; intensity?: number }> }>(
       MUSIC_PLAN_SYSTEM_PROMPT,
       `${context ? context + "\n\n" : ""}Scenes:\n${sceneLines}`,
-      { model: "openai/gpt-4o", temperature: 0.2, maxTokens: 900 }
+      { model: "anthropic/claude-opus-5", temperature: 0.2, maxTokens: 900 }
     );
     const byIndex = new Map<number, { mood?: string; intensity?: number }>();
     for (const row of raw?.scenes ?? []) {

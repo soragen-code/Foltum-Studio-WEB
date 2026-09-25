@@ -9,7 +9,7 @@
  */
 import { getOpenAI } from "@/lib/ai";
 
-export const FRAME_STATE_MODEL = "openai/gpt-4o";
+export const FRAME_STATE_MODEL = "anthropic/claude-opus-5";
 
 /** Minimal client shape so the call can be mocked in unit tests. */
 export interface VisionClient {
@@ -39,7 +39,7 @@ export interface FrameStateCharacter {
 }
 
 /** Stage 102: fallback vision model for the third attempt (same OpenAI client, vision-capable). */
-export const FRAME_STATE_FALLBACK_MODEL = "openai/gpt-4o";
+export const FRAME_STATE_FALLBACK_MODEL = "anthropic/claude-opus-5";
 
 /** The mandatory first line of every last-frame description (read by lib/prompt-seam extractPreviousCamera). */
 export const CAMERA_OF_THIS_FRAME_PREFIX = "CAMERA OF THIS FRAME:";

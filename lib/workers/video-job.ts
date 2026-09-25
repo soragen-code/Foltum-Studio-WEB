@@ -549,13 +549,13 @@ function orderEpisodeShots<S extends { id: string; index: number; sceneId: strin
 
 /**
  * Stage 167 (req 4) — real VLM keyframe-continuity check. Injected into compareShotKeyframesVLM so it
- * compares the previous shot's LAST frame with the next shot's FIRST frame (gpt-4o-mini vision). Returns
+ * compares the previous shot's LAST frame with the next shot's FIRST frame (Claude Opus 5 vision). Returns
  * a soft {consistent, reason}; a mismatch is logged, never a hard failure.
  */
 const shotVisionFn: ShotVisionFn = async ({ prevFrameUrl, nextFrameUrl, question }) => {
   try {
     const res = await getOpenAI().chat.completions.create({
-      model: "openai/gpt-4o",
+      model: "anthropic/claude-opus-5",
       messages: [
         { role: "system", content: "You are a film continuity checker. Compare two consecutive video keyframes and decide whether the visual continuity holds (same setting, lighting, wardrobe, character identity and camera logic). Reply with strict JSON: {\"consistent\": boolean, \"reason\": string}." },
         { role: "user", content: [

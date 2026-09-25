@@ -16,7 +16,7 @@
 import { getOpenAI } from "@/lib/ai";
 import type { VisionClient, VisionRequest } from "@/lib/frame-state";
 
-export const FULL_BODY_CHECK_MODEL = "openai/gpt-4o";
+export const FULL_BODY_CHECK_MODEL = "anthropic/claude-opus-5";
 
 /** Minimum heads-tall for an adult figure to pass (real adults are 7–8; below 6.5 reads as chibi/dwarf). */
 export const ADULT_MIN_HEADS_TALL = 6.5;

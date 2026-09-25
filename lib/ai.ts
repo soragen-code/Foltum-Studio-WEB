@@ -27,7 +27,7 @@ const DEFAULT_TIMEOUT_MS = 240_000;
 const DEFAULT_MAX_RETRIES = 1;
 
 /** Default (fast) model for utility calls: voiceover, translation, idea, frame-state, artifact images (vision). */
-const MODEL = "openai/gpt-4o";
+const MODEL = "anthropic/claude-opus-5";
 /**
  * Model used for SCRIPT generation (season structure, episode scripts, full story, scene breakdown).
  * Per user decision all script/plot writing is done by Claude Opus 5 via WaveSpeed. Anthropic models
@@ -49,7 +49,7 @@ export const EPISODE_SCRIPT_TEMPERATURE = 0.7;
 /**
  * Reasoning-family models (gpt-5*, gpt-6*, o*) use a different parameter set (max_completion_tokens,
  * no temperature). None of the current WaveSpeed models are reasoning-family, so this returns false for
- * openai/gpt-4o and anthropic/claude-opus-5 — kept for forward-compatibility if a reasoning model is added.
+ * anthropic/claude-opus-5 (the only model in use) — kept for forward-compatibility if a reasoning model is added.
  */
 export function isReasoningModel(model: string): boolean {
   return /(^|\/)(gpt-6|gpt-5|o\d)/.test(model);

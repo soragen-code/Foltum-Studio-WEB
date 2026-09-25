@@ -201,7 +201,7 @@ export type ShotVisionFn = (args: {
 
 /**
  * VLM continuity path: compares the LAST keyframe of shot A against the FIRST keyframe of shot B via an
- * injected vision function (gpt-4o-mini in production). It is STRUCTURED so it is NEVER exercised in the
+ * injected vision function (Claude Opus 5 in production). It is STRUCTURED so it is NEVER exercised in the
  * offline tests: it requires two real https frame URLs AND an injected `visionFn`. When either is
  * missing it short-circuits to a skipped (consistent) verdict WITHOUT calling anything. Only the worker,
  * holding real generated frame URLs, ever reaches the vision call.

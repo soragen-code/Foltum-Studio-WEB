@@ -98,7 +98,7 @@ export async function pickMood(input: { logline?: string | null; synopsis?: stri
     const raw = await chatJSON<unknown>(
       MOOD_PICK_SYSTEM_PROMPT,
       text,
-      { model: "openai/gpt-4o", temperature: 0.2, maxTokens: 30 }
+      { model: "anthropic/claude-opus-5", temperature: 0.2, maxTokens: 30 }
     );
     return parseMood(raw);
   } catch (err) {
