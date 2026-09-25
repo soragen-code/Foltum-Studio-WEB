@@ -415,7 +415,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // Stage 238 — a legacy episode saved as STORYBOARD falls back to SCENES while the storyboard is disabled.
   const [mode, setMode] = useState<ProductionMode | null>(() => {
     const saved = (initial.mode as any) ?? null
-    if (!STORYBOARD_ENABLED && saved === 'STORYBOARD') return 'SCENES'
+    // Storyboard mode is disabled → SCENES is the ONLY available mode. Never leave the mode unset: an unset
+    // mode keeps canEnterProduction false, which locks the «К сториборду» / Storyboard / Video steps forever
+    // (the author has nothing to choose). Default to SCENES so the forward navigation is unlocked once refs are ready.
+    if (!STORYBOARD_ENABLED) return 'SCENES'
     return saved
   })
   const [modeSaving, setModeSaving] = useState(false)
