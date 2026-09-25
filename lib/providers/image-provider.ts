@@ -23,6 +23,8 @@ export interface FluxInput {
   seed?: number;
   /** Seedream multi-reference input (1-10 URLs): the output keeps the place/light of these images. */
   image_input?: string[];
+  /** GPT Image 2.0 resolution tier. Default "2k"; the 5×5 storyboard sheet asks for "4k" so sliced panels stay usable. */
+  resolution?: "1k" | "2k" | "4k";
 }
 
 export interface ImageGenerationInput extends FluxInput {
@@ -74,7 +76,8 @@ export function buildWaveSpeedImageRequest(input: ImageGenerationInput): { slug:
   // `quality: "high"` = best fidelity tier; `resolution: "2k"` keeps parity with the previous 2K plates.
   // NOTE: GPT Image 2.0 has NO `seed` parameter, so the caller-supplied seed is intentionally dropped
   // (extra keys are silently ignored by the API — output is provider-random).
-  const body: Record<string, unknown> = { prompt: input.prompt, aspect_ratio, resolution: "2k", quality: "high", output_format: "png", enable_sync_mode: false };
+  const resolution = input.resolution === "1k" || input.resolution === "4k" ? input.resolution : "2k";
+  const body: Record<string, unknown> = { prompt: input.prompt, aspect_ratio, resolution, quality: "high", output_format: "png", enable_sync_mode: false };
   if (refs.length) {
     body.images = refs;
     return { slug: WAVESPEED_GPT_IMAGE_EDIT, body };

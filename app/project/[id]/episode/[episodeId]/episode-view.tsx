@@ -2392,7 +2392,17 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                   ) : validUrl(scene.startFrameUrl) ? (
                     <>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={scene.startFrameUrl as string} alt={`Scene ${scene.number} start frame`} className="h-full w-full object-cover" data-testid="scene-start-frame" />
+                      <img
+                        src={scene.startFrameUrl as string}
+                        alt={`Scene ${scene.number} start frame`}
+                        className="h-full w-full cursor-zoom-in object-cover"
+                        data-testid="scene-start-frame"
+                        // Fullscreen 9:16 slideshow over ALL start frames of the episode (←/→, swipe, wheel).
+                        onClick={() => {
+                          const frames = scenes.filter((s) => validUrl(s.startFrameUrl)).sort((a, b) => a.number - b.number)
+                          openLightbox(frames.map((s) => s.startFrameUrl), frames.findIndex((s) => s.id === scene.id), 'Стартовые кадры / Start frames')
+                        }}
+                      />
                       <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">Стартовый кадр / Start frame</span>
                     </>
                   ) : (
@@ -2594,7 +2604,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             <button className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-white/10 p-2 text-white hover:bg-white/20 sm:left-4" data-testid="lightbox-prev" onClick={(e) => { e.stopPropagation(); lightboxStep(-1) }}><ChevronLeft className="h-6 w-6" /></button>
           )}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={lightbox.images[lightbox.index]} alt={lightbox.title ?? ''} className="max-h-[92vh] max-w-full object-contain" onClick={(e) => e.stopPropagation()} />
+          <img src={lightbox.images[lightbox.index]} alt={lightbox.title ?? ''} className="h-[92vh] max-h-[92vh] max-w-full object-contain" data-testid="lightbox-image" onClick={(e) => e.stopPropagation()} />
           {lightbox.images.length > 1 && (
             <button className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-white/10 p-2 text-white hover:bg-white/20 sm:right-4" data-testid="lightbox-next" onClick={(e) => { e.stopPropagation(); lightboxStep(1) }}><ChevronRight className="h-6 w-6" /></button>
           )}

@@ -13,8 +13,10 @@
 export const GRID_ROWS = 5;
 export const GRID_COLS = 5;
 export const GRID_PANELS = GRID_ROWS * GRID_COLS; // 25
-/** GPT Image 2.0 sheet aspect. Five 16:9 panels per row → 5*(16/9) wide by 5 tall ≈ 16:9 overall. */
-export const GRID_ASPECT_RATIO = "16:9";
+/** GPT Image 2.0 sheet aspect. Five 9:16 panels per row × 5 rows → (5·9):(5·16) = exactly 9:16 overall. */
+export const GRID_ASPECT_RATIO = "9:16";
+/** Sheet resolution tier: 4k (2160×3840) so each of the 25 vertical panels is ≈ 430×770 px after slicing. */
+export const GRID_RESOLUTION = "4k" as const;
 /** GPT Image 2.0 accepts up to 10 image_inputs; keep the char refs + 1 location master under that cap. */
 export const GRID_MAX_CHAR_REFS = 8;
 
@@ -78,9 +80,11 @@ const SHOT_SIZES = ["wide", "medium", "close-up", "medium", "wide"] as const;
  * placeholders in {curly braces} are replaced by fillGridTemplate. When a producer saves an override we
  * keep THEIR text and only substitute the placeholders that are still present.
  */
-export const DEFAULT_GRID_TEMPLATE = `Professional film storyboard sheet laid out as 5 rows by 5 columns of equal 16:9 panels (25 total), thin black borders between panels, dark charcoal background. EVERY PANEL IS A PHOTOREALISTIC LIVE-ACTION FILM STILL: real actors with natural skin texture, real fabric and props, cinematic lighting, shallow depth of field, natural colour grading with subtle film grain — these panels are the first frames of the finished video. NOT a drawing, NOT a sketch, NOT an illustration, NOT grayscale, NOT pencil or ink. Small panel numbers "1.1" to "5.5" in the top-left corner of each panel; bold row labels on the left margin: {ROW_LABELS}. No other text or captions.
+export const DEFAULT_GRID_TEMPLATE = `A single vertical 9:16 contact sheet made of exactly 25 VERTICAL 9:16 panels arranged in 5 rows by 5 columns, all panels identical in size, filling the whole image edge to edge. Panels are separated only by thin, straight, uniform PURE WHITE gutter lines (about 1% of the sheet width) running the full height and width of the sheet, plus the same thin white line along the outer edge. ABSOLUTELY NO TEXT anywhere: no panel numbers, no row labels, no captions, no titles, no subtitles, no watermarks, no logos — the panels contain only the photographed scene.
 
-STORY LEGIBILITY: each panel is ONE distinct story beat that must read without words — stage exactly the action described for that panel, make the key prop ({KEY_ELEMENT}) and the characters' reactions clearly visible, and let consecutive panels show visible progression (cause → effect). Never repeat a generic pose or a generic wide shot; follow the shot size given for each panel.
+EVERY PANEL IS A PHOTOREALISTIC LIVE-ACTION FILM STILL in vertical 9:16 framing: real actors with natural skin texture, real fabric and props, cinematic lighting, shallow depth of field, natural colour grading with subtle film grain — these panels are the first frames of the finished vertical video. NOT a drawing, NOT a sketch, NOT an illustration, NOT grayscale, NOT pencil or ink.
+
+STORY LEGIBILITY: each panel is ONE distinct story beat that must read without words — stage exactly the action described for that panel, make the key prop ({KEY_ELEMENT}) and the characters' reactions clearly visible, and let consecutive panels show visible progression (cause → effect). Never repeat a generic pose or a generic wide shot; follow the shot size given for each panel. Reading order: left to right, then top to bottom (panel 1.1 is top-left, 5.5 is bottom-right).
 
 CONTINUITY RULE: the last panel of every row and the first panel of the next row show the SAME moment — same positions, same poses, same action — differing only in shot size.
 
@@ -90,7 +94,7 @@ CHARACTER REFERENCES — keep faces, hair and wardrobe consistent in every panel
 
 {ROWS}
 
-Clean layout, cinematic compositions, consistent character designs, photoreal throughout.`;
+Clean layout, cinematic vertical compositions, consistent character designs, photoreal throughout, no text.`;
 
 function short(text: string | null | undefined, max = 160): string {
   const t = (text ?? "").replace(/\s+/g, " ").trim();
