@@ -677,3 +677,16 @@ ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "scenePromptTemplate" TEXT;
 -- drive that location's extra reference plates (up to 4 angles of the SAME place). Additive & idempotent;
 -- legacy scenes keep NULL and fall back to the default shot plan.
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "cameraAngle" TEXT;
+
+
+
+-- ─── Stage 240 — GRID STORYBOARD (5×5 sheet → 25 per-scene start frames) ───────────────────────
+-- The storyboard returns as a single editable 5×5 grid image (25 panels). After approval the sheet is
+-- sliced into 25 panels and each panel is assigned to one scene as its START FRAME. All additive & idempotent;
+-- legacy episodes/scenes keep NULL and behave exactly as before.
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "gridUrl" TEXT;
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "gridPrompt" TEXT;
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "gridApproved" BOOLEAN NOT NULL DEFAULT false;
+ALTER TABLE "Episode" ADD COLUMN IF NOT EXISTS "gridJobId" TEXT;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "startFrameUrl" TEXT;
+ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "gridPanelIndex" INTEGER;

@@ -232,6 +232,7 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
     const episodeLoc = await prisma.episode.findUnique({ where: { id: scene.episodeId }, select: {
       id: true,
       script: true, // Stage 54: source text the prop registry is extracted from
+      gridUrl: true, // Stage 240: the episode's 5×5 storyboard sheet, sent as a context PLATE when scenes use grid start frames
       propRegistry: true, // Stage 54: cached registry JSON ({hash, props}) reused across the episode's scenes
       location: { select: { id: true, name: true, imageUrl: true, imageReverse: true, imageDetail: true, imageExtra: true, setInventory: true, regionPlates: true } },
       season: { select: { project: { select: { isTest: true, scenePromptTemplate: true } } } },
@@ -335,6 +336,20 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
       retryRefs = [];
     } else if (referenceImages.length) {
       referenceImages = await downscaleReferences(referenceImages, projectId);
+    }
+    // Stage 240 — GRID STORYBOARD start frame. When this scene carries a sliced panel (Scene.startFrameUrl from
+    // an approved 5×5 sheet), the panel drives the shot: it is PREPENDED as the start frame (image 1) and the full
+    // grid sheet is APPENDED as a context plate (cut first if over the cap). Fully inert for scenes without a panel
+    // and for models that do not accept reference images (text-only path already emptied referenceImages above).
+    {
+      const isHttp = (u?: string | null): u is string => typeof u === "string" && u.startsWith("http") && u.length > 10;
+      if (videoDef.refImages && built.referenceKind !== "text_only" && isHttp(scene.startFrameUrl)) {
+        const extras = [scene.startFrameUrl, ...(isHttp(episodeLoc?.gridUrl) ? [episodeLoc!.gridUrl as string] : [])];
+        const scaled = await downscaleReferences(extras, projectId);
+        const panelRef = scaled[0];
+        const plateRefs = scaled.slice(1);
+        referenceImages = [panelRef, ...referenceImages.filter((u) => u !== panelRef), ...plateRefs].slice(0, SHOT_REFERENCE_IMAGE_CAP);
+      }
     }
     const refCounts = {
       characters: retryRefs.filter(r => r.kind === "character").length,

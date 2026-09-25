@@ -273,6 +273,14 @@ model Episode {
   // generate; the advance-chains cron starts the split automatically once they are all ready, then clears it.
   // Nullable/backward-compatible — legacy rows keep NULL and behave exactly as before.
   boardGate      String?
+  // Stage 240 — GRID STORYBOARD: the episode's single 5×5 storyboard sheet (25 panels). gridUrl = the
+  // rendered sheet (S3). gridPrompt = the producer-editable English prompt used to render it. gridApproved =
+  // the sheet was approved and sliced into 25 per-scene start frames. gridJobId = the last grid job (for
+  // resume-on-reload). All nullable/backward-compatible — legacy episodes keep NULL and behave as before.
+  gridUrl        String?
+  gridPrompt     String? @db.Text
+  gridApproved   Boolean @default(false)
+  gridJobId      String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -490,6 +498,12 @@ model Scene {
   // P7 (additive): true when the approved Episode.script changed after this scene was derived from it, so the
   // scene (and its shots) are outdated and must be rebuilt. Default false = fresh; reset to false on rebuild.
   stale           Boolean @default(false)
+  // Stage 240 — GRID STORYBOARD: after the episode's 5×5 sheet is approved it is sliced into 25 panels; each
+  // panel is uploaded and assigned to one scene as its START FRAME. startFrameUrl = the sliced panel (S3);
+  // gridPanelIndex = 1..25 position on the sheet. Both nullable/additive — scenes without a grid keep NULL and
+  // the classic pipeline is unchanged; when set, the video job uses the panel as the scene's first frame.
+  startFrameUrl   String?
+  gridPanelIndex  Int?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

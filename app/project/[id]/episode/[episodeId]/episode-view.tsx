@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Header } from '@/components/header'
-import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Copy, Check, FileText, RotateCcw, Save, Plus, Undo2, AlertTriangle } from 'lucide-react'
+import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Copy, Check, FileText, RotateCcw, Save, Plus, Undo2, AlertTriangle, Grid3x3 } from 'lucide-react'
 import { FrameToolbar, DownloadAllButton } from '@/app/project/[id]/_components/frame-toolbar'
 import { PromptModal, CHARACTER_PROMPT_DESCRIPTION, LOCATION_PROMPT_DESCRIPTION } from '@/app/project/[id]/_components/prompt-modal'
 import { FeatureLockBadge } from '@/app/project/[id]/_components/feature-lock'
@@ -1265,6 +1265,12 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         <div className="flex flex-wrap items-center gap-4">
           <Link href={`/project/${project.id}`} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> To season story</Link>
           <EpisodeNavGrid projectId={project.id} episodes={siblings} currentId={episode.id} />
+          {/* Stage 240 — GRID STORYBOARD: link to the dedicated 5×5 storyboard sheet flow (self-contained page). */}
+          {scenes.length > 0 && (
+            <Link href={`/project/${project.id}/episode/${episode.id}/storyboard`} className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:brightness-110" data-testid="go-to-storyboard-grid">
+              <Grid3x3 className="h-4 w-4" /> Сториборд-грид / Storyboard grid
+            </Link>
+          )}
         </div>
         <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
