@@ -17,6 +17,12 @@ import { stagingContinuityBlock } from "@/lib/staging-map";
 
 /** Seedance limit. Stage 112 order: re-angle (if predecessor), cast, wide, layout, crowd. */
 export const REFERENCE_IMAGE_CAP = 30;
+/**
+ * Rollback: how many location reference images are sent to the video model. Set to 1 so only the
+ * single master wide plate is used (per product decision to limit locations to ONE master frame).
+ * The multi-angle code below is kept intact; raising this restores the old 4-angle behaviour.
+ */
+export const LOCATION_REF_COUNT = 1;
 /** Stage 44 — how many extra location angles (Location.imageExtra) may join the three base angles as references. */
 export const LOCATION_EXTRA_REF_CAP = 6;
 /** Stage 44 — the note appended when location references are sent: the characters are INSIDE the photographed place. */
@@ -709,7 +715,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     for (const u of parseLocationExtra(location.imageExtra)) {
       if (u && !externalForbidden.has(u) && !angleUrls.includes(u)) angleUrls.push(u);
     }
-    const locationUrls = angleUrls.slice(0, 4);
+    const locationUrls = angleUrls.slice(0, LOCATION_REF_COUNT);
     locationUrls.forEach((url, i) => {
       if (refs.length >= REFERENCE_IMAGE_CAP) return;
       if (i === 0) {

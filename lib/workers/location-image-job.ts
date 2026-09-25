@@ -9,6 +9,13 @@ import { detectC2paFromUrl } from "@/lib/c2pa";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * Rollback: generate ONE master wide frame per location (per product decision to limit locations to a single
+ * master frame). When false the extra layout/detail/accent angle chain below is skipped entirely. The angle
+ * code is kept intact — set this to true (or LOCATION_EXTRA_ANGLES env "1") to restore the 4-angle behaviour.
+ */
+const GENERATE_LOCATION_EXTRA_ANGLES = process.env.LOCATION_EXTRA_ANGLES === "1";
+
+/**
  * Background job: photoreal 9:16 PNG references per location (GPT Image 2.0, C2PA kept).
  * 4-ANGLE REFERENCES: each location now gets FOUR different camera positions of the SAME place, generated as
  * an edit chain so the light, weather and palette stay identical:
@@ -76,6 +83,9 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
         const wideUrl = await uploadRemoteToS3(wideRemote, `media/public/locations/${projectId}/${loc.id}/${VISUAL_STYLE_ID}/ref-${stamp}-wide.png`, "image/png");
         await prisma.location.update({ where: { id: loc.id }, data: { imageUrl: wideUrl, imageReverse: null, imageDetail: null, imageExtra: null } }); // new master → the old angles no longer match; re-shot from this frame
         await checkC2pa(loc.id, "wide", wideUrl);
+
+        // Rollback: by default only the master wide frame is kept per location. Skip the extra angle chain.
+        if (!GENERATE_LOCATION_EXTRA_ANGLES) { done += 1; await sleep(1500); continue; }
 
         // 2) accent camera angles the script wrote for scenes shot at THIS location (season.ts S17
         // "cameraAngle"): distinct, non-empty, in scene order. They drive the extra location plates so the
