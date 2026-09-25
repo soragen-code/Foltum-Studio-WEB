@@ -29,6 +29,7 @@ import {
   type GridSceneBeat,
 } from "@/lib/storyboard-grid";
 import { parseBeatMeta } from "@/lib/simple-pipeline";
+import { softenPromptForModeration, isModerationError } from "@/lib/moderation-soften";
 
 export const STORYBOARD_GRID_JOB_TYPE = "storyboard_grid";
 export const STORYBOARD_GRID_SLICE_JOB_TYPE = "storyboard_grid_slice";
@@ -120,10 +121,44 @@ export async function runStoryboardGridJob(
 
     await updateJob(jobId, { progress: 40, message: "Рисуем лист 5×5 (25 панелей) в GPT Image 2.0..." });
     const imageInput = refs.map((r) => r.url).filter(validUrl);
-    const remote = await generateImage(
-      { prompt, aspect_ratio: GRID_ASPECT_RATIO, ...(imageInput.length ? { image_input: imageInput } : {}) },
-      { jobId, shouldCancel: canceled },
-    );
+    const locationInput = refs.filter((r) => r.kind === "location").map((r) => r.url).filter(validUrl);
+
+    // Moderation ladder: the provider rejects the whole request with a generic "Content flagged as potentially
+    // sensitive" error (typical triggers in a drama: explicit minor ages, violence/captivity words, or a character
+    // reference photo). Attempt 1 = the producer's prompt as-is; attempt 2 = softened wording + safety note, same
+    // refs; attempt 3 = softened prompt with the character portraits dropped (location plate only). Any other
+    // failure (timeout, overload) is NOT retried — no paid resubmission for non-moderation errors.
+    const attempts: Array<{ prompt: string; image_input: string[]; label: string }> = [
+      { prompt, image_input: imageInput, label: "" },
+      { prompt: softenPromptForModeration(prompt), image_input: imageInput, label: "Модерация отклонила промпт — смягчаем формулировки и повторяем (2/3)..." },
+      { prompt: softenPromptForModeration(prompt), image_input: locationInput, label: "Снова отклонено — повторяем без портретов персонажей (3/3)..." },
+    ];
+    let remote = "";
+    let promptUsed = prompt;
+    for (let i = 0; i < attempts.length; i++) {
+      const a = attempts[i];
+      if (a.label) await updateJob(jobId, { progress: 40 + i * 5, message: a.label });
+      try {
+        remote = await generateImage(
+          { prompt: a.prompt, aspect_ratio: GRID_ASPECT_RATIO, ...(a.image_input.length ? { image_input: a.image_input } : {}) },
+          { jobId, shouldCancel: canceled },
+        );
+        promptUsed = a.prompt;
+        break;
+      } catch (err: any) {
+        if (err instanceof GenerationCanceledError) throw err;
+        if (!isModerationError(err) || i === attempts.length - 1) {
+          if (isModerationError(err)) {
+            throw new Error(
+              `Модерация модели отклонила запрос даже после смягчения промпта и удаления портретов (${err?.message ?? "flagged"}). ` +
+                "Отредактируйте промпт («View prompt»: уберите упоминания возраста детей, насилия, оружия, цепей) и повторите.",
+            );
+          }
+          throw err;
+        }
+        console.warn(`[storyboard-grid] moderation rejection on attempt ${i + 1}, retrying softened:`, err?.message);
+      }
+    }
     if (await canceled()) throw new GenerationCanceledError();
 
     const gridUrl = await uploadRemoteToS3(
@@ -135,7 +170,7 @@ export async function runStoryboardGridJob(
     // resets approval — the freshly rendered sheet has not been sliced yet.
     await prisma.episode.update({
       where: { id: episodeId },
-      data: { gridUrl, gridPrompt: prompt, gridApproved: false },
+      data: { gridUrl, gridPrompt: promptUsed, gridApproved: false },
     });
     await completeJob(jobId, { episodeId, gridUrl }, "Storyboard grid ready");
   } catch (err: any) {
