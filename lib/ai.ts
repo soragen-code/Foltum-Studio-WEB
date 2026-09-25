@@ -94,6 +94,21 @@ export type ChatOptions = {
 export const STREAM_JSON_MAX_TOKENS = 16000;
 
 /**
+ * Hidden-thinking cap for Anthropic models on WaveSpeed. Opus 5 thinks BEFORE emitting any visible content,
+ * the thinking tokens are never streamed and they count toward `max_tokens`. Left unbounded, a big
+ * shooting-script prompt was observed thinking for ~5 min and then either being killed by the function
+ * limit or exhausting the whole 32k budget → `finish_reason: "length"` with EMPTY content ("model returned
+ * empty output"). `reasoning_effort` and `thinking: {type:"disabled"}` are ignored by the gateway; an explicit
+ * `budget_tokens` is honoured (probe: 600-token cap → 0 visible chars; budget 1024–3000 → content in 14–20 s).
+ * Anthropic requires 1024 ≤ budget_tokens < max_tokens, so the cap is skipped for small completions.
+ */
+export const THINKING_BUDGET_TOKENS = 3000;
+function thinkingParams(model: string, maxTokens: number): Record<string, unknown> {
+  if (!model.startsWith("anthropic/") || maxTokens < 2048) return {};
+  return { thinking: { type: "enabled", budget_tokens: Math.min(THINKING_BUDGET_TOKENS, maxTokens - 1024) } };
+}
+
+/**
  * Generic chat completion helper.
  * Returns the text content of the first choice.
  */
@@ -117,6 +132,7 @@ export async function chat(
       ...(reasoning
         ? { max_completion_tokens: budget, reasoning_effort: opts?.reasoningEffort ?? SCRIPT_REASONING_EFFORT }
         : { temperature: opts?.temperature ?? 0.85, max_tokens: budget }),
+      ...thinkingParams(model, budget),
       ...(opts?.json ? { response_format: { type: "json_object" } } : {}),
     },
     { timeout: opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS, maxRetries: opts?.maxRetries ?? DEFAULT_MAX_RETRIES },
@@ -232,13 +248,16 @@ export async function streamChatText(
       ...(reasoning
         ? { max_completion_tokens: budget, reasoning_effort: opts?.reasoningEffort ?? SCRIPT_REASONING_EFFORT }
         : { temperature: opts?.temperature ?? 0.85, max_tokens: budget }),
+      ...thinkingParams(model, budget),
       ...(opts?.json ? { response_format: { type: "json_object" } } : {}),
     },
     { timeout: opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS, maxRetries: opts?.maxRetries ?? DEFAULT_MAX_RETRIES },
   );
   let text = "";
+  let finishReason: string | null = null;
   for await (const chunk of stream) {
     const piece = chunk.choices[0]?.delta?.content ?? "";
+    if (chunk.choices[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
     if (piece) {
       text += piece;
       if (opts?.onDelta) {
@@ -246,6 +265,8 @@ export async function streamChatText(
       }
     }
   }
+  // Empty visible output with finish_reason "length" = the whole budget went to hidden thinking — name it.
+  if (!text.trim() && finishReason === "length") throw new Error("model spent the whole token budget on hidden thinking (finish_reason=length) and produced no visible output");
   return text.trim();
 }
 
