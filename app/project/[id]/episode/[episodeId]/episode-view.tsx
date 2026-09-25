@@ -283,15 +283,23 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     return anyScene || validUrl(initial.videoUrl) ? 'scenes' : 'references'
   })
   // Stage 241 — remember the last active step PER EPISODE, so reopening the episode returns the user to where
-  // they left off instead of always resetting to the computed default. The script lives on its own /script
-  // route (view === 'script'), which always shows the script and is never persisted. The value is written only
-  // in this client handler and read only in a mount effect (below) — never during render — so it is SSR-safe.
+  // they left off (Script / References / Scenes) instead of always resetting to the computed default. One key
+  // per episode holds the last step; the Script step lives on its own /script route, so it is persisted too and
+  // restored via a redirect from the production page (see the mount effect below).
   const phaseStorageKey = `foltum:episode-phase:${initial.id}`
-  const goPhase = (p: EpisodePhase) => {
-    setPhase(p)
-    if (view !== 'script' && typeof window !== 'undefined') {
+  // Stage 241 — persist the last active step. Written from explicit user actions only (goPhase for in-page
+  // switches, and the cross-page tab/nav <Link> onClick handlers below, which record the TARGET step at click
+  // time — before navigation — so leaving a page immediately overwrites the saved value with where the user is
+  // going; this is what keeps the /script ↔ production restore from ping-ponging). Never written passively on
+  // the production page's mount (that would fight the restore redirect). SSR-safe: client-only, never in render.
+  const rememberPhase = (p: EpisodePhase) => {
+    if (typeof window !== 'undefined') {
       try { window.localStorage.setItem(phaseStorageKey, p) } catch { /* quota / storage unavailable — ignore */ }
     }
+  }
+  const goPhase = (p: EpisodePhase) => {
+    setPhase(p)
+    rememberPhase(p)
     if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
@@ -759,6 +767,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       // references/scenes page (the resume effect there keeps polling if we navigate across pages).
       refCanceled.current = false; autoResumedRef.current = true
       refScopeRef.current = 'characters'; setRefScope('characters'); setTickSeen(false); setRefSession(true)
+      // Stage 241 — landing on References; record it before navigating so the production page's restore effect
+      // does not bounce us back to /script (which is the last-step value written on this script page's mount).
+      rememberPhase('references')
       router.push(episodeBase)
     } catch { setError('Ошибка сети') } finally { setRegenRefsBusy(false) }
   }
@@ -853,13 +864,28 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   // regenerated and its scenes/videos reset). Polled through the same revisePoll as the rewrite.
   const hasScript = !!(episode.script && String(episode.script).trim())
 
-  // Stage 241 — on mount, return to the last active step the user left this episode on (References / Scenes),
-  // if it is currently reachable. Runs once after hydration (never during SSR / the initial render, so there
-  // is no hydration mismatch) and never on the /script route (which always shows the script).
+  // Stage 241 — the /script route IS the Script step: record it on mount so that whichever way the user reached
+  // this page (deep link, refresh, back button), the last-step key reflects "Script". Safe — the production page
+  // restores 'script' by redirecting here, so there is no redirect loop from writing it here.
+  useEffect(() => {
+    if (view !== 'script') return
+    rememberPhase('script')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Stage 241 — on the PRODUCTION page, on mount, return to the last active step the user left this episode on
+  // (Script / References / Scenes), if it is currently reachable. Runs once after hydration (never during SSR /
+  // the initial render, so there is no hydration mismatch) and never on the /script route.
+  //  - saved 'script'      → redirect to the /script page (it always shows the script; router.replace, not push,
+  //                          so the history stays clean and there is no /script ↔ production ping-pong).
+  //  - saved 'references'   → switch to References if the episode has a script.
+  //  - saved 'scenes'       → switch to Scenes if it is reachable right now (mirrors the phase-step gating);
+  //                          if it is saved but currently unreachable, fall through to the computed default.
   useEffect(() => {
     if (view === 'script' || typeof window === 'undefined') return
     let saved: string | null = null
     try { saved = window.localStorage.getItem(phaseStorageKey) } catch { /* storage unavailable — ignore */ }
+    if (saved === 'script') { router.replace(scriptHref); return }
     if (saved !== 'references' && saved !== 'scenes') return
     // Only restore a step the user can actually reach right now (mirrors the phase-step gating).
     if (saved === 'references' && !hasScript) return
@@ -1247,7 +1273,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             // Step lives on the other page → a link (or a disabled-looking span when not yet reachable).
             const href = key === 'script' ? scriptHref : episodeBase
             if (!reached) return <span key={key} data-testid={`phase-step-${key}`} aria-disabled="true" className={cls}>{label}</span>
-            return <Link key={key} href={href} data-testid={`phase-step-${key}`} className={cls}>{label}</Link>
+            // Stage 241 — record the TARGET step before navigating to the other page, so on arrival the restore
+            // effect keeps the user here (and, from the production page, the 'script' link is not bounced back).
+            return <Link key={key} href={href} onClick={() => rememberPhase(key)} data-testid={`phase-step-${key}`} className={cls}>{label}</Link>
           })}
         </div>
 
@@ -1255,7 +1283,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         {view === 'production' && !hasScript && (
           <div className="mt-4 rounded-xl border border-dashed border-border bg-card p-6 text-center" data-testid="no-script-production">
             <p className="text-sm text-muted-foreground">У этого эпизода ещё нет сценария. Референсы и сцены станут доступны после его создания.</p>
-            <Link href={scriptHref} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:brightness-110" data-testid="go-to-script">
+            <Link href={scriptHref} onClick={() => rememberPhase('script')} className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground hover:brightness-110" data-testid="go-to-script">
               Перейти к сценарию <ArrowRight className="h-4 w-4" />
             </Link>
           </div>
@@ -1348,7 +1376,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             {/* Stage 172 — Script is on its own page: the forward step links to the references/scenes page. */}
             <div className="mt-5 flex flex-wrap items-center justify-end gap-3 border-t border-border pt-4">
               {hasScript ? (
-                <Link href={episodeBase} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:brightness-110" data-testid="script-to-references">
+                <Link href={episodeBase} onClick={() => rememberPhase('references')} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:brightness-110" data-testid="script-to-references">
                   К референсам и сценам <ArrowRight className="h-4 w-4" />
                 </Link>
               ) : (
@@ -1631,7 +1659,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           {/* Stage 59 navigation — References is step 2: back to script · forward to scenes.
               Stage 129 — the forward button unlocks only once references are ready AND a mode is chosen. */}
           <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-            <Link href={scriptHref} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="refs-to-script">
+            <Link href={scriptHref} onClick={() => rememberPhase('script')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="refs-to-script">
               <ArrowLeft className="h-4 w-4" /> Сценарий
             </Link>
             <button onClick={() => goPhase('scenes')} disabled={!canEnterProduction(refsReady, mode)} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="refs-to-scenes" title={!refsReady ? 'Generate all episode references first' : !mode ? 'Choose a production mode to continue' : ''}>
