@@ -6,9 +6,8 @@ import { computeEntitlements } from '@/lib/entitlements'
 
 export const dynamic = 'force-dynamic'
 
-// Stage 242 — the episode STORYBOARD step on its own route (/storyboard), so navigation between steps is a
-// plain link with a visible URL. Reuses EpisodeView with `view="storyboard"` (plate + 5×5 grid cards).
-export default async function EpisodeStoryboardPage({ params }: { params: Promise<{ id: string; episodeId: string }> }) {
+// Stage 242 — the episode VIDEO step (scenes) on its own route (/video). Reuses EpisodeView with `view="video"`.
+export default async function EpisodeVideoPage({ params }: { params: Promise<{ id: string; episodeId: string }> }) {
   const session = await auth()
   if (!session?.user) redirect('/login')
   const { id, episodeId } = await params
@@ -40,5 +39,5 @@ export default async function EpisodeStoryboardPage({ params }: { params: Promis
   // Feature access is computed server-side from the user's subscription and passed to the client view.
   const entitlements = computeEntitlements(user)
 
-  return <EpisodeView view="storyboard" episode={JSON.parse(JSON.stringify(episode))} project={JSON.parse(JSON.stringify(episode.season.project))} siblings={JSON.parse(JSON.stringify(siblings.map(({ script, ...s }) => ({ ...s, hasScript: !!script }))))} credits={user.credits ?? 0} entitlements={entitlements} />
+  return <EpisodeView view="video" episode={JSON.parse(JSON.stringify(episode))} project={JSON.parse(JSON.stringify(episode.season.project))} siblings={JSON.parse(JSON.stringify(siblings.map(({ script, ...s }) => ({ ...s, hasScript: !!script }))))} credits={user.credits ?? 0} entitlements={entitlements} />
 }

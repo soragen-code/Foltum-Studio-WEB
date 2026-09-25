@@ -102,11 +102,14 @@ type Shot = { id: string; index: number; shotType?: string | null; size?: string
 type Scene = { id: string; number: number; title?: string | null; shotType?: string | null; durationSec?: number | null; locationDesc?: string | null; subLocation?: string | null; action?: string | null; dialogue?: string | null; sceneKind?: string | null; voiceover?: string | null; voiceoverLocal?: string | null; videoPrompt?: string | null; promptOverride?: string | null; skipReferences?: boolean | null; videoUrl?: string | null; audioUrl?: string | null; lastFrameUrl?: string | null; startFrameUrl?: string | null; keyframePrompt?: string | null; beatMeta?: unknown; lookStale?: boolean | null; videoModel?: string | null; status: string; hasUndo?: boolean | null; shots?: Shot[]; characters: { character: { id: string; name: string; imageFront?: string | null } }[] }
 type Sibling = { id: string; number: number; title: string; status?: string | null; videoUrl?: string | null; hasScript?: boolean }
 
-export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits, entitlements, view = 'production' }: { episode: any; project: any; siblings?: Sibling[]; credits: number; entitlements?: import('@/lib/entitlements').Entitlements; view?: 'production' | 'script' }) {
+export function EpisodeView({ episode: initial, project, siblings = [], credits: initialCredits, entitlements, view = 'production' }: { episode: any; project: any; siblings?: Sibling[]; credits: number; entitlements?: import('@/lib/entitlements').Entitlements; view?: 'production' | 'script' | 'storyboard' | 'video' }) {
   // Stage 172 — the episode SCRIPT lives on its own page (/script), separate from references + scenes.
   // `view` selects which surface this instance renders; the nav links the two pages together.
   const episodeBase = `/project/${project.id}/episode/${initial.id}`
   const scriptHref = `${episodeBase}/script`
+  // Stage 242 — Storyboard and Video are REAL routes (own URLs), so moving between steps is a plain link.
+  const storyboardHref = `${episodeBase}/storyboard`
+  const videoHref = `${episodeBase}/video`
   const canScenePromptEdit = entitlements ? entitlements.scene_prompt_edit : true
   const canManualPromptEdit = entitlements ? entitlements.manual_prompt_edit : true
   const canPremiumQuality = entitlements ? entitlements.premium_quality : true
@@ -188,7 +191,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       const j = res.job
       if (j.status === 'failed') { setGridError(j.error ?? 'Не удалось нарезать грид / Slice failed'); setSliceBusy(false); return }
       await loadGrid(); await reloadEpisode({ refreshRefs: true }); router.refresh(); setSliceBusy(false)
-      goPhase('scenes')
+      rememberPhase('scenes'); router.push(videoHref)
     },
   })
   const generateGrid = async () => {
@@ -384,8 +387,10 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
     // Stage 172 — the script page always shows the script; the production page never opens on the script
     // step (the script lives on its own route), so it opens on References (or Scenes when video exists).
     if (view === 'script') return 'script'
-    const anyScene = ((initial.scenes ?? []) as Scene[]).some((s) => validUrl(s.videoUrl))
-    return anyScene || validUrl(initial.videoUrl) ? 'scenes' : 'references'
+    // Stage 242 — each step is its own route: /storyboard → Storyboard, /video → Video, base → References.
+    if (view === 'storyboard') return 'storyboard'
+    if (view === 'video') return 'scenes'
+    return 'references'
   })
   // Stage 241 — remember the last active step PER EPISODE, so reopening the episode returns the user to where
   // they left off (Script / References / Scenes) instead of always resetting to the computed default. One key
@@ -1082,16 +1087,13 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
   //  - saved 'scenes'       → switch to Scenes if it is reachable right now (mirrors the phase-step gating);
   //                          if it is saved but currently unreachable, fall through to the computed default.
   useEffect(() => {
-    if (view === 'script' || typeof window === 'undefined') return
+    if (view !== 'production' || typeof window === 'undefined') return
     let saved: string | null = null
     try { saved = window.localStorage.getItem(phaseStorageKey) } catch { /* storage unavailable — ignore */ }
     if (saved === 'script') { router.replace(scriptHref); return }
-    if (saved !== 'references' && saved !== 'storyboard' && saved !== 'scenes') return
-    // Only restore a step the user can actually reach right now (mirrors the phase-step gating).
-    if (saved === 'references' && !hasScript) return
-    if (saved === 'storyboard' && !(hasScript && canEnterProduction(refsReady, mode))) return
-    if (saved === 'scenes' && !(hasScript && (canEnterProduction(refsReady, mode) || scenes.some((s) => validUrl(s.videoUrl))))) return
-    setPhase(saved as EpisodePhase)
+    // Stage 242 — Storyboard / Video live on their own routes: restore = redirect (only when reachable).
+    if (saved === 'storyboard' && hasScript && canEnterProduction(refsReady, mode)) { router.replace(storyboardHref); return }
+    if (saved === 'scenes' && hasScript && (canEnterProduction(refsReady, mode) || scenes.some((s) => validUrl(s.videoUrl)))) { router.replace(videoHref); return }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -1474,12 +1476,6 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
         <div className="flex flex-wrap items-center gap-4">
           <Link href={`/project/${project.id}`} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"><ArrowLeft className="h-4 w-4" /> To season story</Link>
           <EpisodeNavGrid projectId={project.id} episodes={siblings} currentId={episode.id} />
-          {/* Stage 240 — GRID STORYBOARD: link to the dedicated 5×5 storyboard sheet flow (self-contained page). */}
-          {scenes.length > 0 && (
-            <Link href={`/project/${project.id}/episode/${episode.id}/storyboard`} className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:brightness-110" data-testid="go-to-storyboard-grid">
-              <Grid3x3 className="h-4 w-4" /> Сториборд-грид / Storyboard grid
-            </Link>
-          )}
         </div>
         <div className="mt-2 flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
@@ -1504,7 +1500,8 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               || (hasScript && key === 'storyboard' && canEnterProduction(refsReady, mode))
               || (hasScript && key === 'scenes' && (canEnterProduction(refsReady, mode) || scenes.some((s) => validUrl(s.videoUrl))))
             // Which page does this step belong to? Script → the /script page; References/Scenes → the production page.
-            const onThisPage = view === 'script' ? key === 'script' : key !== 'script'
+            // Stage 242 — every step is its own route; only the current page's step renders as an in-page button.
+            const onThisPage = view === 'script' ? key === 'script' : view === 'storyboard' ? key === 'storyboard' : view === 'video' ? key === 'scenes' : key === 'references'
             const active = onThisPage && phase === key
             const cls = `rounded-full border px-3 py-1 font-medium transition ${active ? 'border-primary bg-primary text-primary-foreground' : reached ? 'border-border hover:bg-muted' : 'border-border/50 text-muted-foreground/50'}`
             if (onThisPage) {
@@ -1523,7 +1520,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               )
             }
             // Step lives on the other page → a link (or a disabled-looking span when not yet reachable).
-            const href = key === 'script' ? scriptHref : episodeBase
+            const href = key === 'script' ? scriptHref : key === 'storyboard' ? storyboardHref : key === 'scenes' ? videoHref : episodeBase
             if (!reached) return <span key={key} data-testid={`phase-step-${key}`} aria-disabled="true" className={cls}>{label}</span>
             // Stage 241 — record the TARGET step before navigating to the other page, so on arrival the restore
             // effect keeps the user here (and, from the production page, the 'script' link is not bounced back).
@@ -1969,9 +1966,15 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             <Link href={scriptHref} onClick={() => rememberPhase('script')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="refs-to-script">
               <ArrowLeft className="h-4 w-4" /> Сценарий
             </Link>
-            <button onClick={() => goPhase('storyboard')} disabled={!canEnterProduction(refsReady, mode)} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="refs-to-scenes" title={!refsReady ? 'Generate all episode references first' : !mode ? 'Choose a production mode to continue' : ''}>
-              К сториборду / To storyboard <ArrowRight className="h-4 w-4" />
-            </button>
+            {canEnterProduction(refsReady, mode) ? (
+              <Link href={storyboardHref} onClick={() => rememberPhase('storyboard')} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" data-testid="refs-to-scenes">
+                К сториборду / To storyboard <ArrowRight className="h-4 w-4" />
+              </Link>
+            ) : (
+              <button type="button" disabled className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground opacity-50" data-testid="refs-to-scenes" title={!refsReady ? 'Generate all episode references first' : 'Choose a production mode to continue'}>
+                К сториборду / To storyboard <ArrowRight className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </section>
         )}
@@ -2032,12 +2035,12 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           </div>
 
           <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-            <button onClick={() => goPhase('references')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="storyboard-to-references">
+            <Link href={episodeBase} onClick={() => rememberPhase('references')} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted" data-testid="storyboard-to-references">
               <ArrowLeft className="h-4 w-4" /> Референсы / References
-            </button>
-            <button onClick={() => goPhase('scenes')} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="storyboard-to-scenes" title={gridApproved ? '' : 'Одобрите грид, чтобы получить стартовые кадры сцен'}>
+            </Link>
+            <Link href={videoHref} onClick={() => rememberPhase('scenes')} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground" data-testid="storyboard-to-scenes" title={gridApproved ? '' : 'Одобрите грид, чтобы получить стартовые кадры сцен'}>
               К видео / To video <ArrowRight className="h-4 w-4" />
-            </button>
+            </Link>
           </div>
         </section>
         )}
@@ -2134,9 +2137,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
 
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-4">
           {/* Stage 59 navigation — Scenes is step 3: back to references. */}
-          <button onClick={() => goPhase('references')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted" data-testid="back-to-references">
+          <Link href={episodeBase} onClick={() => rememberPhase('references')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted" data-testid="back-to-references">
             <ArrowLeft className="h-4 w-4" /> References
-          </button>
+          </Link>
           {/* Stage 100 — «Generate all scenes": every pending / failed scene is generated one after another (sequential chain). */}
           {!allReady && (
             <button onClick={openGenerateAll} disabled={genAllStarting || genAllAsk !== null || chainRunActive} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all-scenes" title="Start generating all unfinished scenes one by one">
