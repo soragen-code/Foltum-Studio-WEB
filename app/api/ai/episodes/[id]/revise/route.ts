@@ -1,5 +1,5 @@
 export const dynamic = "force-dynamic";
-export const maxDuration = 300; // only starts the background job (the rewrite itself runs in OpenAI background mode)
+export const maxDuration = 800; // hosts the season_script worker via after(): the Opus 5 script call is blocking and can exceed 5 min
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
