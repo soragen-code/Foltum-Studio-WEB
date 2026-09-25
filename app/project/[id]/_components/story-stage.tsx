@@ -25,6 +25,24 @@ const START_MARK = '═══'
 const END_MARK = '───'
 
 type SeasonData = { id: string; title?: string | null; logline?: string | null; status: string; fullStory?: string | null; episodeCount?: number | null; episodes: SeasonEpisode[] } | null
+/**
+ * Server-side step messages are English; show them bilingually (RU / EN) in the progress row. Unknown
+ * messages (e.g. the per-episode "usually 1-3 minutes" variants) fall through unchanged.
+ */
+function stepMessageRuEn(message?: string | null): string {
+  const m = (message ?? '').trim()
+  if (!m) return 'Запускаем… / Starting...'
+  if (/^Starting/i.test(m)) return 'Запускаем… / Starting...'
+  if (/^Creating the cast/i.test(m)) return 'Создаём персонажей… / Creating the cast…'
+  if (/^Cast draft was incomplete/i.test(m)) return 'Черновик каста неполный — повторяем… / Cast draft was incomplete — retrying…'
+  if (/^Cast ready/i.test(m)) return 'Персонажи готовы. Строим структуру сезона… / Cast ready. Building the season structure…'
+  if (/^Building the season structure/i.test(m)) return 'Строим структуру сезона… / Building the season structure…'
+  const batch = /^Writing episodes (\d+)–(\d+)/i.exec(m)
+  if (batch) return `Пишем серии ${batch[1]}–${batch[2]}… / Writing episodes ${batch[1]}–${batch[2]}…`
+  if (/^Season plot ready/i.test(m)) return 'Сюжет сезона готов / Season plot ready'
+  return m
+}
+
 type Job = { id: string; status: string; progress: number; message?: string | null; error?: string | null; resultData?: string | null; streamedText?: string | null } | null
 
 /**
@@ -130,7 +148,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
     // Poll faster than the shared 3 s constant so the streamed partial script (streamedText) shows up in
     // near-real-time. Concurrent reads that hit the CAS-locked advance still return the current row with
     // the latest partial, so the extra ticks are cheap and only surface fresher text.
-    const id = setInterval(load, 1500)
+    const id = setInterval(load, 1000)
     return () => clearInterval(id)
   }, [jobActive, load])
 
@@ -399,7 +417,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
             <div className="flex items-center justify-between gap-2 text-sm">
               <span className="flex min-w-0 items-center gap-2">
                 <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-primary" />
-                <span className="truncate">{job?.message ?? 'Starting...'}</span>
+                <span className="truncate">{stepMessageRuEn(job?.message)}</span>
               </span>
               <span className="flex flex-shrink-0 items-center gap-2">
                 <span className="tabular-nums font-medium text-muted-foreground" data-testid="season-progress-pct">{buildPct}%</span>
@@ -412,6 +430,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
             {/* Streaming preview: show the text being written live (accumulates on the server, so a
                 reload / return shows the partial-so-far even if the tab was closed). RU + EN. */}
             <StreamingText text={job?.streamedText} active={jobActive} />
+            <p className="text-xs text-muted-foreground">Текст появляется постепенно, по мере написания моделью; вкладку можно закрыть — прогресс и текст сохранятся. / Text streams in as the model writes it and is saved even if you leave the page.</p>
           </div>
         )}
         {job?.status === 'canceled' && !jobActive && (

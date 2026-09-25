@@ -17,12 +17,13 @@
  */
 import { prisma } from "@/lib/db";
 import type { GenerationJob } from "@prisma/client";
-import { chatJSON, SCRIPT_MODEL, EPISODE_SCRIPT_MODEL, EPISODE_SCRIPT_MAX_TOKENS, EPISODE_SCRIPT_TEMPERATURE, startBackgroundJSON, pollBackgroundJSON, cancelBackgroundResponse, type BackgroundPollResult } from "@/lib/ai";
+import { z } from "zod";
+import { chatJSON, streamChatJSON, SCRIPT_MODEL, EPISODE_SCRIPT_MODEL, EPISODE_SCRIPT_MAX_TOKENS, EPISODE_SCRIPT_TEMPERATURE, startBackgroundJSON, pollBackgroundJSON, cancelBackgroundResponse, type BackgroundPollResult } from "@/lib/ai";
 import { maxDetailLevel, isLocationDetailLevel } from "@/lib/location-scale";
-import { completeJob, failJob, isCancelRequested, markCanceled, runInBackground } from "@/lib/jobs";
-import { makeJobStreamWriter, stripJsonForPreview } from "@/lib/stream-progress";
+import { completeJob, failJob, isCancelRequested, markCanceled, runInBackground, updateJob, heartbeatJob } from "@/lib/jobs";
+import { makeJobStreamWriter, stripJsonForPreview, extractProseField } from "@/lib/stream-progress";
 import { runCharacterImagesJob } from "@/lib/workers/character-images-job";
-import { toCharacterCard, normalizeLanguage, seasonCastSystemPrompt, seasonCastUserPrompt, seasonCastResultSchema, characterCardToData, sanitizeCharacterCard, sanitizeLocationCard, dedupeCast, hasFullSetInventory, setInventoryRetryNote, serializeSetInventory, parseSetInventory, locationsFromSynopsisSystemPrompt, locationsResultSchema, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
+import { toCharacterCard, normalizeLanguage, seasonCastSystemPrompt, seasonCastUserPrompt, characterCardSchema, MAX_CAST, characterCardToData, sanitizeCharacterCard, sanitizeLocationCard, dedupeCast, hasFullSetInventory, setInventoryRetryNote, serializeSetInventory, parseSetInventory, locationsFromSynopsisSystemPrompt, locationsResultSchema, type CharacterCard, type IdeaLanguage } from "@/lib/idea";
 import { parseStoredShortSynopsis, renderShortSynopsis } from "@/lib/short-synopsis";
 
 /** Stage 46A: the stored short synopsis (JSON) rendered as the outline block of the structure prompt. */
@@ -226,8 +227,97 @@ export type SeasonJobDeps = {
   cancel: typeof cancelBackgroundResponse;
   /** Synchronous JSON chat used for the short gpt-4o dialogue translation pass. */
   chatJSON: typeof chatJSON;
+  /**
+   * Approach A (Step 3 cast): STREAMING JSON chat with `onDelta`, used for the cast so the visible tokens are
+   * relayed into `streamedText` while the model writes. Optional so existing unit tests (which inject only
+   * chatJSON) keep working — when absent the worker falls back to `chatJSON` (no live preview).
+   */
+  streamJSON?: typeof streamChatJSON;
 };
-const defaultDeps: SeasonJobDeps = { start: startBackgroundJSON, poll: pollBackgroundJSON, cancel: cancelBackgroundResponse, chatJSON };
+const defaultDeps: SeasonJobDeps = { start: startBackgroundJSON, poll: pollBackgroundJSON, cancel: cancelBackgroundResponse, chatJSON, streamJSON: streamChatJSON };
+
+/** Heartbeat interval while a long LLM call is running (STALE_JOB_MS is 3 min — keep updatedAt fresh). */
+const HEARTBEAT_MS = 20_000;
+
+/**
+ * Run a long LLM call with a periodic heartbeat so `failStaleJobs` never kills the job while the model is
+ * thinking (Claude Opus 5 can stay silent for 10–30 s before the first token, and a non-streaming call can
+ * run for minutes). The interval is always cleared in `finally`.
+ */
+async function withHeartbeat<T>(jobId: string, fn: () => Promise<T>): Promise<T> {
+  const timer = setInterval(() => { void heartbeatJob(jobId); }, HEARTBEAT_MS);
+  try {
+    return await fn();
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+/** Reset the live preview at a step boundary so the next step starts with a clean pane. Best-effort. */
+async function clearStreamedText(jobId: string): Promise<void> {
+  await updateJob(jobId, { streamedText: null });
+}
+
+/**
+ * Live preview transform for the cast stream: renders "Name (age) — role" + the appearance/personality text
+ * written so far for every character block present in the (possibly unclosed) JSON, instead of raw braces.
+ * Falls back to the generic value-only preview until the first "name" appears.
+ */
+export function castPreview(accumulated: string): string {
+  if (!accumulated) return "";
+  const parts = accumulated.split(/(?="name"\s*:)/);
+  const out: string[] = [];
+  for (const p of parts) {
+    if (!/^"name"\s*:/.test(p)) continue;
+    const name = extractProseField(p, "name").trim();
+    if (!name) continue;
+    const age = extractProseField(p, "age").trim();
+    const role = extractProseField(p, "role").trim();
+    const head = [name, age ? `(${age})` : "", role ? `— ${role}` : ""].filter(Boolean).join(" ");
+    const body = [extractProseField(p, "appearance"), extractProseField(p, "personality")].map((s) => s.trim()).filter(Boolean).join(" ");
+    out.push(body ? `${head}\n${body}` : head);
+  }
+  return out.length ? out.join("\n\n").slice(-60000) : stripJsonForPreview(accumulated);
+}
+
+const asText = (v: unknown, fallback: string, max: number): string => {
+  const s = typeof v === "string" ? v.trim() : typeof v === "number" && Number.isFinite(v) ? String(v) : "";
+  return (s || fallback).slice(0, max);
+};
+
+/**
+ * Tolerant pre-sanitizer for the cast LLM output: the model regularly omits `role` (and sometimes other
+ * string fields) on extras, which used to make `seasonCastResultSchema.parse` throw and fail the whole
+ * step. Here every likely-missing string field gets a sensible default instead; characters without a
+ * name are dropped; `locations` is optional (ignored for persistence anyway).
+ */
+export function sanitizeRawCast(raw: unknown): { characters: Record<string, unknown>[]; locations: unknown[] } {
+  const obj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const list = Array.isArray(obj.characters) ? obj.characters : Array.isArray(obj.cast) ? obj.cast : [];
+  const characters = list
+    .filter((c) => c && typeof c === "object" && typeof (c as Record<string, unknown>).name === "string" && ((c as Record<string, unknown>).name as string).trim())
+    .map((c) => {
+      const ch = c as Record<string, unknown>;
+      const tier = typeof ch.tier === "string" ? ch.tier.toUpperCase() : "";
+      const roleFallback = tier === "CROWD" || tier === "MINOR" ? "extra" : "supporting";
+      return {
+        ...ch,
+        name: asText(ch.name, "Unnamed", 120),
+        age: asText(ch.age, "adult", 40),
+        role: asText(ch.role ?? ch.description ?? ch.function, roleFallback, 200),
+        appearance: asText(ch.appearance ?? ch.look, "Unremarkable appearance; details as written in the script.", 2500),
+        personality: asText(ch.personality ?? ch.character, "Reserved, practical.", 2000),
+        firstAppearance: asText(ch.firstAppearance ?? ch.firstScene ?? ch.introduction, "Episode 1", 1500),
+      };
+    });
+  return { characters, locations: Array.isArray(obj.locations) ? obj.locations : [] };
+}
+
+/** Tolerant cast schema (see sanitizeRawCast). Still requires ≥2 named characters. */
+export const seasonCastTolerantSchema = z.preprocess(
+  sanitizeRawCast,
+  z.object({ characters: z.array(characterCardSchema).min(2).max(MAX_CAST), locations: z.array(z.unknown()).optional().default([]) }),
+);
 
 // ---------------------------------------------------------------------------
 // Step result validation (pure — schema + business rules)
@@ -521,13 +611,35 @@ export async function advanceSeasonJob(job: GenerationJob, deps: SeasonJobDeps =
 /**
  * Stage 59 (step 3 "Season plot"): in the new 4-step flow the idea step writes ONLY the synopsis, so a
  * fresh project has no characters/locations when the season job starts. Here we generate the COMPLETE cast
- * (all tiers) and the season's locations in ONE fast synchronous call from the approved synopsis, then
- * persist them. Idempotent: if characters already exist (retry / classic flow) it is a no-op. A single
- * ~30 s chatJSON call comfortably fits inside the job's 60 s advance lock, so it is concurrency-safe.
+ * (all tiers) from the approved synopsis and persist it. Idempotent: if characters already exist (retry /
+ * classic flow) it is a no-op.
+ *
+ * Approach A: the call is STREAMING (visible tokens → `streamedText` via castPreview) and runs under a
+ * 20 s heartbeat, so the 3-min stale watchdog can never kill the job mid-call and the producer watches the
+ * cast appear live. The output is parsed with the tolerant schema (missing `role` etc. → defaults); a
+ * parse failure gets ONE retry, then the step fails with a clear message.
  */
-async function generateSeasonCast(projectId: string, synopsis: string, language: IdeaLanguage, deps: SeasonJobDeps): Promise<void> {
-  const raw = await deps.chatJSON(seasonCastSystemPrompt(language), seasonCastUserPrompt(synopsis), { temperature: 0.85, maxTokens: 12000 });
-  const parsed = seasonCastResultSchema.parse(raw);
+async function generateSeasonCast(jobId: string, projectId: string, synopsis: string, language: IdeaLanguage, deps: SeasonJobDeps): Promise<void> {
+  await clearStreamedText(jobId);
+  await updateJob(jobId, { status: "processing", progress: 2, message: "Creating the cast…" });
+  const callModel = async (): Promise<unknown> => {
+    const opts = { temperature: 0.85, maxTokens: 12000 };
+    if (deps.streamJSON) {
+      return deps.streamJSON(seasonCastSystemPrompt(language), seasonCastUserPrompt(synopsis), { ...opts, onDelta: makeJobStreamWriter(jobId, { transform: castPreview }) });
+    }
+    return deps.chatJSON(seasonCastSystemPrompt(language), seasonCastUserPrompt(synopsis), opts);
+  };
+  let parsed: z.infer<typeof seasonCastTolerantSchema> | null = null;
+  let lastError = "";
+  for (let attempt = 1; attempt <= 2 && !parsed; attempt++) {
+    const raw = await withHeartbeat(jobId, callModel);
+    const res = seasonCastTolerantSchema.safeParse(raw);
+    if (res.success) { parsed = res.data; break; }
+    lastError = res.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+    console.warn(`[season] cast attempt ${attempt}/2 rejected: ${lastError}`);
+    if (attempt < 2) await updateJob(jobId, { message: "Cast draft was incomplete — retrying…" });
+  }
+  if (!parsed) throw new Error(`The cast could not be generated (invalid model output: ${lastError}). Restart generation to try again.`);
   const names = parsed.characters.map((c) => c.name);
   const characters = dedupeCast(parsed.characters).map((c) => sanitizeCharacterCard(c, names));
   // Stage 162: create CHARACTERS ONLY here. Locations are no longer generated up front from the synopsis —
@@ -540,6 +652,7 @@ async function generateSeasonCast(projectId: string, synopsis: string, language:
       await tx.character.create({ data: { projectId, ...characterCardToData(c), status: "draft", imageFront: "", imageProfile: "", imageFull: "" } });
     }
   }, { timeout: 30_000 });
+  await updateJob(jobId, { message: `Cast ready: ${characters.length} characters. Building the season structure…` });
 }
 
 async function tick(jobId: string, projectId: string, state: SeasonJobState, deps: SeasonJobDeps): Promise<void> {
@@ -549,7 +662,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
   // Stage 59: generate the season cast + locations from the approved synopsis before the structure step,
   // when the project has none yet (new 4-step flow). Reload so the freshly-created rows are in scope.
   if (project.characters.length === 0) {
-    await generateSeasonCast(projectId, project.synopsis, language, deps);
+    await generateSeasonCast(jobId, projectId, project.synopsis, language, deps);
     const reloaded = await loadProject(projectId);
     if (!reloaded) throw new Error("Project disappeared after cast generation");
     project = reloaded;
@@ -664,8 +777,13 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
       ? season.episodes.map((e) => ({ number: e.number, title: e.title, description: e.description ?? null, cliffhanger: e.cliffhanger ?? null }))
       : undefined;
     const batchTokens = batch ? batch.to - batch.from + 1 : state.episodeCount;
-    responseId = await deps.start(seasonStructureSystemPrompt(language, state.episodeCount, batch), seasonStructureUserPrompt(project.synopsis ?? "", cards, project.locations, shortSynopsisOutline(project.shortSynopsis), prevEpisodes) + retryNote, { model: SCRIPT_MODEL, maxTokens: Math.min(64000, 4000 + 800 * batchTokens), onDelta: makeJobStreamWriter(jobId, { transform: stripJsonForPreview }) });
     message = batch ? `Writing episodes ${batch.from}–${batch.to}...` : "Building the season structure..."; progress = 3;
+    // Approach A: `deps.start` BLOCKS for the whole (multi-minute) structure generation — publish the step
+    // message BEFORE the call, start from a clean preview pane and heartbeat every 20 s while the model
+    // thinks (the streamed episode titles/synopses land in streamedText via the onDelta transform).
+    await clearStreamedText(jobId);
+    await updateJob(jobId, { status: "processing", progress, message });
+    responseId = await withHeartbeat(jobId, () => deps.start(seasonStructureSystemPrompt(language, state.episodeCount, batch), seasonStructureUserPrompt(project.synopsis ?? "", cards, project.locations, shortSynopsisOutline(project.shortSynopsis), prevEpisodes) + retryNote, { model: SCRIPT_MODEL, maxTokens: Math.min(64000, 4000 + 800 * batchTokens), onDelta: makeJobStreamWriter(jobId, { transform: stripJsonForPreview }) }));
   } else if (planned.step === "fullStory") {
     // Unreachable since Stage 106 (handled deterministically above); kept so the state machine stays exhaustive.
     throw new Error("fullStory step is built from the structure, not generated");
@@ -702,7 +820,16 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
     } catch {
       seasonStateBlock = "";
     }
-    responseId = await deps.start(
+    message = planned.userScript
+      ? `Building the script from your text... (usually 1-3 minutes)`
+      : planned.instruction
+      ? `Rewriting the script for episode ${ep.number}... (usually 1-3 minutes)`
+      : `Writing the episode script... (usually 1-3 minutes)`;
+    progress = episodeProgress(done, curTotal);
+    // Approach A: publish the step message before the blocking call, clean preview, heartbeat while writing.
+    await clearStreamedText(jobId);
+    await updateJob(jobId, { status: "processing", progress, message });
+    responseId = await withHeartbeat(jobId, () => deps.start(
       episodeScriptSystemPrompt(language, ep.number),
       episodeScriptUserPrompt({
         synopsis: project.synopsis ?? "", season: seasonStruct!, episode: outlineFromEpisode(ep), characters: cards,
@@ -731,13 +858,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
       // Stage 108 — the episode script is written by gpt-4o (EPISODE_SCRIPT_MODEL): non-reasoning →
       // temperature + max_output_tokens ≤ 16 384. Still a background response (same polling path).
       { model: EPISODE_SCRIPT_MODEL, maxTokens: EPISODE_SCRIPT_MAX_TOKENS, temperature: EPISODE_SCRIPT_TEMPERATURE, onDelta: makeJobStreamWriter(jobId, { transform: stripJsonForPreview }) }
-    );
-    message = planned.userScript
-      ? `Building the script from your text... (usually 1-3 minutes)`
-      : planned.instruction
-      ? `Rewriting the script for episode ${ep.number}... (usually 1-3 minutes)`
-      : `Writing the episode script... (usually 1-3 minutes)`;
-    progress = episodeProgress(done, curTotal);
+    ));
   }
   await saveState(
     jobId,
