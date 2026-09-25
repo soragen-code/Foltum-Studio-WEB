@@ -6,7 +6,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { parseBody, loglineSchema } from "@/lib/validations";
-import { chat } from "@/lib/ai";
+import { streamChatText } from "@/lib/ai";
 import {
   loglineSystemPrompt,
   loglineUserPrompt,
@@ -77,7 +77,12 @@ export async function POST(request: Request) {
       currentLogline: (currentLogline ?? project.logline) ?? undefined,
     });
 
-    const logline = (await chat(system, userMsg, { temperature: 0.9, maxTokens: 400 })).trim();
+    // STREAMING (not chat()): Claude Opus 5 on WaveSpeed emits interleaved hidden "thinking" tokens that,
+    // on a non-streaming call, silently consume the whole max_tokens budget and return truncated/empty
+    // visible content (the "Через двенадцать л" idea-truncation bug: finish_reason "length", content empty).
+    // Streaming accumulates only the visible content deltas and survives it; a generous budget fits the
+    // thinking + the 7-10 sentence pitch.
+    const logline = (await streamChatText(system, userMsg, { temperature: 0.9, maxTokens: 3000 })).trim();
     if (!logline) return NextResponse.json({ error: "AI returned an empty logline" }, { status: 502 });
 
     // Stage 14 (B): persist a producer-chosen episode count (not in story-upload mode).

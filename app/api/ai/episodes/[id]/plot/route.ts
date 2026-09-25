@@ -5,7 +5,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
-import { chat, EPISODE_SCRIPT_MODEL } from "@/lib/ai";
+import { streamChatText, EPISODE_SCRIPT_MODEL } from "@/lib/ai";
 import {
   episodePlotSystemPrompt,
   episodePlotUserPrompt,
@@ -79,11 +79,14 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
 
   let plot = "";
   try {
+    // STREAMING (not chat()): Claude Opus 5 on WaveSpeed emits hidden interleaved "thinking" tokens that
+    // on a non-streaming call consume the whole budget and return truncated/empty visible prose. Streaming
+    // accumulates only the visible content; a generous budget fits the thinking + the episode plot.
     plot = (
-      await chat(
+      await streamChatText(
         episodePlotSystemPrompt(language, target.number),
         episodePlotUserPrompt({ synopsis, season: structure, episode: outlineFromEpisode(target), previousPlots, language }),
-        { model: EPISODE_SCRIPT_MODEL, maxTokens: 2400, temperature: 0.8 },
+        { model: EPISODE_SCRIPT_MODEL, maxTokens: 6000, temperature: 0.8 },
       )
     ).trim();
   } catch (err) {

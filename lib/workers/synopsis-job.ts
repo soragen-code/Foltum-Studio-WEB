@@ -13,7 +13,7 @@
  */
 import { prisma } from "@/lib/db";
 import { updateJob, completeJob, failJob, heartbeatJob, markCanceled, isCancelRequested } from "@/lib/jobs";
-import { chat, streamChatJSON, SCRIPT_MODEL } from "@/lib/ai";
+import { streamChatText, streamChatJSON, SCRIPT_MODEL } from "@/lib/ai";
 // Stage 1 (dramaBible) — generate + validate the structured story bible FIRST, then derive the prose synopsis
 // consistent with it; persist the bible on the Project. Best-effort: failure leaves the classic flow unchanged.
 import { generateDramaBible, type DramaBible, type GenerateDramaBibleResult } from "@/lib/drama-bible";
@@ -285,7 +285,10 @@ export async function runSynopsisCorrectionJob(jobId: string, projectId: string,
       : `Create a synopsis for this idea: ${prompt}`;
 
     await heartbeatJob(jobId);
-    const synopsis = await chat(SYNOPSIS_SYSTEM, userMessage, { temperature: 0.9, maxTokens: 2048 });
+    // STREAMING (not chat()): Claude Opus 5 on WaveSpeed emits hidden interleaved "thinking" tokens that on a
+    // non-streaming call consume the whole budget and return truncated/empty prose. Streaming keeps only the
+    // visible content; a generous budget fits the thinking + the rewritten synopsis.
+    const synopsis = (await streamChatText(SYNOPSIS_SYSTEM, userMessage, { temperature: 0.9, maxTokens: 6000 })).trim();
     if (!synopsis || !synopsis.trim()) { await failJob(jobId, "AI returned an empty synopsis"); return; }
 
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
