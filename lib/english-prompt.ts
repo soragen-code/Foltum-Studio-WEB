@@ -70,7 +70,7 @@ export async function ensureEnglishPrompt(prompt: string | null | undefined): Pr
     // Lazy import keeps this module dependency-light and avoids import cycles.
     const { chat } = await import("@/lib/ai");
     const translated = (
-      await chat(TRANSLATE_SYSTEM, input, { model: "gpt-4o", temperature: 0.2, maxTokens: 4096 })
+      await chat(TRANSLATE_SYSTEM, input, { model: "openai/gpt-4o", temperature: 0.2, maxTokens: 4096 })
     ).trim();
     if (translated) out = translated;
   } catch {

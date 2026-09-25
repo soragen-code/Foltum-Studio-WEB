@@ -20,7 +20,7 @@
 import { createHash } from "node:crypto";
 import { chatJSON } from "@/lib/ai";
 
-export const PROP_MODEL = "gpt-4o";
+export const PROP_MODEL = "openai/gpt-4o";
 export const PROP_TIMEOUT_MS = 90_000;
 /** Hard cap on how many props an episode registry keeps (defensive — a script never needs more). */
 export const PROP_REGISTRY_CAP = 24;

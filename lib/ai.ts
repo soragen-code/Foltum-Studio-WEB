@@ -2,11 +2,16 @@ import OpenAI from "openai";
 
 let _client: OpenAI | null = null;
 
+/**
+ * All LLM traffic runs through WaveSpeed's OpenAI-compatible gateway
+ * (https://llm.wavespeed.ai/v1) authenticated with WAVESPEED_API_KEY. OpenAI is no longer used
+ * directly — the `OpenAI` SDK is kept only as an OpenAI-compatible HTTP client pointed at WaveSpeed.
+ */
 export function getOpenAI(): OpenAI {
   if (!_client) {
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
-    _client = new OpenAI({ apiKey });
+    const apiKey = process.env.WAVESPEED_API_KEY;
+    if (!apiKey) throw new Error("WAVESPEED_API_KEY is not set");
+    _client = new OpenAI({ apiKey, baseURL: "https://llm.wavespeed.ai/v1" });
   }
   return _client;
 }
@@ -21,31 +26,33 @@ const DEFAULT_TIMEOUT_MS = 240_000;
 /** One retry on transient errors (down from the SDK default of 2) — fail fast instead of stacking long waits. */
 const DEFAULT_MAX_RETRIES = 1;
 
-/** Default (fast) model for utility calls: voiceover, translation, idea, frame-state, artifact images. */
-const MODEL = "gpt-4o";
+/** Default (fast) model for utility calls: voiceover, translation, idea, frame-state, artifact images (vision). */
+const MODEL = "openai/gpt-4o";
 /**
- * Strong reasoning model used for SCRIPT generation (season structure, episode scripts, full story).
- * Reasoning models reject `max_tokens` (use `max_completion_tokens`) and any non-default `temperature`.
+ * Model used for SCRIPT generation (season structure, episode scripts, full story, scene breakdown).
+ * Per user decision all script/plot writing is done by Claude Opus 5 via WaveSpeed. Anthropic models
+ * REQUIRE `max_tokens` on every request (always sent by the chat/stream helpers below); they are NOT a
+ * reasoning-family model in the OpenAI sense (isReasoningModel → false), so they take `temperature` + `max_tokens`.
+ * The model may wrap JSON answers in ```json fences — safeJsonParse strips them.
  */
-export const SCRIPT_MODEL = "gpt-6-astra";
+export const SCRIPT_MODEL = "anthropic/claude-opus-5";
 /**
- * Stage 108 → 220 — user decision: EPISODE SCRIPTS are written by gpt-5.5 (stronger reasoning; follows the
- * shooting-script contract + continuity rules far more reliably than gpt-4o); idea/synopsis, season structure,
- * the season plot and the scene breakdown stay on SCRIPT_MODEL.
- * gpt-5.5 IS a reasoning model (isReasoningModel → true): the `chat()` and `startBackgroundJSON` paths omit
- * `temperature`, send `max_completion_tokens` / `max_output_tokens`, and set `reasoning.effort`. The
- * EPISODE_SCRIPT_TEMPERATURE below is therefore silently ignored for this model (kept for the fallback path).
- * Reasoning tokens count toward the completion budget, so the budget is raised to keep the JSON from truncating.
+ * EPISODE SCRIPTS are also written by Claude Opus 5 (same model as SCRIPT_MODEL). Uses `temperature` +
+ * `max_tokens`; the large budget keeps the shooting-script JSON from truncating.
  */
-export const EPISODE_SCRIPT_MODEL = "gpt-5.5";
-/** Completion budget for one episode script on EPISODE_SCRIPT_MODEL (headroom for reasoning + JSON body). */
+export const EPISODE_SCRIPT_MODEL = "anthropic/claude-opus-5";
+/** Completion budget for one episode script on EPISODE_SCRIPT_MODEL. */
 export const EPISODE_SCRIPT_MAX_TOKENS = 32000;
-/** Sampling temperature for episode scripts — used only if EPISODE_SCRIPT_MODEL is switched to a non-reasoning model. */
+/** Sampling temperature for episode scripts. */
 export const EPISODE_SCRIPT_TEMPERATURE = 0.7;
 
-/** Reasoning-family models (gpt-5*, gpt-6*, o*) use a different parameter set than gpt-4o. */
+/**
+ * Reasoning-family models (gpt-5*, gpt-6*, o*) use a different parameter set (max_completion_tokens,
+ * no temperature). None of the current WaveSpeed models are reasoning-family, so this returns false for
+ * openai/gpt-4o and anthropic/claude-opus-5 — kept for forward-compatibility if a reasoning model is added.
+ */
 export function isReasoningModel(model: string): boolean {
-  return /^(gpt-6|gpt-5|o\d)/.test(model);
+  return /(^|\/)(gpt-6|gpt-5|o\d)/.test(model);
 }
 
 /** Default reasoning effort for SCRIPT generation (chat() and background responses). */
@@ -183,15 +190,59 @@ export function safeJsonParse<T = any>(raw: string): T {
   }
 }
 
+/**
+ * Streaming chat completion — accumulates the delta chunks into the full text and returns it.
+ * Streaming is used for LONG generations (script/plot writing) because a non-streaming request for a
+ * multi-minute completion trips the Node undici headers timeout (~300 s) before the body arrives; a
+ * streaming request keeps receiving chunks and never hits that wall. `max_tokens` is ALWAYS sent
+ * (Anthropic models on WaveSpeed reject a request without it).
+ */
+export async function streamChatText(
+  system: string,
+  user: string,
+  opts?: ChatOptions,
+): Promise<string> {
+  const openai = getOpenAI();
+  const model = opts?.model ?? MODEL;
+  const reasoning = isReasoningModel(model);
+  const budget = opts?.maxTokens ?? 4096;
+  const stream = await openai.chat.completions.create(
+    {
+      model,
+      stream: true,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      ...(reasoning
+        ? { max_completion_tokens: budget, reasoning_effort: opts?.reasoningEffort ?? SCRIPT_REASONING_EFFORT }
+        : { temperature: opts?.temperature ?? 0.85, max_tokens: budget }),
+      ...(opts?.json ? { response_format: { type: "json_object" } } : {}),
+    },
+    { timeout: opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS, maxRetries: opts?.maxRetries ?? DEFAULT_MAX_RETRIES },
+  );
+  let text = "";
+  for await (const chunk of stream) {
+    text += chunk.choices[0]?.delta?.content ?? "";
+  }
+  return text.trim();
+}
+
 // ---------------------------------------------------------------------------
-// Background (asynchronous) JSON generation via the Responses API.
+// Background (asynchronous) JSON generation.
 //
-// gpt-6-astra spends minutes on the season structure / scene breakdown (Stage 108: the episode script
-// itself is written by gpt-4o, usually 1–3 minutes, through the same background path). A synchronous call dies at ~300 s
-// (Node undici headers timeout, regardless of the SDK timeout) and the Vercel function is killed
-// at 800 s. In background mode OpenAI runs the generation server-side; we only store the response
-// id and poll it from short requests (see lib/workers/season-script-job.ts).
+// SCRIPT_MODEL / EPISODE_SCRIPT_MODEL (Claude Opus 5) spend minutes on the season structure / scene
+// breakdown / episode script. WaveSpeed's gateway does NOT support the OpenAI Responses API
+// (POST /v1/responses → HTTP 500), so there is no server-side background job to poll. Instead the
+// "start" runs the full generation synchronously via STREAMING chat.completions (which survives the
+// multi-minute wait, unlike a non-streaming call) and returns the completed JSON TEXT as the opaque
+// "id"; the "poll" simply parses that stored text and reports completion immediately. The id/text is
+// persisted between advances (see lib/workers/season-script-job.ts), so a later poll parses it instantly.
+// The signatures are kept so callers written for the old Responses-API path work unchanged.
 // ---------------------------------------------------------------------------
+
+/** Sentinel prefix marking an "id" that actually carries the completed JSON text inline. */
+const INLINE_RESULT_PREFIX = "inline-json:";
 
 export type BackgroundJSONOptions = {
   model?: string;
@@ -205,60 +256,41 @@ export type BackgroundPollResult<T> =
   | { status: "completed"; json: T; usage?: { inputTokens: number; outputTokens: number; totalTokens: number } }
   | { status: "failed"; error: string };
 
-/** Start a background JSON response. Returns the response id (poll it with pollBackgroundJSON). */
+/**
+ * Run the JSON generation to completion (blocking, via streaming) and return the completed text as an
+ * opaque "id" (prefixed with INLINE_RESULT_PREFIX). Poll it with pollBackgroundJSON, which parses it
+ * immediately. Throws if the model returns empty output so the caller records a clean failure.
+ */
 export async function startBackgroundJSON(system: string, user: string, opts?: BackgroundJSONOptions): Promise<string> {
-  const openai = getOpenAI();
-  const model = opts?.model ?? MODEL;
-  const budget = opts?.maxTokens ?? 4096;
-  // NOTE: `instructions:` does not satisfy json_object mode ("json" must appear in an input message) —
-  // the system prompt is sent as an input message instead.
-  const res = await openai.responses.create(
-    {
-      model,
-      background: true,
-      store: true,
-      input: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      text: { format: { type: "json_object" } },
-      max_output_tokens: budget,
-      ...(isReasoningModel(model)
-        ? { reasoning: { effort: opts?.reasoningEffort ?? SCRIPT_REASONING_EFFORT } }
-        : { temperature: opts?.temperature ?? 0.85 }),
-    } as any,
-    { timeout: 60_000, maxRetries: 2 },
-  );
-  return res.id;
+  const text = await streamChatText(system, user, {
+    model: opts?.model ?? MODEL,
+    maxTokens: opts?.maxTokens ?? 4096,
+    reasoningEffort: opts?.reasoningEffort,
+    temperature: opts?.temperature,
+    json: true,
+    // A single generation can run for minutes — give it the full function budget.
+    timeoutMs: 780_000,
+    maxRetries: 1,
+  });
+  if (!text) throw new Error("model returned empty output");
+  return INLINE_RESULT_PREFIX + text;
 }
 
-/** Poll a background response: running / completed (parsed JSON) / failed (readable reason). */
+/**
+ * "Poll" a background result. Because startBackgroundJSON already ran the generation to completion, the
+ * id carries the finished JSON text inline — parse and return it immediately (or a readable failure).
+ */
 export async function pollBackgroundJSON<T = any>(id: string): Promise<BackgroundPollResult<T>> {
-  const openai = getOpenAI();
-  const r: any = await openai.responses.retrieve(id, {}, { timeout: 60_000, maxRetries: 2 });
-  const status = String(r.status ?? "");
-  if (status === "queued" || status === "in_progress") return { status: "running" };
-  if (status === "completed") {
-    const raw = String(r.output_text ?? "");
-    let json: T;
-    try {
-      json = safeJsonParse<T>(raw);
-    } catch {
-      return { status: "failed", error: `invalid JSON in response (${raw.length} chars)` };
-    }
-    const usage = r.usage
-      ? { inputTokens: r.usage.input_tokens ?? 0, outputTokens: r.usage.output_tokens ?? 0, totalTokens: r.usage.total_tokens ?? 0 }
-      : undefined;
-    return { status: "completed", json, usage };
+  const raw = id.startsWith(INLINE_RESULT_PREFIX) ? id.slice(INLINE_RESULT_PREFIX.length) : id;
+  if (!raw) return { status: "failed", error: "empty response" };
+  try {
+    return { status: "completed", json: safeJsonParse<T>(raw) };
+  } catch {
+    return { status: "failed", error: `invalid JSON in response (${raw.length} chars)` };
   }
-  if (status === "incomplete") return { status: "failed", error: `response incomplete: ${r.incomplete_details?.reason ?? "unknown reason"}` };
-  if (status === "cancelled") return { status: "failed", error: "response cancelled" };
-  return { status: "failed", error: `response ${status || "failed"}: ${r.error?.message ?? r.error?.code ?? "unknown error"}` };
 }
 
-/** Cancel a background response (best effort — errors are swallowed). */
-export async function cancelBackgroundResponse(id: string): Promise<void> {
-  try {
-    await getOpenAI().responses.cancel(id, { timeout: 30_000, maxRetries: 0 });
-  } catch {}
+/** No-op: the generation already completed in startBackgroundJSON, so there is nothing to cancel. */
+export async function cancelBackgroundResponse(_id: string): Promise<void> {
+  return;
 }

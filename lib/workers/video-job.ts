@@ -555,7 +555,7 @@ function orderEpisodeShots<S extends { id: string; index: number; sceneId: strin
 const shotVisionFn: ShotVisionFn = async ({ prevFrameUrl, nextFrameUrl, question }) => {
   try {
     const res = await getOpenAI().chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "openai/gpt-4o",
       messages: [
         { role: "system", content: "You are a film continuity checker. Compare two consecutive video keyframes and decide whether the visual continuity holds (same setting, lighting, wardrobe, character identity and camera logic). Reply with strict JSON: {\"consistent\": boolean, \"reason\": string}." },
         { role: "user", content: [

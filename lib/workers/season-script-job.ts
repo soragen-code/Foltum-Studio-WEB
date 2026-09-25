@@ -131,8 +131,15 @@ export type SeasonJobState = {
   lastFailure?: string;
 };
 
-/** Two pollers must not advance the same job at once; a stuck lock expires after this long. */
-export const ADVANCE_LOCK_MS = 60_000;
+/**
+ * Two pollers must not advance the same job at once; a stuck lock expires after this long.
+ * Since WaveSpeed has no Responses-API background mode, startBackgroundJSON now runs the whole
+ * script/plot generation SYNCHRONOUSLY inside one advance (streaming, several minutes). The lock must
+ * outlive that blocking call, or a second poller would win the CAS after 60 s and kick off a DUPLICATE
+ * expensive generation. It is set just over Vercel's 800 s function cap so that when a function is
+ * actually killed the lock still frees shortly after (the killed run cannot be holding it any longer).
+ */
+export const ADVANCE_LOCK_MS = 840_000;
 /** A background response older than this is treated as failed (the step is retried / the job fails). */
 export const STEP_TIMEOUT_MS = 45 * 60_000;
 const MAX_ATTEMPTS = 2;

@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto";
 import { chatJSON } from "@/lib/ai";
 
-export const LOOK_MODEL = "gpt-4o";
+export const LOOK_MODEL = "openai/gpt-4o";
 export const LOOK_TIMEOUT_MS = 90_000;
 
 export const PROMPT_TAGS = ["[SHOT TYPE]", "[VISUAL STYLE]", "[LIGHTING]", "[BLOCKING]", "[GAZE]", "[NON-VERBAL]", "[ACTION]", "[CHARACTER]", "[TRANSITION]"] as const;
