@@ -287,24 +287,81 @@ export function buildStartFramePrompt(input: { beat: BeatMeta; characterNames: s
 
 /* ───────────────────────────── 10. VIDEO prompt (per beat) ───────────────────────────── */
 
-export const BEAT_VIDEO_NEGATIVES = "no logos, no brand marks, no on-screen text, no subtitles or captions, no watermark, no split screen, no distorted anatomy; no other people in frame than described above; no camera cuts inside the clip.";
+/** Human shot-size label for the END line ("Medium shot: …"). */
+export function shotSizeLabel(shot: string | null | undefined): string {
+  const s = normalizeShotType(String(shot ?? "medium"));
+  if (s === "wide") return "Wide shot";
+  if (s === "close-up") return "Close-up";
+  if (s === "over-the-shoulder") return "Over-the-shoulder shot";
+  return "Medium shot";
+}
 
-export function buildBeatVideoPrompt(input: { beat: BeatMeta; characterNames: string[]; hasStartFrame: boolean }): string {
+/** The next clip's opening panel (scene N+1) — becomes the END of clip N. */
+export interface NextBeatRef { shot: string | null; action: string }
+
+/** Derive the END target from the following Scene row (beatMeta first, then shotType/action columns). */
+export function nextBeatFromSceneRow(row: { beatMeta?: unknown; shotType?: string | null; action?: string | null } | null | undefined): NextBeatRef | null {
+  if (!row) return null;
+  const nb = parseBeatMeta(row.beatMeta);
+  if (nb) return { shot: nb.shot, action: nb.action };
+  const action = (row.action ?? "").trim();
+  return action ? { shot: row.shotType ?? null, action } : null;
+}
+
+export const BEAT_VIDEO_FRAMING =
+  "FRAMING: the clip ends on a shot size different from the opening one (wide / medium / close-up). Never return to the opening framing.";
+
+export const BEAT_VIDEO_NEGATIVES =
+  "Do not show any wall or area that is not visible in the START FRAME. No new doors, windows or objects on the visible walls. " +
+  "No changes to the characters' wardrobe, hair or face mid-shot; nothing worn is removed or added unless stated in ACTIONS. " +
+  "No teleporting — every change of position is a visible walk. No slow motion. " +
+  "No looking into the camera; no blank stares into nothing — every glance is aimed at a person, object or sound described in ACTIONS.";
+
+/**
+ * Step 10 — the animation prompt for ONE beat clip (4–5 s). Structure (fixed, English):
+ *   START FRAME (image 1) → Characters (appearance only, image 2..N) → ACTIONS (exactly one beat) →
+ *   END (= the NEXT panel: its shot size + action; last scene → the final pose, static) → FRAMING → NEGATIVES.
+ * `next` = scene N+1 (explicit); when undefined the stored beat.nextStart is used (no shot size known).
+ */
+export function buildBeatVideoPrompt(input: {
+  beat: BeatMeta;
+  characterNames: string[];
+  hasStartFrame: boolean;
+  next?: NextBeatRef | null;
+}): string {
   const { beat } = input;
+  const chars = input.characterNames.length ? input.characterNames : beat.characters;
   const lines: string[] = [];
   let idx = 1;
   if (input.hasStartFrame) {
-    lines.push(`START FRAME: image ${idx} — the first frame of this shot: ${beat.shot} shot, ${beat.location}. Keep its composition, positions and poses at frame 1.`);
+    lines.push("START FRAME:");
+    lines.push(`image ${idx} — the location, the characters' positions, poses and shot size at the first frame. This is the only source of the space.`);
     idx++;
   } else {
-    lines.push(`START FRAME: ${beat.shot} shot, ${beat.location}. Open exactly on: ${beat.action}`);
+    // Legacy / text-to-video fallback: no start-frame image attached — describe the opening instead.
+    lines.push("START FRAME:");
+    lines.push(`No start-frame image is attached. Open on a ${shotSizeLabel(beat.shot).toLowerCase()}: ${beat.location}. ${beat.action}`);
   }
-  const chars = input.characterNames.length ? input.characterNames : beat.characters;
+  lines.push("");
   if (chars.length) {
-    lines.push(`Characters: ${chars.map((n) => `image ${idx++} — ${n}: appearance only`).join("; ")}.`);
+    lines.push("Characters (appearance only):");
+    chars.forEach((n) => { lines.push(`image ${idx} — ${n}.`); idx++; });
+    lines.push("");
   }
-  lines.push(`ACTIONS: ${beat.action}`);
-  lines.push(`END: ${beat.nextStart ? beat.nextStart : beat.cut}`);
-  lines.push(`NEGATIVES: ${BEAT_VIDEO_NEGATIVES}`);
+  lines.push("ACTIONS:");
+  lines.push(beat.action.trim());
+  lines.push("");
+  const next = input.next === undefined ? (beat.nextStart ? { shot: null, action: beat.nextStart } : null) : input.next;
+  if (next && next.action.trim()) {
+    lines.push(`END: ${next.shot ? `${shotSizeLabel(next.shot)}: ` : ""}${next.action.trim()}`);
+  } else {
+    const finalPose = (beat.cut || "").trim() || "the characters hold their final positions";
+    lines.push(`END: ${shotSizeLabel(beat.shot)}: ${finalPose} The characters hold this final pose — static frame, no further movement.`);
+  }
+  lines.push("");
+  lines.push(BEAT_VIDEO_FRAMING);
+  lines.push("");
+  lines.push("NEGATIVES:");
+  lines.push(BEAT_VIDEO_NEGATIVES);
   return lines.join("\n");
 }

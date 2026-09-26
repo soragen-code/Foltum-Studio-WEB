@@ -14,7 +14,7 @@ import { styledVisualPrompt, isStyledAsset, locationAngleImages, parseLocationEx
 import { normalizeVideoModel, videoModelSlug, type VideoModelId } from "@/lib/ai-models";
 import { matchPropsInText, type PropRegistryEntry } from "@/lib/prop-registry";
 import { stagingContinuityBlock } from "@/lib/staging-map";
-import { parseBeatMeta, buildBeatVideoPrompt } from "@/lib/simple-pipeline";
+import { parseBeatMeta, buildBeatVideoPrompt, type NextBeatRef } from "@/lib/simple-pipeline";
 
 /** Seedance limit. Stage 112 order: re-angle (if predecessor), cast, wide, layout, crowd. */
 export const REFERENCE_IMAGE_CAP = 30;
@@ -583,6 +583,11 @@ export interface BuildScenePromptInput {
   location: ScenePromptLocation | null;
   /** The adjacent previous scene (accepted for API compatibility; Stage 38 no longer chains its frame). */
   previous: ScenePromptPrevious | null;
+  /**
+   * Simplified pipeline — the NEXT scene's opening panel (shot size + action): the END of this beat clip.
+   * undefined → fall back to the stored beat.nextStart; null → this is the last scene (END = final pose, static).
+   */
+  nextBeat?: NextBeatRef | null;
   /** Legacy video model id / worker provider; always normalized to Seedance 2.5. */
   provider?: string | null;
   /**
@@ -692,7 +697,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     const refsB: (SceneReference & { id: string })[] = [];
     const startUrl = (scene.startFrameUrl ?? "").trim();
     const hasStart = !!startUrl && !externalForbiddenB.has(startUrl);
-    if (hasStart) refsB.push({ url: startUrl, kind: "scene", id: scene.id, note: "START FRAME — the beat's first frame (composition, location, poses, wardrobe, lighting)." });
+    if (hasStart) refsB.push({ url: startUrl, kind: "scene", id: scene.id, note: "START FRAME — the location, the characters' positions, poses and shot size at the first frame (only source of the space)." });
     const styledB = characters.filter(c => isStyledAsset(c.imageFull) || isStyledAsset(c.imageFront));
     const orderedB = [...styledB.filter(c => c.tier !== "CROWD"), ...styledB.filter(c => c.tier === "CROWD")];
     for (const c of orderedB) {
@@ -703,7 +708,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
     const hasOverrideB = overrideB.length > 0;
     const beatPrompt = hasOverrideB
       ? stripReferenceList(refreshCharacterLine(overrideB, characters, false)).replace(/^REFERENCE MAP:.*$/gm, "").trim()
-      : buildBeatVideoPrompt({ beat, characterNames: orderedB.map(c => c.name), hasStartFrame: hasStart });
+      : buildBeatVideoPrompt({ beat, characterNames: orderedB.map(c => c.name), hasStartFrame: hasStart, next: input.nextBeat });
     const finalizeB = (p: string) => transliterateCyrillic(neutralizeTransition(p));
     const promptB = finalizeB(beatPrompt);
     const resolvedB = input.resolvedDialogueEn ?? (scene.dialogueEn ?? "").trim() ?? "";
@@ -717,7 +722,7 @@ export function buildScenePrompt(input: BuildScenePromptInput): BuildScenePrompt
       referenceKind: refsB.length ? "character_references" : "text_only",
       hasOverride: hasOverrideB,
       openingState: (beat.action ?? "").trim(),
-      endState: (beat.nextStart ?? "").trim(),
+      endState: ((input.nextBeat === undefined ? beat.nextStart : (input.nextBeat?.action ?? beat.cut)) ?? "").trim(),
       reference: refsB.length
         ? { mode: "beat_references", kinds: refsB.map(r => r.kind), characterIds: refsB.filter(r => r.kind === "character" || r.kind === "crowd").map(r => r.id), locationId: null, startFrameSceneId: hasStart ? scene.id : null, beat: true }
         : { mode: "text_only", sceneId: scene.id, reason: "beat_no_references" },

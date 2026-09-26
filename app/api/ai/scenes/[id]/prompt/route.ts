@@ -14,7 +14,8 @@ import {
   type SceneBlockInput,
 } from "@/lib/prompts";
 import { requireFeature } from "@/lib/entitlements";
-import { parseBeatMeta, buildBeatVideoPrompt } from "@/lib/simple-pipeline";
+import { parseBeatMeta, buildBeatVideoPrompt, nextBeatFromSceneRow } from "@/lib/simple-pipeline";
+import { resolveBeatCastLinks } from "@/lib/beat-cast";
 
 /**
  * GET /api/ai/scenes/[id]/prompt
@@ -65,9 +66,13 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
   if (beat) {
     const startFrameUrl = (scene as { startFrameUrl?: string | null }).startFrameUrl;
     const hasStartFrame = typeof startFrameUrl === "string" && startFrameUrl.startsWith("http");
-    const characterNames = scene.characters.map(l => l.character.name).filter(Boolean);
-    const prompt = buildBeatVideoPrompt({ beat, characterNames, hasStartFrame });
-    return NextResponse.json({ prompt, hasOverride: false, version: "beat-v1", references });
+    // Same cast order as the worker (buildScenePrompt beat branch): styled individuals first, crowd last.
+    const castLinks = await resolveBeatCastLinks(scene, scene.characters);
+    const styled = castLinks.filter(l => !!(l.character.imageFull || l.character.imageFront));
+    const characterNames = [...styled.filter(l => l.character.tier !== "CROWD"), ...styled.filter(l => l.character.tier === "CROWD")].map(l => l.character.name).filter(Boolean);
+    const next = nextBeatFromSceneRow(await prisma.scene.findFirst({ where: { episodeId: scene.episodeId, number: scene.number + 1 }, select: { beatMeta: true, shotType: true, action: true } }));
+    const prompt = buildBeatVideoPrompt({ beat, characterNames, hasStartFrame, next });
+    return NextResponse.json({ prompt, hasOverride: false, version: "beat-v2", references });
   }
 
   // No override → assemble deterministically from the nine ordered blocks.

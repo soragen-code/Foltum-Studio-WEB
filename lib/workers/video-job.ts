@@ -28,7 +28,8 @@ import { runAssemblyJob } from "@/lib/workers/assembly-job";
 import { getDialogueLanguage } from "@/lib/dialogue-language";
 import { getOpenAI } from "@/lib/ai";
 import { REFERENCE_IMAGE_CAP as SHOT_REFERENCE_IMAGE_CAP, buildScenePrompt, resolveOpeningState, type SceneReference } from "@/lib/scene-prompt";
-import { parseBeatMeta } from "@/lib/simple-pipeline";
+import { parseBeatMeta, nextBeatFromSceneRow } from "@/lib/simple-pipeline";
+import { resolveBeatCastLinks } from "@/lib/beat-cast";
 import { finalVideoPrompt } from "@/lib/video-prompt-final";
 import type { PlannedShot } from "@/lib/prompts/shot-plan";
 import type { ShotCharacterLike } from "@/lib/prompts/shot";
@@ -207,6 +208,10 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
   try {
     const scene = await prisma.scene.findUnique({ where: { id: sceneId }, include: { location: true } }); // per-scene location (null → fall back to the episode location)
     if (!scene?.videoPrompt) throw new Error("Scene has no video prompt");
+    // SIMPLIFIED PIPELINE — END of this beat clip = the NEXT scene's opening panel (shot size + action); null = last scene.
+    const nextBeat = parseBeatMeta(scene.beatMeta)
+      ? nextBeatFromSceneRow(await prisma.scene.findFirst({ where: { episodeId: scene.episodeId, number: scene.number + 1 }, select: { beatMeta: true, shotType: true, action: true } }))
+      : undefined;
     // Stage 11: if cancellation was requested before we submitted any prediction, stop now —
     // no provider call is made, the scene is reset and the reserved credits are refunded.
     if (await isCancelRequested(jobId)) {
@@ -223,7 +228,8 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
     await updateJob(jobId, { status: "processing", progress: 5, message: "Preparing photorealistic visual references..." });
     // Stage 40: a (re)generation invalidates the previously described actual end-state of this scene.
     if (scene.endStateActual) await prisma.scene.update({ where: { id: sceneId }, data: { endStateActual: null } }).catch(() => {});
-    const links = await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true }, orderBy: { characterId: "asc" } });
+    // Beat scenes may carry their cast only as names in beatMeta — fall back to name matching (lib/beat-cast).
+    const links = await resolveBeatCastLinks(scene, await prisma.sceneCharacter.findMany({ where: { sceneId }, include: { character: true }, orderBy: { characterId: "asc" } }));
     // Stage 40: the previous scene's end-state (actual description of its last frame in chain mode,
     // otherwise the scripted "Final frame") opens this scene's prompt. Its image is never sent.
     const previousRow = await resolveVideoPredecessor(prisma, scene);
@@ -296,7 +302,7 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
     const reangleInfo: VideoJobState["reangle"] = undefined;
     const reangleRequest: ReturnType<typeof buildReangleRequest> | null = null;
     const built = buildScenePrompt({
-      scene: lookScene,
+      scene: lookScene, nextBeat,
       reangleUrl, regionPlateUrl, subLocationRefUrl, forbiddenReferenceUrls,
       characters: links.map(l => ({ characterId: l.characterId, name: l.character.name, tier: l.character.tier, imageFront: l.character.imageFront, imageProfile: l.character.imageProfile, imageFull: l.character.imageFull, imageExtra: l.character.imageExtra, appearance: l.character.appearance, age: l.character.age })),
       location: scene.location ?? episodeLoc?.location ?? null,
@@ -386,11 +392,12 @@ async function runSceneVideoJob(params: VideoJobParams): Promise<void> {
     if (!freshScene) throw new Error("Scene was removed during preprocessing.");
     const currentPrevious = await resolveVideoPredecessor(prisma, freshScene);
     assertPredecessorReady(currentPrevious);
-    const freshCharacters = freshScene.characters.map(l => ({ characterId: l.characterId, name: l.character.name,
+    const freshLinks = await resolveBeatCastLinks(freshScene, freshScene.characters);
+    const freshCharacters = freshLinks.map(l => ({ characterId: l.characterId, name: l.character.name,
       tier: l.character.tier, imageFront: l.character.imageFront, imageFull: l.character.imageFull,
       appearance: l.character.appearance, age: l.character.age }));
     const freshRefs = buildScenePrompt({ scene: freshScene, characters: freshCharacters, location: freshScene.location ?? freshScene.episode.location,
-      previous: currentPrevious, forbiddenReferenceUrls, template: scenePromptTemplate }).retryRefs;
+      previous: currentPrevious, forbiddenReferenceUrls, template: scenePromptTemplate, nextBeat }).retryRefs;
     if (reangleRequest && (!currentPrevious || buildReangleRequest({ sceneId, number: freshScene.number,
       startState: freshScene.startState, videoPrompt: freshScene.videoPrompt, promptOverride: freshScene.promptOverride,
       previous: currentPrevious, refs: freshRefs, castState: freshCharacters, regionPlateUrl }).hash !== reangleRequest.hash))

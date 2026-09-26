@@ -7,6 +7,8 @@ import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { resolveVideoPredecessor } from "@/lib/reangle";
 import { buildScenePrompt } from "@/lib/scene-prompt";
 import { finalVideoPrompt } from "@/lib/video-prompt-final";
+import { parseBeatMeta, nextBeatFromSceneRow } from "@/lib/simple-pipeline";
+import { resolveBeatCastLinks } from "@/lib/beat-cast";
 
 /**
  * GET /api/ai/scenes/[id]/video-prompt
@@ -55,7 +57,8 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
   const forbiddenReferenceUrls = [scene.keyframeUrl, (previous as { keyframeUrl?: string | null } | null)?.keyframeUrl]
     .filter((u): u is string => !!u);
 
-  const characters = scene.characters.map(l => ({
+  const castLinks = await resolveBeatCastLinks(scene, scene.characters);
+  const characters = castLinks.map(l => ({
     characterId: l.characterId,
     name: l.character.name,
     tier: l.character.tier,
@@ -69,12 +72,18 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
 
   const location = scene.location ?? scene.episode.location ?? null;
 
+  // SIMPLIFIED PIPELINE — END of a beat clip = the next scene's opening panel (same lookup as the worker).
+  const nextBeat = parseBeatMeta(scene.beatMeta)
+    ? nextBeatFromSceneRow(await prisma.scene.findFirst({ where: { episodeId: scene.episodeId, number: scene.number + 1 }, select: { beatMeta: true, shotType: true, action: true } }))
+    : undefined;
+
   const built = buildScenePrompt({
     scene: scene as never,
     characters,
     location: location as never,
     previous: previous as never,
     forbiddenReferenceUrls,
+    nextBeat,
     template: scene.episode?.season?.project?.scenePromptTemplate ?? null,
   });
 

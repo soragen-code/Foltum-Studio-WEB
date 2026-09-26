@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Header } from '@/components/header'
-import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Copy, Check, FileText, RotateCcw, Save, Plus, Undo2, AlertTriangle, Grid3x3 } from 'lucide-react'
+import { Loader2, Wand2, ArrowLeft, ArrowRight, MapPin, Film, Download, RefreshCw, Images, X, Maximize2, Users, ImageOff, ChevronLeft, ChevronRight, Copy, Check, FileText, RotateCcw, Save, Plus, Undo2, AlertTriangle, Grid3x3, Image as ImageIcon } from 'lucide-react'
 import { FrameToolbar, DownloadAllButton } from '@/app/project/[id]/_components/frame-toolbar'
 import { PromptModal, CHARACTER_PROMPT_DESCRIPTION, LOCATION_PROMPT_DESCRIPTION } from '@/app/project/[id]/_components/prompt-modal'
 import { FeatureLockBadge } from '@/app/project/[id]/_components/feature-lock'
@@ -159,6 +159,23 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       const j = res.job
       if (j.status === 'failed') setFramesError(j.error ?? 'Не удалось сгенерировать кадры / Start frames failed')
       await reloadEpisode({ refreshRefs: true }); router.refresh(); setFramesBusy(false)
+    },
+  })
+  // Step 9 — full-size START FRAME REDRAW (one scene or all scenes; job type start_frame_redraw). Redraws the
+  // stored panel at 9:16 2K and overwrites Scene.startFrameUrl; the grid sheet itself is never touched.
+  // One job at a time is tracked: while a redraw runs, every redraw button is disabled.
+  const [redrawBusy, setRedrawBusy] = useState<Record<string, boolean>>({})
+  const [redrawAllBusy, setRedrawAllBusy] = useState(false)
+  const [redrawMsg, setRedrawMsg] = useState<string | null>(null)
+  const [redrawError, setRedrawError] = useState<string | null>(null)
+  const redrawActive = redrawAllBusy || Object.values(redrawBusy).some(Boolean)
+  const redrawPoll = useJobPolling({
+    onUpdate: (res) => { if (res.job?.message) setRedrawMsg(res.job.message) },
+    onFinish: async (res) => {
+      const j = res.job
+      if (j.status === 'failed') setRedrawError(j.error ?? 'Не удалось перерисовать старт-кадр / Start frame redraw failed')
+      await reloadEpisode({ refreshRefs: true }); router.refresh()
+      setRedrawBusy({}); setRedrawAllBusy(false); setRedrawMsg(null)
     },
   })
   // GRID STORYBOARD (step 9, grid-first) — the "Start frames" card now renders ONE 5×5 sheet with GPT Image 2.0
@@ -565,6 +582,22 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       .catch(() => {})
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Resume an active START FRAME REDRAW job (single scene or all scenes) after a reload.
+  useEffect(() => {
+    fetch(`/api/ai/episodes/${episode.id}/start-frames/redraw`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const j = d?.job
+        if (j && (j.status === 'pending' || j.status === 'processing')) {
+          let single = false; let ids: string[] = []
+          try { const rd = typeof j.resultData === 'string' ? JSON.parse(j.resultData) : j.resultData; single = !!rd?.single; ids = Array.isArray(rd?.sceneIds) ? rd.sceneIds : [] } catch {}
+          if (single && ids[0]) setRedrawBusy({ [ids[0]]: true }); else setRedrawAllBusy(true)
+          setRedrawMsg(j.message ?? null); redrawPoll.start(j.id)
+        }
+      })
+      .catch(() => {})
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Resume the GRID / SLICE job after a reload. Both the 5×5 sheet render (storyboard_grid) and the
   // approve-and-slice pass (storyboard_grid_slice) run in the background on the server, so on mount we
   // re-attach the correct progress bar to any active job and refresh the current sheet + approval state.
@@ -873,6 +906,29 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
       if (d?.jobId) framesPoll.start(d.jobId)
       else { setFramesBusy(false); await reloadEpisode({ refreshRefs: true }) }
     } catch { setFramesError('Network error'); setFramesBusy(false) }
+  }
+
+  /** Step 9 — redraw ONE scene's start frame at full resolution (plate + current panel + cast refs). */
+  const redrawStartFrame = async (sceneId: string) => {
+    setRedrawError(null); setRedrawBusy({ [sceneId]: true }); setRedrawMsg(null)
+    try {
+      const res = await fetch(`/api/ai/scenes/${sceneId}/start-frame`, { method: 'POST' })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) { setRedrawError(d?.error ?? 'Failed to start the redraw'); setRedrawBusy({}); return }
+      if (d?.jobId) redrawPoll.start(d.jobId)
+      else { setRedrawBusy({}); await reloadEpisode({ refreshRefs: true }) }
+    } catch { setRedrawError('Network error'); setRedrawBusy({}) }
+  }
+  /** Step 9 — redraw the start frames of ALL scenes of the episode (progress «X/N» from the job message). */
+  const redrawAllStartFrames = async () => {
+    setRedrawError(null); setRedrawAllBusy(true); setRedrawMsg(null)
+    try {
+      const res = await fetch(`/api/ai/episodes/${episode.id}/start-frames/redraw`, { method: 'POST' })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) { setRedrawError(d?.error ?? 'Failed to start the redraw'); setRedrawAllBusy(false); return }
+      if (d?.jobId) redrawPoll.start(d.jobId)
+      else { setRedrawAllBusy(false); await reloadEpisode({ refreshRefs: true }) }
+    } catch { setRedrawError('Network error'); setRedrawAllBusy(false) }
   }
 
   /** «Generate master frame" on ONE location card (Stage 46A): exactly ONE master frame of this location,
@@ -2246,6 +2302,14 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <button onClick={() => setAssembleDialogOpen(true)} disabled={!allReady || stitching} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="assemble" title={allReady ? 'Join completed scenes into one episode' : 'Available when all scenes are ready'}>
             {stitching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Film className="h-4 w-4" />} Монтаж
           </button>
+          {/* Step 9 — full-size redraw of every scene's start frame (grid untouched). Progress «X/N» from the job. */}
+          {scenes.some((s) => validUrl(s.startFrameUrl)) && (
+            <button onClick={redrawAllStartFrames} disabled={redrawActive} className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50" data-testid="redraw-all-start-frames" title="Перерисовать все старт-кадры в полном размере (9:16, 2K) / Redraw all start frames at full size">
+              {redrawAllBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />}
+              {redrawAllBusy ? (redrawMsg ?? 'Рисуем… / Drawing…') : 'Полноразмерные старт-кадры для всех сцен / Full-size start frames for all scenes'}
+            </button>
+          )}
+          {redrawError && <span className="text-xs text-destructive" data-testid="redraw-error">{redrawError}</span>}
           <span className="text-xs text-muted-foreground" data-testid="batch-status">{scenes.filter((s) => validUrl(s.videoUrl)).length} of {scenes.length} scenes ready{generatingCount > 0 ? ` · generating: ${generatingCount}` : ''}{isAssembled ? ' · episode assembled' : ''}</span>
           {/* Stage 89 — «Quality & speed» (power tier) chosen right here, before generating. One selector
               reflects BOTH quality (resolution) and speed/cost; the value is applied to scene generation,
@@ -2509,6 +2573,19 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
                       {scene.promptOverride ? <span className="ml-1 rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary" data-testid="scene-override-badge">modified</span> : null}
                     </button>
                   </div>
+                  {/* Step 9 — redraw THIS scene's start frame at full size (plate + current panel + cast). Grid untouched. */}
+                  {validUrl(scene.startFrameUrl) && (
+                    <button
+                      onClick={() => redrawStartFrame(scene.id)}
+                      disabled={gen || redrawActive}
+                      className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted disabled:opacity-50"
+                      data-testid="redraw-start-frame"
+                      title="Перерисовать старт-кадр в полном размере (9:16, 2K) / Redraw the start frame at full size"
+                    >
+                      {redrawBusy[scene.id] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />}
+                      {redrawBusy[scene.id] ? 'Рисуем… / Drawing…' : 'Перерисовать старт-кадр / Redraw start frame'}
+                    </button>
+                  )}
                   <div className="flex flex-col gap-2 sm:flex-row">
                     <input value={sceneEdit[scene.id] ?? ''} onChange={(e) => setSceneEdit((t) => ({ ...t, [scene.id]: e.target.value }))} placeholder={canScenePromptEdit ? "Edit scene: what to adjust…" : "Редактирование сцен промптом доступно по подписке"} className="min-w-0 flex-1 rounded-lg border border-border bg-background px-3 py-1.5 text-sm" data-testid="scene-revise-input" disabled={gen || !canScenePromptEdit} />
                     <button onClick={() => reviseScene(scene)} disabled={gen || !canScenePromptEdit || !!sceneBusy[scene.id] || !(sceneEdit[scene.id] ?? '').trim()} className="inline-flex items-center justify-center gap-1 rounded-lg border border-border px-3 py-1.5 text-sm disabled:opacity-50" data-testid="scene-revise-submit">
