@@ -179,8 +179,10 @@ HARD RULES:
 - WHAT A FRAME SHOWS (as elements of the description, not a fixed sentence template, and only when visible in the frame): where each person stands/sits/lies relative to the layout objects (cot, column, board…), what is in their hands, where they look.
 - Shot size ONLY: wide / medium / close / extreme close-up, optionally with the suffix "two-shot" (e.g. "medium two-shot", "close two-shot"). NO camera angles as sizes — never over-the-shoulder, POV, low angle, high angle, insert, reverse. Vary sizes; never four identical sizes in a row.
 - ROW TAG: every scene gets ONE CAPS word "tag" naming the row's theme (the object or turn the row is about).
-- ROW HAND-OFF: beat 1 of scenes 2–5 shows the SAME MOMENT as beat 5 of the previous scene from a DIFFERENT shot size — write it starting with "same moment — " (X.5 = (X+1).1: same positions, hands, gaze). A location change happens ONLY at this row boundary, and both panels already show the new place.
-- NO JUMPS IN SPACE WITHIN A ROW: nobody teleports, changes place or turns around unless a beat shows the new state; consecutive beats are consecutive instants of one continuous scene.
+- ROW HAND-OFF (the most important seam): beat 1 of scenes 2–5 shows the SAME MOMENT as beat 5 of the previous scene from a DIFFERENT shot size — write it starting with "same moment — ". MECHANICAL TEST: read X.5 and (X+1).1 together — they must describe ONE picture: the SAME people, the SAME frozen action/verb, the same positions, hands and gaze; only the framing wording differs (wider: add what else the layout shows; closer: drop what falls out of frame). Different verbs or different people in X.5 and (X+1).1 = a broken seam. Write (X+1).1 FIRST as a copy of X.5, then adjust only the framing. CORRECT: 1.5 medium: "Nora, kettle in hand, setting it on the floor by the cot; Marta bent over the wound behind her." → 2.1 wide: "same moment — Nora setting the kettle by the cot, Marta bent over the wound, Kemp on the cot." WRONG: 1.5 "Marta lifting the blade away" → 2.1 "Nora setting the kettle down beside the cot, Marta working" (other person, other verb = two different moments). A location change happens ONLY at this row boundary, and both panels already show the new place.
+- NO JUMPS IN SPACE WITHIN A ROW: nobody teleports, changes place or turns around unless a beat shows the new state; consecutive beats are consecutive instants of one continuous scene. A person at object A in one beat and at object B two beats later needs a beat showing the move — or start them at B from the row's first beat. This also holds INTO the seam: X.5 must follow directly from X.4.
+- NO STATES AHEAD OF THE SCRIPT: never freeze a state the script has not reached at that point — "his chest still" reads as death, a bandage on a wound reads as already treated. Show only what is true at that instant of the script.
+- CHARACTER SHEETS = the character at the START of the episode: no items, injuries or wardrobe that only appear later in the script (a bandage the character receives in scene 3 is NOT in the sheet).
 - CAST ONLY: everyone who appears in a beat must be from the episode cast, named in LATIN letters verbatim. No unnamed people (no "a guard", "a porter", "a crowd"): if the script needs a one-off figure, use an existing cast member, or show an object / detail instead. Only characters listed in the scene's "characters" may appear in its beats.
 - "layout": the geometry of the ONE episode location — main objects with CENTER / LEFT / RIGHT / BACK wall / FOREGROUND / far LEFT directions relative to the viewer. Beats place people relative to these objects.
 - "characterSheets": one entry per cast member appearing in this episode — textual appearance down to details (sex, age, build, hair, face, this episode's wardrobe, distinctive items). English.
@@ -259,6 +261,140 @@ export function normalizeShotList(raw: unknown): { ok: true; shotList: ShotList 
     if (!/[a-z]/i.test(last.cut) || last.cut.length < 12) last.cut = `Ends in the state the next scene opens on: ${nextFirst.action}`;
   }
   return { ok: true, shotList: { scenes, layout, characterSheets } };
+}
+
+/* ───────────── Row hand-off (seam) check: X.5 and (X+1).1 must be ONE picture ───────────── */
+
+export interface SeamIssue {
+  /** 0-based index of the scene whose beat 5 hands off to the next scene's beat 1. */
+  index: number;
+  /** Human-readable reason (English, for logs / repair prompt). */
+  reason: string;
+}
+
+const SAME_MOMENT_RE = /^\s*same\s+moment\s*[—–-]*\s*/i;
+const ING_STOPLIST = new Set([
+  "during", "nothing", "something", "anything", "everything", "ceiling", "morning", "evening", "thing", "ring", "string",
+  "spring", "lightning", "building", "clothing", "bedding", "railing", "awning", "landing", "opening", "being", "king", "wing",
+  "sling", "siding", "padding", "stocking", "stockings", "earring", "earrings", "meeting", "painting", "drawing", "writing",
+  "lining", "netting", "matting", "carving", "engraving", "shilling", "sterling", "darling", "filling", "coating", "casing",
+  "surrounding", "surroundings", "belonging", "belongings", "according", "including", "following", "beginning", "ending",
+  "sweeping", "streaming", "flooding", "dripping", "peeling", "leaking", "swelling", "crawling", "sheeting", "rolling", "gleaming",
+]);
+
+/** Cast names mentioned in a beat (canonical names; only name tokens unique to one character count). */
+function namesInBeat(text: string, castNames: string[]): Set<string> {
+  const tokens = new Map<string, string | null>(); // token → canonical name, or null when ambiguous
+  for (const name of castNames) {
+    for (const t of name.split(/[\s-]+/).map((x) => x.replace(/[^A-Za-z]/g, "").toLowerCase()).filter((x) => x.length >= 3)) {
+      tokens.set(t, tokens.has(t) && tokens.get(t) !== name ? null : name);
+    }
+  }
+  const out = new Set<string>();
+  for (const w of text.toLowerCase().replace(/['’]s\b/g, "").split(/[^a-z]+/)) {
+    const n = tokens.get(w);
+    if (n) out.add(n);
+  }
+  return out;
+}
+
+/** Frozen-state verbs of a beat: -ing forms minus a noun stoplist and minus scenery motion (rain, water…). */
+function verbsInBeat(text: string): Set<string> {
+  const out = new Set<string>();
+  for (const w of text.toLowerCase().split(/[^a-z]+/)) {
+    if (w.length >= 6 && w.endsWith("ing") && !ING_STOPLIST.has(w)) out.add(w);
+  }
+  return out;
+}
+
+/** Shot size rank for seam comparison: 3 wide, 2 medium, 1 close, 0 extreme close-up (two-shots share their base). */
+function shotWidth(shot: string): number {
+  const s = String(shot ?? "").toLowerCase();
+  if (s.includes("extreme")) return 0;
+  if (s.includes("close")) return 1;
+  if (s.includes("wide")) return 3;
+  return 2;
+}
+
+/**
+ * Mechanical seam test (the producer's rule): glue X.5 and (X+1).1 — they must describe one picture at two shot
+ * sizes. Different people or different frozen verbs → the seam is broken. Empty verb sets are not compared
+ * (a purely static description can match anything).
+ */
+export function checkRowSeams(shotList: ShotList, castNames: string[]): SeamIssue[] {
+  const names = castNames.length ? castNames : Array.from(new Set(shotList.scenes.flatMap((s) => s.characters)));
+  const issues: SeamIssue[] = [];
+  for (let i = 0; i < shotList.scenes.length - 1; i++) {
+    const ba = shotList.scenes[i].beats[SHOT_LIST_BEATS - 1], bb = shotList.scenes[i + 1].beats[0];
+    const a = ba?.action ?? "";
+    const b = (bb?.action ?? "").replace(SAME_MOMENT_RE, "");
+    if (!a || !b) continue;
+    const na = namesInBeat(a, names), nb = namesInBeat(b, names);
+    // The wider frame may show MORE people (Kemp on the cot appears only in the wide); the closer one only fewer.
+    const wa = shotWidth(ba.shot), wb = shotWidth(bb.shot);
+    const subset = (x: Set<string>, y: Set<string>) => Array.from(x).every((n) => y.has(n));
+    const peopleDiffer = wa === wb ? !(subset(na, nb) && subset(nb, na)) : wa > wb ? !subset(nb, na) : !subset(na, nb);
+    const va = verbsInBeat(a), vb = verbsInBeat(b);
+    const verbsDiffer = va.size > 0 && vb.size > 0 && !Array.from(va).some((v) => vb.has(v));
+    const reasons: string[] = [];
+    if (peopleDiffer) reasons.push(`different people (${[...na].join(", ") || "none"} vs ${[...nb].join(", ") || "none"})`);
+    if (verbsDiffer) reasons.push(`different verbs (${[...va].join(", ")} vs ${[...vb].join(", ")})`);
+    if (reasons.length) issues.push({ index: i, reason: reasons.join("; ") });
+  }
+  return issues;
+}
+
+export function seamRepairSystemPrompt(): string {
+  return `You fix broken ROW HAND-OFFS in a 5×5 storyboard shot list (25 freeze-frames, 5 rows). Beat X.5 (last of a row) and beat (X+1).1 (first of the next row) must be ONE picture seen at two shot sizes: the SAME people, the SAME frozen action/verb, the same positions, hands and gaze — only the framing wording differs (wider: add what else the fixed layout shows; closer: drop what falls out of frame). (X+1).1 starts with "same moment — ".
+
+For every seam given, rewrite BOTH beats: keep X.5 a direct continuation of X.4 (nobody changes place or turns around unnoticed), and keep (X+1).1 leading into (X+1).2. Each beat is ONE freeze-frame in English: zero or one verb, no "then", no camera angles, no dialogue quotes, cast names in Latin letters verbatim, only people from the listed cast. Keep the existing shot sizes. Do not freeze states the script has not reached.
+
+Return ONLY JSON: {"seams":[{"index":<given index>,"last":"<new X.5 action>","first":"same moment — <new (X+1).1 action>"}]}`;
+}
+
+export function seamRepairUserPrompt(shotList: ShotList, issues: SeamIssue[]): string {
+  const blocks = issues.map(({ index, reason }) => {
+    const a = shotList.scenes[index], b = shotList.scenes[index + 1];
+    const A = a.beats, B = b.beats;
+    return [
+      `SEAM index ${index} — ROW ${index + 1} ${a.tag || ""} → ROW ${index + 2} ${b.tag || ""} (detected: ${reason})`,
+      `Cast row ${index + 1}: ${a.characters.join(", ") || "-"}; cast row ${index + 2}: ${b.characters.join(", ") || "-"}`,
+      `${index + 1}.4 ${A[3].shot}: ${A[3].action}`,
+      `${index + 1}.5 ${A[4].shot}: ${A[4].action}   ← rewrite`,
+      `${index + 2}.1 ${B[0].shot}: ${B[0].action}   ← rewrite`,
+      `${index + 2}.2 ${B[1].shot}: ${B[1].action}`,
+    ].join("\n");
+  });
+  return [shotList.layout ? `LAYOUT: ${shotList.layout}` : "", ...blocks, "Rewrite the marked beats now."].filter(Boolean).join("\n\n");
+}
+
+/** Apply a repair answer; unknown / empty entries are ignored. Returns how many seams were changed. */
+export function applySeamRepair(shotList: ShotList, raw: unknown): number {
+  const root = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const list = Array.isArray(root.seams) ? root.seams : Array.isArray(raw) ? (raw as unknown[]) : [];
+  let n = 0;
+  for (const item of list) {
+    const o = (item ?? {}) as Record<string, unknown>;
+    const index = typeof o.index === "number" ? o.index : Number(o.index);
+    const last = typeof o.last === "string" ? o.last.trim() : "";
+    const first = typeof o.first === "string" ? o.first.trim() : "";
+    if (!Number.isInteger(index) || index < 0 || index >= shotList.scenes.length - 1 || !last || !first) continue;
+    shotList.scenes[index].beats[SHOT_LIST_BEATS - 1].action = last;
+    shotList.scenes[index + 1].beats[0].action = `same moment — ${first.replace(SAME_MOMENT_RE, "")}`;
+    n++;
+  }
+  return n;
+}
+
+/**
+ * Deterministic fallback when the model cannot repair a seam: (X+1).1 becomes a copy of X.5 (one picture, the
+ * other shot size). Loses the wider/closer framing nuance but never leaves two different moments on the seam.
+ */
+export function forceSeams(shotList: ShotList, issues: SeamIssue[]): void {
+  for (const { index } of issues) {
+    const last = shotList.scenes[index].beats[SHOT_LIST_BEATS - 1].action;
+    shotList.scenes[index + 1].beats[0].action = `same moment — ${last.replace(SAME_MOMENT_RE, "")}`;
+  }
 }
 
 /** ONE CAPS word (letters/digits/hyphen), max 24 chars; "" when absent. */

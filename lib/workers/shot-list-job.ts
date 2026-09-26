@@ -24,6 +24,11 @@ import {
   beatsFromShotList,
   beatTitle,
   buildBeatVideoPrompt,
+  checkRowSeams,
+  seamRepairSystemPrompt,
+  seamRepairUserPrompt,
+  applySeamRepair,
+  forceSeams,
   type ShotList,
 } from "@/lib/simple-pipeline";
 
@@ -71,6 +76,31 @@ export async function runShotListJob(jobId: string, projectId: string, episodeId
     }
     if (!shotList) throw new Error(`The shot list could not be built (${problem || "invalid model output"}). Try again.`);
 
+    // Mechanical row hand-off test: X.5 and (X+1).1 must be one picture (same people, same frozen verb).
+    // Broken seams → one repair call to the model; whatever is still broken → deterministic copy of X.5.
+    let seamsFixed = 0, seamsForced = 0;
+    let issues = checkRowSeams(shotList, characterNames);
+    if (issues.length) {
+      console.warn(`[shot-list] ${issues.length} broken row seam(s): ${issues.map((i) => `${i.index + 1}.5→${i.index + 2}.1 ${i.reason}`).join(" | ")}`);
+      await updateJob(jobId, { progress: 60, message: `Fixing ${issues.length} row hand-off(s)…` });
+      try {
+        const fixed = await withHeartbeat(jobId, () => streamChatJSON<unknown>(
+          seamRepairSystemPrompt(),
+          seamRepairUserPrompt(shotList!, issues),
+          { model: EPISODE_SCRIPT_MODEL, maxTokens: 2_000, temperature: 0.3, timeoutMs: 180_000 },
+        ));
+        seamsFixed = applySeamRepair(shotList, fixed);
+      } catch (err) {
+        console.warn(`[shot-list] seam repair call failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      issues = checkRowSeams(shotList, characterNames);
+      if (issues.length) {
+        console.warn(`[shot-list] forcing ${issues.length} seam(s): ${issues.map((i) => `${i.index + 1}.5→${i.index + 2}.1 ${i.reason}`).join(" | ")}`);
+        forceSeams(shotList, issues);
+        seamsForced = issues.length;
+      }
+    }
+
     const beats = beatsFromShotList(shotList);
     await updateJob(jobId, { progress: 80, message: `Saving ${beats.length} beats…` });
 
@@ -106,7 +136,8 @@ export async function runShotListJob(jobId: string, projectId: string, episodeId
       await tx.episode.update({ where: { id: episodeId }, data });
     }, { timeout: 60_000 });
 
-    await completeJob(jobId, { episodeId, scenes: beats.length }, `Shot list ready: ${shotList.scenes.length} scenes × ${beats.length / shotList.scenes.length} beats`);
+    const seamNote = seamsFixed || seamsForced ? ` (row hand-offs repaired: ${seamsFixed}${seamsForced ? `, forced: ${seamsForced}` : ""})` : "";
+    await completeJob(jobId, { episodeId, scenes: beats.length }, `Shot list ready: ${shotList.scenes.length} scenes × ${beats.length / shotList.scenes.length} beats${seamNote}`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[shot-list] job ${jobId} failed:`, msg);
