@@ -164,7 +164,7 @@ function buildLocationBlock(
   const multi = locations.length > 1;
   for (const location of locations) {
     const name = short(location.name, 60) || "location";
-    const layout = short(location.keyObjects, 320);
+    const layout = short(location.keyObjects, 320).replace(/[.\s]+$/, "");
     const rows = multi ? rowsLabel(location.rows) : "";
     const head = rows ? `LOCATION for ${rows}` : "LOCATION";
     const fixed = `Fixed layout: ${layout || "keep the room and its objects exactly as in the reference"}. Nobody leaves this space.`;
