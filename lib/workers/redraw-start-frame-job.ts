@@ -46,7 +46,7 @@ export function buildRedrawStartFramePrompt(input: {
   const firstChar = panelIdx + 1;
   const lines: string[] = [];
   lines.push(
-    "Full-frame photorealistic live-action film still, PORTRAIT 9:16, single frame, NO text, NO borders, NO split panels.",
+    "Full-frame photorealistic still, PORTRAIT 9:16, single frame, NO text, NO borders, NO split panels.",
   );
   lines.push(
     `Recreate the storyboard panel (image ${panelIdx}) at full resolution and detail: same composition, shot size, character positions, poses, hands, gaze.`,
