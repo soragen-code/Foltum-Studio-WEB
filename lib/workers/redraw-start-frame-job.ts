@@ -14,8 +14,7 @@ import sharp from "sharp";
 import { prisma } from "@/lib/db";
 import { generateImage, GenerationCanceledError } from "@/lib/providers/image-provider";
 import { uploadBufferToS3 } from "@/lib/s3-upload";
-import { updateJob, completeJob, failJob, isCancelRequested, markCanceled, heartbeatJob } from "@/lib/jobs";
-import { runWithConcurrency } from "@/lib/reference-counts";
+import { updateJob, completeJob, failJob, isCancelRequested, markCanceled, heartbeatJob, getBaseUrl, getWorkerSecret, WORKER_SECRET_HEADER } from "@/lib/jobs";
 import { softenPromptForModeration, isModerationError } from "@/lib/moderation-soften";
 import { parseBeatMeta, shotSizeLabel } from "@/lib/simple-pipeline";
 import { resolveBeatCastLinks } from "@/lib/beat-cast";
@@ -24,7 +23,14 @@ export const REDRAW_START_FRAME_JOB_TYPE = "start_frame_redraw";
 
 /** 2K GPT Image renders with up to 10 refs take minutes; 3 in flight keeps 25 scenes inside the route budget. */
 const REDRAW_CONCURRENCY = 3;
-const REDRAW_IMAGE_TIMEOUT_MS = 480_000;
+const REDRAW_IMAGE_TIMEOUT_MS = 300_000;
+/** A batch of 25 scenes takes ~15-20 min — longer than one invocation (maxDuration 800 s). After this much
+ *  elapsed time the worker hands the REMAINING scenes to a fresh invocation (POST /api/ai/workers/start-frame-redraw)
+ *  under the same jobId, so progress «X/N» simply continues. Worst case per invocation: budget + one image timeout. */
+const REDRAW_HANDOFF_AFTER_MS = 420_000;
+
+/** Progress carried across chained invocations (same GenerationJob). */
+export type RedrawChainState = { total: number; done: number; failed: number; updated: string[]; errors: string[] };
 const OUT_W = 1080;
 const OUT_H = 1920;
 
@@ -60,12 +66,13 @@ export function buildRedrawStartFramePrompt(input: {
   return lines.join("\n");
 }
 
-export async function runRedrawStartFramesJob(jobId: string, projectId: string, episodeId: string, sceneIds: string[]): Promise<void> {
+export async function runRedrawStartFramesJob(jobId: string, projectId: string, episodeId: string, sceneIds: string[], chain?: RedrawChainState | null): Promise<void> {
   const canceled = () => isCancelRequested(jobId);
+  const startedAt = Date.now();
   try {
     if (await canceled()) { await markCanceled(jobId); return; }
-    const single = sceneIds.length === 1;
-    await updateJob(jobId, { status: "processing", progress: 3, message: single ? "Рисуем..." : "Собираем панели, плейт и референсы..." });
+    const single = !chain && sceneIds.length === 1;
+    if (!chain) await updateJob(jobId, { status: "processing", progress: 3, message: single ? "Рисуем..." : "Собираем панели, плейт и референсы..." });
 
     const episode = await prisma.episode.findUnique({
       where: { id: episodeId },
@@ -87,13 +94,13 @@ export async function runRedrawStartFramesJob(jobId: string, projectId: string, 
     const targets = episode.scenes.filter((s) => validUrl(s.startFrameUrl));
     if (targets.length === 0) { await failJob(jobId, "У сцены нет старт-кадра (панели грида) — сначала нарежьте лист"); return; }
 
-    const total = targets.length;
-    let done = 0;
-    let failed = 0;
-    const errors: string[] = [];
-    const updated: string[] = [];
+    const total = chain?.total ?? targets.length;
+    let done = chain?.done ?? 0;
+    let failed = chain?.failed ?? 0;
+    const errors: string[] = chain?.errors ? [...chain.errors] : [];
+    const updated: string[] = chain?.updated ? [...chain.updated] : [];
 
-    await runWithConcurrency(targets, REDRAW_CONCURRENCY, async (scene) => {
+    const processScene = async (scene: (typeof targets)[number]) => {
       if (await canceled()) return;
       try {
         const beat = parseBeatMeta(scene.beatMeta);
@@ -159,18 +166,47 @@ export async function runRedrawStartFramesJob(jobId: string, projectId: string, 
           message: single ? (failed ? "Ошибка" : "Готово") : `Полноразмерные старт-кадры: ${done}/${total}${failed ? ` (ошибок: ${failed})` : ""}`,
         }).catch(() => {});
       }
-    });
+    };
+
+    // Batches of REDRAW_CONCURRENCY; before each batch check the time budget and hand off the rest if needed.
+    for (let i = 0; i < targets.length; i += REDRAW_CONCURRENCY) {
+      if (await canceled()) break;
+      if (i > 0 && Date.now() - startedAt > REDRAW_HANDOFF_AFTER_MS) {
+        const remaining = targets.slice(i).map((t) => t.id);
+        const handed = await handOffRemaining({ jobId, projectId, episodeId, sceneIds: remaining, chain: { total, done, failed, updated, errors } });
+        if (handed) { console.log(`[start-frame-redraw] handed off ${remaining.length} scenes to a new invocation`); return; }
+        console.warn("[start-frame-redraw] hand-off failed — continuing in this invocation");
+      }
+      await Promise.all(targets.slice(i, i + REDRAW_CONCURRENCY).map(processScene));
+    }
 
     if (await canceled()) { await markCanceled(jobId); return; }
     if (failed === total) { await failJob(jobId, `Не удалось перерисовать ни одного кадра: ${errors[0] ?? ""}`); return; }
     await completeJob(
       jobId,
-      { episodeId, sceneIds: targets.map((s) => s.id), updated, generated: total - failed, failed, errors: errors.slice(0, 5), single },
+      { episodeId, sceneIds, updated, generated: total - failed, failed, errors: errors.slice(0, 5), single },
       single ? "Старт-кадр перерисован" : failed ? `Готово ${total - failed}/${total} кадров (ошибок: ${failed})` : `Готово: ${total} полноразмерных старт-кадров`,
     );
   } catch (err: any) {
     if (err instanceof GenerationCanceledError) { await markCanceled(jobId); return; }
     console.error("[start-frame-redraw] job failed:", err);
     await failJob(jobId, err?.message ?? "Start frame redraw failed");
+  }
+}
+
+/** Continue the job in a fresh serverless invocation (internal worker route, shared worker secret). */
+async function handOffRemaining(body: { jobId: string; projectId: string; episodeId: string; sceneIds: string[]; chain: RedrawChainState }): Promise<boolean> {
+  const secret = getWorkerSecret();
+  if (!secret) return false;
+  try {
+    const res = await fetch(`${getBaseUrl()}/api/ai/workers/start-frame-redraw`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", [WORKER_SECRET_HEADER]: secret },
+      body: JSON.stringify(body),
+    });
+    return res.ok;
+  } catch (e: any) {
+    console.error("[start-frame-redraw] hand-off request failed:", e?.message ?? e);
+    return false;
   }
 }
