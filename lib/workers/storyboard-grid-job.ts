@@ -2,13 +2,14 @@
  * Stage 240 — GRID STORYBOARD background workers.
  *
  * Two jobs, both additive and inert for episodes that never use the grid:
- *   1. storyboard_grid       — render ONE 5×5 storyboard sheet (25 panels) with GPT Image 2.0 from a
- *                              producer-editable English prompt. References passed to the model: each character's
+ *   1. storyboard_grid       — render ONE storyboard sheet (a single composition, a grid of panels) with GPT Image 2.0
+ *                              from a producer-editable English prompt. References passed to the model: each character's
  *                              neutral-background portrait (up to GRID_MAX_CHAR_REFS) + the single location master
  *                              plate. Result → Episode.gridUrl + Episode.gridPrompt (the exact prompt used).
- *   2. storyboard_grid_slice — after the sheet is approved, cut it strictly along the 5×5 grid (sharp), upload each and
- *                              assign it to the matching scene as its START FRAME (Scene.startFrameUrl +
- *                              Scene.gridPanelIndex). Sets Episode.gridApproved = true.
+ *   2. storyboard_grid_slice — after the sheet is approved, cut it along the WHITE separator lines between panels
+ *                              (sharp). The grid dimensions are DETECTED from those lines (the model does not honour a
+ *                              fixed count), each panel is uploaded and assigned to the matching scene as its START
+ *                              FRAME (Scene.startFrameUrl + Scene.gridPanelIndex). Sets Episode.gridApproved = true.
  *
  * Nothing here touches the classic SCENES pipeline or the per-board STORYBOARD pipeline — a scene without a
  * startFrameUrl behaves exactly as before.
@@ -42,20 +43,22 @@ const PANEL_OUT_W = 1080;
 const PANEL_OUT_H = 1920;
 
 /**
- * Content-aware 5×5 slice. The model rarely places the sheet edge-to-edge and the 5 rows can drift a couple of
- * percent, so a blind pw=W/5 cut leaves black borders and clips faces. Instead we:
- *   1. trim the uniform outer margin by finding where per-column / per-row brightness rises above the dark frame,
- *   2. inside that content box, place the 4 internal cut lines and SNAP each one to the darkest column/row
- *      (the thin black border) within a window around the /5 prior — i.e. cut on the real gutters, not on fifths,
- *   3. reject the sheet (return null → the job asks for a clean re-gen) if the resulting panels are not uniform.
- * Returns full-resolution boundary arrays: colBounds/rowBounds have GRID_COLS+1 / GRID_ROWS+1 entries.
+ * Cut on the WHITE separator lines between panels. The sheet is ONE composition (a grid of frames) and the model does
+ * NOT honour any fixed panel count — real sheets come out 4 columns × 6 rows, not 5×5. So we DETECT the grid instead of
+ * assuming it:
+ *   1. build the per-column / per-row mean-brightness profile,
+ *   2. find the bright INTERNAL local maxima of each profile — those are the white lines dividing the frames,
+ *   3. columns = vertical lines + 1, rows = horizontal lines + 1; bounds run edge-to-edge (0 … W / 0 … H),
+ *   4. reject the sheet (return null → the job asks for a clean re-gen) only if the detected grid is out of a sane
+ *      range or the bands are wildly non-uniform.
+ * Returns full-resolution boundary arrays of DETECTED length: colBounds has (cols+1) entries, rowBounds (rows+1).
  */
 async function analyzeGridBounds(
   sheet: Buffer,
   totalW: number,
   totalH: number,
 ): Promise<{ colBounds: number[]; rowBounds: number[] } | null> {
-  const SW = Math.min(600, totalW);
+  const SW = Math.min(800, totalW);
   const { data, info } = await sharp(sheet).greyscale().resize(SW, null).raw().toBuffer({ resolveWithObject: true });
   const w = info.width;
   const h = info.height;
@@ -76,66 +79,72 @@ async function analyzeGridBounds(
   }
   for (let x = 0; x < w; x++) colMean[x] /= h;
 
-  // (1) Trim outer margin: content starts where the profile climbs above (min + 12% of range).
-  const contentBox = (arr: Float64Array): [number, number] => {
+  // Find the bright internal separator lines: local maxima of the brightness profile above (min + 50% of range),
+  // ignoring the outer 6% (the sheet frame), then merge maxima that sit within 6% of the axis length.
+  const detectBrightLines = (arr: Float64Array): number[] => {
+    const N = arr.length;
     let mn = Infinity;
     let mx = -Infinity;
     for (const v of arr) {
       if (v < mn) mn = v;
       if (v > mx) mx = v;
     }
-    const thr = mn + (mx - mn) * 0.12;
-    let lo = 0;
-    while (lo < arr.length - 1 && arr[lo] <= thr) lo++;
-    let hi = arr.length - 1;
-    while (hi > lo && arr[hi] <= thr) hi--;
-    return [lo, hi];
-  };
-  const [xlo, xhi] = contentBox(colMean);
-  const [ylo, yhi] = contentBox(rowMean);
-  if (xhi - xlo < GRID_COLS * 4 || yhi - ylo < GRID_ROWS * 4) return null;
-
-  // (2) Snap each of the 4 internal cuts to the darkest line in a window around the /5 prior.
-  const snapCuts = (arr: Float64Array, lo: number, hi: number, n: number): number[] => {
-    const span = (hi - lo) / n;
-    const win = Math.max(2, Math.round(span * 0.18));
-    const cuts: number[] = [lo];
-    for (let k = 1; k < n; k++) {
-      const expected = Math.round(lo + span * k);
-      let best = expected;
-      let bestV = Infinity;
-      for (let p = expected - win; p <= expected + win; p++) {
-        if (p <= lo || p >= hi) continue;
-        if (arr[p] < bestV) {
-          bestV = arr[p];
-          best = p;
-        }
+    const range = mx - mn;
+    if (range < 5) return [];
+    const thr = mn + range * 0.5;
+    const win = 5;
+    const edge = Math.round(N * 0.06);
+    const raw: number[] = [];
+    for (let i = edge; i < N - edge; i++) {
+      const v = arr[i];
+      if (v < thr) continue;
+      let isMax = true;
+      for (let k = -win; k <= win; k++) {
+        if (k === 0) continue;
+        const j = i + k;
+        if (j < 0 || j >= N) continue;
+        if (arr[j] > v) { isMax = false; break; }
       }
-      cuts.push(best);
+      if (isMax) raw.push(i);
     }
-    cuts.push(hi);
-    return cuts;
+    const mergeDist = Math.max(3, Math.round(N * 0.06));
+    raw.sort((a, b) => a - b);
+    const merged: { pos: number; val: number }[] = [];
+    for (const p of raw) {
+      const last = merged[merged.length - 1];
+      if (last && p - last.pos <= mergeDist) {
+        if (arr[p] > last.val) { last.pos = p; last.val = arr[p]; }
+      } else {
+        merged.push({ pos: p, val: arr[p] });
+      }
+    }
+    return merged.map((m) => m.pos);
   };
-  const colCuts = snapCuts(colMean, xlo, xhi, GRID_COLS);
-  const rowCuts = snapCuts(rowMean, ylo, yhi, GRID_ROWS);
 
-  // (3) Uniformity guard: every column/row band must be within ±35% of the median band size.
-  const uniform = (cuts: number[]): boolean => {
-    const bands = cuts.slice(1).map((c, i) => c - cuts[i]);
+  const colLines = detectBrightLines(colMean);
+  const rowLines = detectBrightLines(rowMean);
+  const nCols = colLines.length + 1;
+  const nRows = rowLines.length + 1;
+  // Sane-range guard: real sheets are 3–6 columns and 4–7 rows. Anything else means the lines were not found.
+  if (nCols < 3 || nCols > 6 || nRows < 4 || nRows > 7) return null;
+
+  const colBounds = [0, ...colLines.map((c) => Math.round(c * sx)), totalW];
+  const rowBounds = [0, ...rowLines.map((r) => Math.round(r * sy)), totalH];
+
+  // Uniformity guard (lenient — real grids drift): reject only if a band is < 0.5× or > 2.0× the median band.
+  const uniform = (bounds: number[]): boolean => {
+    const bands = bounds.slice(1).map((c, i) => c - bounds[i]);
     const sorted = [...bands].sort((a, b) => a - b);
     const med = sorted[Math.floor(sorted.length / 2)];
     if (med <= 0) return false;
-    return bands.every((b) => b >= med * 0.65 && b <= med * 1.35);
+    return bands.every((b) => b >= med * 0.5 && b <= med * 2.0);
   };
-  if (!uniform(colCuts) || !uniform(rowCuts)) return null;
+  if (!uniform(colBounds) || !uniform(rowBounds)) return null;
 
-  return {
-    colBounds: colCuts.map((c) => Math.round(c * sx)),
-    rowBounds: rowCuts.map((r) => Math.round(r * sy)),
-  };
+  return { colBounds, rowBounds };
 }
 
-/** Panel rect from detected boundaries, pulled 3–5 px inward to drop the thin black border. */
+/** Panel rect from detected boundaries, pulled 3–5 px inward to drop the white separator line. */
 function panelRectFromBounds(colBounds: number[], rowBounds: number[], row: number, col: number) {
   const left0 = colBounds[col];
   const right0 = colBounds[col + 1];
@@ -375,41 +384,43 @@ export async function runStoryboardGridSliceJob(
     const totalH = meta.height ?? 0;
     if (totalW < GRID_COLS || totalH < GRID_ROWS) { await failJob(jobId, "Лист сториборда повреждён"); return; }
 
-    // Content-aware geometry: trim the outer margin and snap the 4×4 internal cuts to the real black gutters
-    // (never blind fifths). null ⇒ the sheet has margins/labels or drifting rows → ask for a clean re-gen instead
-    // of hand-cutting garbage panels.
+    // Detect the grid from the WHITE separator lines between panels and cut on them (never a blind /N). null ⇒ the
+    // separator lines were not found (margins/labels, or the sheet is not a clean grid) → ask for a clean re-gen
+    // instead of hand-cutting garbage panels.
     const bounds = await analyzeGridBounds(sheet, totalW, totalH);
     if (!bounds) {
       await failJob(
         jobId,
-        "Не удалось разметить панели по границам листа. Перегенерируйте лист сториборда с NO margins / NO labels (панели вплотную, тонкие чёрные бордеры) — руками не режем.",
+        "Не удалось найти белые линии между кадрами. Перегенерируйте лист сториборда одной композицией с NO margins / NO labels (кадры вплотную, разделённые тонкими белыми линиями) — руками не режем.",
       );
       return;
     }
     const { colBounds, rowBounds } = bounds;
+    const cols = colBounds.length - 1;
+    const rows = rowBounds.length - 1;
+    const detectedPanels = cols * rows;
 
     const scenes = episode.scenes;
     const ts = Date.now();
     let assigned = 0;
     const sliced: string[] = [];
-    const panelSizes = new Set<string>();
+    const toAssign = Math.min(detectedPanels, scenes.length);
 
-    for (let i = 0; i < GRID_PANELS; i++) {
+    for (let i = 0; i < detectedPanels; i++) {
       if (await canceled()) throw new GenerationCanceledError();
-      const row = Math.floor(i / GRID_COLS);
-      const col = i % GRID_COLS;
+      const row = Math.floor(i / cols);
+      const col = i % cols;
       // Detected panel box → centred exact-9:16 sub-rect → 1080×1920, so every panel is uniform and undistorted.
       const rect = fitNineSixteen(panelRectFromBounds(colBounds, rowBounds, row, col));
 
       const scene = scenes[i];
-      if (!scene) break; // fewer than 25 scenes — only slice what maps to a scene
+      if (!scene) break; // fewer scenes than detected panels — only slice what maps to a scene
 
       const panelBuf = await sharp(sheet)
         .extract(rect)
         .resize(PANEL_OUT_W, PANEL_OUT_H, { fit: "fill" })
         .png()
         .toBuffer();
-      panelSizes.add(`${rect.width}x${rect.height}`);
       // Row.Col naming (panel_R.C) so the sheet position is obvious in storage.
       const panelUrl = await uploadBufferToS3(
         panelBuf,
@@ -431,16 +442,17 @@ export async function runStoryboardGridSliceJob(
       sliced.push(scene.id);
       assigned += 1;
       await updateJob(jobId, {
-        progress: 15 + Math.round((60 * (i + 1)) / GRID_PANELS),
-        message: `Размечаем панель ${i + 1}/${GRID_PANELS}...`,
+        progress: 15 + Math.round((60 * (i + 1)) / Math.max(1, toAssign)),
+        message: `Размечаем кадр ${i + 1}/${toAssign} (сетка ${cols}×${rows})...`,
       });
     }
 
-    // Validation: on a full sheet we expect 25 panels, all one size. If not, the sheet is bad — refuse.
-    if (scenes.length >= GRID_PANELS && (assigned !== GRID_PANELS || panelSizes.size !== 1)) {
+    // Validation: every scene that has a panel above it must have been assigned one. Panel EXTRACT sizes vary with the
+    // detected grid (that is expected) — the OUTPUT is always 1080×1920 — so we check coverage, not extract size.
+    if (assigned !== toAssign) {
       await failJob(
         jobId,
-        `Нарезка не сошлась (панелей ${assigned}/${GRID_PANELS}, размеров ${panelSizes.size}). Перегенерируйте лист с NO margins / NO labels — руками не режем.`,
+        `Нарезка не сошлась (размечено ${assigned}/${toAssign} кадров, сетка ${cols}×${rows}). Перегенерируйте лист одной композицией с NO margins / NO labels — руками не режем.`,
       );
       return;
     }
