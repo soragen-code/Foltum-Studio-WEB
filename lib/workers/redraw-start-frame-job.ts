@@ -2,12 +2,14 @@
  * Simplified pipeline — step 9, START FRAME REDRAW.
  *
  * Re-renders the start frame of one or many beat scenes at full resolution with GPT Image 2.0 (9:16, 2K),
- * using the CURRENT start frame (the sliced grid panel) as the composition reference. References:
- *   image 1 = the location master plate (allowed on this step only — never in the video refs),
- *   image 2 = the scene's current start frame (grid panel as sliced),
- *   image 3..N = the scene cast (Character.imageFull || imageFront, appearance only).
- * When the episode has no plate the numbering shifts (panel = image 1). The result is normalised to a
- * 1080×1920 PNG and OVERWRITES Scene.startFrameUrl. The grid sheet / slicing logic is never touched.
+ * using the sliced grid panel ONLY as a composition reference (never upscaled into the frame). References:
+ *   image 1 = the storyboard panel (beat.gridPanelUrl, fallback Scene.startFrameUrl) — composition/poses/framing only,
+ *   image 2 = the location master plate (allowed on this step only — never in the video refs), when present,
+ *   next image = the previous shot X.5 (seam ref) for the first beat of a non-first grid row, when present,
+ *   image N.. = the scene cast (Character.imageFull || imageFront, appearance only).
+ * The prompt tells the model to recreate image 1's composition exactly but render at full photographic
+ * resolution. The result is normalised to a 1080×1920 PNG and OVERWRITES Scene.startFrameUrl.
+ * The grid sheet / slicing logic is never touched.
  * Job type "start_frame_redraw"; resultData { episodeId, sceneIds, single? }.
  */
 import sharp from "sharp";
@@ -39,26 +41,32 @@ const validUrl = (u?: string | null): u is string => typeof u === "string" && u.
 export function buildRedrawStartFramePrompt(input: {
   shot: string | null | undefined;
   action: string;
-  hasPlate: boolean;
+  plateIdx: number | null;
+  seam?: { idx: number; prevShot: string | null | undefined } | null;
   characterNames: string[];
+  characterStartIdx: number;
 }): string {
-  const panelIdx = input.hasPlate ? 2 : 1;
-  const firstChar = panelIdx + 1;
   const lines: string[] = [];
   lines.push(
     "Full-frame photorealistic still, PORTRAIT 9:16, single frame, NO text, NO borders, NO split panels.",
   );
   lines.push(
-    `Recreate the storyboard panel (image ${panelIdx}) at full resolution and detail: same composition, shot size, character positions, poses, hands, gaze.`,
+    "Recreate the composition of image 1 exactly: same shot size, character positions, poses, hands, gaze, camera angle. " +
+      "Image 1 is a rough storyboard panel — use it ONLY for composition, then render everything at full photographic resolution and detail (do NOT copy its sketch quality, do NOT upscale it).",
   );
-  if (input.hasPlate) {
-    lines.push("LOCATION = image 1 (only source of the space; do not invent walls/doors/objects).");
+  if (input.plateIdx) {
+    lines.push(`LOCATION = image ${input.plateIdx} (only source of the space; do not invent walls/doors/objects).`);
   } else {
-    lines.push(`LOCATION = the space visible in image ${panelIdx} (only source of the space; do not invent walls/doors/objects).`);
+    lines.push("LOCATION = the space visible in image 1 (only source of the space; do not invent walls/doors/objects).");
+  }
+  if (input.seam) {
+    lines.push(
+      `SAME MOMENT as image ${input.seam.idx} (the previous shot, ${shotSizeLabel(input.seam.prevShot)}): identical people, wardrobe, positions, props and lighting — only the framing / shot size changes.`,
+    );
   }
   if (input.characterNames.length) {
     lines.push(
-      `CHARACTERS (identical face, hair, wardrobe): ${input.characterNames.map((n, i) => `${n} = image ${firstChar + i}`).join(", ")}.`,
+      `CHARACTERS (identical face, hair, wardrobe): ${input.characterNames.map((n, i) => `${n} = image ${input.characterStartIdx + i}`).join(", ")}.`,
     );
   }
   lines.push(`SHOT: ${shotSizeLabel(input.shot)}.`);
@@ -104,16 +112,47 @@ export async function runRedrawStartFramesJob(jobId: string, projectId: string, 
       if (await canceled()) return;
       try {
         const beat = parseBeatMeta(scene.beatMeta);
+        // image 1 = the storyboard panel (composition reference), NOT the final frame. Prefer the panel we
+        // stashed at slice time; fall back to the current startFrameUrl (which is the panel until first redraw).
+        const panelUrl = validUrl(beat?.gridPanelUrl) ? beat!.gridPanelUrl! : scene.startFrameUrl!;
         const plateUrl = validUrl(scene.location?.imageUrl) ? scene.location!.imageUrl! : episodePlate;
+
+        // Seam: first beat of a non-first grid row (panel index (gp-1)%5===0 && gp>5). Pull the previous shot X.5
+        // as a positions reference so X.5 → (X+1).1 read as the same moment at a different framing (one extra read).
+        let seamRef: { url: string; prevShot: string | null } | null = null;
+        const gp = scene.gridPanelIndex ?? null;
+        if (gp && gp > 5 && (gp - 1) % 5 === 0) {
+          const prev = await prisma.scene.findFirst({
+            where: { episodeId, gridPanelIndex: gp - 1 },
+            select: { startFrameUrl: true, shotType: true, beatMeta: true },
+          });
+          if (prev) {
+            const pb = parseBeatMeta(prev.beatMeta);
+            const prevUrl = validUrl(pb?.gridPanelUrl) ? pb!.gridPanelUrl! : (validUrl(prev.startFrameUrl) ? prev.startFrameUrl! : null);
+            if (prevUrl) seamRef = { url: prevUrl, prevShot: pb?.shot ?? prev.shotType ?? null };
+          }
+        }
+
+        // Reference order: panel (1) → plate (2?) → seam (?) → characters. Numbering computed as we push.
+        const baseRefs: string[] = [panelUrl];
+        let plateIdx: number | null = null;
+        if (plateUrl) { plateIdx = baseRefs.length + 1; baseRefs.push(plateUrl); }
+        let seamIdx: number | null = null;
+        if (seamRef) { seamIdx = baseRefs.length + 1; baseRefs.push(seamRef.url); }
+        const characterStartIdx = baseRefs.length + 1;
+
         const links = await resolveBeatCastLinks(scene, scene.characters);
         const withRef = links.map((l) => l.character).filter((c) => validUrl(c.imageFull) || validUrl(c.imageFront));
         const ordered = [...withRef.filter((c) => c.tier !== "CROWD"), ...withRef.filter((c) => c.tier === "CROWD")];
-        const maxChars = 10 - (plateUrl ? 2 : 1);
-        const cast = ordered.slice(0, Math.max(0, maxChars));
+        const maxChars = Math.max(0, 10 - baseRefs.length);
+        const cast = ordered.slice(0, maxChars);
         const castUrls = cast.map((c) => (validUrl(c.imageFull) ? c.imageFull! : c.imageFront!));
         const action = (beat?.action || scene.action || "").trim() || "The characters hold the positions shown in the panel.";
-        const prompt = buildRedrawStartFramePrompt({ shot: beat?.shot ?? scene.shotType, action, hasPlate: !!plateUrl, characterNames: cast.map((c) => c.name) });
-        const baseRefs = [...(plateUrl ? [plateUrl] : []), scene.startFrameUrl!];
+        const prompt = buildRedrawStartFramePrompt({
+          shot: beat?.shot ?? scene.shotType, action, plateIdx,
+          seam: seamRef ? { idx: seamIdx!, prevShot: seamRef.prevShot } : null,
+          characterNames: cast.map((c) => c.name), characterStartIdx,
+        });
 
         // Moderation ladder (as in the grid job): as-is → softened wording → softened without character portraits.
         const attempts: Array<{ prompt: string; image_input: string[] }> = [

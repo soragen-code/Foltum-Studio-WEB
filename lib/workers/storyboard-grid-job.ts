@@ -17,7 +17,8 @@ import sharp from "sharp";
 import { prisma } from "@/lib/db";
 import { generateImage, GenerationCanceledError } from "@/lib/providers/image-provider";
 import { uploadRemoteToS3, uploadBufferToS3 } from "@/lib/s3-upload";
-import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
+import { updateJob, completeJob, failJob, isCancelRequested, markCanceled, runInBackground, getBaseUrl, getWorkerSecret, WORKER_SECRET_HEADER } from "@/lib/jobs";
+import { REDRAW_START_FRAME_JOB_TYPE, runRedrawStartFramesJob } from "@/lib/workers/redraw-start-frame-job";
 import {
   buildGridPrompt,
   GRID_ASPECT_RATIO,
@@ -41,18 +42,111 @@ const PANEL_OUT_W = 1080;
 const PANEL_OUT_H = 1920;
 
 /**
- * Strict 5×5 grid cut (the template asks for NO margins / NO labels, thin black borders): pw = W/5, ph = H/5 and
- * an inset proportional to the panel width (≈ 6 px on a 432 px panel) eats the black border on every side.
+ * Content-aware 5×5 slice. The model rarely places the sheet edge-to-edge and the 5 rows can drift a couple of
+ * percent, so a blind pw=W/5 cut leaves black borders and clips faces. Instead we:
+ *   1. trim the uniform outer margin by finding where per-column / per-row brightness rises above the dark frame,
+ *   2. inside that content box, place the 4 internal cut lines and SNAP each one to the darkest column/row
+ *      (the thin black border) within a window around the /5 prior — i.e. cut on the real gutters, not on fifths,
+ *   3. reject the sheet (return null → the job asks for a clean re-gen) if the resulting panels are not uniform.
+ * Returns full-resolution boundary arrays: colBounds/rowBounds have GRID_COLS+1 / GRID_ROWS+1 entries.
  */
-function gridPanelRect(totalW: number, totalH: number, row: number, col: number) {
-  const pw = totalW / GRID_COLS;
-  const ph = totalH / GRID_ROWS;
-  const inset = Math.max(4, Math.round(pw * 0.014));
-  const left = Math.round(col * pw + inset);
-  const top = Math.round(row * ph + inset);
-  const right = Math.round((col + 1) * pw - inset);
-  const bottom = Math.round((row + 1) * ph - inset);
-  return { left, top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) };
+async function analyzeGridBounds(
+  sheet: Buffer,
+  totalW: number,
+  totalH: number,
+): Promise<{ colBounds: number[]; rowBounds: number[] } | null> {
+  const SW = Math.min(600, totalW);
+  const { data, info } = await sharp(sheet).greyscale().resize(SW, null).raw().toBuffer({ resolveWithObject: true });
+  const w = info.width;
+  const h = info.height;
+  const sx = totalW / w;
+  const sy = totalH / h;
+
+  const colMean = new Float64Array(w);
+  const rowMean = new Float64Array(h);
+  for (let y = 0; y < h; y++) {
+    const base = y * w;
+    let rowSum = 0;
+    for (let x = 0; x < w; x++) {
+      const v = data[base + x];
+      colMean[x] += v;
+      rowSum += v;
+    }
+    rowMean[y] = rowSum / w;
+  }
+  for (let x = 0; x < w; x++) colMean[x] /= h;
+
+  // (1) Trim outer margin: content starts where the profile climbs above (min + 12% of range).
+  const contentBox = (arr: Float64Array): [number, number] => {
+    let mn = Infinity;
+    let mx = -Infinity;
+    for (const v of arr) {
+      if (v < mn) mn = v;
+      if (v > mx) mx = v;
+    }
+    const thr = mn + (mx - mn) * 0.12;
+    let lo = 0;
+    while (lo < arr.length - 1 && arr[lo] <= thr) lo++;
+    let hi = arr.length - 1;
+    while (hi > lo && arr[hi] <= thr) hi--;
+    return [lo, hi];
+  };
+  const [xlo, xhi] = contentBox(colMean);
+  const [ylo, yhi] = contentBox(rowMean);
+  if (xhi - xlo < GRID_COLS * 4 || yhi - ylo < GRID_ROWS * 4) return null;
+
+  // (2) Snap each of the 4 internal cuts to the darkest line in a window around the /5 prior.
+  const snapCuts = (arr: Float64Array, lo: number, hi: number, n: number): number[] => {
+    const span = (hi - lo) / n;
+    const win = Math.max(2, Math.round(span * 0.18));
+    const cuts: number[] = [lo];
+    for (let k = 1; k < n; k++) {
+      const expected = Math.round(lo + span * k);
+      let best = expected;
+      let bestV = Infinity;
+      for (let p = expected - win; p <= expected + win; p++) {
+        if (p <= lo || p >= hi) continue;
+        if (arr[p] < bestV) {
+          bestV = arr[p];
+          best = p;
+        }
+      }
+      cuts.push(best);
+    }
+    cuts.push(hi);
+    return cuts;
+  };
+  const colCuts = snapCuts(colMean, xlo, xhi, GRID_COLS);
+  const rowCuts = snapCuts(rowMean, ylo, yhi, GRID_ROWS);
+
+  // (3) Uniformity guard: every column/row band must be within ±35% of the median band size.
+  const uniform = (cuts: number[]): boolean => {
+    const bands = cuts.slice(1).map((c, i) => c - cuts[i]);
+    const sorted = [...bands].sort((a, b) => a - b);
+    const med = sorted[Math.floor(sorted.length / 2)];
+    if (med <= 0) return false;
+    return bands.every((b) => b >= med * 0.65 && b <= med * 1.35);
+  };
+  if (!uniform(colCuts) || !uniform(rowCuts)) return null;
+
+  return {
+    colBounds: colCuts.map((c) => Math.round(c * sx)),
+    rowBounds: rowCuts.map((r) => Math.round(r * sy)),
+  };
+}
+
+/** Panel rect from detected boundaries, pulled 3–5 px inward to drop the thin black border. */
+function panelRectFromBounds(colBounds: number[], rowBounds: number[], row: number, col: number) {
+  const left0 = colBounds[col];
+  const right0 = colBounds[col + 1];
+  const top0 = rowBounds[row];
+  const bottom0 = rowBounds[row + 1];
+  const inset = Math.max(3, Math.min(5, Math.round((right0 - left0) * 0.01)));
+  const left = left0 + inset;
+  const top = top0 + inset;
+  const width = Math.max(1, right0 - left0 - inset * 2);
+  const height = Math.max(1, bottom0 - top0 - inset * 2);
+  return { left, top, width, height };
 }
 
 /** Shrink a panel rectangle to an exact 9:16 box centred inside it. */
@@ -280,18 +374,32 @@ export async function runStoryboardGridSliceJob(
     const totalW = meta.width ?? 0;
     const totalH = meta.height ?? 0;
     if (totalW < GRID_COLS || totalH < GRID_ROWS) { await failJob(jobId, "Лист сториборда повреждён"); return; }
-    // Panel geometry: strict 5×5 grid cut (see gridPanelRect) — the sheet has no margins and no labels, so the
-    // borders sit exactly on the fifths; the inset eats the thin black border. Then a centred 9:16 crop → 1080×1920.
+
+    // Content-aware geometry: trim the outer margin and snap the 4×4 internal cuts to the real black gutters
+    // (never blind fifths). null ⇒ the sheet has margins/labels or drifting rows → ask for a clean re-gen instead
+    // of hand-cutting garbage panels.
+    const bounds = await analyzeGridBounds(sheet, totalW, totalH);
+    if (!bounds) {
+      await failJob(
+        jobId,
+        "Не удалось разметить панели по границам листа. Перегенерируйте лист сториборда с NO margins / NO labels (панели вплотную, тонкие чёрные бордеры) — руками не режем.",
+      );
+      return;
+    }
+    const { colBounds, rowBounds } = bounds;
+
     const scenes = episode.scenes;
     const ts = Date.now();
     let assigned = 0;
+    const sliced: string[] = [];
+    const panelSizes = new Set<string>();
 
     for (let i = 0; i < GRID_PANELS; i++) {
       if (await canceled()) throw new GenerationCanceledError();
       const row = Math.floor(i / GRID_COLS);
       const col = i % GRID_COLS;
-      // Each panel is trimmed to an exact 9:16 box (center-crop) and normalised to 1080×1920 so every start frame is uniform.
-      const rect = fitNineSixteen(gridPanelRect(totalW, totalH, row, col));
+      // Detected panel box → centred exact-9:16 sub-rect → 1080×1920, so every panel is uniform and undistorted.
+      const rect = fitNineSixteen(panelRectFromBounds(colBounds, rowBounds, row, col));
 
       const scene = scenes[i];
       if (!scene) break; // fewer than 25 scenes — only slice what maps to a scene
@@ -301,24 +409,80 @@ export async function runStoryboardGridSliceJob(
         .resize(PANEL_OUT_W, PANEL_OUT_H, { fit: "fill" })
         .png()
         .toBuffer();
+      panelSizes.add(`${rect.width}x${rect.height}`);
+      // Row.Col naming (panel_R.C) so the sheet position is obvious in storage.
       const panelUrl = await uploadBufferToS3(
         panelBuf,
-        `media/public/grid/${projectId}/${episodeId}/panel-${i + 1}-${ts}.png`,
+        `media/public/grid/${projectId}/${episodeId}/panel_${row + 1}.${col + 1}-${ts}.png`,
         "image/png",
       );
+      // The panel is a COMPOSITION REFERENCE, not the final start frame. Keep it in beatMeta.gridPanelUrl; also seed
+      // startFrameUrl so the redraw step (below) and the UI have something, but the redraw OVERWRITES it with a
+      // freshly rendered full 9:16 frame. Never upscale the panel into the video.
+      const prevBeat = parseBeatMeta(scene.beatMeta);
       await prisma.scene.update({
         where: { id: scene.id },
-        data: { startFrameUrl: panelUrl, gridPanelIndex: i + 1 },
+        data: {
+          startFrameUrl: panelUrl,
+          gridPanelIndex: i + 1,
+          beatMeta: { ...(prevBeat ?? {}), gridPanelUrl: panelUrl },
+        },
       });
+      sliced.push(scene.id);
       assigned += 1;
       await updateJob(jobId, {
-        progress: 15 + Math.round((70 * (i + 1)) / GRID_PANELS),
-        message: `Нарезаем панель ${i + 1}/${GRID_PANELS}...`,
+        progress: 15 + Math.round((60 * (i + 1)) / GRID_PANELS),
+        message: `Размечаем панель ${i + 1}/${GRID_PANELS}...`,
       });
     }
 
+    // Validation: on a full sheet we expect 25 panels, all one size. If not, the sheet is bad — refuse.
+    if (scenes.length >= GRID_PANELS && (assigned !== GRID_PANELS || panelSizes.size !== 1)) {
+      await failJob(
+        jobId,
+        `Нарезка не сошлась (панелей ${assigned}/${GRID_PANELS}, размеров ${panelSizes.size}). Перегенерируйте лист с NO margins / NO labels — руками не режем.`,
+      );
+      return;
+    }
+
     await prisma.episode.update({ where: { id: episodeId }, data: { gridApproved: true } });
-    await completeJob(jobId, { episodeId, panelsAssigned: assigned }, `Sliced ${assigned} start frames from the grid (grid cut)`);
+
+    // Panel ≠ start frame: hand the sliced scenes to the start-frame redraw, which regenerates each panel as a full
+    // 9:16 frame (panel = composition ref image 1, plate = image 2, character height refs = image 3..N). If the
+    // hand-off can't fire we still complete — the user can press «Полноразмерные старт-кадры» manually.
+    let redrawStarted = false;
+    if (sliced.length > 0) {
+      try {
+        const redrawJob = await prisma.generationJob.create({
+          data: {
+            type: REDRAW_START_FRAME_JOB_TYPE, status: "pending", progress: 0,
+            message: `Полноразмерные старт-кадры: 0/${sliced.length}`, projectId,
+            resultData: JSON.stringify({ episodeId, sceneIds: sliced, single: false }),
+          },
+        });
+        const secret = getWorkerSecret();
+        if (secret) {
+          const r = await fetch(`${getBaseUrl()}/api/ai/workers/start-frame-redraw`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", [WORKER_SECRET_HEADER]: secret },
+            body: JSON.stringify({ jobId: redrawJob.id, projectId, episodeId, sceneIds: sliced }),
+          });
+          redrawStarted = r.ok;
+        }
+        if (!redrawStarted) runInBackground(() => runRedrawStartFramesJob(redrawJob.id, projectId, episodeId, sliced));
+        redrawStarted = true;
+      } catch (e: any) {
+        console.warn("[storyboard-grid-slice] auto start-frame redraw failed to start:", e?.message ?? e);
+      }
+    }
+
+    await completeJob(
+      jobId,
+      { episodeId, panelsAssigned: assigned, redrawStarted },
+      redrawStarted
+        ? `Размечено ${assigned} панелей; генерирую полноразмерные старт-кадры`
+        : `Размечено ${assigned} панелей (нажмите «Полноразмерные старт-кадры»)`,
+    );
   } catch (err: any) {
     if (err instanceof GenerationCanceledError) { await markCanceled(jobId); return; }
     console.error("[storyboard-grid-slice] failed:", err);

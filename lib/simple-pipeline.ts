@@ -83,6 +83,9 @@ export interface BeatMeta {
   layout?: string | null;
   /** CHARACTER SHEETs of the cast present in this row (name → appearance text) — merged across beats by the grid. */
   castSheets?: Record<string, string> | null;
+  /** Sliced grid panel (S3) — the COMPOSITION reference for this beat. The start frame is re-rendered from it; the
+   *  panel itself is never used as the final start frame or upscaled into video. Set by the grid slice job. */
+  gridPanelUrl?: string | null;
 }
 
 const LANG_NAMES: Record<string, string> = {
@@ -456,6 +459,7 @@ export function parseBeatMeta(v: unknown): BeatMeta | null {
     castSheets: m.castSheets && typeof m.castSheets === "object" && !Array.isArray(m.castSheets)
       ? Object.fromEntries(Object.entries(m.castSheets as Record<string, unknown>).filter(([, v]) => typeof v === "string" && v).map(([k, v]) => [k, String(v)]))
       : null,
+    gridPanelUrl: typeof m.gridPanelUrl === "string" && m.gridPanelUrl ? m.gridPanelUrl : null,
   };
 }
 
