@@ -7,9 +7,10 @@
  *                              neutral-background portrait (up to GRID_MAX_CHAR_REFS) + the single location master
  *                              plate. Result → Episode.gridUrl + Episode.gridPrompt (the exact prompt used).
  *   2. storyboard_grid_slice — after the sheet is approved, cut it along the WHITE separator lines between panels
- *                              (sharp). The grid dimensions are DETECTED from those lines (the model does not honour a
- *                              fixed count), each panel is uploaded and assigned to the matching scene as its START
- *                              FRAME (Scene.startFrameUrl + Scene.gridPanelIndex). Sets Episode.gridApproved = true.
+ *                              (sharp). The grid is a FIXED 5×5 = 25 panels; the 4 internal cuts per axis are snapped
+ *                              onto the white seams so the cut lands on the real gap. Each panel is uploaded and
+ *                              assigned to the matching scene as its START FRAME (Scene.startFrameUrl +
+ *                              Scene.gridPanelIndex). Sets Episode.gridApproved = true.
  *
  * Nothing here touches the classic SCENES pipeline or the per-board STORYBOARD pipeline — a scene without a
  * startFrameUrl behaves exactly as before.
@@ -43,15 +44,16 @@ const PANEL_OUT_W = 1080;
 const PANEL_OUT_H = 1920;
 
 /**
- * Cut on the WHITE separator lines between panels. The sheet is ONE composition (a grid of frames) and the model does
- * NOT honour any fixed panel count — real sheets come out 4 columns × 6 rows, not 5×5. So we DETECT the grid instead of
- * assuming it:
+ * Cut on the WHITE separator lines between panels. The sheet is a FIXED 5×5 grid = 25 panels (GRID_COLS × GRID_ROWS),
+ * so the number of cuts is known: 4 internal cuts per axis. We do NOT guess how many panels there are — we only need to
+ * place those 4 cuts exactly on the white seams:
  *   1. build the per-column / per-row mean-brightness profile,
- *   2. find the bright INTERNAL local maxima of each profile — those are the white lines dividing the frames,
- *   3. columns = vertical lines + 1, rows = horizontal lines + 1; bounds run edge-to-edge (0 … W / 0 … H),
- *   4. reject the sheet (return null → the job asks for a clean re-gen) only if the detected grid is out of a sane
- *      range or the bands are wildly non-uniform.
- * Returns full-resolution boundary arrays of DETECTED length: colBounds has (cols+1) entries, rowBounds (rows+1).
+ *   2. for each of the 4 internal cuts, start from its EXPECTED uniform position (lo + span·k) and SNAP it to the
+ *      brightest (whitest) column/row inside a small window around it — that peak is the seam between two frames,
+ *   3. cut edge-to-edge: colBounds = [0, c1, c2, c3, c4, W] and rowBounds = [0, r1, r2, r3, r4, H] (always 6 + 6),
+ *   4. reject the sheet (return null → the job asks for a clean re-gen) only if a resulting band is wildly non-uniform
+ *      (the seams could not be found at all).
+ * Returns full-resolution boundary arrays: colBounds has GRID_COLS+1 entries, rowBounds GRID_ROWS+1.
  */
 async function analyzeGridBounds(
   sheet: Buffer,
@@ -79,59 +81,36 @@ async function analyzeGridBounds(
   }
   for (let x = 0; x < w; x++) colMean[x] /= h;
 
-  // Find the bright internal separator lines: local maxima of the brightness profile above (min + 50% of range),
-  // ignoring the outer 6% (the sheet frame), then merge maxima that sit within 6% of the axis length.
-  const detectBrightLines = (arr: Float64Array): number[] => {
-    const N = arr.length;
-    let mn = Infinity;
-    let mx = -Infinity;
-    for (const v of arr) {
-      if (v < mn) mn = v;
-      if (v > mx) mx = v;
-    }
-    const range = mx - mn;
-    if (range < 5) return [];
-    const thr = mn + range * 0.5;
-    const win = 5;
-    const edge = Math.round(N * 0.06);
-    const raw: number[] = [];
-    for (let i = edge; i < N - edge; i++) {
-      const v = arr[i];
-      if (v < thr) continue;
-      let isMax = true;
-      for (let k = -win; k <= win; k++) {
-        if (k === 0) continue;
-        const j = i + k;
-        if (j < 0 || j >= N) continue;
-        if (arr[j] > v) { isMax = false; break; }
+  // Place the (n-1) internal cuts: each starts at its expected uniform position lo + span·k and snaps to the brightest
+  // (whitest) sample inside a ±(span·0.18) window — that is the white seam between two frames. Cuts edge-to-edge:
+  // returns n+1 boundaries [lo, cut1, …, cut(n-1), hi].
+  const snapToBright = (arr: Float64Array, lo: number, hi: number, n: number): number[] => {
+    const span = (hi - lo) / n;
+    const win = Math.max(3, Math.round(span * 0.18));
+    const cuts: number[] = [lo];
+    for (let k = 1; k < n; k++) {
+      const expected = Math.round(lo + span * k);
+      let bestPos = expected;
+      let bestVal = -Infinity;
+      const from = Math.max(lo + 1, expected - win);
+      const to = Math.min(hi - 1, expected + win);
+      for (let i = from; i <= to; i++) {
+        if (arr[i] > bestVal) { bestVal = arr[i]; bestPos = i; }
       }
-      if (isMax) raw.push(i);
+      cuts.push(bestPos);
     }
-    const mergeDist = Math.max(3, Math.round(N * 0.06));
-    raw.sort((a, b) => a - b);
-    const merged: { pos: number; val: number }[] = [];
-    for (const p of raw) {
-      const last = merged[merged.length - 1];
-      if (last && p - last.pos <= mergeDist) {
-        if (arr[p] > last.val) { last.pos = p; last.val = arr[p]; }
-      } else {
-        merged.push({ pos: p, val: arr[p] });
-      }
-    }
-    return merged.map((m) => m.pos);
+    cuts.push(hi);
+    return cuts;
   };
 
-  const colLines = detectBrightLines(colMean);
-  const rowLines = detectBrightLines(rowMean);
-  const nCols = colLines.length + 1;
-  const nRows = rowLines.length + 1;
-  // Sane-range guard: real sheets are 3–6 columns and 4–7 rows. Anything else means the lines were not found.
-  if (nCols < 3 || nCols > 6 || nRows < 4 || nRows > 7) return null;
+  const colCuts = snapToBright(colMean, 0, w, GRID_COLS);
+  const rowCuts = snapToBright(rowMean, 0, h, GRID_ROWS);
 
-  const colBounds = [0, ...colLines.map((c) => Math.round(c * sx)), totalW];
-  const rowBounds = [0, ...rowLines.map((r) => Math.round(r * sy)), totalH];
+  const colBounds = colCuts.map((c, i) => (i === 0 ? 0 : i === colCuts.length - 1 ? totalW : Math.round(c * sx)));
+  const rowBounds = rowCuts.map((r, i) => (i === 0 ? 0 : i === rowCuts.length - 1 ? totalH : Math.round(r * sy)));
 
-  // Uniformity guard (lenient — real grids drift): reject only if a band is < 0.5× or > 2.0× the median band.
+  // Uniformity guard (lenient — a real 5×5 grid is near-uniform so this passes easily): reject only if a band is
+  // < 0.5× or > 2.0× the median band, which means the seams could not be located at all.
   const uniform = (bounds: number[]): boolean => {
     const bands = bounds.slice(1).map((c, i) => c - bounds[i]);
     const sorted = [...bands].sort((a, b) => a - b);
