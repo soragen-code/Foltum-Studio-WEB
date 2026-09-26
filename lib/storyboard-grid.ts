@@ -135,10 +135,12 @@ function buildCharacterBlock(characters: GridCharacter[]): { block: string; refs
   const refs: GridRef[] = [];
   const lines: string[] = [];
   for (const c of characters) {
-    const desc = short(c.appearance, 180) || short(c.role, 80) || "character";
+    // The shot-list CHARACTER SHEET (full text description) wins with or without a portrait; the project
+    // appearance / role is only the fallback for legacy shot lists without sheets.
+    const sheet = short(c.sheet, 400).replace(/[.\s]+$/, "");
+    const desc = sheet || (short(c.appearance, 180) || short(c.role, 80) || "character").replace(/[.\s]+$/, "");
     if (c.refUrl && refs.length < GRID_MAX_CHAR_REFS) {
       refs.push({ url: c.refUrl, kind: "character", label: c.name });
-      const sheet = short(c.sheet, 400).replace(/[.\s]+$/, "");
       lines.push(sheet ? `${c.name} = image ${refs.length} — ${sheet}.` : `${c.name} = image ${refs.length}.`);
     } else {
       lines.push(`${c.name} (no reference image) = ${desc}.`);
@@ -184,7 +186,9 @@ function buildLocationBlock(
       // The location name adds nothing once the layout is given — only name it when there is no layout line.
       lines.push(`${head} = image ${nextImageNumber + refs.length - 1}${layoutLine ? "" : ` (${name})`}. ${fixed}`);
     } else {
-      lines.push(`${head} (no reference image): ${name}. ${fixed}`);
+      // Same rule without a plate: the layout line already defines the set, so the (possibly non-English) name is
+      // only written when there is no layout to describe it.
+      lines.push(layoutLine ? `${head} (no reference image). ${fixed}` : `${head} (no reference image): ${name}. ${fixed}`);
     }
   }
   if (!lines.length) lines.push("LOCATION (no reference): a single consistent location. Keep the same room and objects throughout; do not invent new rooms. Nobody leaves this space.");
