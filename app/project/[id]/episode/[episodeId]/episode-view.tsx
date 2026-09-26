@@ -2293,9 +2293,9 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <Link href={episodeBase} onClick={() => rememberPhase('references')} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted" data-testid="back-to-references">
             <ArrowLeft className="h-4 w-4" /> References
           </Link>
-          {/* Stage 100 — «Generate all scenes": every pending / failed scene is generated one after another (sequential chain). */}
+          {/* Stage 250 — «Generate all scenes": every pending / failed scene is generated IN PARALLEL (fan-out, Stage 39). */}
           {!allReady && (
-            <button onClick={openGenerateAll} disabled={genAllStarting || genAllAsk !== null || chainRunActive} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all-scenes" title="Start generating all unfinished scenes one by one">
+            <button onClick={openGenerateAll} disabled={genAllStarting || genAllAsk !== null} className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50" data-testid="generate-all-scenes" title="Start generating all unfinished scenes in parallel">
               {genAllStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} Generate all scenes
             </button>
           )}
@@ -2358,11 +2358,11 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
               ))}
             </select>
           </div>
-          {/* Stage 100: parallel mode removed — generation is always sequential (chain), so there is no
-              mode selector anymore. Scenes always start one after another, each from the previous scene's final frame. */}
-          {chainRunActive && <span className="inline-flex items-center gap-1 text-xs text-primary" data-testid="chain-run-active"><Loader2 className="h-3 w-3 animate-spin" /> The chain continues: scenes are generated in sequence</span>}
+          {/* Stage 250: «Generate all scenes» fans out — every unfinished scene starts in parallel at once.
+              The legacy sequential chain badge is kept only for old runs that may still be active. */}
+          {chainRunActive && <span className="inline-flex items-center gap-1 text-xs text-primary" data-testid="chain-run-active"><Loader2 className="h-3 w-3 animate-spin" /> Generation in progress…</span>}
           <p className="w-full text-xs text-muted-foreground" data-testid="scenes-hint">
-            Scenes are generated in sequence: the final frame of the previous scene is passed to the next one, and the camera changes position. <b>Generate all scenes:</b> starts all scenes that are not ready yet one by one (credits are charged for each scene).{' '}
+            <b>Generate all scenes:</b> starts every scene that is not ready yet in parallel — all at once (credits are charged for each scene).{' '}
             <b>Assemble:</b> stitches the finished videos from all scenes into one episode without regenerating — available when all scenes are ready. Episode quality (480p/720p/1080p, 30/60 frames/s) and background music are selected during assembly.
           </p>
           {stitching && stitchJob.job && <div className="w-full" data-testid="assemble-progress"><JobProgressBar job={stitchJob.job} expectedTotalSec={180} /></div>}
@@ -2699,7 +2699,7 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-5">
             <h3 className="font-display text-lg font-bold">Generate all scenes</h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              Will be started <b>{genAllAsk.pendingCount}</b> scenes in sequence — one after another, each next one starts after the previous one is published — approximately <b>{genAllAsk.total}</b> cr. ({genAllAsk.costPerScene} cr. per scene). Balance: {genAllAsk.credits} cr.
+              Will start <b>{genAllAsk.pendingCount}</b> scenes in parallel — all at once — approximately <b>{genAllAsk.total}</b> cr. ({genAllAsk.costPerScene} cr. per scene). Balance: {genAllAsk.credits} cr.
               {genAllAsk.credits < genAllAsk.total && <span className="mt-1 block text-destructive">There aren’t enough credits for all scenes: only the ones you can pay for will start, and the rest will be marked “Not enough credits.”</span>}
             </p>
             <div className="mt-4 flex justify-end gap-2">
