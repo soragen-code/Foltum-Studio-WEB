@@ -6,11 +6,11 @@
  *                              from a producer-editable English prompt. References passed to the model: each character's
  *                              neutral-background portrait (up to GRID_MAX_CHAR_REFS) + the single location master
  *                              plate. Result → Episode.gridUrl + Episode.gridPrompt (the exact prompt used).
- *   2. storyboard_grid_slice — after the sheet is approved, cut it along the WHITE separator lines between panels
- *                              (sharp). The grid is a FIXED 5×5 = 25 panels; the 4 internal cuts per axis are snapped
- *                              onto the white seams so the cut lands on the real gap. Each panel is uploaded and
- *                              assigned to the matching scene as its START FRAME (Scene.startFrameUrl +
- *                              Scene.gridPanelIndex). Sets Episode.gridApproved = true.
+ *   2. storyboard_grid_slice — after the sheet is approved, cut it on the SAME FIXED PARAMETERS it was generated to:
+ *                              a rigid, uniform 5×5 = 25 panels. The full width/height is divided into GRID_COLS equal
+ *                              columns and GRID_ROWS equal rows (no seam detection), so every panel is exactly the same
+ *                              size by construction. Each panel is uploaded and assigned to the matching scene as its
+ *                              START FRAME (Scene.startFrameUrl + Scene.gridPanelIndex). Sets Episode.gridApproved = true.
  *
  * Nothing here touches the classic SCENES pipeline or the per-board STORYBOARD pipeline — a scene without a
  * startFrameUrl behaves exactly as before.
@@ -44,82 +44,19 @@ const PANEL_OUT_W = 1080;
 const PANEL_OUT_H = 1920;
 
 /**
- * Cut on the WHITE separator lines between panels. The sheet is a FIXED 5×5 grid = 25 panels (GRID_COLS × GRID_ROWS),
- * so the number of cuts is known: 4 internal cuts per axis. We do NOT guess how many panels there are — we only need to
- * place those 4 cuts exactly on the white seams:
- *   1. build the per-column / per-row mean-brightness profile,
- *   2. for each of the 4 internal cuts, start from its EXPECTED uniform position (lo + span·k) and SNAP it to the
- *      brightest (whitest) column/row inside a small window around it — that peak is the seam between two frames,
- *   3. cut edge-to-edge: colBounds = [0, c1, c2, c3, c4, W] and rowBounds = [0, r1, r2, r3, r4, H] (always 6 + 6),
- *   4. reject the sheet (return null → the job asks for a clean re-gen) only if a resulting band is wildly non-uniform
- *      (the seams could not be found at all).
- * Returns full-resolution boundary arrays: colBounds has GRID_COLS+1 entries, rowBounds GRID_ROWS+1.
+ * FIXED-PARAMETER SLICING — no grid detection. The sheet is generated to a KNOWN geometry (see DEFAULT_GRID_TEMPLATE):
+ * a rigid 5×5 grid (GRID_COLS × GRID_ROWS) of perfectly equal panels with straight, continuous gridlines edge-to-edge.
+ * We therefore cut on the SAME fixed parameters we asked the model to draw instead of trying to detect where the seams
+ * landed (detection/snap drifts per row because a free single-composition render never draws a pixel-perfect grid —
+ * that produced panels of visibly different widths/heights). We divide the full width into GRID_COLS equal columns and
+ * the full height into GRID_ROWS equal rows. Every panel is exactly totalW/GRID_COLS × totalH/GRID_ROWS, so all 25
+ * start frames come out identical in size BY CONSTRUCTION. Returns colBounds (GRID_COLS+1) and rowBounds (GRID_ROWS+1).
  */
-async function analyzeGridBounds(
-  sheet: Buffer,
-  totalW: number,
-  totalH: number,
-): Promise<{ colBounds: number[]; rowBounds: number[] } | null> {
-  const SW = Math.min(800, totalW);
-  const { data, info } = await sharp(sheet).greyscale().resize(SW, null).raw().toBuffer({ resolveWithObject: true });
-  const w = info.width;
-  const h = info.height;
-  const sx = totalW / w;
-  const sy = totalH / h;
-
-  const colMean = new Float64Array(w);
-  const rowMean = new Float64Array(h);
-  for (let y = 0; y < h; y++) {
-    const base = y * w;
-    let rowSum = 0;
-    for (let x = 0; x < w; x++) {
-      const v = data[base + x];
-      colMean[x] += v;
-      rowSum += v;
-    }
-    rowMean[y] = rowSum / w;
-  }
-  for (let x = 0; x < w; x++) colMean[x] /= h;
-
-  // Place the (n-1) internal cuts: each starts at its expected uniform position lo + span·k and snaps to the brightest
-  // (whitest) sample inside a ±(span·0.18) window — that is the white seam between two frames. Cuts edge-to-edge:
-  // returns n+1 boundaries [lo, cut1, …, cut(n-1), hi].
-  const snapToBright = (arr: Float64Array, lo: number, hi: number, n: number): number[] => {
-    const span = (hi - lo) / n;
-    const win = Math.max(3, Math.round(span * 0.18));
-    const cuts: number[] = [lo];
-    for (let k = 1; k < n; k++) {
-      const expected = Math.round(lo + span * k);
-      let bestPos = expected;
-      let bestVal = -Infinity;
-      const from = Math.max(lo + 1, expected - win);
-      const to = Math.min(hi - 1, expected + win);
-      for (let i = from; i <= to; i++) {
-        if (arr[i] > bestVal) { bestVal = arr[i]; bestPos = i; }
-      }
-      cuts.push(bestPos);
-    }
-    cuts.push(hi);
-    return cuts;
-  };
-
-  const colCuts = snapToBright(colMean, 0, w, GRID_COLS);
-  const rowCuts = snapToBright(rowMean, 0, h, GRID_ROWS);
-
-  const colBounds = colCuts.map((c, i) => (i === 0 ? 0 : i === colCuts.length - 1 ? totalW : Math.round(c * sx)));
-  const rowBounds = rowCuts.map((r, i) => (i === 0 ? 0 : i === rowCuts.length - 1 ? totalH : Math.round(r * sy)));
-
-  // Uniformity guard (lenient — a real 5×5 grid is near-uniform so this passes easily): reject only if a band is
-  // < 0.5× or > 2.0× the median band, which means the seams could not be located at all.
-  const uniform = (bounds: number[]): boolean => {
-    const bands = bounds.slice(1).map((c, i) => c - bounds[i]);
-    const sorted = [...bands].sort((a, b) => a - b);
-    const med = sorted[Math.floor(sorted.length / 2)];
-    if (med <= 0) return false;
-    return bands.every((b) => b >= med * 0.5 && b <= med * 2.0);
-  };
-  if (!uniform(colBounds) || !uniform(rowBounds)) return null;
-
+function computeGridBounds(totalW: number, totalH: number): { colBounds: number[]; rowBounds: number[] } {
+  const colBounds: number[] = [];
+  for (let c = 0; c <= GRID_COLS; c++) colBounds.push(Math.round((totalW * c) / GRID_COLS));
+  const rowBounds: number[] = [];
+  for (let r = 0; r <= GRID_ROWS; r++) rowBounds.push(Math.round((totalH * r) / GRID_ROWS));
   return { colBounds, rowBounds };
 }
 
@@ -363,18 +300,9 @@ export async function runStoryboardGridSliceJob(
     const totalH = meta.height ?? 0;
     if (totalW < GRID_COLS || totalH < GRID_ROWS) { await failJob(jobId, "Лист сториборда повреждён"); return; }
 
-    // Detect the grid from the WHITE separator lines between panels and cut on them (never a blind /N). null ⇒ the
-    // separator lines were not found (margins/labels, or the sheet is not a clean grid) → ask for a clean re-gen
-    // instead of hand-cutting garbage panels.
-    const bounds = await analyzeGridBounds(sheet, totalW, totalH);
-    if (!bounds) {
-      await failJob(
-        jobId,
-        "Не удалось найти белые линии между кадрами. Перегенерируйте лист сториборда одной композицией с NO margins / NO labels (кадры вплотную, разделённые тонкими белыми линиями) — руками не режем.",
-      );
-      return;
-    }
-    const { colBounds, rowBounds } = bounds;
+    // Cut on the SAME fixed parameters the sheet was generated to (a rigid, uniform 5×5 grid) — no seam detection, so
+    // every panel is exactly totalW/GRID_COLS × totalH/GRID_ROWS and all 25 start frames are identical in size.
+    const { colBounds, rowBounds } = computeGridBounds(totalW, totalH);
     const cols = colBounds.length - 1;
     const rows = rowBounds.length - 1;
     const detectedPanels = cols * rows;
