@@ -135,13 +135,16 @@ function buildCharacterBlock(characters: GridCharacter[]): { block: string; refs
   const refs: GridRef[] = [];
   const lines: string[] = [];
   for (const c of characters) {
-    // The shot-list CHARACTER SHEET (full text description) wins with or without a portrait; the project
-    // appearance / role is only the fallback for legacy shot lists without sheets.
+    // A reference portrait is authoritative for what the character LOOKS LIKE, exactly like a location plate is
+    // authoritative for the set. When we pass the portrait we must NOT also paste a text appearance description:
+    // the auto-generated shot-list sheet routinely contradicts the portrait (bald man in a plate carrier vs.
+    // "sandy hair, canvas uniform"), and the model then blends the two. So with a ref we only name the image;
+    // the text sheet / appearance is written ONLY as the fallback when there is no portrait at all.
     const sheet = short(c.sheet, 400).replace(/[.\s]+$/, "");
-    const desc = sheet || (short(c.appearance, 180) || short(c.role, 80) || "character").replace(/[.\s]+$/, "");
+    const desc = (sheet || short(c.appearance, 180) || short(c.role, 80) || "character").replace(/[.\s]+$/, "");
     if (c.refUrl && refs.length < GRID_MAX_CHAR_REFS) {
       refs.push({ url: c.refUrl, kind: "character", label: c.name });
-      lines.push(sheet ? `${c.name} = image ${refs.length} — ${sheet}.` : `${c.name} = image ${refs.length}.`);
+      lines.push(`${c.name} = image ${refs.length}.`);
     } else {
       lines.push(`${c.name} (no reference image) = ${desc}.`);
     }

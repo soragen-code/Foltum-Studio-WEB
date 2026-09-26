@@ -5,7 +5,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { loadGridInputs } from "@/lib/workers/storyboard-grid-job";
-import { buildGridPrompt } from "@/lib/storyboard-grid";
+import { buildGridPrompt, type GridRef } from "@/lib/storyboard-grid";
 
 /**
  * Stage 240 — GRID STORYBOARD prompt editor endpoint (drives the shared PromptModal).
@@ -24,10 +24,10 @@ async function ownedEpisode(userId: string, episodeId: string) {
 }
 
 /** Build the default (auto) grid prompt from the episode's current data. */
-async function buildDefault(episodeId: string): Promise<string> {
+async function buildDefault(episodeId: string): Promise<{ prompt: string; refs: GridRef[] }> {
   const { characters, location, locations, scenes, keyElement } = await loadGridInputs(episodeId);
-  const { prompt } = buildGridPrompt({ characters, location, locations, scenes, keyElement, template: null });
-  return prompt;
+  const { prompt, refs } = buildGridPrompt({ characters, location, locations, scenes, keyElement, template: null });
+  return { prompt, refs };
 }
 
 export async function GET(request: Request) {
@@ -41,11 +41,14 @@ export async function GET(request: Request) {
   const episode = await ownedEpisode(session.user.id, episodeId);
   if (!episode) return NextResponse.json({ error: "Episode not found" }, { status: 404 });
 
-  const auto = await buildDefault(episodeId);
+  const { prompt: auto, refs } = await buildDefault(episodeId);
   const saved = (episode.gridPrompt ?? "").trim();
   const hasOverride = saved.length > 0 && saved !== auto.trim();
+  // `refs` is the ordered list of images actually passed to the generator (image 1..K characters, then the
+  // location plates). It is independent of the text prompt override, so the producer always sees exactly what
+  // the model receives.
   return NextResponse.json(
-    { prompt: saved || auto, hasOverride },
+    { prompt: saved || auto, hasOverride, refs },
     { headers: { "Cache-Control": "no-store" } },
   );
 }
@@ -68,10 +71,10 @@ export async function PUT(request: Request) {
   if (!next) {
     // Reset to auto — drop the override.
     await prisma.episode.update({ where: { id: episodeId }, data: { gridPrompt: null } });
-    const auto = await buildDefault(episodeId);
+    const { prompt: auto } = await buildDefault(episodeId);
     return NextResponse.json({ prompt: auto, hasOverride: false });
   }
   await prisma.episode.update({ where: { id: episodeId }, data: { gridPrompt: next } });
-  const auto = await buildDefault(episodeId);
+  const { prompt: auto } = await buildDefault(episodeId);
   return NextResponse.json({ prompt: next, hasOverride: next !== auto.trim() });
 }

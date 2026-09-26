@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, FileText, Grid3x3, Loader2, Scissors, Sparkles, Video } from 'lucide-react'
+import { ArrowLeft, FileText, Grid3x3, Images, Loader2, Scissors, Sparkles, Video, X } from 'lucide-react'
 import { PromptModal } from '@/app/project/[id]/_components/prompt-modal'
 
 /**
@@ -16,6 +16,8 @@ import { PromptModal } from '@/app/project/[id]/_components/prompt-modal'
 type Panel = { id: string; number: number; title?: string | null; startFrameUrl?: string | null; gridPanelIndex?: number | null }
 type Job = { id: string; status: string; progress?: number | null; message?: string | null; error?: string | null } | null
 type GridState = { gridUrl: string | null; gridPrompt: string | null; gridApproved: boolean; panels: Panel[]; job: Job }
+/** One reference image actually passed to the generator, in the exact order the model receives it. */
+type GridRef = { url: string; kind: 'character' | 'location'; label: string }
 
 const isHttp = (u?: string | null): u is string => !!u && /^https?:\/\//.test(u)
 const active = (j: Job) => !!j && (j.status === 'pending' || j.status === 'processing')
@@ -26,8 +28,28 @@ export function StoryboardGridPanel({ projectId, episodeId }: { projectId: strin
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState<null | 'grid' | 'approve' | 'videos'>(null)
   const [showPrompt, setShowPrompt] = useState(false)
+  const [showRefs, setShowRefs] = useState(false)
+  const [refs, setRefs] = useState<GridRef[] | null>(null)
+  const [refsLoading, setRefsLoading] = useState(false)
+  const [refsErr, setRefsErr] = useState<string | null>(null)
   const [videosStarted, setVideosStarted] = useState(false)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Load the reference images actually passed to the generator (image 1..K characters, then location plates),
+  // straight from the prompt endpoint so the producer sees exactly what the model receives.
+  const openRefs = useCallback(async () => {
+    setShowRefs(true); setRefsErr(null); setRefsLoading(true)
+    try {
+      const r = await fetch(`/api/ai/storyboard/grid/prompt?episodeId=${episodeId}`, { cache: 'no-store' })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d?.error || 'Не удалось загрузить референсы')
+      setRefs(Array.isArray(d?.refs) ? d.refs : [])
+    } catch (e: any) {
+      setRefsErr(e?.message ?? 'Ошибка загрузки референсов')
+    } finally {
+      setRefsLoading(false)
+    }
+  }, [episodeId])
 
   const load = useCallback(async () => {
     try {
@@ -133,6 +155,11 @@ export function StoryboardGridPanel({ projectId, episodeId }: { projectId: strin
           <FileText className="h-4 w-4" /> Промпт / View Prompt
         </button>
 
+        <button onClick={openRefs} disabled={busy !== null}
+          className="inline-flex items-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-semibold hover:bg-muted disabled:opacity-50">
+          <Images className="h-4 w-4" /> Референсы / References
+        </button>
+
         <button onClick={approveGrid} disabled={!hasGrid || jobRunning || busy !== null}
           className="inline-flex items-center gap-2 rounded-lg border border-primary/50 bg-primary/10 px-4 py-2 text-sm font-semibold text-primary hover:bg-primary/20 disabled:opacity-50">
           {busy === 'approve' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Scissors className="h-4 w-4" />}
@@ -199,6 +226,50 @@ export function StoryboardGridPanel({ projectId, episodeId }: { projectId: strin
           testId="grid-prompt-modal"
           onClose={() => setShowPrompt(false)}
         />
+      )}
+
+      {showRefs && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setShowRefs(false)}>
+          <div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-border bg-background p-5 shadow-xl" onClick={(e) => e.stopPropagation()} data-testid="grid-refs-modal">
+            <div className="mb-1 flex items-start justify-between gap-4">
+              <h3 className="font-display text-lg font-bold">Передаваемые референсы / Reference images</h3>
+              <button onClick={() => setShowRefs(false)} className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"><X className="h-5 w-5" /></button>
+            </div>
+            <p className="mb-4 text-sm text-muted-foreground">
+              Именно эти изображения уходят в генератор — в этом порядке (image 1..N). Внешность и локация берутся из них, а не из текста.<br />
+              These exact images are sent to the model, in this order (image 1..N).
+            </p>
+
+            {refsLoading && <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /> Загрузка... / Loading...</div>}
+            {refsErr && <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">{refsErr}</p>}
+
+            {!refsLoading && !refsErr && refs && refs.length === 0 && (
+              <p className="rounded-lg border border-border bg-muted/40 px-3 py-6 text-center text-sm text-muted-foreground">
+                Референсы не заданы — модель сгенерирует внешность и локацию по тексту промпта.<br />
+                No reference images — the model will infer looks and set from the prompt text.
+              </p>
+            )}
+
+            {!refsLoading && !refsErr && refs && refs.length > 0 && (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {refs.map((ref, i) => (
+                  <div key={`${ref.url}-${i}`} className="overflow-hidden rounded-lg border border-border">
+                    {isHttp(ref.url) ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={ref.url} alt={`image ${i + 1} — ${ref.label}`} className="aspect-[9/16] w-full object-cover" />
+                    ) : (
+                      <div className="flex aspect-[9/16] w-full items-center justify-center bg-muted text-xs text-muted-foreground">—</div>
+                    )}
+                    <div className="px-2 py-1.5">
+                      <div className="text-xs font-semibold">image {i + 1} · {ref.label}</div>
+                      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{ref.kind === 'character' ? 'персонаж / character' : 'локация / location'}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   )
