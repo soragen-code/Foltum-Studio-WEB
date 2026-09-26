@@ -36,6 +36,8 @@ export interface GridCharacter {
   role?: string | null;
   /** Neutral-background reference image URL (imageFront preferred). Absent → rendered "(no reference)". */
   refUrl?: string | null;
+  /** CHARACTER SHEET from the shot list (1–2 English sentences, this episode's wardrobe). Rendered after "= image N". */
+  sheet?: string | null;
 }
 
 export interface GridLocation {
@@ -47,6 +49,8 @@ export interface GridLocation {
   keyObjects?: string | null;
   /** Grid rows (1..5) that take place in this location; empty/absent = the whole sheet. */
   rows?: number[];
+  /** LOCATION LAYOUT from the shot list — camera-relative directions of the key objects (wins over keyObjects). */
+  layout?: string | null;
 }
 
 export interface GridSceneBeat {
@@ -55,6 +59,8 @@ export interface GridSceneBeat {
   /** Short readable action for the panel (English). */
   action?: string | null;
   shotType?: string | null;
+  /** ROW theme tag (one CAPS word) — "ROW N TAG:"; taken from the row's first beat that carries one. */
+  rowTag?: string | null;
 }
 
 export interface BuildGridPromptInput {
@@ -77,8 +83,8 @@ export interface BuiltGridPrompt {
 }
 
 /** Shot-size rotation so each row opens/closes on a different size (wide → medium → close-up). */
-const SHOT_SIZES = ["wide", "medium", "close-up", "medium", "wide"] as const;
-/** Per-panel beat text cap — long enough for "[Who] [position] [verb] [object]; [second] [position] [what]. Looks at [target]." */
+const SHOT_SIZES = ["wide", "medium", "close", "medium", "wide"] as const;
+/** Per-panel beat text cap — long enough for one freeze-frame description (positions, hands, gaze). */
 export const GRID_BEAT_MAX_CHARS = 320;
 /** Soft prompt cap (GPT Image 2.0 accepts up to 32 000 chars); beats are shortened progressively to fit. */
 export const GRID_PROMPT_MAX_CHARS = 30_000;
@@ -90,7 +96,7 @@ export const GRID_PROMPT_MAX_CHARS = 30_000;
  */
 export const DEFAULT_GRID_TEMPLATE = `Photorealistic live-action film storyboard sheet: 5 rows × 5 columns of equal PORTRAIT 9:16 panels (25 total), thin black borders, dark grey background, NO margins, NO labels, NO text of any kind inside or outside panels — only the panels edge to edge. Each panel is a cinematic photoreal film still: real skin, real fabric, physically correct light, film grain. NOT drawing, NOT illustration.
 
-CONTINUITY: the last panel of every row and the first panel of the next row show the SAME moment (same positions, poses, hands, gaze) — only the shot size differs. Within a row nobody changes position unless a bit says so. Each panel adds exactly ONE new action to the previous panel.
+CONTINUITY: Each panel is a single frozen instant — one pose, one action at most; consecutive panels are consecutive instants of the same continuous scene. The last panel of every row and the first panel of the next row show the SAME moment (same positions, poses, hands, gaze) — only the shot size differs. Within a row nobody changes position unless a panel shows it.
 
 CHARACTERS (identical face, hair, wardrobe in every panel): {CHARACTER_REFERENCES}
 
@@ -132,7 +138,8 @@ function buildCharacterBlock(characters: GridCharacter[]): { block: string; refs
     const desc = short(c.appearance, 180) || short(c.role, 80) || "character";
     if (c.refUrl && refs.length < GRID_MAX_CHAR_REFS) {
       refs.push({ url: c.refUrl, kind: "character", label: c.name });
-      lines.push(`${c.name} = image ${refs.length}.`);
+      const sheet = short(c.sheet, 400).replace(/[.\s]+$/, "");
+      lines.push(sheet ? `${c.name} = image ${refs.length} — ${sheet}.` : `${c.name} = image ${refs.length}.`);
     } else {
       lines.push(`${c.name} (no reference image) = ${desc}.`);
     }
@@ -164,13 +171,18 @@ function buildLocationBlock(
   const multi = locations.length > 1;
   for (const location of locations) {
     const name = short(location.name, 60) || "location";
-    const layout = short(location.keyObjects, 320).replace(/[.\s]+$/, "");
     const rows = multi ? rowsLabel(location.rows) : "";
     const head = rows ? `LOCATION for ${rows}` : "LOCATION";
-    const fixed = `Fixed layout: ${layout || "keep the room and its objects exactly as in the reference"}. Nobody leaves this space.`;
+    // Shot-list LAYOUT (camera-relative directions) wins; fall back to the set inventory / visual prompt.
+    const layoutLine = short(location.layout, 400).replace(/[.\s]+$/, "");
+    const layout = short(location.keyObjects, 320).replace(/[.\s]+$/, "");
+    const fixed = layoutLine
+      ? `Layout: ${layoutLine}. Nobody leaves this space.`
+      : `Fixed layout: ${layout || "keep the room and its objects exactly as in the reference"}. Nobody leaves this space.`;
     if (location.imageUrl && refs.length < maxRefs) {
       refs.push({ url: location.imageUrl, kind: "location", label: location.name || "Location" });
-      lines.push(`${head} = image ${nextImageNumber + refs.length - 1} (${name}). ${fixed}`);
+      // The location name adds nothing once the layout is given — only name it when there is no layout line.
+      lines.push(`${head} = image ${nextImageNumber + refs.length - 1}${layoutLine ? "" : ` (${name})`}. ${fixed}`);
     } else {
       lines.push(`${head} (no reference image): ${name}. ${fixed}`);
     }
@@ -179,21 +191,28 @@ function buildLocationBlock(
   return { line: lines.join("\n"), refs };
 }
 
-/** Build the five ROW blocks: "ROW r: r.1 size: beat. r.2 size: beat. …" (no labels — the sheet carries no text). */
+/**
+ * Build the five ROW blocks exactly as the reference format: "ROW r TAG: r.1 size: beat. r.2 size: beat. …"
+ * (TAG = the row's one-word theme from the shot list; omitted when absent). Beats are substituted as stored —
+ * each is already a freeze-frame; the row hand-off "same moment — " is written by the shot list itself and is
+ * only prefixed here when a legacy beat lacks it.
+ */
 function buildRowsBlock(beats: GridSceneBeat[], beatMax = GRID_BEAT_MAX_CHARS): string {
   const rows: string[] = [];
   for (let r = 1; r <= GRID_ROWS; r++) {
     const panels: string[] = [];
+    let tag = "";
     for (let c = 1; c <= GRID_COLS; c++) {
       const idx = (r - 1) * GRID_COLS + (c - 1);
       const beat = beats[idx];
+      if (!tag && beat?.rowTag) tag = String(beat.rowTag).trim().replace(/[^A-Za-z0-9-]/g, "").toUpperCase().slice(0, 24);
       const action = short(beat?.action, beatMax) || short(beat?.title, 60) || "continue the action";
       const size = short(beat?.shotType, 24).replace(/\.$/, "").toLowerCase() || SHOT_SIZES[(r - 1 + c - 1) % SHOT_SIZES.length];
       let text = `${r}.${c} ${size}: ${action}`;
-      if (c === 1 && r > 1) text = `${r}.${c} ${size}: same moment as ${r - 1}.${GRID_COLS} — ${action}`;
+      if (c === 1 && r > 1 && !/^same moment/i.test(action)) text = `${r}.${c} ${size}: same moment — ${action}`;
       panels.push(text.replace(/\.$/, "") + ".");
     }
-    rows.push(`ROW ${r}: ${panels.join(" ")}`);
+    rows.push(`ROW ${r}${tag ? ` ${tag}` : ""}: ${panels.join(" ")}`);
   }
   return rows.join("\n");
 }

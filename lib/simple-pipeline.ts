@@ -2,7 +2,8 @@
  * SIMPLIFIED EPISODE PIPELINE (text → images → video).
  *
  *   4. Episode script  — PLAIN screenplay TEXT (Claude Opus 5, streaming). No JSON scene schema.
- *   5. Shot list       — exactly 5 scenes × 5 beats (JSON, streaming). Persisted as 25 Scene rows
+ *   5. Shot list       — exactly 5 scenes × 5 beats (JSON, streaming); a beat is a FREEZE-FRAME (one picture,
+ *                        0–1 verbs), never a clip. Persisted as 25 Scene rows
  *                        (one per beat, `Scene.beatMeta`) so the per-scene video / start-frame /
  *                        chain / assembly infrastructure works unchanged.
  *   6–9. Images        — master plate (storyboard only), character height refs, 5×5 storyboard grid,
@@ -28,18 +29,25 @@ export const SHOT_LIST_SCENES = 5;
 export const SHOT_LIST_BEATS = 5;
 export const BEAT_CLIP_SECONDS = 5;
 
-export const SHOT_TYPES = ["wide", "medium", "close-up", "over-the-shoulder"] as const;
+/**
+ * Shot SIZE only (no angles — over-the-shoulder / POV / low angle are not sizes). "two-shot" is an optional
+ * suffix for a size framing two people. Legacy stored values ("close-up", "over-the-shoulder") normalize to
+ * "close" / "medium" on read (normalizeShotType).
+ */
+export const SHOT_TYPES = ["wide", "medium", "close", "extreme close-up", "wide two-shot", "medium two-shot", "close two-shot"] as const;
 export type ShotType = (typeof SHOT_TYPES)[number];
 
 export interface ShotListBeat {
   shot: ShotType;
-  /** ONE action lasting 4–5 s, English. */
+  /** ONE freeze-frame — what is visible in the panel at a single instant (0–1 verbs), English. */
   action: string;
   /** Link to the next beat, English (what state the cut lands in). */
   cut: string;
 }
 export interface ShotListScene {
   title: string;
+  /** ONE-word CAPS theme tag of the row (LAMP / DEBT / AMPULES …). */
+  tag: string;
   /** Short English location line. */
   location: string;
   /** Latin character names present in the scene. */
@@ -48,6 +56,10 @@ export interface ShotListScene {
 }
 export interface ShotList {
   scenes: ShotListScene[];
+  /** LOCATION LAYOUT — one English line, key objects with camera-relative directions (no location name). */
+  layout: string;
+  /** CHARACTER SHEET per cast member (Latin name → 1–2 English sentences of appearance in this episode). */
+  characterSheets: Record<string, string>;
 }
 
 /** Per-beat metadata stored in `Scene.beatMeta` (one Scene row per beat). */
@@ -65,6 +77,12 @@ export interface BeatMeta {
   nextStart: string | null;
   /** Prompt used for the start frame (View Prompt), set by the start-frames job. */
   startFramePrompt?: string | null;
+  /** ROW theme tag (one CAPS word) — the same on all 5 beats of the row; grid prompt "ROW N TAG:". */
+  rowTag?: string | null;
+  /** Episode LOCATION LAYOUT line (camera-relative directions) — duplicated on every beat (no Episode column). */
+  layout?: string | null;
+  /** CHARACTER SHEETs of the cast present in this row (name → appearance text) — merged across beats by the grid. */
+  castSheets?: Record<string, string> | null;
 }
 
 const LANG_NAMES: Record<string, string> = {
@@ -134,19 +152,22 @@ export function episodeScreenplayUserPrompt(input: ScreenplayPromptInput): strin
 /* ───────────────────────────── 5. SHOT LIST (5 × 5 JSON) ───────────────────────────── */
 
 export function shotListSystemPrompt(): string {
-  return `You are a director breaking a finished episode script into a SHOT LIST for an AI video model.
+  return `You are a director breaking a finished episode script into a STORYBOARD SHOT LIST of 25 freeze-frames for an AI image/video pipeline.
 
 Return ONLY valid JSON (no markdown, no commentary) of this exact shape:
 {
+  "layout": "<LOCATION LAYOUT — ONE English line, key objects with directions relative to the camera/viewer, NO location name, e.g. 'cot CENTER, cast-iron column LEFT, brazier RIGHT, chalk debt board on the BACK wall, door far LEFT'>",
+  "characterSheets": { "<Latin character name>": "<CHARACTER SHEET — 1–2 English sentences: sex, age, build, hair, face, wardrobe in THIS episode, distinctive items>", ... },
   "scenes": [
     {
       "title": "<short scene title, English>",
+      "tag": "<ONE word, CAPS, the theme of this row, e.g. LAMP / DEBT / AMPULES / CONFESSION / TOKEN>",
       "location": "<short English location line, e.g. 'Cramped map-maker's workshop, night'>",
       "characters": ["<Latin character name>", ...],
       "beats": [
-        { "shot": "wide" | "medium" | "close-up" | "over-the-shoulder",
-          "action": "<ONE storyboard panel, English, present tense, in the exact format: [Who] [position in the location] [verb] [object]; [second character] [position] [what they do]. Looks at [gaze target].>",
-          "cut": "<the state the clip ends in / how it links to the next beat, English, one sentence>" }
+        { "shot": "wide" | "medium" | "close" | "extreme close-up" | "wide two-shot" | "medium two-shot" | "close two-shot",
+          "action": "<ONE FREEZE-FRAME, English: what is visible in the panel at one single instant>",
+          "cut": "<how this frame links to the next one, English, one sentence>" }
       ]
     }
   ]
@@ -154,17 +175,17 @@ Return ONLY valid JSON (no markdown, no commentary) of this exact shape:
 
 HARD RULES:
 - EXACTLY 5 scenes, EXACTLY 5 beats per scene (25 beats total). Follow the script's 5 scenes in order. A scene = one ROW of 5 consecutive panels.
-- ONE PANEL = ONE VERB. Every beat answers "what changed since the previous frame" with ONE sentence. If nothing changed, the beat is redundant — replace it with the next real change. If two things changed, split them across two beats. A beat never contains two actions and never summarises a minute.
-- THREE MANDATORY FIELDS in every beat's "action": (1) where each present character stands/sits in the location (position), (2) what is in their hands, (3) where they look ("Looks at …"). A field is INHERITED from the previous beat unless the change is stated explicitly — so state every change, and only changes.
-- NO JUMPS IN SPACE WITHIN A SCENE: within a row nobody teleports, changes place or turns around unless a beat says so. A location change happens ONLY at the row boundary (between beat 5 of scene N and beat 1 of scene N+1), and BOTH panels show the same moment ALREADY in the new place with identical positions, hands and gaze (never "walks to", never "on the way").
-- ONE-OFF CHARACTERS: either remove them or introduce them through the protagonist's gaze in the PREVIOUS beat ("Looks at the porter by the door") before they act.
-- KEY / CLIMAX BEAT: describe it comparatively against an earlier beat ("unlike 1.3, the hand now …").
-- "action" FORMAT (strict): "[Who] [position in location] [verb] [object]; [second character] [position] [what they do]. Looks at [target]." — e.g. "Marta kneels at the cot's right side, scalpel in hand, cutting the shirt; Kemp lies on the cot, belt in his teeth. Looks at Kemp's ribs." Do NOT prefix the shot size inside "action" — it goes in the "shot" field.
-- All text is ENGLISH. Character names stay in LATIN letters exactly as in the script's cast.
-- Only characters listed in the scene's "characters" may appear in its beats.
-- Each beat's "shot" is one of: wide, medium, close-up, over-the-shoulder. Vary shots; never four identical shots in a row.
-- CONTINUITY: beat 5 of scene N must END in the state that beat 1 of scene N+1 STARTS from ("cut" of 5 = opening of the next scene's beat 1). Within a scene, each "cut" describes the exact pose/position the next beat opens on.
-- Dialogue is NOT quoted; describe speaking as an action ("Mira leans in and speaks urgently to Oren").`;
+- A BEAT IS A FREEZE-FRAME, NOT A CLIP. "action" describes ONE picture — what is visible at one instant: ZERO or ONE verb. A participle / -ing form is allowed as a frozen state ("teeth clamped on the belt", "Nora stepping forward", "Marta's hand takes three ampules"). FORBIDDEN: "then", "and then", "while … then", "starts to", "begins to", "slowly", listing 2+ actions of the same character. If you wrote "then", split it into two beats. If an action is complex, spread it over several beats. Never summarise a stretch of time.
+- WHAT A FRAME SHOWS (as elements of the description, not a fixed sentence template, and only when visible in the frame): where each person stands/sits/lies relative to the layout objects (cot, column, board…), what is in their hands, where they look.
+- Shot size ONLY: wide / medium / close / extreme close-up, optionally with the suffix "two-shot" (e.g. "medium two-shot", "close two-shot"). NO camera angles as sizes — never over-the-shoulder, POV, low angle, high angle, insert, reverse. Vary sizes; never four identical sizes in a row.
+- ROW TAG: every scene gets ONE CAPS word "tag" naming the row's theme (the object or turn the row is about).
+- ROW HAND-OFF: beat 1 of scenes 2–5 shows the SAME MOMENT as beat 5 of the previous scene from a DIFFERENT shot size — write it starting with "same moment — " (X.5 = (X+1).1: same positions, hands, gaze). A location change happens ONLY at this row boundary, and both panels already show the new place.
+- NO JUMPS IN SPACE WITHIN A ROW: nobody teleports, changes place or turns around unless a beat shows the new state; consecutive beats are consecutive instants of one continuous scene.
+- CAST ONLY: everyone who appears in a beat must be from the episode cast, named in LATIN letters verbatim. No unnamed people (no "a guard", "a porter", "a crowd"): if the script needs a one-off figure, use an existing cast member, or show an object / detail instead. Only characters listed in the scene's "characters" may appear in its beats.
+- "layout": the geometry of the ONE episode location — main objects with CENTER / LEFT / RIGHT / BACK wall / FOREGROUND / far LEFT directions relative to the viewer. Beats place people relative to these objects.
+- "characterSheets": one entry per cast member appearing in this episode — textual appearance down to details (sex, age, build, hair, face, this episode's wardrobe, distinctive items). English.
+- All text is ENGLISH. Do NOT prefix the shot size inside "action" — it goes in the "shot" field.
+- Dialogue is NOT quoted; a speaking character is a frozen state ("Nora speaking, pointing her pipe at the chalk debt board").`;
 }
 
 export function shotListUserPrompt(input: { scriptText: string; episodeTitle: string; episodeNumber: number; characterNames: string[]; locationName?: string | null }): string {
@@ -203,15 +224,32 @@ export function normalizeShotList(raw: unknown): { ok: true; shotList: ShotList 
     // 4 beats → pad by splitting the last action's hold; 6 beats → drop the 6th.
     while (beats.length < SHOT_LIST_BEATS) {
       const last = beats[beats.length - 1];
-      beats.push({ shot: last.shot === "close-up" ? "medium" : "close-up", action: `Hold: ${last.cut}`, cut: last.cut });
+      beats.push({ shot: last.shot === "close" ? "medium" : "close", action: `Hold: ${last.cut}`, cut: last.cut });
     }
     beats.length = SHOT_LIST_BEATS;
     const characters = Array.isArray(s.characters) ? (s.characters as unknown[]).map((c) => str(c)).filter(Boolean) : [];
-    scenes.push({ title: str(s.title) || `Scene ${i + 1}`, location: str(s.location) || str(s.setting) || "", characters, beats });
+    const tag = normalizeRowTag(str(s.tag) || str(s.rowTag));
+    scenes.push({ title: str(s.title) || `Scene ${i + 1}`, tag, location: str(s.location) || str(s.setting) || "", characters, beats });
   }
   while (scenes.length < SHOT_LIST_SCENES) {
     const last = scenes[scenes.length - 1];
     scenes.push({ ...last, title: `${last.title} (continued)`, beats: last.beats.map((b) => ({ ...b })) });
+  }
+  // Episode-level blocks (tolerant: missing → empty, the grid prompt falls back to the location/character data).
+  const layout = str(root.layout) || str(root.locationLayout);
+  const sheetsRaw = (root.characterSheets ?? root.characters ?? null) as unknown;
+  const characterSheets: Record<string, string> = {};
+  if (sheetsRaw && typeof sheetsRaw === "object" && !Array.isArray(sheetsRaw)) {
+    for (const [name, sheet] of Object.entries(sheetsRaw as Record<string, unknown>)) {
+      const n = name.trim(); const t = str(sheet);
+      if (n && t) characterSheets[n] = t;
+    }
+  } else if (Array.isArray(sheetsRaw)) {
+    for (const item of sheetsRaw as unknown[]) {
+      const o = (item ?? {}) as Record<string, unknown>;
+      const n = str(o.name); const t = str(o.sheet) || str(o.appearance) || str(o.description);
+      if (n && t) characterSheets[n] = t;
+    }
   }
   // Continuity rule: beat 5 of scene N must lead into beat 1 of scene N+1 — enforce softly by writing the
   // link into the cut text when the model left it blank/generic.
@@ -220,15 +258,27 @@ export function normalizeShotList(raw: unknown): { ok: true; shotList: ShotList 
     const nextFirst = scenes[i + 1].beats[0];
     if (!/[a-z]/i.test(last.cut) || last.cut.length < 12) last.cut = `Ends in the state the next scene opens on: ${nextFirst.action}`;
   }
-  return { ok: true, shotList: { scenes } };
+  return { ok: true, shotList: { scenes, layout, characterSheets } };
 }
 
+/** ONE CAPS word (letters/digits/hyphen), max 24 chars; "" when absent. */
+export function normalizeRowTag(v: string): string {
+  const w = v.trim().replace(/[:\s].*$/, "").replace(/[^A-Za-z0-9-]/g, "");
+  return w ? w.toUpperCase().slice(0, 24) : "";
+}
+
+/**
+ * Shot SIZE normalizer. Angles are not sizes: over-the-shoulder / POV / low / high / insert / reverse collapse
+ * to "medium" (or "close" for insert). "two-shot" survives as a suffix on wide / medium / close.
+ */
 export function normalizeShotType(v: string): ShotType {
   const s = v.toLowerCase().replace(/[_\s]+/g, "-");
-  if (s.includes("over")) return "over-the-shoulder";
-  if (s.includes("close") || s.includes("cu")) return "close-up";
-  if (s.includes("wide") || s.includes("long") || s.includes("establish")) return "wide";
-  return "medium";
+  const two = /two-?shot|2-?shot/.test(s);
+  if (/extreme|ecu|xcu|macro/.test(s)) return "extreme close-up";
+  if (/insert|detail/.test(s)) return "close";
+  if (/close|\bcu\b|^cu|-cu\b|tight/.test(s)) return two ? "close two-shot" : "close";
+  if (/wide|long|establish|\bws\b|full/.test(s)) return two ? "wide two-shot" : "wide";
+  return two ? "medium two-shot" : "medium";
 }
 
 /** Flatten the 5×5 shot list into 25 ordered BeatMeta records (number 1..25). */
@@ -237,10 +287,16 @@ export function beatsFromShotList(shotList: ShotList): BeatMeta[] {
   shotList.scenes.forEach((scene, si) => {
     scene.beats.forEach((beat, bi) => {
       const next = bi + 1 < scene.beats.length ? scene.beats[bi + 1] : shotList.scenes[si + 1]?.beats[0] ?? null;
+      // CHARACTER SHEETs of this row's cast only (the grid merges them across rows); layout on every beat.
+      const castSheets: Record<string, string> = {};
+      for (const n of scene.characters) { const sheet = shotList.characterSheets?.[n]; if (sheet) castSheets[n] = sheet; }
       out.push({
         v: 1, sceneIndex: si + 1, beatIndex: bi + 1, sceneTitle: scene.title, location: scene.location,
         characters: scene.characters, shot: beat.shot, action: beat.action, cut: beat.cut,
         nextStart: next ? next.action : null,
+        rowTag: scene.tag || null,
+        layout: shotList.layout || null,
+        castSheets: Object.keys(castSheets).length ? castSheets : null,
       });
     });
   });
@@ -259,6 +315,11 @@ export function parseBeatMeta(v: unknown): BeatMeta | null {
     characters: Array.isArray(m.characters) ? m.characters.map(String) : [], shot: normalizeShotType(String(m.shot ?? "medium")),
     action: m.action, cut: String(m.cut ?? ""), nextStart: typeof m.nextStart === "string" ? m.nextStart : null,
     startFramePrompt: typeof m.startFramePrompt === "string" ? m.startFramePrompt : null,
+    rowTag: typeof m.rowTag === "string" && m.rowTag ? m.rowTag : null,
+    layout: typeof m.layout === "string" && m.layout ? m.layout : null,
+    castSheets: m.castSheets && typeof m.castSheets === "object" && !Array.isArray(m.castSheets)
+      ? Object.fromEntries(Object.entries(m.castSheets as Record<string, unknown>).filter(([, v]) => typeof v === "string" && v).map(([k, v]) => [k, String(v)]))
+      : null,
   };
 }
 
@@ -291,8 +352,11 @@ export function buildStartFramePrompt(input: { beat: BeatMeta; characterNames: s
 export function shotSizeLabel(shot: string | null | undefined): string {
   const s = normalizeShotType(String(shot ?? "medium"));
   if (s === "wide") return "Wide shot";
-  if (s === "close-up") return "Close-up";
-  if (s === "over-the-shoulder") return "Over-the-shoulder shot";
+  if (s === "close") return "Close-up";
+  if (s === "extreme close-up") return "Extreme close-up";
+  if (s === "wide two-shot") return "Wide two-shot";
+  if (s === "medium two-shot") return "Medium two-shot";
+  if (s === "close two-shot") return "Close two-shot";
   return "Medium shot";
 }
 
@@ -319,7 +383,8 @@ export const BEAT_VIDEO_NEGATIVES =
 
 /**
  * Step 10 — the animation prompt for ONE beat clip (4–5 s). Structure (fixed, English):
- *   START FRAME (image 1) → Characters (appearance only, image 2..N) → ACTIONS (exactly one beat) →
+ *   START FRAME (image 1) → Characters (appearance only, image 2..N) → ACTIONS (the movement from freeze-frame N
+ *   into freeze-frame N+1 — the only place a movement is described) →
  *   END (= the NEXT panel: its shot size + action; last scene → the final pose, static) → FRAMING → NEGATIVES.
  * `next` = scene N+1 (explicit); when undefined the stored beat.nextStart is used (no shot size known).
  */
@@ -348,10 +413,15 @@ export function buildBeatVideoPrompt(input: {
     chars.forEach((n) => { lines.push(`image ${idx} — ${n}.`); idx++; });
     lines.push("");
   }
-  lines.push("ACTIONS:");
-  lines.push(beat.action.trim());
-  lines.push("");
+  // ACTIONS is the ONLY place where the movement between freeze-frame N (START) and freeze-frame N+1 (END) is described.
   const next = input.next === undefined ? (beat.nextStart ? { shot: null, action: beat.nextStart } : null) : input.next;
+  lines.push("ACTIONS:");
+  if (next && next.action.trim()) {
+    lines.push(`From the START FRAME state, ${beat.action.trim().replace(/[.\s]+$/, "")} → moves continuously into: ${next.action.trim()}`);
+  } else {
+    lines.push(beat.action.trim());
+  }
+  lines.push("");
   if (next && next.action.trim()) {
     lines.push(`END: ${next.shot ? `${shotSizeLabel(next.shot)}: ` : ""}${next.action.trim()}`);
   } else {

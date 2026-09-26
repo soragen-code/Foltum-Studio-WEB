@@ -96,11 +96,19 @@ export async function loadGridInputs(episodeId: string): Promise<{
   });
   if (!episode) throw new Error("Episode not found");
 
+  // Shot-list episode blocks live on the beats (Scene.beatMeta): LAYOUT (same on every beat), CHARACTER SHEETs
+  // (per row's cast — merged here) and ROW tags. No Episode column is needed.
+  const beatMetas = episode.scenes.map((s) => parseBeatMeta(s.beatMeta));
+  const shotListLayout = beatMetas.find((b) => b?.layout)?.layout ?? null;
+  const castSheets = new Map<string, string>();
+  for (const b of beatMetas) for (const [n, sheet] of Object.entries(b?.castSheets ?? {})) if (sheet && !castSheets.has(n.toLowerCase())) castSheets.set(n.toLowerCase(), sheet);
+
   const characters: GridCharacter[] = episode.characters.map(({ character: c }) => ({
     id: c.id,
     name: c.name,
     appearance: c.appearance,
     role: c.role,
+    sheet: castSheets.get(c.name.trim().toLowerCase()) ?? null,
     // Neutral-background reference: the front portrait is the cleanest identity frame; fall back to the full body.
     refUrl: validUrl(c.imageFront) ? c.imageFront : validUrl(c.imageFull) ? c.imageFull : null,
   }));
@@ -112,9 +120,10 @@ export async function loadGridInputs(episodeId: string): Promise<{
         name: loc.name || episode.locationName || "Location",
         imageUrl: validUrl(loc.imageUrl) ? loc.imageUrl : null,
         keyObjects: loc.setInventory || loc.visualPrompt || loc.description || null,
+        layout: shotListLayout,
       }
     : episode.locationName
-    ? { id: "episode-location", name: episode.locationName, imageUrl: null, keyObjects: episode.locationDesc || null }
+    ? { id: "episode-location", name: episode.locationName, imageUrl: null, keyObjects: episode.locationDesc || null, layout: shotListLayout }
     : null;
 
   // Scene-bound locations (Scene.locationId) grouped by grid row: a row = 5 consecutive scenes. Rows whose
@@ -126,19 +135,19 @@ export async function loadGridInputs(episodeId: string): Promise<{
     const key = l ? l.id : location?.id ?? "";
     if (!key) return;
     const entry = byLocation.get(key) ?? (l
-      ? { id: l.id, name: l.name || episode.locationName || "Location", imageUrl: validUrl(l.imageUrl) ? l.imageUrl : null, keyObjects: l.setInventory || l.visualPrompt || l.description || null, rows: [] as number[] }
+      ? { id: l.id, name: l.name || episode.locationName || "Location", imageUrl: validUrl(l.imageUrl) ? l.imageUrl : null, keyObjects: l.setInventory || l.visualPrompt || l.description || null, layout: shotListLayout, rows: [] as number[] }
       : { ...(location as GridLocation), rows: [] as number[] });
     if (!entry.rows!.includes(row)) entry.rows!.push(row);
     byLocation.set(key, entry);
   });
   const locations = Array.from(byLocation.values());
 
-  // Simplified pipeline: beat scenes (Scene.beatMeta) describe each panel with the beat's shot + action
-  // ("[Who] [position] [verb] [object]; [second] [position] [what]. Looks at [target]." — ONE verb per panel).
-  const scenes: GridSceneBeat[] = episode.scenes.map((s) => {
-    const beat = parseBeatMeta(s.beatMeta);
+  // Simplified pipeline: beat scenes (Scene.beatMeta) describe each panel with the beat's shot size + freeze-frame
+  // text (one picture, 0–1 verbs) and carry the row's theme tag ("ROW N TAG:").
+  const scenes: GridSceneBeat[] = episode.scenes.map((s, i) => {
+    const beat = beatMetas[i];
     if (beat) {
-      return { number: s.number, title: `${beat.sceneTitle} — ${s.title}`, action: beat.action || s.action || s.title || null, shotType: beat.shot || s.shotType };
+      return { number: s.number, title: `${beat.sceneTitle} — ${s.title}`, action: beat.action || s.action || s.title || null, shotType: beat.shot || s.shotType, rowTag: beat.rowTag ?? null };
     }
     return {
       number: s.number,
