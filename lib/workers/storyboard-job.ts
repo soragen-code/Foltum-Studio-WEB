@@ -45,6 +45,7 @@ import {
 } from "@/lib/storyboard-scenes";
 import { buildStoryboardVideoRequest, storyboardCameraMode } from "@/lib/storyboard-animation";
 import { detectSpokenLanguage, translateDialogue } from "@/lib/voiceover";
+import { runWithPromptContext } from "@/lib/prompt-log";
 
 export const STORYBOARD_BOARDS_JOB_TYPE = "storyboard_boards";
 export const BOARD_IMAGE_JOB_TYPE = "board_image";
@@ -317,7 +318,7 @@ async function translateStartFramesRu(texts: string[]): Promise<string[] | null>
  * LLM call plans, for every scene, who is on screen / enters / exits plus the keyframe (startFrame) and motion
  * descriptions; the dialogue itself is restored verbatim from the scene (never rewritten) and voiced in the clip.
  */
-export async function runStoryboardBoardsJob(jobId: string, projectId: string, episodeId: string): Promise<void> {
+async function runStoryboardBoardsJobImpl(jobId: string, projectId: string, episodeId: string): Promise<void> {
   try {
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
     const episode = await prisma.episode.findUnique({ where: { id: episodeId } });
@@ -636,7 +637,7 @@ export async function runStoryboardBoardsJob(jobId: string, projectId: string, e
 }
 
 /* ───────────── 2) board_image — render one board's 9:16 keyframe still ───────────── */
-export async function runBoardImageJob(jobId: string, projectId: string, boardId: string): Promise<void> {
+async function runBoardImageJobImpl(jobId: string, projectId: string, boardId: string): Promise<void> {
   const canceled = () => isCancelRequested(jobId);
   try {
     if (await canceled()) { await markCanceled(jobId); return; }
@@ -851,7 +852,7 @@ export async function runBoardImageJob(jobId: string, projectId: string, boardId
 }
 
 /* ───────────── 3) board_video — animate one board via image-to-video ───────────── */
-export async function runBoardVideoJob(jobId: string, projectId: string, boardId: string): Promise<void> {
+async function runBoardVideoJobImpl(jobId: string, projectId: string, boardId: string): Promise<void> {
   const canceled = () => isCancelRequested(jobId);
   let predictionId: string | null = null;
   try {
@@ -954,4 +955,19 @@ export async function runStoryboardAssembleJob(jobId: string, episodeId: string,
     console.error("[storyboard-assemble] failed:", err);
     await failJob(jobId, err?.message ?? "Storyboard assembly failed");
   }
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runStoryboardBoardsJob(jobId: string, projectId: string, episodeId: string): Promise<void> {
+  return runWithPromptContext({ kind: "storyboard", projectId, episodeId }, () => runStoryboardBoardsJobImpl(jobId, projectId, episodeId));
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runBoardImageJob(jobId: string, projectId: string, boardId: string): Promise<void> {
+  return runWithPromptContext({ kind: "storyboard", projectId }, () => runBoardImageJobImpl(jobId, projectId, boardId));
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runBoardVideoJob(jobId: string, projectId: string, boardId: string): Promise<void> {
+  return runWithPromptContext({ kind: "storyboard", projectId }, () => runBoardVideoJobImpl(jobId, projectId, boardId));
 }

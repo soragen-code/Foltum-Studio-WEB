@@ -5,6 +5,7 @@ import { useJobPolling, JobProgressBar, StreamingText } from './use-job-polling'
 import { Loader2, RefreshCw, Lock, Check, User, ImageOff, ScrollText } from 'lucide-react'
 import { CharacterUserRefs } from './character-user-refs'
 import { CharacterFacePhoto } from './character-face-photo'
+import { PromptLogButton } from './prompt-log-button'
 
 /** Renders the 3 character image slots with proper fallback */
 function CharacterImages({
@@ -188,6 +189,7 @@ export function CharactersStage({ project, onRefresh, entitlements }: { project:
       <div className="rounded-xl border border-border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
         <div className="flex items-center justify-between">
           <h2 className="font-display text-xl font-bold">Stage 2 — Characters</h2>
+          <PromptLogButton projectId={project.id} kinds={['characters', 'character']} />
           {isLocked && (
             <span className="flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
               <Lock className="h-3 w-3" /> Locked

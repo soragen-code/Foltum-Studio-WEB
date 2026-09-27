@@ -5,11 +5,18 @@ import { Wand2, Loader2, Check, PenLine } from 'lucide-react'
 import { useJobPolling, StreamingText } from './use-job-polling'
 import { RewritePlaceholder } from './rewrite-placeholder'
 import { rewriteViewState } from '@/lib/rewrite-view-state'
+import { PromptLogButton } from './prompt-log-button'
+import { ReadOnlyStageCard } from './project-steps'
 
 // Roughly how long the synopsis rewrite takes — drives the smooth 0→100 % client bar.
 const SYNOPSIS_CORRECTION_EXPECTED_SEC = 30
 
-export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh: () => void }) {
+export function SynopsisStage({ project, onRefresh, readOnly = false }: { project: any; onRefresh: () => void; readOnly?: boolean }) {
+  if (readOnly) return <ReadOnlyStageCard title="Шаг 2 — Синопсис" text={project?.synopsis} testId="synopsis-stage-readonly" aside={<PromptLogButton projectId={project.id} kinds={['synopsis', 'idea']} />} />
+  return <SynopsisStageEditor project={project} onRefresh={onRefresh} />
+}
+
+function SynopsisStageEditor({ project, onRefresh }: { project: any; onRefresh: () => void }) {
   const [prompt, setPrompt] = useState('')
   const [synopsis, setSynopsis] = useState(project?.synopsis ?? '')
   const [correctionPrompt, setCorrectionPrompt] = useState('')
@@ -130,7 +137,10 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
     return (
       <div className="space-y-6">
         <div className="rounded-xl border border-border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
-          <h2 className="mb-2 font-display text-xl font-bold">Шаг 2 — Синопсис</h2>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-display text-xl font-bold">Шаг 2 — Синопсис</h2>
+            <PromptLogButton projectId={project.id} kinds={['synopsis', 'idea']} />
+          </div>
           <p className="mb-4 text-sm text-muted-foreground">
             Проверьте синопсис сезона. Его можно отредактировать прямо в тексте, сгенерировать заново на основе идеи или попросить ИИ переписать по вашему замечанию. Когда всё устраивает — нажмите «Аппрув / Далее», и мы перейдём к сюжету по сериям.
           </p>
@@ -207,7 +217,10 @@ export function SynopsisStage({ project, onRefresh }: { project: any; onRefresh:
   return (
     <div className="space-y-6">
       <div className="rounded-xl border border-border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
-        <h2 className="mb-4 font-display text-xl font-bold">Stage 1 — Synopsis</h2>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-display text-xl font-bold">Stage 1 — Synopsis</h2>
+          <PromptLogButton projectId={project.id} kinds={['synopsis', 'idea']} />
+        </div>
         <p className="mb-4 text-sm text-muted-foreground">
           Describe your film or series idea. AI will generate a short synopsis.
         </p>

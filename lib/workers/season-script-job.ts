@@ -91,6 +91,7 @@ import { toDramaBibleForMap, type DramaBible } from "@/lib/drama-bible";
 import { renderSeasonStateBlock, normalizeSeasonState } from "@/lib/season-state";
 import { getDialogueLanguage } from "@/lib/dialogue-language";
 import { dramaBibleBrief } from "@/lib/prompts/drama-bible";
+import { runWithPromptContext } from "@/lib/prompt-log";
 
 export const SEASON_JOB_TYPE = "season_script";
 
@@ -842,7 +843,7 @@ async function tick(jobId: string, projectId: string, state: SeasonJobState, dep
           instruction: planned.instruction ? reviseInstruction(planned.instruction, next) : null,
           extraBlocks: [seasonMapCellBlock, dramaBibleBlock, seasonStateBlock],
         }) + retryNote,
-        { model: EPISODE_SCRIPT_MODEL, maxTokens: SCREENPLAY_MAX_TOKENS, temperature: EPISODE_SCRIPT_TEMPERATURE, timeoutMs: 780_000, onDelta: makeJobStreamWriter(jobId) }
+        { model: EPISODE_SCRIPT_MODEL, maxTokens: SCREENPLAY_MAX_TOKENS, temperature: EPISODE_SCRIPT_TEMPERATURE, timeoutMs: 780_000, onDelta: makeJobStreamWriter(jobId), log: { kind: "script", projectId, episodeId: ep.id } }
       ));
       text = (raw ?? "").replace(/^```[a-z]*\s*/i, "").replace(/\s*```\s*$/, "").trim();
     }
@@ -1117,8 +1118,13 @@ async function applyStepResult(project: LoadedProject, season: LoadedSeason | nu
 }
 
 /** Entry point used by the routes that create a job: records the episode count and performs the first advance. */
-export async function runSeasonScriptJob(jobId: string, projectId: string, episodeCount = SEASON_DEFAULT_EPISODES, storyBatch?: SeasonJobState["storyBatch"]): Promise<void> {
+async function runSeasonScriptJobImpl(jobId: string, projectId: string, episodeCount = SEASON_DEFAULT_EPISODES, storyBatch?: SeasonJobState["storyBatch"]): Promise<void> {
   const job = await prisma.generationJob.findUnique({ where: { id: jobId } });
   if (!job) return;
   await advanceSeasonJob(job, defaultDeps, { episodeCount, storyBatch });
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runSeasonScriptJob(jobId: string, projectId: string, episodeCount = SEASON_DEFAULT_EPISODES, storyBatch?: SeasonJobState["storyBatch"]): Promise<void> {
+  return runWithPromptContext({ kind: "story", projectId }, () => runSeasonScriptJobImpl(jobId, projectId, episodeCount, storyBatch));
 }

@@ -32,6 +32,8 @@ import { locationExtraLabel } from '@/lib/visual-style'
 import { episodeTotalSeconds, EPISODE_MAX_TOTAL_SECONDS, EPISODE_TOTAL_LABEL } from '@/lib/season'
 import { DEFAULT_SCENE_PROMPT_TEMPLATE } from '@/lib/scene-prompt-template'
 import { ASSEMBLE_QUALITIES, ASSEMBLE_FPS, DEFAULT_ASSEMBLE_QUALITY, DEFAULT_ASSEMBLE_FPS, type AssembleQuality, type AssembleFps } from '@/lib/assemble-options'
+import { PromptLogButton } from '../../_components/prompt-log-button'
+import { ProjectSteps } from '../../_components/project-steps'
 
 type EpisodePhase = 'script' | 'shotlist' | 'references' | 'storyboard' | 'scenes'
 
@@ -1602,8 +1604,14 @@ export function EpisodeView({ episode: initial, project, siblings = [], credits:
             {episode.logline && <p className="mt-1 text-sm text-muted-foreground">{episode.logline}</p>}
             <EpisodeFootage description={(episode as any).description} className="mt-2" />
           </div>
-          <div className="text-sm text-muted-foreground">Credits: <span className="font-semibold text-foreground" data-testid="credits">{credits}</span></div>
+          <div className="flex items-center gap-3">
+            <PromptLogButton projectId={project.id} kinds={['script', 'plot', 'shot_list', 'storyboard', 'scenes', 'video', 'keyframe']} episodeId={episode.id} />
+            <div className="text-sm text-muted-foreground">Credits: <span className="font-semibold text-foreground" data-testid="credits">{credits}</span></div>
+          </div>
         </div>
+
+        {/* Project-level steps (Идея → … → Серии); passed steps open a read-only view of that stage. */}
+        <ProjectSteps projectId={project.id} stage={project?.stage} current="scenes" className="mt-4" />
 
         {/* Stage 14 (D): guided steps — script → references → scenes. Stage 172: the Script step lives on its
             own page (/script); steps that belong to the OTHER page render as links that navigate between the two. */}

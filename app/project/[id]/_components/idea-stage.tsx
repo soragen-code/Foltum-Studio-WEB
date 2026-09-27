@@ -7,6 +7,8 @@ import { LocationCard, AddLocationForm, TierBadge, TIER_LABELS, groupByTier, typ
 import { parseStoredShortSynopsis, type ShortSynopsis } from '@/lib/short-synopsis'
 import { CancelButton } from './cancel-button'
 import { useJobPolling, SmoothProgress, StreamingText } from './use-job-polling'
+import { PromptLogButton } from './prompt-log-button'
+import { ReadOnlyStageCard } from './project-steps'
 
 /** Roughly how long the synopsis step takes — drives the smooth 0→100 % progress bar. */
 const SYNOPSIS_EXPECTED_SEC = 60
@@ -442,7 +444,13 @@ export function IdeaEditor({
  * → POST /api/ai/season → the wizard switches to the single «Season script screen.
  * The synopsis / cast / locations stay editable there (collapsible blocks).
  */
-export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () => void }) {
+export function IdeaStage({ project, onRefresh, readOnly = false }: { project: any; onRefresh: () => void; readOnly?: boolean }) {
+  // Read-only view (opened from the project step bar after the stage was passed): just the approved idea.
+  if (readOnly) return <ReadOnlyStageCard title="Шаг 1 — Идея" text={project?.idea} testId="idea-stage-readonly" aside={<PromptLogButton projectId={project.id} kinds={['idea']} />} />
+  return <IdeaStageEditor project={project} onRefresh={onRefresh} />
+}
+
+function IdeaStageEditor({ project, onRefresh }: { project: any; onRefresh: () => void }) {
   const [idea, setIdea] = useState<string>(project?.idea ?? '')
   const [result, setResult] = useState<{ synopsis: string; language: string; characters: CharacterCardData[]; locations: LocationCardData[] } | null>(
     project?.synopsis && project?.characters?.length ? { synopsis: project.synopsis, language: project.language ?? '', characters: project.characters, locations: project.locations ?? [] } : null
@@ -636,9 +644,12 @@ export function IdeaStage({ project, onRefresh }: { project: any; onRefresh: () 
   return (
     <div className="space-y-6">
       <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
-        <h2 className="flex items-center gap-2 font-display text-xl font-bold">
-          <Lightbulb className="h-5 w-5 text-primary" /> {isUpload ? 'Step 1 — Upload your script' : 'Step 1 — Idea'}
-        </h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="flex items-center gap-2 font-display text-xl font-bold">
+            <Lightbulb className="h-5 w-5 text-primary" /> {isUpload ? 'Step 1 — Upload your script' : 'Step 1 — Idea'}
+          </h2>
+          <PromptLogButton projectId={project.id} kinds={['idea']} />
+        </div>
         <p className="mt-1 text-sm text-muted-foreground">
           {isUpload
             ? 'Загрузите готовый сюжет / сценарий файлом (.txt, .md, .docx, .pdf) или вставьте текстом. ИИ примет его за основу и структурирует в сезон: синопсис, разбивку по эпизодам, персонажей и локации.'

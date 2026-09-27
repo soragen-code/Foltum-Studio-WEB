@@ -39,6 +39,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
           id: true,
           title: true,
           logline: true,
+          projectId: true,
           project: { select: { synopsis: true, language: true } },
           episodes: {
             orderBy: { number: "asc" },
@@ -86,7 +87,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       await streamChatText(
         episodePlotSystemPrompt(language, target.number),
         episodePlotUserPrompt({ synopsis, season: structure, episode: outlineFromEpisode(target), previousPlots, language }),
-        { model: EPISODE_SCRIPT_MODEL, maxTokens: 6000, temperature: 0.8 },
+        { model: EPISODE_SCRIPT_MODEL, maxTokens: 6000, temperature: 0.8, log: { kind: "plot", projectId: season.projectId, episodeId: target.id } },
       )
     ).trim();
   } catch (err) {

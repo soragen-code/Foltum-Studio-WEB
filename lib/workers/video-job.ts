@@ -45,6 +45,7 @@ import { resolvePowerTier, SCENE_RESOLUTION } from "@/lib/power-tier";
 import { sceneProgressStage, SCENE_STAGE_PROGRESS, SCENE_STAGE_MESSAGE } from "@/lib/scene-progress";
 import { sceneClipSeconds, sceneClipCost } from "@/lib/season";
 import { stripPreviousCameraLine, type Continuity } from "@/lib/prompt-seam";
+import { runWithPromptContext } from "@/lib/prompt-log";
 
 export interface VideoJobParams {
   jobId: string;
@@ -171,7 +172,7 @@ function parseState(resultData: string | null | undefined): VideoJobState | null
  * If the function dies mid-way, GET /api/jobs/[id] calls `resumeVideoJob()` which
  * picks the prediction up by id and finishes the work.
  */
-export async function runVideoJob(params: VideoJobParams): Promise<void> {
+async function runVideoJobImpl(params: VideoJobParams): Promise<void> {
   // The generation UNIT depends on the episode's mode:
   //   • «Шоты» mode (shotId present) → render ONE Shot (runShotVideoJob).
   //   • Default SCENE mode (no shotId) → render the WHOLE scene as one clip (runSceneVideoJob).
@@ -1021,4 +1022,9 @@ export async function resumeVideoJob(job: { id: string; type: string; status: st
     await saveOwned(job.id, state, { message: "Provider status temporarily unavailable; checking again", error: safeProviderError(error) });
     return true;
   }
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runVideoJob(params: VideoJobParams): Promise<void> {
+  return runWithPromptContext({ kind: "video", projectId: params.projectId, sceneId: params.sceneId }, () => runVideoJobImpl(params));
 }

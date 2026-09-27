@@ -11,6 +11,7 @@
 /*  retries; on a dropped connection the caller polls by id.            */
 /* ------------------------------------------------------------------ */
 
+import { getPromptContext, logPrompt } from "@/lib/prompt-log";
 export const WAVESPEED_BASE = "https://api.wavespeed.ai/api/v3";
 export const SEEDANCE_T2V_SLUG = "bytedance/seedance-2.5/text-to-video";
 export const SEEDANCE_I2V_SLUG = "bytedance/seedance-2.5/image-to-video";
@@ -103,6 +104,19 @@ export async function wavespeedSubmit(slug: string, body: Record<string, unknown
   if (typeof body?.prompt === "string" && body.prompt) {
     const { ensureEnglishPrompt } = await import("@/lib/english-prompt");
     body = { ...body, prompt: await ensureEnglishPrompt(body.prompt) };
+  }
+  {
+    // Prompt log: the prompt + the small scalar params (no base64 / long strings — sanitized in logPrompt).
+    const { prompt: _p, ...rest } = body;
+    void _p;
+    logPrompt({
+      kind: getPromptContext().kind ?? (label && label !== "WaveSpeed" ? label.toLowerCase().replace(/\s+/g, "_") : undefined) ?? "video",
+      provider: "wavespeed",
+      endpoint: `${WAVESPEED_BASE}/${slug}`,
+      model: slug,
+      user: typeof body.prompt === "string" ? body.prompt : "",
+      extra: rest,
+    });
   }
   let res: Response;
   try {

@@ -11,6 +11,7 @@ import { StickyReviseBar } from './sticky-revise-bar'
 import { type SeasonEpisode, seasonBuildPercent } from './season-stage'
 import { EpisodeFootage } from './episode-footage'
 import { PLOT_ACCEPT } from '@/lib/plot-import'
+import { PromptLogButton } from './prompt-log-button'
 
 
 // GenerationJob.type values (mirrored from the server workers — this is a client component, so we can't
@@ -91,7 +92,7 @@ function FullStoryView({ text }: { text: string }) {
   )
 }
 
-export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: () => void }) {
+export function StoryStage({ project, onRefresh, readOnly = false }: { project: any; onRefresh?: () => void; readOnly?: boolean }) {
   const [season, setSeason] = useState<SeasonData>(null)
   const [job, setJob] = useState<Job>(null)
   const [loading, setLoading] = useState(true)
@@ -304,10 +305,13 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
   if (loading) return <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
 
   return (
-    <div className="space-y-6 pb-40" data-testid="story-stage">
+    // Read-only view (project step bar → «Сюжет» after the stage was passed): every action button, input and
+    // the bottom revise bar are hidden; the text stays. The «Промпт» button (data-keep) is the only control left.
+    <div className={`space-y-6 pb-40 ${readOnly ? '[&_button:not([data-keep])]:hidden [&_input]:hidden [&_textarea]:pointer-events-none' : ''}`} data-testid="story-stage" data-readonly={readOnly || undefined}>
       <div className="rounded-xl border border-border bg-card p-4 sm:p-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="font-display text-xl font-bold">Шаг 3 — Сюжет по сериям</h2>
+          <PromptLogButton projectId={project.id} kinds={['story']} keep />
           {episodeCount > 0 && <span className="inline-flex items-center gap-1 rounded-full bg-muted px-3 py-1 text-sm" data-testid="episode-count"><BookOpen className="h-4 w-4" /> {seasonTotal > total ? `${total} / ${seasonTotal}` : episodeCount} серий</span>}
         </div>
         <p className="mt-1 text-sm text-muted-foreground">
@@ -512,7 +516,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
       </div>
 
       {/* Compact bottom-docked «What to change in the plot" field (Stage 69) — restored without the episode list. */}
-      <StickyReviseBar
+      {!readOnly && <StickyReviseBar
         value={storyText}
         onChange={setStoryText}
         onSubmit={() => reviseStory({ instruction: storyText })}
@@ -523,7 +527,7 @@ export function StoryStage({ project, onRefresh }: { project: any; onRefresh?: (
         submitLabel="Исправить промптом"
         testId="story-revise"
         hint="Перегенерация очищает сгенерированные сцены и видео затронутых серий."
-      />
+      />}
     </div>
   )
 }

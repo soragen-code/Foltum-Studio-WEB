@@ -6,6 +6,7 @@ import { chatJSON } from "@/lib/ai";
 import { artifactImagePrompt, VISUAL_STYLE_ID, REFERENCE_ASPECT_RATIO } from "@/lib/visual-style";
 import { detectC2paFromUrl } from "@/lib/c2pa";
 import { ARTIFACT_FRAME_COUNT, REF_BATCH_CONCURRENCY, runWithConcurrency, parseImageArray } from "@/lib/reference-counts";
+import { runWithPromptContext } from "@/lib/prompt-log";
 
 // Stage 14 (E): "important objects" / artifacts of an episode. Each gets 2 photoreal
 // reference frames (a clean isolated shot + one in realistic in-story context, chained on
@@ -51,7 +52,7 @@ async function extractArtifacts(script: string, title: string, language: string)
  * reference frames. Extraction runs once (LLM) if no artifacts are linked yet; frame generation is
  * concurrency-limited (≤ REF_BATCH_CONCURRENCY in flight) and idempotent. Job type "artifacts".
  */
-export async function runArtifactImagesJob({ jobId, projectId, episodeId }: ArtifactImagesJobParams): Promise<void> {
+async function runArtifactImagesJobImpl({ jobId, projectId, episodeId }: ArtifactImagesJobParams): Promise<void> {
   try {
     const project = await prisma.project.findUnique({ where: { id: projectId }, select: { language: true } });
     const language = project?.language ?? "en";
@@ -167,4 +168,9 @@ export async function runArtifactImagesJob({ jobId, projectId, episodeId }: Arti
     console.error("[artifact-job] failed:", err);
     await failJob(jobId, err?.message ?? "Artifact image generation failed");
   }
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runArtifactImagesJob(params: ArtifactImagesJobParams): Promise<void> {
+  return runWithPromptContext({ kind: "artifact", projectId: params.projectId, episodeId: params.episodeId }, () => runArtifactImagesJobImpl(params));
 }

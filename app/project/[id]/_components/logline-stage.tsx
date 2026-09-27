@@ -3,6 +3,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { Wand2, Loader2, Check, RefreshCw, MessageSquareText, Lightbulb } from 'lucide-react'
 import { useJobPolling, SmoothProgress } from './use-job-polling'
+import { PromptLogButton } from './prompt-log-button'
+import { ReadOnlyStageCard } from './project-steps'
 
 /** Roughly how long the synopsis job (kicked on approval) takes — drives the smooth 0→100 % bar. */
 const SYNOPSIS_EXPECTED_SEC = 60
@@ -18,7 +20,12 @@ const SYNOPSIS_EXPECTED_SEC = 60
  * Nothing auto-progresses: the synopsis is generated only when the producer approves here. Regeneration
  * happens only on an explicit button click.
  */
-export function LoglineStage({ project, onRefresh }: { project: any; onRefresh: () => void }) {
+export function LoglineStage({ project, onRefresh, readOnly = false }: { project: any; onRefresh: () => void; readOnly?: boolean }) {
+  if (readOnly) return <ReadOnlyStageCard title="Шаг 1 — Идея (логлайн)" text={project?.logline} testId="logline-stage-readonly" aside={<PromptLogButton projectId={project.id} kinds={['logline']} />} />
+  return <LoglineStageEditor project={project} onRefresh={onRefresh} />
+}
+
+function LoglineStageEditor({ project, onRefresh }: { project: any; onRefresh: () => void }) {
   const [logline, setLogline] = useState<string>(project?.logline ?? '')
   const [correctionPrompt, setCorrectionPrompt] = useState('')
   const [regenerating, setRegenerating] = useState(false)
@@ -123,9 +130,12 @@ export function LoglineStage({ project, onRefresh }: { project: any; onRefresh: 
   return (
     <div className="space-y-6">
       <div className="rounded-xl border border-border bg-card p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
-        <h2 className="mb-2 flex items-center gap-2 font-display text-xl font-bold">
-          <Lightbulb className="h-5 w-5 text-primary" /> Шаг 1 — Идея
-        </h2>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h2 className="flex items-center gap-2 font-display text-xl font-bold">
+            <Lightbulb className="h-5 w-5 text-primary" /> Шаг 1 — Идея
+          </h2>
+          <PromptLogButton projectId={project.id} kinds={['logline']} />
+        </div>
         <p className="mb-4 text-sm text-muted-foreground">
           Это развёрнутая идея сезона — питч на 7–10 предложений. Отредактируйте её прямо в тексте, попросите
           ИИ переписать по промпту или сгенерируйте заново. Когда идея вас устроит — нажмите «Аппрув / Далее»,

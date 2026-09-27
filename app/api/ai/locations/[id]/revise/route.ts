@@ -37,7 +37,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     let lastError = "";
     for (let attempt = 0; attempt < 2 && !card; attempt++) {
       try {
-        const raw = await chatJSON(reviseLocationSystemPrompt(language), reviseLocationUserPrompt(location.project.synopsis ?? "", current, instruction), { temperature: 0.6, maxTokens: 2500 });
+        const raw = await chatJSON(reviseLocationSystemPrompt(language), reviseLocationUserPrompt(location.project.synopsis ?? "", current, instruction), { temperature: 0.6, maxTokens: 2500, log: { kind: "location", projectId: location.projectId } });
         card = sanitizeLocationCard(locationCardSchema.parse(raw));
       } catch (e: any) { lastError = e?.message ?? String(e); }
     }

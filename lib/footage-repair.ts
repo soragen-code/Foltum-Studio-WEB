@@ -246,8 +246,9 @@ export async function repairEpisodeDescriptions<T extends RepairableEpisode>(
 
 
 /* ───────────── Stage 128 — repair NEW-format episode synopses (single continuous description + cliffhanger) ─────────────
- * The story build no longer uses the SHOT 1 / SHOT 2 / CLIFFHANGER footage split. An episode "description" is ONE
- * detailed continuous synopsis followed by a single "CLIFFHANGER: …" line. This mirrors repairEpisodeDescriptions:
+ * The story build no longer uses the SHOT 1 / SHOT 2 / CLIFFHANGER footage split. An episode "description" is a
+ * thesis-style bullet summary (Opening / What happens / Ending blocks) followed by a single "CLIFFHANGER: …" line.
+ * This mirrors repairEpisodeDescriptions:
  * targeted LLM passes on the failing episodes, then a deterministic clamp that always yields a description passing
  * validateEpisodeSynopses (strip any shot/beat/timing split, ensure a CLIFFHANGER line, cap the length).
  */
@@ -258,8 +259,8 @@ const TIMING_MARKER_RE = /\b(?:shots?\s*[12]|beat\s*[12]|first\s+30|last\s+30|30
 export function synopsisRepairSystemPrompt(language: IdeaLanguage): string {
   return `You fix episode "description" fields that failed a strict format check. Rewrite ONLY the episodes you are given, keep their story events and the same characters — do NOT invent new events. Write in the story language (${language}).
 ${EPISODE_SYNOPSIS_RULE}
-For every episode after the first, the synopsis MUST open by picking up directly from the given previous episode's cliffhanger (same moment, same place), then move forward.
-Return ONLY JSON: {"episodes":[{"number":<int>,"description":"<one continuous synopsis paragraph>\\n${CLIFFHANGER_LINE_LABEL} <one final image>","cliffhanger":"<the CLIFFHANGER line text>"}]}.`;
+For every episode after the first, the first "Opening:" bullet MUST pick up directly from the given previous episode's cliffhanger (same moment, same place), then move forward.
+Return ONLY JSON: {"episodes":[{"number":<int>,"description":"<Opening label>:\\n- <bullet>\\n<What happens label>:\\n- <bullet>\\n- <bullet>\\n- <bullet>\\n<Ending label>:\\n- <bullet>\\n${CLIFFHANGER_LINE_LABEL} <one final image>","cliffhanger":"<the CLIFFHANGER line text>"}]}.`;
 }
 
 export function synopsisRepairUserPrompt(items: { number: number; title?: string; description: string; previousCliffhanger: string | null; problems: string[] }[]): string {
@@ -269,6 +270,33 @@ export function synopsisRepairUserPrompt(items: { number: number; title?: string
     `Current description:\n${it.description}`,
     `Problems: ${it.problems.join("; ")}`,
   ].join("\n")).join("\n\n");
+}
+
+/** A "- " / "•" bullet line of the thesis-format synopsis. */
+const BULLET_LINE_RE = /^\s*[-•]\s+/;
+/** A block label line ("Opening:", «Что происходит:», …) — a short line ending with ":" and carrying no bullet. */
+const LABEL_LINE_RE = /^[^-•\n]{1,40}:$/;
+
+/**
+ * Cut a THESIS-FORMAT synopsis (labelled "- " bullet blocks) to ≤ maxWords by dropping trailing bullets, keeping
+ * the line structure (labels + bullets) intact. Returns null when the text is not a bullet list (→ prose clamp).
+ */
+function clampSynopsisBullets(text: string, maxWords: number): string | null {
+  const lines = text.split(/\r?\n/).map((l) => l.replace(TIMING_MARKER_RE, " ").replace(/[ \t]+/g, " ").trim()).filter(Boolean);
+  if (lines.filter((l) => BULLET_LINE_RE.test(l)).length < 2) return null;
+  const kept: string[] = [];
+  let words = 0;
+  for (const line of lines) {
+    const isLabel = LABEL_LINE_RE.test(line);
+    // Count exactly like validateEpisodeSynopses does (labels and "-" markers included) so the result passes it.
+    const w = countWords(line);
+    if (!isLabel && words + w > maxWords && kept.some((k) => BULLET_LINE_RE.test(k))) break;
+    kept.push(line);
+    words += w;
+  }
+  // Drop trailing labels left without bullets.
+  while (kept.length && LABEL_LINE_RE.test(kept[kept.length - 1])) kept.pop();
+  return kept.length ? kept.join("\n") : null;
 }
 
 /** Cut a synopsis to ≤ maxWords, keeping whole sentences (then a hard word cut). Never empty when the input isn't. */
@@ -295,9 +323,19 @@ function clampSynopsisText(text: string, maxWords: number): string {
  */
 export function clampSynopsis(description: string, cliffhangerField: string | null | undefined): string {
   const { synopsis, cliffhanger } = parseEpisodeSynopsis(description);
-  // Strip shot/beat labels and any leftover timing words from the prose.
-  let prose = stripShotSplitLabels(synopsis).replace(TIMING_MARKER_RE, " ").replace(/\s+/g, " ").trim();
   let hook = (cliffhanger ?? cliffhangerField ?? "").replace(TIMING_MARKER_RE, " ").replace(/\s+/g, " ").trim();
+  // Thesis format (labelled "- " bullets): keep the line structure, drop trailing bullets to fit the cap.
+  const bullets = clampSynopsisBullets(synopsis, EPISODE_SYNOPSIS_MAX_WORDS);
+  if (bullets) {
+    if (!hook) {
+      const bulletLines = bullets.split("\n").filter((l) => BULLET_LINE_RE.test(l));
+      hook = (bulletLines[bulletLines.length - 1] ?? "").replace(BULLET_LINE_RE, "").trim() || "The frame freezes on the final image.";
+    }
+    hook = clampSynopsisText(hook, EPISODE_SYNOPSIS_MAX_WORDS) || "The frame freezes on the final image.";
+    return `${bullets}\n${CLIFFHANGER_LINE_LABEL} ${hook}`;
+  }
+  // Legacy prose: strip shot/beat labels and any leftover timing words.
+  let prose = stripShotSplitLabels(synopsis).replace(TIMING_MARKER_RE, " ").replace(/\s+/g, " ").trim();
   if (!hook) {
     // No cliffhanger anywhere → promote the last sentence of the prose to the hook.
     const sentences = splitSentences(prose);

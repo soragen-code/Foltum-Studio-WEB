@@ -29,6 +29,7 @@ import {
   buildFullStoryFromStructure,
 } from "@/lib/season";
 import { repairEpisodeSynopses } from "../footage-repair";
+import { runWithPromptContext } from "@/lib/prompt-log";
 
 /** GenerationJob.type value for the whole-season story rewrite. */
 export const STORY_REVISE_JOB_TYPE = "story_revise";
@@ -50,7 +51,7 @@ export interface StoryReviseParams {
  * with { needsForce, withVideo, episodes } and makes NO database change — the client then re-submits
  * with force=true after confirmation.
  */
-export async function runStoryReviseJob(jobId: string, projectId: string, params: StoryReviseParams): Promise<void> {
+async function runStoryReviseJobImpl(jobId: string, projectId: string, params: StoryReviseParams): Promise<void> {
   try {
     const instruction = (params.instruction ?? "").trim();
     const force = params.force === true;
@@ -189,4 +190,9 @@ export async function runStoryReviseJob(jobId: string, projectId: string, params
     console.error("[story-revise] job error:", err);
     await failJob(jobId, "Generation failed: " + (err?.message ?? "Unknown error"));
   }
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runStoryReviseJob(jobId: string, projectId: string, params: StoryReviseParams): Promise<void> {
+  return runWithPromptContext({ kind: "story", projectId }, () => runStoryReviseJobImpl(jobId, projectId, params));
 }

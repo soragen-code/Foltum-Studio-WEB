@@ -38,6 +38,7 @@ import {
   type IdeaLanguage,
 } from "@/lib/idea";
 import { resolveProjectName } from "@/lib/project-name";
+import { runWithPromptContext } from "@/lib/prompt-log";
 
 /** GenerationJob.type value for the idea→synopsis job (new string value, no schema change). */
 export const SYNOPSIS_JOB_TYPE = "synopsis";
@@ -71,7 +72,7 @@ function titleFromFirstLine(prose: string): string {
  *   4. ONLY THEN the drama-bible best-of-3 (minutes of LLM work) runs best-effort in the tail of this same
  *      background invocation — the job is already completed, so nothing waits on it.
  */
-export async function runSynopsisJob(jobId: string, projectId: string, params: SynopsisJobParams): Promise<void> {
+async function runSynopsisJobImpl(jobId: string, projectId: string, params: SynopsisJobParams): Promise<void> {
   // Keep the job's updatedAt fresh so GET polling's failStaleJobs (STALE_JOB_MS = 3 min) never reaps a live job.
   let hb: ReturnType<typeof setInterval> | null = null;
   let synopsisForBible: string | null = null;
@@ -312,7 +313,7 @@ export interface SynopsisCorrectionParams {
  * logic exactly: with a correction + current synopsis it revises the existing text; otherwise it writes
  * a fresh synopsis from `prompt`. Updates ONLY project.synopsis and completes with { synopsis }.
  */
-export async function runSynopsisCorrectionJob(jobId: string, projectId: string, params: SynopsisCorrectionParams): Promise<void> {
+async function runSynopsisCorrectionJobImpl(jobId: string, projectId: string, params: SynopsisCorrectionParams): Promise<void> {
   try {
     const prompt = (params.prompt ?? "").trim();
     const correction = (params.correction ?? "").trim();
@@ -343,4 +344,14 @@ export async function runSynopsisCorrectionJob(jobId: string, projectId: string,
     console.error("[synopsis-correction] job error:", err);
     await failJob(jobId, "Generation failed: " + (err?.message ?? "Unknown error"));
   }
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runSynopsisJob(jobId: string, projectId: string, params: SynopsisJobParams): Promise<void> {
+  return runWithPromptContext({ kind: "idea", projectId }, () => runSynopsisJobImpl(jobId, projectId, params));
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runSynopsisCorrectionJob(jobId: string, projectId: string, params: SynopsisCorrectionParams): Promise<void> {
+  return runWithPromptContext({ kind: "synopsis", projectId }, () => runSynopsisCorrectionJobImpl(jobId, projectId, params));
 }

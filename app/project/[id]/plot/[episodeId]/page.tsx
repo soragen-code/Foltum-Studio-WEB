@@ -33,7 +33,7 @@ export default async function PlotPage({ params }: { params: Promise<{ id: strin
 
   const project = await prisma.project.findFirst({
     where: { id, userId: user.id },
-    select: { id: true, name: true },
+    select: { id: true, name: true, stage: true },
   })
   if (!project) notFound()
 
@@ -41,6 +41,7 @@ export default async function PlotPage({ params }: { params: Promise<{ id: strin
     <PlotView
       projectId={id}
       projectName={project.name}
+      projectStage={project.stage}
       episode={{ id: episode.id, number: episode.number, title: episode.title, plot: episode.plot ?? null, plotStatus: episode.plotStatus ?? null, hasScript: !!episode.script }}
       siblings={siblings.map((s) => ({ id: s.id, number: s.number, title: s.title, hasPlot: !!s.plot?.trim(), hasScript: !!s.script }))}
     />

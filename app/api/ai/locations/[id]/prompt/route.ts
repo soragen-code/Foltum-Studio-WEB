@@ -63,7 +63,7 @@ export async function PUT(request: Request, ctx: { params: Promise<{ id: string 
         const raw = await chatJSON(
           locationFromNameSystemPrompt(language),
           `SYNOPSIS:\n${loc.project.synopsis ?? "(none)"}\n\nLOCATION NAME: ${loc.name}${loc.description ? `\nNOTE: ${loc.description}` : ""}`,
-          { temperature: 0.7, maxTokens: 2000 }
+          { temperature: 0.7, maxTokens: 2000, log: { kind: "location", projectId: loc.projectId } }
         );
         card = sanitizeLocationCard(locationCardSchema.parse(raw));
       } catch (e: any) { lastError = e?.message ?? String(e); }

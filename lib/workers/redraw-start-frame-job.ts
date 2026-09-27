@@ -20,6 +20,7 @@ import { updateJob, completeJob, failJob, isCancelRequested, markCanceled, heart
 import { softenPromptForModeration, isModerationError } from "@/lib/moderation-soften";
 import { parseBeatMeta, shotSizeLabel } from "@/lib/simple-pipeline";
 import { resolveBeatCastLinks } from "@/lib/beat-cast";
+import { runWithPromptContext } from "@/lib/prompt-log";
 
 export const REDRAW_START_FRAME_JOB_TYPE = "start_frame_redraw";
 
@@ -74,7 +75,7 @@ export function buildRedrawStartFramePrompt(input: {
   return lines.join("\n");
 }
 
-export async function runRedrawStartFramesJob(jobId: string, projectId: string, episodeId: string, sceneIds: string[], chain?: RedrawChainState | null): Promise<void> {
+async function runRedrawStartFramesJobImpl(jobId: string, projectId: string, episodeId: string, sceneIds: string[], chain?: RedrawChainState | null): Promise<void> {
   const canceled = () => isCancelRequested(jobId);
   const startedAt = Date.now();
   try {
@@ -248,4 +249,9 @@ async function handOffRemaining(body: { jobId: string; projectId: string; episod
     console.error("[start-frame-redraw] hand-off request failed:", e?.message ?? e);
     return false;
   }
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runRedrawStartFramesJob(jobId: string, projectId: string, episodeId: string, sceneIds: string[], chain?: RedrawChainState | null): Promise<void> {
+  return runWithPromptContext({ kind: "keyframe", projectId, episodeId }, () => runRedrawStartFramesJobImpl(jobId, projectId, episodeId, sceneIds, chain));
 }

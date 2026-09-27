@@ -74,6 +74,7 @@ import {
   pickPredecessorState,
   dependentStateIds,
 } from "@/lib/scene-breakdown";
+import { runWithPromptContext } from "@/lib/prompt-log";
 
 /** GenerationJob.type value for the episode scene-breakdown job. */
 export const SCENES_JOB_TYPE = "scenes";
@@ -376,7 +377,7 @@ async function persistScenes(episodeId: string, data: { scenes?: any[] }): Promi
  * Starts a gpt-6-astra BACKGROUND response and polls it with heartbeats until it completes,
  * then normalizes + persists the dramatic scenes and completes the job with { scenes }.
  */
-export async function runScenesJob(jobId: string, projectId: string | undefined, episodeId: string): Promise<void> {
+async function runScenesJobImpl(jobId: string, projectId: string | undefined, episodeId: string): Promise<void> {
   try {
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
     await updateJob(jobId, { status: "processing", progress: 8, message: "Writing the episode's dramatic scenes…" });
@@ -552,4 +553,9 @@ export async function updateSeasonStateForApprovedEpisode(episodeId: string): Pr
         `(they must be regenerated from the updated chain)`
     );
   }
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runScenesJob(jobId: string, projectId: string | undefined, episodeId: string): Promise<void> {
+  return runWithPromptContext({ kind: "scenes", projectId, episodeId }, () => runScenesJobImpl(jobId, projectId, episodeId));
 }

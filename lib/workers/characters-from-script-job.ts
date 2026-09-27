@@ -7,6 +7,7 @@ import { characterCardSchema, characterCardToData, dedupeCast, MAX_CAST, normali
 import { dialogueSpeakers, matchCharacter } from "@/lib/season";
 import { parseBeatMeta } from "@/lib/simple-pipeline";
 import { castPreview, sanitizeRawCast } from "@/lib/workers/season-script-job";
+import { runWithPromptContext } from "@/lib/prompt-log";
 
 /**
  * References step (Step 5) — MANUAL "Create characters from script" action.
@@ -121,7 +122,7 @@ function escapeRe(s: string): string {
  * Entry point for POST /api/ai/characters (runs in the background; the route returns the jobId immediately).
  * Never throws — every failure is written into the job (`failJob`).
  */
-export async function runCharactersFromScriptJob(jobId: string, projectId: string): Promise<void> {
+async function runCharactersFromScriptJobImpl(jobId: string, projectId: string): Promise<void> {
   try {
     await updateJob(jobId, { status: "processing", progress: 5, message: "Reading the scripts…", streamedText: null });
     const project = await prisma.project.findUnique({
@@ -203,4 +204,9 @@ export async function runCharactersFromScriptJob(jobId: string, projectId: strin
     console.error(`[characters-from-script] job ${jobId} failed:`, msg);
     await failJob(jobId, msg);
   }
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runCharactersFromScriptJob(jobId: string, projectId: string): Promise<void> {
+  return runWithPromptContext({ kind: "characters", projectId }, () => runCharactersFromScriptJobImpl(jobId, projectId));
 }

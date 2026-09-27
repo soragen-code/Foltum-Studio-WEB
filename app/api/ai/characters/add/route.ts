@@ -42,7 +42,7 @@ export async function POST(request: Request) {
         const raw = await chatJSON(
           castExpansionSystemPrompt(language, hint ? { hint, countHint: "1-12" } : undefined),
           castExpansionUserPrompt(project.synopsis, existing, hint),
-          { temperature: 0.8, maxTokens: 6000 }
+          { temperature: 0.8, maxTokens: 6000, log: { kind: "characters", projectId } }
         );
         added = normalizeCastExpansion(raw, names);
       } catch (e: any) {

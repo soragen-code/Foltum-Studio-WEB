@@ -12,6 +12,7 @@ import { REF_BATCH_CONCURRENCY, runWithConcurrency } from "@/lib/reference-count
 // Stage 75: user-uploaded photo references — transport only (prepended to image_input).
 // combineFaceAndUserRefs also prepends the optional single "face photo" (Character.faceImageUrl) FIRST.
 import { combineFaceAndUserRefs, mergeImageInput } from "@/lib/character-user-refs";
+import { runWithPromptContext } from "@/lib/prompt-log";
 
 // Stage 53: a character reference is a SINGLE photo — the full-body FRONT shot (imageFull). The front
 // portrait, the profile and the extra angles are no longer auto-generated; they are only produced when
@@ -93,7 +94,7 @@ type C2paCheck = { characterId: string; shot: string; ok: boolean; signatures: s
  * (20) provider requests run in flight; every stored photo's C2PA metadata is verified. Idempotent:
  * a character that already has imageFull is skipped, so a resumed/retried job only fills the gaps.
  */
-export async function runCharacterImagesJob({ jobId, projectId, characterIds, imageModel, plateUrl }: CharacterImagesJobParams): Promise<void> {
+async function runCharacterImagesJobImpl({ jobId, projectId, characterIds, imageModel, plateUrl }: CharacterImagesJobParams): Promise<void> {
   try {
     const characters = await prisma.character.findMany({
       where: { id: { in: characterIds }, projectId },
@@ -196,4 +197,9 @@ export async function runCharacterImagesJob({ jobId, projectId, characterIds, im
     console.error("[images-job] failed:", err);
     await failJob(jobId, err?.message ?? "Image generation failed");
   }
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runCharacterImagesJob(params: CharacterImagesJobParams): Promise<void> {
+  return runWithPromptContext({ kind: "character", projectId: params.projectId }, () => runCharacterImagesJobImpl(params));
 }

@@ -5,6 +5,8 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Header } from '@/components/header'
 import { Loader2, Wand2, ArrowRight, ArrowLeft, FileText, BookOpen } from 'lucide-react'
+import { PromptLogButton } from '../../_components/prompt-log-button'
+import { ProjectSteps } from '../../_components/project-steps'
 
 type Sibling = { id: string; number: number; title: string; hasPlot: boolean; hasScript: boolean }
 type EpisodeInfo = { id: string; number: number; title: string; plot: string | null; plotStatus: string | null; hasScript: boolean }
@@ -16,11 +18,13 @@ type EpisodeInfo = { id: string; number: number; title: string; plot: string | n
  */
 export function PlotView({
   projectId,
+  projectStage,
   projectName,
   episode,
   siblings,
 }: {
   projectId: string
+  projectStage?: string | null
   projectName: string
   episode: EpisodeInfo
   siblings: Sibling[]
@@ -81,10 +85,13 @@ export function PlotView({
           )}
         </div>
 
+        <ProjectSteps projectId={projectId} stage={projectStage} current="story" className="mb-4" />
+
         <div className="rounded-xl border border-border bg-card p-4 sm:p-6" data-testid="plot-stage">
           <div className="flex flex-wrap items-center gap-2">
             <BookOpen className="h-5 w-5 text-primary" />
             <h1 className="font-display text-xl font-bold">Сюжет серии {episode.number}{episode.title ? ` — ${episode.title}` : ''}</h1>
+            <span className="ml-auto"><PromptLogButton projectId={projectId} kinds={['plot']} episodeId={episode.id} /></span>
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
             Это сюжет (что происходит: события, персонажи, локации и подлокации, порядок сцен) — на его основе затем создаётся скрипт эпизода. Сюжеты создаются последовательно: сначала сюжет этой серии, затем сюжет следующей.

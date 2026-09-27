@@ -35,7 +35,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     .map((s) => `#${s.number} [${s.shotType}] ${s.locationDesc}\nACTION: ${s.action}\nVIDEO PROMPT:\n${s.videoPrompt}`)
     .join("\n\n")}`;
   try {
-    const raw = await chatJSON(locationReviseSystemPrompt(language), user, { temperature: 0.5, maxTokens: 14000 });
+    const raw = await chatJSON(locationReviseSystemPrompt(language), user, { temperature: 0.5, maxTokens: 14000, log: { kind: "location", projectId: episode.season.projectId, episodeId: episode.id } });
     const parsed = locationReviseSchema.parse(raw);
     const byNum = new Map(parsed.scenes.map((s) => [s.number, s]));
     await prisma.$transaction(async (tx) => {

@@ -1,4 +1,5 @@
 import { GenerationAttempt, safeDiagnosticInput, safeProviderError, classifyProviderError, logAttempt } from "@/lib/generation-diagnostics";
+import { getPromptContext, logPrompt } from "@/lib/prompt-log";
 import { VISUAL_STYLE_ID } from "@/lib/visual-style";
 import { WAVESPEED_BASE, getWaveSpeedKey, wavespeedErrorText } from "@/lib/wavespeed";
 import { ensureEnglishPrompt } from "@/lib/english-prompt";
@@ -94,6 +95,14 @@ async function wavespeedStart(input: ImageGenerationInput): Promise<string> {
   // (from Location.visualPrompt/name, Character.appearance, scene-still text, etc.) reaches Seedream.
   const prompt = await ensureEnglishPrompt(input.prompt);
   const { slug, body } = buildWaveSpeedImageRequest({ ...input, prompt });
+  logPrompt({
+    kind: getPromptContext().kind ?? input.kind,
+    provider: "wavespeed",
+    endpoint: `${WAVESPEED_BASE}/${slug}`,
+    model: slug,
+    user: prompt,
+    extra: { aspect_ratio: body.aspect_ratio, resolution: body.resolution, quality: body.quality, refsCount: Array.isArray(body.images) ? body.images.length : 0 },
+  });
   let res: Response;
   try {
     res = await fetch(`${WAVESPEED_BASE}/${slug}`, {

@@ -41,7 +41,7 @@ export async function POST(request: Request) {
     let lastError = "";
     for (let attempt = 0; attempt < 2 && !card; attempt++) {
       try {
-        const raw = await chatJSON(locationFromNameSystemPrompt(language), `SYNOPSIS:\n${project.synopsis ?? "(none)"}\n\nLOCATION NAME: ${name}${note ? `\nNOTE: ${note}` : ""}`, { temperature: 0.7, maxTokens: 2000 });
+        const raw = await chatJSON(locationFromNameSystemPrompt(language), `SYNOPSIS:\n${project.synopsis ?? "(none)"}\n\nLOCATION NAME: ${name}${note ? `\nNOTE: ${note}` : ""}`, { temperature: 0.7, maxTokens: 2000, log: { kind: "locations", projectId } });
         card = sanitizeLocationCard(locationCardSchema.parse(raw));
       } catch (e: any) { lastError = e?.message ?? String(e); }
     }

@@ -13,6 +13,7 @@ import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { runWithConcurrency } from "@/lib/reference-counts";
 import { parseBeatMeta, buildStartFramePrompt, START_FRAMES_JOB_TYPE, type BeatMeta } from "@/lib/simple-pipeline";
+import { runWithPromptContext } from "@/lib/prompt-log";
 
 export { START_FRAMES_JOB_TYPE };
 
@@ -21,7 +22,7 @@ const START_FRAME_CONCURRENCY = 6;
 
 const validUrl = (u?: string | null): u is string => typeof u === "string" && u.startsWith("http") && u.length > 10;
 
-export async function runStartFramesJob(jobId: string, projectId: string, episodeId: string, sceneIds?: string[] | null): Promise<void> {
+async function runStartFramesJobImpl(jobId: string, projectId: string, episodeId: string, sceneIds?: string[] | null): Promise<void> {
   const canceled = () => isCancelRequested(jobId);
   try {
     if (await canceled()) { await markCanceled(jobId); return; }
@@ -103,4 +104,9 @@ export async function runStartFramesJob(jobId: string, projectId: string, episod
     console.error("[start-frames] job failed:", err);
     await failJob(jobId, err?.message ?? "Start frames failed");
   }
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runStartFramesJob(jobId: string, projectId: string, episodeId: string, sceneIds?: string[] | null): Promise<void> {
+  return runWithPromptContext({ kind: "keyframe", projectId, episodeId }, () => runStartFramesJobImpl(jobId, projectId, episodeId, sceneIds));
 }

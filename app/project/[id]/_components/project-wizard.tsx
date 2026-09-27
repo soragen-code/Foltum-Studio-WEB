@@ -12,6 +12,7 @@ import { IdeaStage } from './idea-stage'
 import { LoglineStage } from './logline-stage'
 import { ReferencesStage } from './references-stage'
 import { StoryStage } from './story-stage'
+import { ProjectSteps, BackToCurrentStep, isStepPassed, type ProjectStepKey } from './project-steps'
 import { SCENE_RESOLUTION } from '@/lib/power-tier'
 import { Gauge, ArrowLeft } from 'lucide-react'
 import { motion } from 'framer-motion'
@@ -32,6 +33,19 @@ export function ProjectWizard({ project: initialProject, entitlements }: { proje
   // Optional «"References" tab (stage 5), opened via ?tab=references from the season/episode screens.
   const searchParams = useSearchParams()
   const referencesTab = searchParams?.get('tab') === 'references' && isNewFlow(project) && currentStage !== 'idea'
+  // Read-only view of a PASSED stage, opened from the project step bar (?step=idea|logline|synopsis|story).
+  // Only stages the project already went through are allowed; anything else falls back to the current stage.
+  // Nothing here changes project.stage.
+  const stepParam = searchParams?.get('step') as ProjectStepKey | null
+  const readOnlyStep: ProjectStepKey | null =
+    stepParam && stepParam !== 'scenes' && isStepPassed(stepParam, currentStage) ? stepParam : null
+  const stepsCurrent: ProjectStepKey = readOnlyStep ?? (
+    referencesTab ? 'scenes'
+    : currentStage === 'idea' ? 'idea'
+    : currentStage === 'logline' ? 'logline'
+    : currentStage === 'synopsis' ? 'synopsis'
+    : currentStage === 'structure' ? 'story'
+    : 'scenes')
 
   const refreshProject = async () => {
     try {
@@ -64,13 +78,24 @@ export function ProjectWizard({ project: initialProject, entitlements }: { proje
           </div>
         </div>
 
+        <ProjectSteps projectId={project?.id} stage={currentStage} current={stepsCurrent} className="mb-6" />
+
         <motion.div
-          key={referencesTab ? 'references-tab' : currentStage}
+          key={readOnlyStep ? `step-${readOnlyStep}` : referencesTab ? 'references-tab' : currentStage}
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.3 }}
         >
-          {referencesTab && (
+          {readOnlyStep && (
+            <div className="space-y-4" data-testid={`readonly-step-${readOnlyStep}`}>
+              <BackToCurrentStep projectId={project.id} />
+              {readOnlyStep === 'idea' && <IdeaStage project={project} onRefresh={refreshProject} readOnly />}
+              {readOnlyStep === 'logline' && <LoglineStage project={project} onRefresh={refreshProject} readOnly />}
+              {readOnlyStep === 'synopsis' && <SynopsisStage project={project} onRefresh={refreshProject} readOnly />}
+              {readOnlyStep === 'story' && <StoryStage project={project} onRefresh={refreshProject} readOnly />}
+            </div>
+          )}
+          {!readOnlyStep && referencesTab && (
             <div className="space-y-4" data-testid="references-tab">
               <Link href={`/project/${project.id}`} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground" data-testid="back-to-season">
                 <ArrowLeft className="h-4 w-4" /> To season script
@@ -78,39 +103,39 @@ export function ProjectWizard({ project: initialProject, entitlements }: { proje
               <ReferencesStage project={project} onRefresh={refreshProject} optional />
             </div>
           )}
-          {!referencesTab && currentStage === 'idea' && (
+          {!readOnlyStep && !referencesTab && currentStage === 'idea' && (
             <IdeaStage project={project} onRefresh={refreshProject} />
           )}
-          {!referencesTab && currentStage === 'logline' && (
+          {!readOnlyStep && !referencesTab && currentStage === 'logline' && (
             <LoglineStage project={project} onRefresh={refreshProject} />
           )}
-          {!referencesTab && currentStage === 'references' && (
+          {!readOnlyStep && !referencesTab && currentStage === 'references' && (
             <ReferencesStage project={project} onRefresh={refreshProject} />
           )}
           {/* Legacy flow: synopsis is its own screen (synopsis → characters). */}
-          {!referencesTab && currentStage === 'synopsis' && !isNewFlow(project) && (
+          {!readOnlyStep && !referencesTab && currentStage === 'synopsis' && !isNewFlow(project) && (
             <SynopsisStage project={project} onRefresh={refreshProject} />
           )}
           {/* ПРАВКА 2 — новый флоу: Шаг 2 (синопсис) и Шаг 3 (сюжет) теперь на ОТДЕЛЬНЫХ страницах.
              На стадии 'synopsis' показываем только синопсис; после его аппрува проект переходит на
              стадию 'structure' (см. approve-synopsis), и тогда открывается отдельная страница сюжета. */}
-          {!referencesTab && currentStage === 'synopsis' && isNewFlow(project) && (
+          {!readOnlyStep && !referencesTab && currentStage === 'synopsis' && isNewFlow(project) && (
             <div className="space-y-6" data-testid="synopsis-page">
               <SynopsisStage project={project} onRefresh={refreshProject} />
             </div>
           )}
-          {!referencesTab && currentStage === 'structure' && isNewFlow(project) && (
+          {!readOnlyStep && !referencesTab && currentStage === 'structure' && isNewFlow(project) && (
             <div className="space-y-6" data-testid="story-page">
               <StoryStage project={project} onRefresh={refreshProject} />
             </div>
           )}
-          {!referencesTab && currentStage === 'characters' && (
+          {!readOnlyStep && !referencesTab && currentStage === 'characters' && (
             <CharactersStage project={project} onRefresh={refreshProject} entitlements={entitlements} />
           )}
-          {!referencesTab && currentStage === 'structure' && !isNewFlow(project) && (
+          {!readOnlyStep && !referencesTab && currentStage === 'structure' && !isNewFlow(project) && (
             <StructureStage project={project} onRefresh={refreshProject} />
           )}
-          {!referencesTab && currentStage === 'scenes' && (
+          {!readOnlyStep && !referencesTab && currentStage === 'scenes' && (
             <ScenesStage project={project} onRefresh={refreshProject} />
           )}
         </motion.div>

@@ -5,6 +5,7 @@ import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from
 import { locationAnglePrompt, locationAccentAnglePrompt, LOCATION_SHOT_PLAN, setInventoryEntries, MAX_INVENTORY_IN_PROMPT, VISUAL_STYLE_ID, REFERENCE_ASPECT_RATIO } from "@/lib/visual-style";
 import { LOCATION_MASTER_FRAMES } from "@/lib/location-scale";
 import { detectC2paFromUrl } from "@/lib/c2pa";
+import { runWithPromptContext } from "@/lib/prompt-log";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -28,7 +29,7 @@ const GENERATE_LOCATION_EXTRA_ANGLES = process.env.LOCATION_EXTRA_ANGLES === "1"
  * location_extra_image job. Job type "location_image". Charged LOCATION_MASTER_FRAMES frame(s) per location;
  * the caller refunds the frame if the master did not change.
  */
-export async function runLocationImagesJob({ jobId, projectId, locationIds, imageModel }: { jobId: string; projectId: string; locationIds: string[]; imageModel?: string }): Promise<void> {
+async function runLocationImagesJobImpl({ jobId, projectId, locationIds, imageModel }: { jobId: string; projectId: string; locationIds: string[]; imageModel?: string }): Promise<void> {
   // User cancel: checked before every provider call (inside generateImage, which also cancels the running
   // prediction) and again before any result is written. Location data is left untouched; the caller's
   // refund pass returns the credits for every location whose master frame did not change.
@@ -154,4 +155,9 @@ export async function runLocationImagesJob({ jobId, projectId, locationIds, imag
     console.error("[location-images] failed:", err);
     await failJob(jobId, err?.message ?? "Location image generation failed");
   }
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runLocationImagesJob(params: { jobId: string; projectId: string; locationIds: string[]; imageModel?: string }): Promise<void> {
+  return runWithPromptContext({ kind: "location", projectId: params.projectId }, () => runLocationImagesJobImpl(params));
 }

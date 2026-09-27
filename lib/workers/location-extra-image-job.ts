@@ -4,6 +4,7 @@ import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { locationExtraAnglePrompt, parseLocationExtra, VISUAL_STYLE_ID, REFERENCE_ASPECT_RATIO } from "@/lib/visual-style";
 import { detectC2paFromUrl } from "@/lib/c2pa";
+import { runWithPromptContext } from "@/lib/prompt-log";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -35,7 +36,7 @@ export function extraJobImageInputs(
  * and materials stay identical — only the camera position changes (five-slot LOCATION_SHOT_PLAN). The new URLs are
  * APPENDED to Location.imageExtra (JSON array). Job type "location_extra_image".
  */
-export async function runLocationExtraImagesJob({ jobId, projectId, locationId, count, imageModel }: { jobId: string; projectId: string; locationId: string; count: number; imageModel?: string }): Promise<void> {
+async function runLocationExtraImagesJobImpl({ jobId, projectId, locationId, count, imageModel }: { jobId: string; projectId: string; locationId: string; count: number; imageModel?: string }): Promise<void> {
   // User cancel: checked before every provider call (generateImage also cancels the running prediction)
   // and before a finished plate is written. Existing imageExtra stays as is; the caller's refund pass
   // returns the credits for every plate that was not added.
@@ -100,4 +101,9 @@ export async function runLocationExtraImagesJob({ jobId, projectId, locationId, 
     console.error("[location-extra-images] failed:", err);
     await failJob(jobId, err?.message ?? "Extra location image generation failed");
   }
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runLocationExtraImagesJob(params: { jobId: string; projectId: string; locationId: string; count: number; imageModel?: string }): Promise<void> {
+  return runWithPromptContext({ kind: "location", projectId: params.projectId }, () => runLocationExtraImagesJobImpl(params));
 }

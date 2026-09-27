@@ -352,15 +352,15 @@ export function cliffhangerChainGivens(structure: { episodes: { number: number; 
 }
 
 /* ───────────── Stage 128 — episode story = ONE detailed continuous synopsis (no 30/30 shot split) ───────────── */
-// An episode "description" is now a SINGLE flowing, detailed synopsis paragraph (setup → development → turn →
-// ending) followed by one closing "CLIFFHANGER: …" line. The old two-beat "SHOT 1 (30 s) / SHOT 2 (30 s)"
+// An episode "description" is now a THESIS-STYLE bullet summary — three labelled blocks (Opening / What happens /
+// Ending, labels in the story language) of "- " bullets — followed by one closing "CLIFFHANGER: …" line. The old two-beat "SHOT 1 (30 s) / SHOT 2 (30 s)"
 // footage split is GONE from the story build. The cliffhanger stays (separate field + closing line). The legacy
 // footage helpers above are kept unchanged so old saved episodes (shot1/shot2) still parse (no auto-migration).
 export const CLIFFHANGER_LINE_LABEL = "CLIFFHANGER:";
-/** Guideline floor (used only in the retry note — NOT a hard cap): a detailed synopsis is ~4–7 sentences. */
+/** Guideline floor (used only by the clamp / tests — NOT a hard cap): a thesis synopsis is ~80–120 words. */
 export const EPISODE_SYNOPSIS_MIN_WORDS = 45;
-/** Upper bound so a runaway answer is clamped (a paragraph, not a page). */
-export const EPISODE_SYNOPSIS_MAX_WORDS = 240;
+/** Upper bound so a runaway answer is clamped (three short bullet blocks, ~80–120 words + labels). */
+export const EPISODE_SYNOPSIS_MAX_WORDS = 130;
 
 /** Labels that would (re)impose a shot/beat/timing division — forbidden in the new synopsis format. */
 const SHOT_SPLIT_MARKER_RE = /\bshots?\s*[12]\b|\bbeat\s*[12]\b|\b30\s*s(?:ec)?(?:onds?)?\b|first\s+30\b|last\s+30\b|60-?second/i;
@@ -419,7 +419,7 @@ export function validateEpisodeSynopses(episodes: { number: number; description?
   episodes.forEach((e) => {
     const desc = (e.description ?? "").trim();
     if (!desc) { problems.push(`episode ${e.number}: description is missing`); return; }
-    if (hasShotSplitMarkers(desc)) problems.push(`episode ${e.number}: description still uses a shot/beat/timing split (e.g. "SHOT 1", "30 s") — write ONE continuous synopsis instead`);
+    if (hasShotSplitMarkers(desc)) problems.push(`episode ${e.number}: description still uses a shot/beat/timing split (e.g. "SHOT 1", "30 s") — write the thesis-style bullet summary instead`);
     const { synopsis, cliffhanger } = parseEpisodeSynopsis(desc);
     const cliff = (cliffhanger ?? e.cliffhanger ?? "").trim();
     if (!cliff) problems.push(`episode ${e.number}: missing the closing "${CLIFFHANGER_LINE_LABEL}" line`);
@@ -428,25 +428,46 @@ export function validateEpisodeSynopses(episodes: { number: number; description?
   return problems;
 }
 
-/** The user's reference example, in the new single-synopsis + cliffhanger format. */
-export const EPISODE_SYNOPSIS_EXAMPLE = `EXAMPLE (reference for the FORMAT and the level of detail — do not reuse its content):
-Episode 1 "description": Alex leads his small team down into a cold dugout as distant shells thud, and they crowd around a hissing field radio hoping for any sign of rescue. A calm voice promises shelter to the north; the group argues in low voices about whether to trust it while a frightened child clings to Alex's sleeve. Alex turns the volume up, marks the route on a torn map and tells them they move at first light. As the lamp flickers, something heavy scrapes against the earth wall outside and the radio drops into static.
+/** The user's reference example, in the bullet-point (thesis) synopsis + cliffhanger format. */
+export const EPISODE_SYNOPSIS_EXAMPLE = `EXAMPLE (reference for the FORMAT and the level of detail — do not reuse its content; block labels here are English because the example story is English):
+Episode 1 "description":
+Opening:
+- Alex leads his team down into a cold dugout while shells thud outside.
+What happens:
+- The team crowds around a field radio; a calm voice promises shelter to the north.
+- The group argues about trusting the voice; a child clings to Alex.
+- Alex marks the route on a torn map and orders a move at first light.
+- Something heavy scrapes against the earth wall outside; the radio drops into static.
+Ending:
+- Alex raises the lamp toward the dugout's rim.
 CLIFFHANGER: Over the dugout's rim, five pairs of glowing eyes open in the dark.
-Episode 2 "description": The glowing eyes are still fixed on the group as the creatures pour over the dugout's rim onto the huddled team. Alex shoves the child behind him and swings a shovel at the nearest shape while the others scramble for the far corner. The radio voice keeps calmly repeating the route as if nothing is happening, and Alex realizes the signal is luring them out. He kicks over the lamp to buy darkness and drags the wounded toward the tunnel mouth.
+Episode 2 "description":
+Opening:
+- The glowing eyes are still fixed on the group; the creatures pour over the rim onto the team.
+What happens:
+- Alex shoves the child behind him and swings a shovel at the nearest creature.
+- The others scramble for the far corner; the radio voice keeps repeating the route.
+- Alex realizes the signal is luring them out.
+- He kicks over the lamp and drags the wounded toward the tunnel mouth.
+Ending:
+- The last light goes out as the group reaches the tunnel.
 CLIFFHANGER: A clawed hand closes around the child's ankle as the last light goes out.`;
 
-/** The new description-format rule shared by the structure prompt and the revise prompt. */
-export const EPISODE_SYNOPSIS_RULE = `EPISODE "description" = a DETAILED, CONTINUOUS SYNOPSIS of the whole episode (MANDATORY FORMAT):
-  Write ONE flowing paragraph — about ${EPISODE_SYNOPSIS_MIN_WORDS}+ words, roughly 4–7 sentences — that tells everything that happens in this episode IN ORDER: the set-up, the development, the central turn, and how it ends. Be concrete: WHO is present, WHERE it takes place, WHAT they physically do, the key actions, and one or two short orienting lines of what is said (weave them into the prose). It reads like the episode's story, not a shot list.
-  Then, on a NEW line, exactly one closing hook: "${CLIFFHANGER_LINE_LABEL} <a single concrete final IMAGE that forces the viewer into the next episode>" (a picture the viewer sees, never a question or "will they…").
-  DO NOT divide the episode into shots, beats or halves: NO "SHOT 1"/"SHOT 2", NO "BEAT 1/2", NO "first 30 / last 30", NO timings or durations ("30 s", "30 seconds", "60-second"), NO numbered lists — just the continuous synopsis followed by the single CLIFFHANGER line.
-  CONTINUITY (expressed in the prose, no labels): every episode after the first OPENS by picking up DIRECTLY from the previous episode's cliffhanger — the same moment, the same place, the same unresolved situation — and only then moves forward; never a time-skip, never a reset.
+/** The description-format rule shared by the structure prompt and the revise prompt (bullet-point theses). */
+export const EPISODE_SYNOPSIS_RULE = `EPISODE "description" = a THESIS-STYLE SUMMARY of the whole episode (MANDATORY FORMAT — three labelled bullet-list blocks, then one CLIFFHANGER line):
+  Block 1 label "Opening:" (write the label in the STORY LANGUAGE, e.g. Russian «Начало:», English «Opening:») — 1–2 bullets. For every episode after the first, the FIRST bullet picks up the previous episode's cliffhanger DIRECTLY: same moment, same place, same unresolved situation (never a time-skip, never a reset).
+  Block 2 label "What happens:" (Russian «Что происходит:») — 3–6 bullets — ONLY factual events IN ORDER: WHO / WHERE / WHAT they do. NO descriptions of appearance, locations or atmosphere, NO emotions, NO motivations, NO dialogue lines.
+  Block 3 label "Ending:" (Russian «Финал:») — exactly 1 bullet — the last event of the episode.
+  Every bullet starts with "- " on its own line and is ONE short sentence (one event). Each block label is on its own line ending with ":".
+  Then, as the LAST line, exactly one closing hook: "${CLIFFHANGER_LINE_LABEL} <a single concrete final IMAGE that forces the viewer into the next episode>" (a picture the viewer sees, never a question or "will they…"). This label stays "${CLIFFHANGER_LINE_LABEL}" in every language.
+  Total length about 80–120 words (labels not counted); HARD MAX ${EPISODE_SYNOPSIS_MAX_WORDS} words. Do NOT write flowing prose paragraphs.
+  DO NOT divide the episode into shots or halves: NO "SHOT 1"/"SHOT 2", NO "BEAT 1/2", NO "first 30 / last 30", NO timings or durations ("30 s", "30 seconds", "60-second"), NO numbered lists — only the three bullet blocks followed by the single CLIFFHANGER line.
   "cliffhanger" (the JSON field) = the ${CLIFFHANGER_LINE_LABEL} line's text, copied verbatim. "logline" = ONE sentence (what this episode is about). Name the characters actually present; keep it to ONE key location per episode.
 ${EPISODE_SYNOPSIS_EXAMPLE}`;
 
 /** Appended to the structure/revise prompt on the single retry after validateEpisodeSynopses failed. */
 export const EPISODE_SYNOPSIS_RETRY_NOTE =
-  `Your previous answer split episodes into shots/beats or added timings, or its "description" was too thin — rewrite EVERY episode "description" as ONE continuous, DETAILED synopsis paragraph (about ${EPISODE_SYNOPSIS_MIN_WORDS}+ words, ~4–7 sentences: set-up → development → the turn → the ending, with who / where / what and a couple of short orienting lines), with NO "SHOT 1/2", NO "BEAT", NO "(30 s)" / seconds / durations and NO numbered list, followed by a single "${CLIFFHANGER_LINE_LABEL} …" line. Every episode after the first opens by continuing directly from the previous episode's cliffhanger.`;
+  `Your previous answer split episodes into shots/beats, added timings, wrote flowing prose instead of bullet theses, or made a "description" too long / too thin — rewrite EVERY episode "description" in the mandatory thesis format: three labelled blocks in the story language ("Opening:" 1–2 bullets, "What happens:" 3–6 bullets of factual events in order — who / where / what, no appearance, atmosphere, emotions, motivations or dialogue — "Ending:" 1 bullet), every bullet on its own line starting with "- ", about 80–120 words total (HARD MAX ${EPISODE_SYNOPSIS_MAX_WORDS}), with NO "SHOT 1/2", NO "BEAT", NO "(30 s)" / seconds / durations and NO numbered list, followed by a single last "${CLIFFHANGER_LINE_LABEL} …" line. Every episode after the first opens by continuing directly from the previous episode's cliffhanger.`;
 
 /** Stage 38: every scene kind the script writer may emit (also the values persisted in Scene.sceneKind). */
 export const SCENE_KINDS = ["dialogue", "narration", "action"] as const;
@@ -1501,10 +1522,10 @@ export function seasonStructureSystemPrompt(
   const batchRule = batch
     ? `- BATCH: this SEASON has EXACTLY ${total} episodes in total. In THIS response produce ONLY episodes ${from}..${to} (${expectedCount} episode${expectedCount === 1 ? "" : "s"}) — numbered ${from}..${to} contiguously, no more, no fewer. Plan the four-act arc below across ALL ${total} episodes of the season and output only this slice of it; the other episodes are generated in separate calls. Keep the SAME title/logline the season already has (see PREVIOUS EPISODES if given).`
     : `- NUMBER OF EPISODES: produce EXACTLY ${total} episodes — no more, no fewer — numbered 1..${total} contiguously. This count is set by the producer; do NOT change it, do NOT pad and do NOT compress the story into a different number.`;
-  return `You are a showrunner planning ONE season of a short-form vertical drama series (9:16 video, each episode = a piece of up to ${EPISODE_TOTAL_LABEL} (at most ${EPISODE_MAX_TOTAL_SECONDS} s), later shot as ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES} short clips of ${SCENE_MIN_SECONDS}–${SCENE_CLIP_MAX_SECONDS} s each). At THIS planning stage you describe each episode as ONE detailed, continuous synopsis ending on a cliffhanger — NOT a shot-by-shot list and NOT split into timed halves; the full ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES}-clip shooting script is written later from this synopsis.
-- EPISODE SHAPE (a single continuous synopsis, ${EPISODE_TOTAL_LABEL}): tell the whole episode in order as one flowing account — the set-up (it carries the episode's continuation straight out of the previous episode's cliffhanger; episode 1: the season opening), the development, ONE concrete central dramatic turn, and how it ends on this episode's cliffhanger. No subplots, no montage, no shot/beat/timing division.
+  return `You are a showrunner planning ONE season of a short-form vertical drama series (9:16 video, each episode = a piece of up to ${EPISODE_TOTAL_LABEL} (at most ${EPISODE_MAX_TOTAL_SECONDS} s), later shot as ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES} short clips of ${SCENE_MIN_SECONDS}–${SCENE_CLIP_MAX_SECONDS} s each). At THIS planning stage you describe each episode as a SHORT THESIS-STYLE summary (labelled bullet blocks of events) ending on a cliffhanger — NOT prose, NOT a shot-by-shot list and NOT split into timed halves; the full ${EPISODE_MIN_SCENES}–${EPISODE_MAX_SCENES}-clip shooting script is written later from this synopsis.
+- EPISODE SHAPE (a thesis-style event summary, ${EPISODE_TOTAL_LABEL}): list what happens in the episode in order — the opening (it carries the episode's continuation straight out of the previous episode's cliffhanger; episode 1: the season opening), the development, ONE concrete central dramatic turn, and how it ends on this episode's cliffhanger. No subplots, no montage, no shot/beat/timing division.
 - ${EPISODE_SYNOPSIS_RULE}
-Return STRICT JSON: {"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string, "description": string (a detailed continuous episode synopsis in prose, ~4–7 sentences, then a final "CLIFFHANGER: ..." line — NO shot/beat split, NO timings)}]}.
+Return STRICT JSON: {"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string, "description": string (thesis-style bullet summary: three labelled blocks Opening / What happens / Ending of "- " bullets in the story language, ~80–120 words, then a final "CLIFFHANGER: ..." line — NO prose paragraphs, NO shot/beat split, NO timings)}]}.
 RULES:
 ${batchRule}
 - DRAMATURGY across the whole season (spread these four acts over the ${total} episodes, in order): ВСТУПЛЕНИЕ → ЗАВЯЗКА → КУЛЬМИНАЦИЯ → РАЗВЯЗКА.
@@ -1601,19 +1622,19 @@ export function recommendEpisodeCountUserPrompt(synopsis: string): string {
 }
 
 /* ───────────── Stage 173 (task 2) — per-episode PLOT (сюжет), generated sequentially before the script ───────────── */
-// The PLOT is a prose beat-sheet of ONE episode: WHAT happens (events, characters, locations/sub-locations,
+// The PLOT is a thesis-style event list of ONE episode: WHAT happens (events, characters, locations/sub-locations,
 // scene order) — NOT a shooting script (no dialogue lines, no camera/shot directions; those are added later
 // when the script is written FROM this plot). Plots are generated one episode at a time, each one aware of the
-// previous episodes' plots so the season stays continuous.
+// previous episodes' plots so the season stays continuous. Same three-block bullet format as the episode
+// "description" (Opening / What happens / Ending, labels in the story language), ~80–120 words.
 export function episodePlotSystemPrompt(language: IdeaLanguage, episodeNumber: number): string {
   const L = langName(language);
-  return `You are a professional TV series writer. Write the PLOT (сюжет) of ONE episode — EPISODE ${episodeNumber} — as a clear prose beat-sheet. This is the PLOT, NOT the shooting script: describe WHAT happens; do NOT write spoken dialogue lines, camera directions, shot types or timings (those are added later when the script is built from this plot).
-Cover, in the order they happen on screen (this order IS the scene order):
-- every KEY EVENT / story beat of the episode;
-- which CHARACTERS take part in each beat and what they want and do (a change of who is present must be motivated — someone arrives, leaves or the action moves);
-- the LOCATION and the specific SUB-LOCATION (the exact spot within the location) where each beat plays out — a new beat at a new spot means the story moved there;
-- how this episode continues from the previous one (for episode 1, how it opens the season) and the HOOK / CLIFFHANGER it ends on.
-Write it as readable paragraphs, one per beat/scene, in the order they occur. Write ALL prose in ${L}, but keep every CHARACTER NAME in Latin letters. Keep it concise but complete — roughly 250–500 words. Output ONLY the plot text (no JSON, no headings like "System:", no commentary).`;
+  return `You are a professional TV series writer. Write the PLOT (сюжет) of ONE episode — EPISODE ${episodeNumber} — as a SHORT THESIS-STYLE event list. This is the PLOT, NOT the shooting script: list WHAT happens; do NOT write spoken dialogue lines, camera directions, shot types or timings (those are added later when the script is built from this plot).
+MANDATORY FORMAT — three labelled bullet-list blocks, labels in ${L} (e.g. Russian «Начало:» / «Что происходит:» / «Финал:», English «Opening:» / «What happens:» / «Ending:»), each label on its own line ending with ":", every bullet on its own line starting with "- " and containing ONE event in ONE short sentence:
+- "Opening:" — 1–2 bullets: how this episode opens (for every episode after the first, the FIRST bullet picks up the previous episode's ending / cliffhanger directly — same moment, same place; for episode 1, how it opens the season).
+- "What happens:" — 3–6 bullets — ONLY factual events IN ORDER (this order IS the scene order): WHO is present, WHERE (the location and the specific SUB-LOCATION — the exact spot within the location; a new spot means the story moved there), WHAT they do. A change of who is present must be motivated (someone arrives, leaves or the action moves). NO descriptions of appearance, locations or atmosphere, NO emotions, NO motivations, NO dialogue lines.
+- "Ending:" — exactly 1 bullet: the last event — the HOOK / CLIFFHANGER the episode ends on, as a concrete picture.
+Total length about 80–120 words (labels not counted). No prose paragraphs, no numbered lists, no headings other than the three labels. Write everything in ${L}, but keep every CHARACTER NAME in Latin letters. Output ONLY the plot text (no JSON, no headings like "System:", no commentary).`;
 }
 export function episodePlotUserPrompt(input: {
   synopsis: string;
@@ -1641,7 +1662,7 @@ MAIN LOCATION: ${ep.locationName} — ${ep.locationDesc}
 CHARACTERS EXPECTED IN THIS EPISODE: ${ep.characters.join(", ")}
 INTENDED CLIFFHANGER: ${ep.cliffhanger}
 
-Write the full PLOT (сюжет) of episode ${ep.number} following the rules above.`;
+Write the PLOT (сюжет) of episode ${ep.number} in the mandatory three-block thesis format following the rules above.`;
 }
 
 export function episodeScriptSystemPrompt(language: IdeaLanguage, episodeNumber = 1): string {
@@ -2371,7 +2392,7 @@ export const SEASON_SYNC_INSTRUCTION =
 
 export function seasonReviseSystemPrompt(language: IdeaLanguage, episodeCount: number): string {
   return `You are the showrunner of a short-form vertical drama series. You receive the CURRENT season structure (${episodeCount} episodes) and an INSTRUCTION from the author. Apply the instruction to the structure and return the FULL updated structure as STRICT JSON with exactly the same shape:
-{"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string, "description": string (a detailed continuous episode synopsis in prose, ~4–7 sentences, then a final "CLIFFHANGER: ..." line — NO shot/beat split, NO timings)}]}.
+{"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string, "description": string (thesis-style bullet summary: three labelled blocks Opening / What happens / Ending of "- " bullets in the story language, ~80–120 words, then a final "CLIFFHANGER: ..." line — NO prose paragraphs, NO shot/beat split, NO timings)}]}.
 RULES:
 - Keep EXACTLY ${episodeCount} episodes with the same numbers 1..${episodeCount}. Never add or remove episodes.
 - MINIMAL CHANGE: copy every field of every episode VERBATIM unless the instruction (or story consistency it forces) requires changing it. Episodes that the instruction does not touch must be returned character-for-character identical — the system regenerates only episodes whose logline / arc / location / characters changed, and rewriting untouched episodes wastes the author's work.
@@ -2502,10 +2523,10 @@ export function seasonFullStoryUserPrompt(input: { synopsis: string; structure: 
 
 /** Story-screen revise: rewrite the prose per the author's instruction AND keep the structure in sync (count may change). */
 export function seasonStoryReviseSystemPrompt(language: IdeaLanguage, episodeCount: number): string {
-  return `You are the showrunner of a short-form vertical drama. You receive the CURRENT season structure (${episodeCount} episodes), the CURRENT season plot (= the list of episode descriptions, each a detailed continuous synopsis), and an INSTRUCTION from the author. Apply the instruction and return the FULL updated season as STRICT JSON:
-{"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string, "description": string (a detailed continuous episode synopsis in prose, ~4–7 sentences, then a final "CLIFFHANGER: ..." line — NO shot/beat split, NO timings)}], "fullStory": string}.
+  return `You are the showrunner of a short-form vertical drama. You receive the CURRENT season structure (${episodeCount} episodes), the CURRENT season plot (= the list of episode descriptions, each a thesis-style bullet summary), and an INSTRUCTION from the author. Apply the instruction and return the FULL updated season as STRICT JSON:
+{"title": string, "logline": string, "episodes": [{"number": int, "title": string, "logline": string, "locationName": string, "locationDesc": string, "locationDetail": "low"|"medium"|"high", "characters": [names], "arcRole": "завязка"|"развитие"|"поворот"|"финал", "cliffhanger": string, "description": string (thesis-style bullet summary: three labelled blocks Opening / What happens / Ending of "- " bullets in the story language, ~80–120 words, then a final "CLIFFHANGER: ..." line — NO prose paragraphs, NO shot/beat split, NO timings)}], "fullStory": string}.
 RULES:
-- SEASON PLOT = EPISODES: the season plot the author reads IS the ordered list of episode "description" fields (each a detailed continuous synopsis ending on its CLIFFHANGER line) — there is NO separate prose story. The app builds the plot text from "episodes" itself, so "fullStory" may be returned as an empty string "" or a 1–2 sentence season overview; never write prose there.
+- SEASON PLOT = EPISODES: the season plot the author reads IS the ordered list of episode "description" fields (each a thesis-style bullet summary ending on its CLIFFHANGER line) — there is NO separate prose story. The app builds the plot text from "episodes" itself, so "fullStory" may be returned as an empty string "" or a 1–2 sentence season overview; never write prose there.
 - MINIMAL CHANGE: keep the structure and descriptions the author did NOT ask to change VERBATIM. Only touch what the instruction (or the story consistency it forces) requires — the system regenerates scripts only for episodes whose logline / arc / location / cast changed, so needless edits waste the author's work.
 - EPISODE COUNT: keep ${episodeCount} episodes UNLESS the author explicitly asks to add or remove episodes; then return the new count (allowed range ${SEASON_MIN_EPISODES}–${SEASON_MAX_EPISODES}), renumber episodes 1..N contiguously (the cliffhanger → next-episode-opening chain must stay unbroken after renumbering). Episode 1 = завязка, last = финал.
 - Use ONLY the given character names verbatim; "locationName" should be one of the given LOCATIONS (verbatim) unless the story truly needs a new place. "logline" is ONE sentence; "cliffhanger" = the CLIFFHANGER line verbatim.

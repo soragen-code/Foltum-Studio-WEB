@@ -34,6 +34,7 @@ import {
 } from "@/lib/storyboard-grid";
 import { parseBeatMeta } from "@/lib/simple-pipeline";
 import { softenPromptForModeration, isModerationError } from "@/lib/moderation-soften";
+import { runWithPromptContext } from "@/lib/prompt-log";
 
 export const STORYBOARD_GRID_JOB_TYPE = "storyboard_grid";
 export const STORYBOARD_GRID_SLICE_JOB_TYPE = "storyboard_grid_slice";
@@ -180,7 +181,7 @@ export async function loadGridInputs(episodeId: string): Promise<{
 }
 
 /* ───────────── 1) storyboard_grid — render the 5×5 sheet ───────────── */
-export async function runStoryboardGridJob(
+async function runStoryboardGridJobImpl(
   jobId: string,
   projectId: string,
   episodeId: string,
@@ -274,7 +275,7 @@ export async function runStoryboardGridJob(
 }
 
 /* ───────────── 2) storyboard_grid_slice — cut the sheet into 25 scene start frames ───────────── */
-export async function runStoryboardGridSliceJob(
+async function runStoryboardGridSliceJobImpl(
   jobId: string,
   projectId: string,
   episodeId: string,
@@ -407,4 +408,14 @@ export async function runStoryboardGridSliceJob(
     console.error("[storyboard-grid-slice] failed:", err);
     await failJob(jobId, err?.message ?? "Storyboard grid slicing failed");
   }
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runStoryboardGridJob(jobId: string, projectId: string, episodeId: string, promptOverride?: string | null): Promise<void> {
+  return runWithPromptContext({ kind: "storyboard", projectId, episodeId }, () => runStoryboardGridJobImpl(jobId, projectId, episodeId, promptOverride));
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runStoryboardGridSliceJob(jobId: string, projectId: string, episodeId: string): Promise<void> {
+  return runWithPromptContext({ kind: "storyboard", projectId, episodeId }, () => runStoryboardGridSliceJobImpl(jobId, projectId, episodeId));
 }

@@ -31,6 +31,7 @@ import {
   forceSeams,
   type ShotList,
 } from "@/lib/simple-pipeline";
+import { runWithPromptContext } from "@/lib/prompt-log";
 
 export { SHOT_LIST_JOB_TYPE };
 
@@ -45,7 +46,7 @@ async function withHeartbeat<T>(jobId: string, fn: () => Promise<T>): Promise<T>
   }
 }
 
-export async function runShotListJob(jobId: string, projectId: string, episodeId: string): Promise<void> {
+async function runShotListJobImpl(jobId: string, projectId: string, episodeId: string): Promise<void> {
   try {
     const episode = await prisma.episode.findFirst({
       where: { id: episodeId, season: { projectId } },
@@ -143,4 +144,9 @@ export async function runShotListJob(jobId: string, projectId: string, episodeId
     console.error(`[shot-list] job ${jobId} failed:`, msg);
     await failJob(jobId, msg);
   }
+}
+
+/** Prompt-log attribution wrapper (see lib/prompt-log.ts): sets the kind/ids context for every LLM / WaveSpeed call in this worker. */
+export function runShotListJob(jobId: string, projectId: string, episodeId: string): Promise<void> {
+  return runWithPromptContext({ kind: "shot_list", projectId, episodeId }, () => runShotListJobImpl(jobId, projectId, episodeId));
 }

@@ -82,7 +82,7 @@ export async function POST(request: Request) {
     // visible content (the "Через двенадцать л" idea-truncation bug: finish_reason "length", content empty).
     // Streaming accumulates only the visible content deltas and survives it; a generous budget fits the
     // thinking + the 7-10 sentence pitch.
-    const logline = (await streamChatText(system, userMsg, { temperature: 0.9, maxTokens: 3000 })).trim();
+    const logline = (await streamChatText(system, userMsg, { temperature: 0.9, maxTokens: 3000, log: { kind: "logline", projectId } })).trim();
     if (!logline) return NextResponse.json({ error: "AI returned an empty logline" }, { status: 502 });
 
     // Stage 14 (B): persist a producer-chosen episode count (not in story-upload mode).

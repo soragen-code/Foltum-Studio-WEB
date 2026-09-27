@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { logPrompt } from "@/lib/prompt-log";
 
 let _client: OpenAI | null = null;
 
@@ -82,7 +83,26 @@ export type ChatOptions = {
    * (SSE). No effect on the final return value.
    */
   onDelta?: (delta: string, accumulated: string) => void;
+  /** Prompt-log attribution (kind + ids); falls back to the AsyncLocalStorage context (lib/prompt-log.ts). */
+  log?: { kind?: string; projectId?: string; episodeId?: string; seasonId?: string; sceneId?: string };
 };
+
+const LLM_ENDPOINT = "https://llm.wavespeed.ai/v1/chat/completions";
+/** Record one outgoing LLM request (once per chat()/streamChatText() call, not per SDK retry). */
+function logLlmPrompt(model: string, system: string, user: string, opts?: ChatOptions): void {
+  logPrompt({
+    kind: opts?.log?.kind,
+    projectId: opts?.log?.projectId,
+    episodeId: opts?.log?.episodeId,
+    seasonId: opts?.log?.seasonId,
+    sceneId: opts?.log?.sceneId,
+    provider: "wavespeed-llm",
+    endpoint: LLM_ENDPOINT,
+    model,
+    system,
+    user,
+  });
+}
 
 /**
  * Default completion budget for STREAMING JSON generation (idea / drama-bible / synopsis). Claude Opus 5 on
@@ -121,6 +141,7 @@ export async function chat(
   const model = opts?.model ?? MODEL;
   const reasoning = isReasoningModel(model);
   const budget = opts?.maxTokens ?? 4096;
+  logLlmPrompt(model, system, user, opts);
   const res = await openai.chat.completions.create(
     {
       model,
@@ -237,6 +258,7 @@ export async function streamChatText(
   const model = opts?.model ?? MODEL;
   const reasoning = isReasoningModel(model);
   const budget = opts?.maxTokens ?? 4096;
+  logLlmPrompt(model, system, user, opts);
   const stream = await openai.chat.completions.create(
     {
       model,

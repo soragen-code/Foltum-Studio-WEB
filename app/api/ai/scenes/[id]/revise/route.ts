@@ -56,7 +56,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
     // much slower. gpt-4o is non-reasoning → temperature + max_tokens path (reasoningEffort is ignored).
     // A LOW temperature (0.3) keeps the edit close to the author's text — minimal, verbatim changes with no
     // drift/softening. maxTokens 8000 stays well under the gpt-4o 16 384 cap and keeps the JSON from truncating.
-    const raw0 = sceneReviseSchema.parse(await chatJSON(sceneReviseSystemPrompt(language), user, { model: EPISODE_SCRIPT_MODEL, temperature: 0.3, maxTokens: 8000 }));
+    const raw0 = sceneReviseSchema.parse(await chatJSON(sceneReviseSystemPrompt(language), user, { model: EPISODE_SCRIPT_MODEL, temperature: 0.3, maxTokens: 8000, log: { kind: "scenes", projectId: project.id, episodeId: scene.episodeId, sceneId: scene.id } }));
     // Seedance voices `dialogue` → guarantee English (swap swapped fields / translate).
     // Stage 38: the model may switch the kind ("make this scene a fight" → "action"); a narration scene
     // never changes kind here, otherwise keep the stored kind when the model omits it.

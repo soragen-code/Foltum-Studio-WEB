@@ -57,7 +57,7 @@ export async function POST(request: Request) {
     // Stage 105 — descriptions must be 60-second footage (3-line format, OPENS ON chain); one retry with the format note.
     const userPrompt = seasonReviseUserPrompt({ synopsis: project.synopsis, structure: before, characters: cards, locations: project.locations, instruction });
     const attempt = async (note: string, strict: boolean): Promise<SeasonStructure> => {
-      const raw = await chatJSON(seasonReviseSystemPrompt(language, before.episodes.length), userPrompt + note, { temperature: 0.4, maxTokens: 8000 });
+      const raw = await chatJSON(seasonReviseSystemPrompt(language, before.episodes.length), userPrompt + note, { temperature: 0.4, maxTokens: 8000, log: { kind: "story", projectId } });
       const parsed = seasonReviseSchema.parse(raw);
       if (parsed.episodes.length !== before.episodes.length) throw new Error(`LLM returned ${parsed.episodes.length} episodes instead of ${before.episodes.length}`);
       const out = { ...parsed, episodes: parsed.episodes.map((e, i) => ({ ...e, number: i + 1 })) };
@@ -73,7 +73,7 @@ export async function POST(request: Request) {
       after = await attempt(`\n\n${EPISODE_SYNOPSIS_RETRY_NOTE} Problems found: ${why}`, false);
     }
     // Stage 128 — never fail on synopsis format: targeted repair passes + deterministic clamp.
-    const fixed = await repairEpisodeSynopses(after.episodes, language, (sys, usr) => chatJSON(sys, usr, { temperature: 0.3, maxTokens: 6000 }));
+    const fixed = await repairEpisodeSynopses(after.episodes, language, (sys, usr) => chatJSON(sys, usr, { temperature: 0.3, maxTokens: 6000, log: { kind: "story", projectId } }));
     if (fixed.repaired.length || fixed.clamped.length) console.warn(`[season-revise] synopsis repaired for episodes ${fixed.repaired.join(", ") || "-"}; clamped ${fixed.clamped.join(", ") || "-"}`);
     after = { ...after, episodes: fixed.episodes };
   } catch (err) {

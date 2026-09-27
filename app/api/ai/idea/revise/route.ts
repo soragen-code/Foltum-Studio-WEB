@@ -59,7 +59,7 @@ export async function POST(request: Request) {
         const raw = await chatJSON(
           reviseSynopsisSystemPrompt(language),
           reviseSynopsisUserPrompt(project.synopsis, cards, instruction),
-          { temperature: 0.6, maxTokens: 3500 }
+          { temperature: 0.6, maxTokens: 3500, log: { kind: "idea", projectId } }
         );
         result = synopsisReviseResultSchema.parse(raw);
       } catch (e: any) {

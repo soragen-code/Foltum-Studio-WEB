@@ -50,7 +50,7 @@ export function EpisodeFootage({ description, className = '' }: { description?: 
   const { synopsis, cliffhanger } = parseEpisodeSynopsis(text)
   return (
     <div className={`space-y-1.5 text-xs text-white ${className}`} data-testid="episode-synopsis">
-      {synopsis && <p className="leading-relaxed" data-testid="episode-synopsis-body">{synopsis}</p>}
+      {synopsis && <p className="whitespace-pre-line leading-relaxed" data-testid="episode-synopsis-body">{synopsis}</p>}
       {cliffhanger && (
         <p data-testid="episode-synopsis-cliffhanger">
           <span className="font-semibold text-foreground">Cliffhanger:</span>{' '}

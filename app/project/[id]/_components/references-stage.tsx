@@ -14,6 +14,7 @@ import { TIER_LABELS, groupByTier, tierOf, type Tier, type LocationCardData, Loc
 import { locationExtraLabel } from '@/lib/visual-style'
 import { CharacterUserRefs } from './character-user-refs'
 import { AddFrameTile } from './add-frame-tile'
+import { PromptLogButton } from './prompt-log-button'
 
 interface RefCharacter extends CharacterCardData {
   imageFront?: string | null
@@ -543,6 +544,7 @@ export function ReferencesStage({ project, onRefresh, optional = false }: { proj
           <h2 className="flex items-center gap-2 font-display text-xl font-bold">
             <Users className="h-5 w-5 text-primary" /> {optional ? 'References' : 'Step 2 — Characters (references)'}
           </h2>
+          <PromptLogButton projectId={project.id} kinds={['characters', 'character', 'locations', 'location']} />
         </div>
         {optional && (
           <p className="mt-1 text-sm text-muted-foreground">

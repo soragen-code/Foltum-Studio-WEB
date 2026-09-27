@@ -56,7 +56,7 @@ export async function POST(request: Request) {
         const raw = await chatJSON(
           reviseCharacterSystemPrompt(language),
           reviseCharacterUserPrompt(character.project.synopsis ?? "", card, instruction),
-          { temperature: 0.6, maxTokens: 1500 }
+          { temperature: 0.6, maxTokens: 1500, log: { kind: "characters", projectId: character.projectId } }
         );
         next = characterCardSchema.parse(raw);
       } catch (e: any) {
