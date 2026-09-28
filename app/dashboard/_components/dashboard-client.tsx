@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Header } from '@/components/header'
 import { Film, Plus, Clapperboard, Clock, ChevronRight, Sparkles, Zap, Crown, Trash2, Loader2, Wand2 } from 'lucide-react'
@@ -27,8 +28,31 @@ const tierConfig: Record<string, { icon: React.ElementType; color: string; label
 
 export function DashboardClient() {
   const { t, locale } = useTranslation()
+  const router = useRouter()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
+  // «Новый проект v2.0» — отдельный поток идея → синопсис (Claude Fable 5.1). Создаёт проект тем же
+  // POST /api/projects, но открывает мастер с ?flow=v2, где включается экран v2 (idea-stage-v2).
+  const [creatingV2, setCreatingV2] = useState(false)
+
+  const createProjectV2 = async () => {
+    if (creatingV2) return
+    setCreatingV2(true)
+    try {
+      const res = await fetch('/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ powerTier: 'LOW' }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) { toast.error(data?.error ?? t('dashboard.deleteFailed')); setCreatingV2(false); return }
+      const id = data?.project?.id
+      router.push(`/project/${id}?flow=v2`)
+    } catch {
+      toast.error('Не удалось создать проект')
+      setCreatingV2(false)
+    }
+  }
   // Stage 46A — delete a project from the list: two-step confirm inside the card, then DELETE /api/projects/[id].
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -114,6 +138,17 @@ export function DashboardClient() {
               <Wand2 className="h-4 w-4" />
               {t('dashboard.manualMode')}
             </Link>
+            {/* «Новый проект v2.0» — поток идея/жанры → просмотр промпта → синопсис (Claude Fable 5.1). */}
+            <button
+              type="button"
+              onClick={createProjectV2}
+              disabled={creatingV2}
+              className="flex items-center gap-2 rounded-lg border border-border bg-card px-5 py-2.5 text-sm font-semibold transition hover:bg-muted disabled:opacity-50"
+              data-testid="dashboard-new-project-v2"
+            >
+              {creatingV2 ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              Новый проект v2.0
+            </button>
             <Link
               href="/project/new"
               className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"

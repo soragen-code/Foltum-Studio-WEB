@@ -9,6 +9,7 @@ import { CharactersStage } from './characters-stage'
 import { StructureStage } from './structure-stage'
 import { ScenesStage } from './scenes-stage'
 import { IdeaStage } from './idea-stage'
+import { IdeaStageV2 } from './idea-stage-v2'
 import { LoglineStage } from './logline-stage'
 import { ReferencesStage } from './references-stage'
 import { StoryStage } from './story-stage'
@@ -36,6 +37,10 @@ export function ProjectWizard({ project: initialProject, entitlements }: { proje
   // Read-only view of a PASSED stage, opened from the project step bar (?step=idea|logline|synopsis|story).
   // Only stages the project already went through are allowed; anything else falls back to the current stage.
   // Nothing here changes project.stage.
+  // «Новый проект v2.0» — отдельный поток идея/жанры → просмотр промпта → синопсис (Claude Fable 5.1).
+  // Метка потока живёт в URL (?flow=v2); при стадии idea рендерим экран v2 вместо обычного idea-stage.
+  // После генерации синопсиса проект переходит на stage="synopsis" и дальше идёт обычным пайплайном.
+  const flowV2 = searchParams?.get('flow') === 'v2'
   const stepParam = searchParams?.get('step') as ProjectStepKey | null
   const readOnlyStep: ProjectStepKey | null =
     stepParam && stepParam !== 'scenes' && isStepPassed(stepParam, currentStage) ? stepParam : null
@@ -103,7 +108,10 @@ export function ProjectWizard({ project: initialProject, entitlements }: { proje
               <ReferencesStage project={project} onRefresh={refreshProject} optional />
             </div>
           )}
-          {!readOnlyStep && !referencesTab && currentStage === 'idea' && (
+          {!readOnlyStep && !referencesTab && currentStage === 'idea' && flowV2 && (
+            <IdeaStageV2 project={project} onRefresh={refreshProject} />
+          )}
+          {!readOnlyStep && !referencesTab && currentStage === 'idea' && !flowV2 && (
             <IdeaStage project={project} onRefresh={refreshProject} />
           )}
           {!readOnlyStep && !referencesTab && currentStage === 'logline' && (
