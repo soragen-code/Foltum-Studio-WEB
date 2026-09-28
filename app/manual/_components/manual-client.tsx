@@ -14,7 +14,7 @@ import { VIDEO_FAMILIES, DEFAULT_VIDEO_MODEL_ID, getVideoModel } from '@/lib/vid
 import { useJobPolling, JobProgressBar, type JobPollResponse } from '@/app/project/[id]/_components/use-job-polling'
 import { compressImageForUpload } from '@/lib/client-image-compress'
 import { usePersistentState } from '@/lib/use-persistent-state'
-import { LocationGenerator, buildReferenceBlock, type ManualLocation } from './location-generator'
+import { buildReferenceBlock, type ManualLocation } from './location-generator'
 
 interface ManualItem {
   id: string
@@ -539,9 +539,6 @@ export function ManualClient() {
             </button>
           </section>
         </div>
-
-        {/* ── Location Generator (Stage 234h) ── */}
-        <LocationGenerator locations={locations} reloadLocations={loadLocations} onUseInVideo={applyLocationToVideo} />
 
         {/* ── History ── */}
         <section className="mt-8" data-testid="manual-history">
