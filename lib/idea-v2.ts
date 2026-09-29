@@ -77,13 +77,20 @@ export function synopsisV2UserPrompt(input: SynopsisV2Input): string {
 }
 
 /**
- * Собрать промпт синопсиса v2 (system/user) + лейбл модели для отображения.
- * Используется и превью-роутом, и воркером генерации, чтобы гарантировать идентичность.
+ * Минимальный нейтральный служебный system для отправки в модель. Всё содержательное
+ * (роль, правила, язык и задание) живёт в едином промпте и уходит одним user-сообщением.
  */
-export function buildSynopsisV2Prompt(input: SynopsisV2Input): { system: string; user: string; model: string } {
-  return {
-    system: synopsisV2SystemPrompt(input),
-    user: synopsisV2UserPrompt(input),
-    model: FABLE_MODEL_LABEL,
-  };
+export const SYNOPSIS_V2_NEUTRAL_SYSTEM = "You are a helpful assistant.";
+
+/**
+ * Собрать ЕДИНЫЙ цельный текст промпта синопсиса v2 + лейбл модели для отображения.
+ *
+ * Один источник правды: и превью-роут, и воркер генерации собирают промпт через эту функцию.
+ * Пользователь видит и редактирует ровно этот текст (правила сверху, затем язык и задание) —
+ * то есть один цельный промпт, а не отдельные блоки system/user.
+ */
+export function buildSynopsisV2Prompt(input: SynopsisV2Input): { prompt: string; model: string } {
+  const system = synopsisV2SystemPrompt(input);
+  const user = synopsisV2UserPrompt(input);
+  return { prompt: `${system}\n\n${user}`, model: FABLE_MODEL_LABEL };
 }

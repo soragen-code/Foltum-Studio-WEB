@@ -3,8 +3,9 @@
  *
  * Повторяет паттерн synopsis-job.ts (idea → synopsis), но:
  *   • использует ТОЛЬКО модель FABLE_MODEL («Claude Fable 5.1»);
- *   • собирает промпт через lib/idea-v2.ts (единый с превью-роутом) ИЛИ берёт присланный
- *     пользователем отредактированный system/user (overrideSystem / overrideUser);
+ *   • собирает ЕДИНЫЙ цельный промпт через lib/idea-v2.ts (единый с превью-роутом) ИЛИ берёт
+ *     присланный пользователем отредактированный текст (overridePrompt); промпт уходит в модель
+ *     одним user-сообщением (system — минимальный служебный);
  *   • логирует реально отправленный промпт (в т.ч. отредактированный) с kind "synopsis_v2"
  *     — за счёт runWithPromptContext + авто-лога в streamChatText (lib/ai.ts);
  *   • сохраняет синопсис в Project тем же путём, что v1 (stage="synopsis"), поэтому после
@@ -25,7 +26,7 @@ import {
 } from "@/lib/idea";
 import { resolveProjectName } from "@/lib/project-name";
 import { runWithPromptContext } from "@/lib/prompt-log";
-import { FABLE_MODEL, buildSynopsisV2Prompt, resolveV2Language } from "@/lib/idea-v2";
+import { FABLE_MODEL, SYNOPSIS_V2_NEUTRAL_SYSTEM, buildSynopsisV2Prompt, resolveV2Language } from "@/lib/idea-v2";
 
 /** GenerationJob.type для задачи «идея v2 → синопсис» (новое строковое значение, без миграции схемы). */
 export const SYNOPSIS_V2_JOB_TYPE = "synopsis_v2";
@@ -36,10 +37,8 @@ export const SYNOPSIS_V2_EXPECTED_SEC = 45;
 export interface SynopsisV2JobParams {
   idea?: string | null;
   genres?: string[];
-  /** Отредактированный пользователем system-промпт (если он смотрел/правил превью). */
-  overrideSystem?: string | null;
-  /** Отредактированный пользователем user-промпт. */
-  overrideUser?: string | null;
+  /** Отредактированный пользователем ЕДИНЫЙ цельный промпт (если он смотрел/правил превью). */
+  overridePrompt?: string | null;
 }
 
 /** Запасной заголовок из первой строки прозы, если metadata-вызов не удался. */
@@ -52,11 +51,12 @@ function titleFromFirstLine(prose: string): string {
 async function runSynopsisV2JobImpl(jobId: string, projectId: string, params: SynopsisV2JobParams): Promise<void> {
   let hb: ReturnType<typeof setInterval> | null = null;
   try {
-    const { idea, genres = [], overrideSystem, overrideUser } = params;
+    const { idea, genres = [], overridePrompt } = params;
     const built = buildSynopsisV2Prompt({ idea, genres });
-    // Реально отправляемый промпт: правки пользователя имеют приоритет над сгенерированным.
-    const system = overrideSystem && overrideSystem.trim() ? overrideSystem : built.system;
-    const user = overrideUser && overrideUser.trim() ? overrideUser : built.user;
+    // Реально отправляемый промпт: правка пользователя имеет приоритет над сгенерированным.
+    // Единый цельный текст уходит в модель одним user-сообщением; system — минимальный служебный.
+    const system = SYNOPSIS_V2_NEUTRAL_SYSTEM;
+    const user = overridePrompt && overridePrompt.trim() ? overridePrompt : built.prompt;
     const defaultLanguage = resolveV2Language({ idea, genres });
     const ideaForStore = idea && idea.trim()
       ? idea.trim()

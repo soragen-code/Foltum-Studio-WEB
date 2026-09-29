@@ -29,8 +29,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   // Просмотр / редактирование промпта.
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
-  const [editSystem, setEditSystem] = useState('')
-  const [editUser, setEditUser] = useState('')
+  const [editPrompt, setEditPrompt] = useState('')
 
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState('')
@@ -98,8 +97,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) { setError(d?.error ?? 'Не удалось собрать промпт'); return }
-      setEditSystem(d.system ?? '')
-      setEditUser(d.user ?? '')
+      setEditPrompt(d.prompt ?? '')
       setPreviewOpen(true)
     } catch { setError('Ошибка сети') }
     finally { setPreviewLoading(false) }
@@ -109,7 +107,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     setError(''); setCanceled(false); clearJob(); setStarting(true)
     try {
       const body: any = { projectId: project.id, ...(mode === 'idea' ? { idea: idea.trim() } : { genres }) }
-      if (withOverride) { body.overrideSystem = editSystem; body.overrideUser = editUser }
+      if (withOverride) { body.overridePrompt = editPrompt }
       const res = await fetch('/api/ai/v2/synopsis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -259,26 +257,14 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             <div className="mt-5 space-y-4" data-testid="idea-v2-preview">
               <div>
                 <label className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  <Pencil className="h-3.5 w-3.5" /> System (правила)
+                  <Pencil className="h-3.5 w-3.5" /> Промпт
                 </label>
                 <textarea
-                  value={editSystem}
-                  onChange={(e) => setEditSystem(e.target.value)}
-                  rows={10}
+                  value={editPrompt}
+                  onChange={(e) => setEditPrompt(e.target.value)}
+                  rows={20}
                   className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary"
-                  data-testid="idea-v2-preview-system"
-                />
-              </div>
-              <div>
-                <label className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  <Pencil className="h-3.5 w-3.5" /> User (запрос)
-                </label>
-                <textarea
-                  value={editUser}
-                  onChange={(e) => setEditUser(e.target.value)}
-                  rows={6}
-                  className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary"
-                  data-testid="idea-v2-preview-user"
+                  data-testid="idea-v2-preview-prompt"
                 />
               </div>
               <button
