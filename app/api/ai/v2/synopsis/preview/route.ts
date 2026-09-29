@@ -4,13 +4,14 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { buildSynopsisV2Prompt } from "@/lib/idea-v2";
+import { buildSynopsisV2Parts } from "@/lib/idea-v2";
 
 /**
  * POST /api/ai/v2/synopsis/preview  { projectId, idea? | genres? }
  *
- * «Новый проект v2.0», просмотр промпта: собирает ЕДИНЫЙ цельный текст промпта синопсиса ровно так же,
- * как это сделает генерация, и возвращает его (плюс лейбл модели). НИЧЕГО не генерирует и не пишет в БД.
+ * «Новый проект v2.0», просмотр промпта: собирает РАЗДЕЛЬНО system и user синопсиса ровно так же,
+ * как это сделает генерация, и возвращает их (плюс лейбл модели и индикатор контекста). НИЧЕГО
+ * не генерирует и не пишет в БД.
  */
 const previewSchema = z.object({
   projectId: z.string().min(1),
@@ -34,8 +35,11 @@ export async function POST(request: Request) {
     const project = await prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true } });
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
-    const { prompt, model } = buildSynopsisV2Prompt({ idea, genres });
-    return NextResponse.json({ prompt, model }, { headers: { "Cache-Control": "no-store" } });
+    const { system, user: userPrompt, model, contextIncluded, contextNote } = buildSynopsisV2Parts({ idea, genres });
+    return NextResponse.json(
+      { system, user: userPrompt, model, contextIncluded, contextNote },
+      { headers: { "Cache-Control": "no-store" } },
+    );
   } catch (err: any) {
     console.error("Synopsis v2 preview error:", err);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, Wand2, Sparkles, Lightbulb, Eye, Pencil, Check, ArrowLeft, Tags } from 'lucide-react'
+import { Loader2, Wand2, Sparkles, Lightbulb, Eye, Pencil, Check, ArrowLeft, Tags, Info } from 'lucide-react'
 import { GENRES } from '@/lib/idea'
 import { FABLE_MODEL_LABEL } from '@/lib/idea-v2'
 import { CancelButton } from './cancel-button'
@@ -29,7 +29,9 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   // Просмотр / редактирование промпта.
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewLoading, setPreviewLoading] = useState(false)
-  const [editPrompt, setEditPrompt] = useState('')
+  const [editSystem, setEditSystem] = useState('')
+  const [editUser, setEditUser] = useState('')
+  const [contextNote, setContextNote] = useState('')
 
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState('')
@@ -97,7 +99,9 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) { setError(d?.error ?? 'Не удалось собрать промпт'); return }
-      setEditPrompt(d.prompt ?? '')
+      setEditSystem(d.system ?? '')
+      setEditUser(d.user ?? '')
+      setContextNote(d.contextNote ?? '')
       setPreviewOpen(true)
     } catch { setError('Ошибка сети') }
     finally { setPreviewLoading(false) }
@@ -107,7 +111,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     setError(''); setCanceled(false); clearJob(); setStarting(true)
     try {
       const body: any = { projectId: project.id, ...(mode === 'idea' ? { idea: idea.trim() } : { genres }) }
-      if (withOverride) { body.overridePrompt = editPrompt }
+      if (withOverride) { body.overrideSystem = editSystem; body.overrideUser = editUser }
       const res = await fetch('/api/ai/v2/synopsis', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -255,16 +259,33 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
 
           {previewOpen && !generating && (
             <div className="mt-5 space-y-4" data-testid="idea-v2-preview">
+              {contextNote && (
+                <p className="flex items-start gap-1.5 text-xs text-muted-foreground" data-testid="idea-v2-context-note">
+                  <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" /> {contextNote}
+                </p>
+              )}
               <div>
                 <label className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  <Pencil className="h-3.5 w-3.5" /> Промпт
+                  <Pencil className="h-3.5 w-3.5" /> System (правила)
                 </label>
                 <textarea
-                  value={editPrompt}
-                  onChange={(e) => setEditPrompt(e.target.value)}
-                  rows={20}
+                  value={editSystem}
+                  onChange={(e) => setEditSystem(e.target.value)}
+                  rows={12}
                   className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary"
-                  data-testid="idea-v2-preview-prompt"
+                  data-testid="idea-v2-preview-system"
+                />
+              </div>
+              <div>
+                <label className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <Pencil className="h-3.5 w-3.5" /> User (запрос)
+                </label>
+                <textarea
+                  value={editUser}
+                  onChange={(e) => setEditUser(e.target.value)}
+                  rows={8}
+                  className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary"
+                  data-testid="idea-v2-preview-user"
                 />
               </div>
               <button

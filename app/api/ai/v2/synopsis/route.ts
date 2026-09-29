@@ -10,19 +10,20 @@ import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runSynopsisV2Job, SYNOPSIS_V2_JOB_TYPE } from "@/lib/workers/synopsis-v2-job";
 
 /**
- * POST /api/ai/v2/synopsis  { projectId, idea? | genres?, overridePrompt? }
+ * POST /api/ai/v2/synopsis  { projectId, idea? | genres?, overrideSystem?, overrideUser? }
  *
  * «Новый проект v2.0»: идея / жанры → синопсис (7–10 предложений) моделью «Claude Fable 5.1».
  * Создаёт фоновую GenerationJob (type "synopsis_v2") и сразу возвращает { jobId }; фактическая
  * генерация идёт в фоне (after()) через runSynopsisV2Job, клиент поллит GET /api/jobs/[id].
  * Идемпотентно: активная задача возвращается как есть. Если пользователь смотрел/правил промпт,
- * передаётся overridePrompt (единый цельный текст) — воркер отправит именно его.
+ * передаются overrideSystem/overrideUser (раздельно) — воркер отправит именно их двумя messages.
  */
 const generateSchema = z.object({
   projectId: z.string().min(1),
   idea: z.string().trim().max(20000).optional(),
   genres: z.array(z.string().max(80)).max(30).optional(),
-  overridePrompt: z.string().max(120000).optional(),
+  overrideSystem: z.string().max(60000).optional(),
+  overrideUser: z.string().max(60000).optional(),
 });
 
 export async function POST(request: Request) {
@@ -36,7 +37,7 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null);
     const parsed = generateSchema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
-    const { projectId, idea, genres, overridePrompt } = parsed.data;
+    const { projectId, idea, genres, overrideSystem, overrideUser } = parsed.data;
 
     if (!(idea && idea.trim()) && !(genres && genres.length))
       return NextResponse.json({ error: "Provide an idea or at least one genre" }, { status: 400 });
@@ -60,7 +61,7 @@ export async function POST(request: Request) {
     const job = await prisma.generationJob.create({
       data: { type: SYNOPSIS_V2_JOB_TYPE, status: "pending", progress: 0, message: "Starting…", projectId },
     });
-    runInBackground(() => runSynopsisV2Job(job.id, projectId, { idea, genres, overridePrompt }));
+    runInBackground(() => runSynopsisV2Job(job.id, projectId, { idea, genres, overrideSystem, overrideUser }));
     return NextResponse.json({ jobId: job.id, resumed: false });
   } catch (err: any) {
     console.error("Synopsis v2 generation error:", err);

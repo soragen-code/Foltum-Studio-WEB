@@ -2,8 +2,8 @@
  * «Новый проект v2.0» — отдельный поток идея → синопсис.
  *
  * Единый источник правды для промптов синопсиса v2: и превью (роут .../preview), и генерация
- * (воркер synopsis-v2-job) собирают system/user через ОДНИ и те же функции, чтобы отредактированный
- * пользователем промпт точно соответствовал тому, что показывалось на превью.
+ * (воркер synopsis-v2-job) собирают РАЗДЕЛЬНО system и user через ОДНИ и те же функции, чтобы
+ * отредактированный пользователем промпт точно соответствовал тому, что показывалось на превью.
  *
  * В этом режиме для LLM используется ТОЛЬКО одна модель — «Claude Fable 5.1» (лейбл для UI/логов);
  * на бэкенд отправляется реальный slug WaveSpeed (Claude Opus 5), под которым работает шлюз.
@@ -77,20 +77,35 @@ export function synopsisV2UserPrompt(input: SynopsisV2Input): string {
 }
 
 /**
- * Минимальный нейтральный служебный system для отправки в модель. Всё содержательное
- * (роль, правила, язык и задание) живёт в едином промпте и уходит одним user-сообщением.
+ * Пояснение для UI: передаётся ли в промпт синопсиса v2 какой-либо дополнительный контекст проекта.
+ *
+ * Для шага синопсиса доп. контекст НЕ подмешивается: промпт формируется ТОЛЬКО из идеи/жанров
+ * пользователя (см. synopsisV2SystemPrompt / synopsisV2UserPrompt) — ни RAG, ни история проекта,
+ * ни ранее сохранённые данные в него не попадают.
  */
-export const SYNOPSIS_V2_NEUTRAL_SYSTEM = "You are a helpful assistant.";
+export const SYNOPSIS_V2_CONTEXT_INCLUDED = false;
+export const SYNOPSIS_V2_CONTEXT_NOTE =
+  "Контекст проекта не передаётся — синопсис генерируется только из вашей идеи/жанров.";
 
 /**
- * Собрать ЕДИНЫЙ цельный текст промпта синопсиса v2 + лейбл модели для отображения.
+ * Собрать РАЗДЕЛЬНО system и user синопсиса v2 + лейбл модели и индикатор контекста.
  *
  * Один источник правды: и превью-роут, и воркер генерации собирают промпт через эту функцию.
- * Пользователь видит и редактирует ровно этот текст (правила сверху, затем язык и задание) —
- * то есть один цельный промпт, а не отдельные блоки system/user.
+ * Пользователь видит и редактирует ДВА отдельных блока — что уходит в system и что в user;
+ * в модель они отправляются двумя messages в одном вызове streamChatText.
  */
-export function buildSynopsisV2Prompt(input: SynopsisV2Input): { prompt: string; model: string } {
-  const system = synopsisV2SystemPrompt(input);
-  const user = synopsisV2UserPrompt(input);
-  return { prompt: `${system}\n\n${user}`, model: FABLE_MODEL_LABEL };
+export function buildSynopsisV2Parts(input: SynopsisV2Input): {
+  system: string;
+  user: string;
+  model: string;
+  contextIncluded: boolean;
+  contextNote: string;
+} {
+  return {
+    system: synopsisV2SystemPrompt(input),
+    user: synopsisV2UserPrompt(input),
+    model: FABLE_MODEL_LABEL,
+    contextIncluded: SYNOPSIS_V2_CONTEXT_INCLUDED,
+    contextNote: SYNOPSIS_V2_CONTEXT_NOTE,
+  };
 }
