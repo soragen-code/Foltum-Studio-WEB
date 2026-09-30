@@ -103,9 +103,19 @@ export const SYNOPSIS_V2_CONTEXT_NOTE =
  * Пользователь видит и редактирует ДВА отдельных блока — что уходит в system и что в user;
  * в модель они отправляются двумя messages в одном вызове streamChatText.
  */
+/**
+ * Assistant «prefill» синопсиса. По умолчанию пуст: модель пишет ответ с чистого листа. Пользователь
+ * может задать его в модалке просмотра промпта — тогда он уйдёт третьим (assistant) message и модель
+ * продолжит с него. Держим отдельной функцией, чтобы при желании задать дефолтный зачин в одном месте.
+ */
+export function synopsisV2AssistantPrefill(_input: SynopsisV2Input): string {
+  return "";
+}
+
 export function buildSynopsisV2Parts(input: SynopsisV2Input): {
   system: string;
   user: string;
+  assistant: string;
   model: string;
   contextIncluded: boolean;
   contextNote: string;
@@ -113,6 +123,7 @@ export function buildSynopsisV2Parts(input: SynopsisV2Input): {
   return {
     system: synopsisV2SystemPrompt(input),
     user: synopsisV2UserPrompt(input),
+    assistant: synopsisV2AssistantPrefill(input),
     model: FABLE_MODEL_LABEL,
     contextIncluded: SYNOPSIS_V2_CONTEXT_INCLUDED,
     contextNote: SYNOPSIS_V2_CONTEXT_NOTE,

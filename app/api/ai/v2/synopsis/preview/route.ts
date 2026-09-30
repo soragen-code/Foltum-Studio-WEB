@@ -35,9 +35,9 @@ export async function POST(request: Request) {
     const project = await prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true } });
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
-    const { system, user: userPrompt, model, contextIncluded, contextNote } = buildSynopsisV2Parts({ idea, genres });
+    const { system, user: userPrompt, assistant, model, contextIncluded, contextNote } = buildSynopsisV2Parts({ idea, genres });
     return NextResponse.json(
-      { system, user: userPrompt, model, contextIncluded, contextNote },
+      { system, user: userPrompt, assistant, model, contextIncluded, contextNote },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (err: any) {

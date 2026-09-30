@@ -83,6 +83,12 @@ export type ChatOptions = {
    * (SSE). No effect on the final return value.
    */
   onDelta?: (delta: string, accumulated: string) => void;
+  /**
+   * Optional assistant "prefill": seeds the start of the assistant's reply as a third message. When
+   * non-empty, an { role: "assistant" } message is appended so the model continues from it. The returned
+   * text is only the CONTINUATION (callers that need the whole reply must prepend the prefill themselves).
+   */
+  assistantPrefill?: string;
   /** Prompt-log attribution (kind + ids); falls back to the AsyncLocalStorage context (lib/prompt-log.ts). */
   log?: { kind?: string; projectId?: string; episodeId?: string; seasonId?: string; sceneId?: string };
 };
@@ -266,6 +272,9 @@ export async function streamChatText(
       messages: [
         { role: "system", content: system },
         { role: "user", content: user },
+        ...(opts?.assistantPrefill && opts.assistantPrefill.trim()
+          ? [{ role: "assistant" as const, content: opts.assistantPrefill }]
+          : []),
       ],
       ...(reasoning
         ? { max_completion_tokens: budget, reasoning_effort: opts?.reasoningEffort ?? SCRIPT_REASONING_EFFORT }

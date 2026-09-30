@@ -47,6 +47,8 @@ export interface SynopsisV2JobParams {
   overrideSystem?: string | null;
   /** Отредактированный пользователем user-промпт. */
   overrideUser?: string | null;
+  /** Заданный пользователем assistant «prefill» — зачин ответа модели (по умолчанию пуст). */
+  overrideAssistant?: string | null;
 }
 
 /** Запасной заголовок из первой строки прозы, если metadata-вызов не удался. */
@@ -59,12 +61,13 @@ function titleFromFirstLine(prose: string): string {
 async function runSynopsisV2JobImpl(jobId: string, projectId: string, params: SynopsisV2JobParams): Promise<void> {
   let hb: ReturnType<typeof setInterval> | null = null;
   try {
-    const { idea, genres = [], overrideSystem, overrideUser } = params;
+    const { idea, genres = [], overrideSystem, overrideUser, overrideAssistant } = params;
     const parts = buildSynopsisV2Parts({ idea, genres });
     // Реально отправляемый промпт: правки пользователя имеют приоритет над сгенерированными.
-    // system и user уходят в модель двумя messages в одном вызове streamChatText.
+    // system и user уходят в модель двумя messages; assistant-prefill — третьим (если задан).
     const system = overrideSystem && overrideSystem.trim() ? overrideSystem : parts.system;
     const user = overrideUser && overrideUser.trim() ? overrideUser : parts.user;
+    const assistantPrefill = (overrideAssistant ?? parts.assistant ?? "").trim();
     const defaultLanguage = resolveV2Language({ idea, genres });
     const ideaForStore = idea && idea.trim()
       ? idea.trim()
@@ -82,8 +85,10 @@ async function runSynopsisV2JobImpl(jobId: string, projectId: string, params: Sy
       if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
       try {
         const onDelta = makeJobStreamWriter(jobId);
-        const raw = await streamChatText(system, user, { model: FABLE_MODEL, temperature: 0.8, maxTokens: 6000, onDelta });
-        const cleaned = stripMarkup(raw ?? "").trim();
+        const raw = await streamChatText(system, user, { model: FABLE_MODEL, temperature: 0.8, maxTokens: 6000, onDelta, assistantPrefill });
+        // Если задан assistant-prefill, модель вернёт только продолжение — восстановим полный текст.
+        const full = assistantPrefill ? `${assistantPrefill}${raw ?? ""}` : (raw ?? "");
+        const cleaned = stripMarkup(full).trim();
         if (cleaned.length < 60) throw new Error("synopsis prose too short / empty");
         synopsis = cleaned;
       } catch (e: any) {
