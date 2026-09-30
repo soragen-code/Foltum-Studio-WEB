@@ -46,6 +46,9 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const [screen, setScreen] = useState<Screen>('choose')
   // Пожелания продюсера (только режим жанров). В БД не хранятся — уходят в preview/generate через inputBody.
   const [wishes, setWishes] = useState('')
+  // Английский перевод пожеланий, полученный из preview (промпт в модалке показан с ним).
+  // Уходит в generate как wishesEn, чтобы в модель попал ровно показанный текст. Сбрасывается при правке поля.
+  const [wishesEn, setWishesEn] = useState('')
   // Модалка-предупреждение о сбросе последующих шагов — показывается ТОЛЬКО после «Отправить» в модалке промпта, если ввод менялся.
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   // Пользователь подтвердил сброс → уже сохранённые логлайн/синопсис скрываются до новой генерации логлайна.
@@ -185,8 +188,10 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   }
   const onIdeaChange = (v: string) => { setIdea(v); markInputDirty() }
   const canProceed = mode === 'idea' ? idea.trim().length >= 10 : genres.length > 0
-  const onWishesChange = (v: string) => { setWishes(v); markInputDirty() }
-  const inputBody = () => (mode === 'idea' ? { idea: idea.trim() } : { genres, wishes: wishes.trim() || undefined })
+  const onWishesChange = (v: string) => { setWishes(v); setWishesEn(''); markInputDirty() }
+  const inputBody = () => (mode === 'idea'
+    ? { idea: idea.trim() }
+    : { genres, wishes: wishes.trim() || undefined, wishesEn: wishes.trim() && wishesEn ? wishesEn : undefined })
   // Аргументы уточнения логлайна: добавляются только для шага логлайна, когда есть непустая правка и текущий логлайн.
   // noRefine — принудительно «с нуля» (шаг 1 → модалка, кнопка «Сгенерировать»), даже если поле правки заполнено.
   const refineArgs = (k: Kind, noRefine = false) =>
@@ -213,6 +218,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       if (!res.ok) { setError(d?.error ?? 'Не удалось собрать промпт'); return false }
       const p: Prompt = { system: d.system ?? '', user: d.user ?? '', assistant: d.assistant ?? '' }
       setEdit((s) => ({ ...s, [k]: p })); setOrig((s) => ({ ...s, [k]: p }))
+      if (k === 'logline' && typeof d.wishesEn === 'string') setWishesEn(d.wishesEn)
       const dialogNote = 'loglineBase' in args
         ? ` Правка уйдёт диалогом из ${2 + loglineTurns.length} ходов: модель видит свои прежние логлайны и все ранние правки. Если отредактировать поля вручную — отправится только ваш текст, одним запросом.`
         : ''

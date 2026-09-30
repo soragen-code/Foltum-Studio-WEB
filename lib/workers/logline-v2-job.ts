@@ -14,6 +14,7 @@ import { updateJob, completeJob, failJob, heartbeatJob, markCanceled, isCancelRe
 import { makeJobStreamWriter, flushStreamedText } from "@/lib/stream-progress";
 import { streamChatText } from "@/lib/ai";
 import { genresToEnglish, stripMarkup } from "@/lib/idea";
+import { translateToEnglish } from "@/lib/translate-en";
 import { runWithPromptContext } from "@/lib/prompt-log";
 import { FABLE_MODEL, LOGLINE_V2_STAGE, buildLoglineV2Parts } from "@/lib/idea-v2";
 
@@ -26,8 +27,10 @@ export const LOGLINE_V2_EXPECTED_SEC = 15;
 export interface LoglineV2JobParams {
   idea?: string | null;
   genres?: string[];
-  /** Пожелания продюсера (режим жанров). */
+  /** Пожелания продюсера (режим жанров), как ввёл пользователь (обычно по-русски). */
   wishes?: string | null;
+  /** Английский перевод пожеланий из preview. Если не передан — переводим здесь. */
+  wishesEn?: string | null;
   /** Текущий логлайн — база для режима уточнения (см. refine). */
   logline?: string | null;
   /** Правка: что изменить в текущем логлайне (режим уточнения, контекст сохраняется). */
@@ -51,8 +54,10 @@ function cleanLogline(raw: string): string {
 async function runLoglineV2JobImpl(jobId: string, projectId: string, params: LoglineV2JobParams): Promise<void> {
   let hb: ReturnType<typeof setInterval> | null = null;
   try {
-    const { idea, genres = [], wishes, logline: prevLogline, refine, loglineBase, loglineTurns, overrideSystem, overrideUser, overrideAssistant } = params;
-    const parts = buildLoglineV2Parts({ idea, genres, wishes, logline: prevLogline, refine, loglineBase, loglineTurns });
+    const { idea, genres = [], wishes, wishesEn, logline: prevLogline, refine, loglineBase, loglineTurns, overrideSystem, overrideUser, overrideAssistant } = params;
+    // В промпт — английские пожелания: перевод из preview (совпадает с модалкой) либо переводим сейчас.
+    const wishesForPrompt = (wishesEn ?? "").trim() || (await translateToEnglish(wishes));
+    const parts = buildLoglineV2Parts({ idea, genres, wishes: wishesForPrompt, logline: prevLogline, refine, loglineBase, loglineTurns });
     const system = overrideSystem && overrideSystem.trim() ? overrideSystem : parts.system;
     const user = overrideUser && overrideUser.trim() ? overrideUser : parts.user;
     const assistantPrefill = (overrideAssistant ?? parts.assistant ?? "").trim();

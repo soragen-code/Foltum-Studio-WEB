@@ -5,6 +5,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { buildLoglineV2Parts } from "@/lib/idea-v2";
+import { translateToEnglish } from "@/lib/translate-en";
 
 /**
  * POST /api/ai/v2/logline/preview  { projectId, idea? | genres? }
@@ -37,9 +38,12 @@ export async function POST(request: Request) {
     const project = await prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true } });
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
-    const { system, user: userPrompt, assistant, model, contextIncluded, contextNote } = buildLoglineV2Parts({ idea, genres, wishes, logline, refine, loglineBase, loglineTurns });
+    // Пожелания (режим жанров) пишутся по-русски → в промпт идёт английский перевод. Возвращаем его
+    // клиенту (wishesEn): в generate он уйдёт как есть, чтобы промпт совпал с показанным в модалке.
+    const wishesEn = await translateToEnglish(wishes);
+    const { system, user: userPrompt, assistant, model, contextIncluded, contextNote } = buildLoglineV2Parts({ idea, genres, wishes: wishesEn, logline, refine, loglineBase, loglineTurns });
     return NextResponse.json(
-      { system, user: userPrompt, assistant, model, contextIncluded, contextNote },
+      { system, user: userPrompt, assistant, model, contextIncluded, contextNote, wishesEn: wishesEn || undefined },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (err: any) {
