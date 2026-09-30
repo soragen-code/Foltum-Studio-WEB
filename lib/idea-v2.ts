@@ -46,11 +46,15 @@ export interface SynopsisV2Input {
    */
   refine?: string | null;
   /**
-   * История ранее применённых правок логлайна (по порядку). Каждая из них УЖЕ учтена в текущем
-   * логлайне и должна оставаться в силе — модель не должна отменять прежние пожелания.
-   * Пример: сначала «не про воду», затем «не про шахты» — обе должны действовать одновременно.
+   * Первый (базовый) логлайн L0, сгенерированный без правок. Нужен, чтобы собрать реальный
+   * диалог system→user→assistant для messages-режима (модель видит собственные прежние ответы).
    */
-  refineHistory?: string[] | null;
+  loglineBase?: string | null;
+  /**
+   * Применённые пары «правка → полученный логлайн» по порядку. Каждая пара становится ходом
+   * user(правка)→assistant(логлайн) в транскрипте, поэтому прежние правки не отменяются моделью.
+   */
+  loglineTurns?: { refine: string; logline: string }[] | null;
 }
 
 /**
@@ -226,42 +230,43 @@ ${LOGLINE_V2_RULES}
 ${languageRule}`;
 }
 
-export function loglineV2UserPrompt(input: SynopsisV2Input): string {
+/** Тейл-инструкция: собственно попросить одно предложение по формуле. */
+const LOGLINE_V2_TAIL = `\n\nWrite the one-sentence logline now: "When [event], [hero] must [goal], or else [stakes]."`;
+
+/** Источник задания (идея пользователя либо набор жанров) — общий для первой генерации и для правок. */
+function loglineV2Source(input: SynopsisV2Input): string {
   const idea = (input.idea ?? "").trim();
+  if (idea) return `IDEA:\n${idea}`;
+  const genres = input.genres ?? [];
+  const english = genresToEnglish(genres);
+  const premises = genres
+    .map((g) => (GENRE_BY_ID[(g ?? "").trim().toLowerCase()] as { premise?: string } | undefined)?.premise)
+    .filter(Boolean) as string[];
+  const premiseBlock = premises.length
+    ? `\n\nGENRE PREMISE(S) TO FOLLOW:\n${premises.map((p) => `- ${p}`).join("\n")}`
+    : "";
+  const wishes = (input.wishes ?? "").trim();
+  const wishesBlock = wishes ? `\n\nPRODUCER'S WISHES (incorporate into the logline):\n${wishes}` : "";
+  return `The producer has NOT written a story. Invent an original, gripping story in the following genre(s): ${english.join(", ") || "drama"}. Combine them if more than one is given, avoid clichés, and surprise the viewer while staying coherent.${premiseBlock}${wishesBlock}`;
+}
+
+/** Инструкция для хода-правки. В messages-режиме модель видит текущий логлайн как свой предыдущий ответ. */
+function loglineV2RefineInstruction(refine: string): string {
+  return `The producer now wants to change the logline as follows:\n${refine}\n\nRewrite the logline applying this newest change while keeping everything that already works and without reverting any earlier change. Keep it a single sentence.${LOGLINE_V2_TAIL}`;
+}
+
+export function loglineV2UserPrompt(input: SynopsisV2Input): string {
+  const source = loglineV2Source(input);
   const refine = (input.refine ?? "").trim();
   const prev = (input.logline ?? "").trim();
-  const tail = `\n\nWrite the one-sentence logline now: "When [event], [hero] must [goal], or else [stakes]."`;
 
-  // Источник (идея пользователя или набор жанров) — общий и для первой генерации, и для правки.
-  let source: string;
-  if (idea) {
-    source = `IDEA:\n${idea}`;
-  } else {
-    const genres = input.genres ?? [];
-    const english = genresToEnglish(genres);
-    const premises = genres
-      .map((g) => (GENRE_BY_ID[(g ?? "").trim().toLowerCase()] as { premise?: string } | undefined)?.premise)
-      .filter(Boolean) as string[];
-    const premiseBlock = premises.length
-      ? `\n\nGENRE PREMISE(S) TO FOLLOW:\n${premises.map((p) => `- ${p}`).join("\n")}`
-      : "";
-    const wishes = (input.wishes ?? "").trim();
-    const wishesBlock = wishes ? `\n\nPRODUCER'S WISHES (incorporate into the logline):\n${wishes}` : "";
-    source = `The producer has NOT written a story. Invent an original, gripping story in the following genre(s): ${english.join(", ") || "drama"}. Combine them if more than one is given, avoid clichés, and surprise the viewer while staying coherent.${premiseBlock}${wishesBlock}`;
-  }
-
-  // Режим уточнения: контекст сохраняется — модель дорабатывает текущий логлайн по пожеланию продюсера.
+  // Fallback (нет транскрипта, напр. после перезагрузки страницы): одноходовая правка
+  // с явным указанием текущего логлайна. В messages-режиме этот текст используется только для лога.
   if (refine && prev) {
-    const history = (input.refineHistory ?? [])
-      .map((h) => (h ?? "").trim())
-      .filter(Boolean);
-    const historyBlock = history.length
-      ? `\n\nEARLIER CHANGE REQUESTS FROM THE PRODUCER (in order — ALL of them are already reflected in the current logline and MUST stay in force; never undo or reverse any of them):\n${history.map((h) => `- ${h}`).join("\n")}`
-      : "";
-    return `${source}\n\nCURRENT LOGLINE:\n"${prev}"${historyBlock}\n\nThe producer NOW wants to change it as follows:\n${refine}\n\nRewrite the logline applying this newest change while keeping everything that already works AND without reverting any of the earlier change requests above. Keep it a single sentence.${tail}`;
+    return `${source}\n\nCURRENT LOGLINE:\n"${prev}"\n\n${loglineV2RefineInstruction(refine)}`;
   }
 
-  return `${source}${tail}`;
+  return `${source}${LOGLINE_V2_TAIL}`;
 }
 
 /** Assistant-prefill логлайна — по умолчанию пуст. */
@@ -279,13 +284,42 @@ export function buildLoglineV2Parts(input: SynopsisV2Input): {
   model: string;
   contextIncluded: boolean;
   contextNote: string;
+  messages?: { role: "system" | "user" | "assistant"; content: string }[];
 } {
+  const system = loglineV2SystemPrompt(input);
+  const user = loglineV2UserPrompt(input);
+  const assistant = loglineV2AssistantPrefill(input);
+
+  const refine = (input.refine ?? "").trim();
+  const base = (input.loglineBase ?? "").trim();
+  const turns = (input.loglineTurns ?? []).filter(
+    (t) => t && (t.refine ?? "").trim() && (t.logline ?? "").trim(),
+  );
+
+  // Реальный диалог доступен, только когда есть базовый логлайн L0 и текущая правка.
+  // Тогда модель видит собственные прежние ответы (system → user → assistant → user → ...),
+  // и прежние правки не отменяются. Без базы (напр. после перезагрузки) — fallback в user-промпте.
+  let messages: { role: "system" | "user" | "assistant"; content: string }[] | undefined;
+  if (refine && base) {
+    messages = [
+      { role: "system", content: system },
+      { role: "user", content: `${loglineV2Source(input)}${LOGLINE_V2_TAIL}` },
+      { role: "assistant", content: base },
+    ];
+    for (const t of turns) {
+      messages.push({ role: "user", content: loglineV2RefineInstruction((t.refine ?? "").trim()) });
+      messages.push({ role: "assistant", content: (t.logline ?? "").trim() });
+    }
+    messages.push({ role: "user", content: loglineV2RefineInstruction(refine) });
+  }
+
   return {
-    system: loglineV2SystemPrompt(input),
-    user: loglineV2UserPrompt(input),
-    assistant: loglineV2AssistantPrefill(input),
+    system,
+    user,
+    assistant,
     model: FABLE_MODEL_LABEL,
     contextIncluded: false,
     contextNote: LOGLINE_V2_CONTEXT_NOTE,
+    ...(messages ? { messages } : {}),
   };
 }

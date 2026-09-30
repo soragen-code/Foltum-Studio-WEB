@@ -32,8 +32,10 @@ export interface LoglineV2JobParams {
   logline?: string | null;
   /** Правка: что изменить в текущем логлайне (режим уточнения, контекст сохраняется). */
   refine?: string | null;
-  /** История ранее применённых правок логлайна — чтобы модель не отменяла прежние пожелания. */
-  refineHistory?: string[] | null;
+  /** Базовый логлайн L0 — для сборки реального диалога messages. */
+  loglineBase?: string | null;
+  /** Применённые пары «правка → логлайн» по порядку — становятся ходами диалога. */
+  loglineTurns?: { refine: string; logline: string }[] | null;
   overrideSystem?: string | null;
   overrideUser?: string | null;
   overrideAssistant?: string | null;
@@ -49,11 +51,18 @@ function cleanLogline(raw: string): string {
 async function runLoglineV2JobImpl(jobId: string, projectId: string, params: LoglineV2JobParams): Promise<void> {
   let hb: ReturnType<typeof setInterval> | null = null;
   try {
-    const { idea, genres = [], wishes, logline: prevLogline, refine, refineHistory, overrideSystem, overrideUser, overrideAssistant } = params;
-    const parts = buildLoglineV2Parts({ idea, genres, wishes, logline: prevLogline, refine, refineHistory });
+    const { idea, genres = [], wishes, logline: prevLogline, refine, loglineBase, loglineTurns, overrideSystem, overrideUser, overrideAssistant } = params;
+    const parts = buildLoglineV2Parts({ idea, genres, wishes, logline: prevLogline, refine, loglineBase, loglineTurns });
     const system = overrideSystem && overrideSystem.trim() ? overrideSystem : parts.system;
     const user = overrideUser && overrideUser.trim() ? overrideUser : parts.user;
     const assistantPrefill = (overrideAssistant ?? parts.assistant ?? "").trim();
+    // Если пользователь вручную отредактировал промпт (overrides) — шлём именно его тексты, без диалога.
+    const edited = Boolean(
+      (overrideSystem && overrideSystem.trim()) ||
+      (overrideUser && overrideUser.trim()) ||
+      (overrideAssistant && overrideAssistant.trim()),
+    );
+    const messages = edited ? undefined : parts.messages;
     const ideaForStore = idea && idea.trim()
       ? idea.trim()
       : `[v2 · genres] ${genresToEnglish(genres).join(", ") || "—"}`;
@@ -68,7 +77,7 @@ async function runLoglineV2JobImpl(jobId: string, projectId: string, params: Log
       if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
       try {
         const onDelta = makeJobStreamWriter(jobId);
-        const raw = await streamChatText(system, user, { model: FABLE_MODEL, temperature: 0.8, maxTokens: 2048, onDelta, assistantPrefill });
+        const raw = await streamChatText(system, user, { model: FABLE_MODEL, temperature: 0.8, maxTokens: 2048, onDelta, assistantPrefill, messages });
         const full = assistantPrefill ? `${assistantPrefill}${raw ?? ""}` : (raw ?? "");
         const cleaned = cleanLogline(full);
         if (cleaned.length < 20) throw new Error("logline too short / empty");

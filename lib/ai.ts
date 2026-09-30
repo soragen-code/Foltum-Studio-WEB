@@ -89,6 +89,13 @@ export type ChatOptions = {
    * text is only the CONTINUATION (callers that need the whole reply must prepend the prefill themselves).
    */
   assistantPrefill?: string;
+  /**
+   * Optional full chat transcript (multi-turn). When provided, it is sent AS-IS instead of building
+   * [system, user, (assistantPrefill)] — this is the canonical way to give the model real conversation
+   * memory (system → user → assistant → user → …). `system`/`user` args are then used only for the
+   * prompt log. `assistantPrefill` is ignored when `messages` is set.
+   */
+  messages?: { role: "system" | "user" | "assistant"; content: string }[];
   /** Prompt-log attribution (kind + ids); falls back to the AsyncLocalStorage context (lib/prompt-log.ts). */
   log?: { kind?: string; projectId?: string; episodeId?: string; seasonId?: string; sceneId?: string };
 };
@@ -269,13 +276,16 @@ export async function streamChatText(
     {
       model,
       stream: true,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-        ...(opts?.assistantPrefill && opts.assistantPrefill.trim()
-          ? [{ role: "assistant" as const, content: opts.assistantPrefill }]
-          : []),
-      ],
+      messages:
+        opts?.messages && opts.messages.length
+          ? opts.messages
+          : [
+              { role: "system", content: system },
+              { role: "user", content: user },
+              ...(opts?.assistantPrefill && opts.assistantPrefill.trim()
+                ? [{ role: "assistant" as const, content: opts.assistantPrefill }]
+                : []),
+            ],
       ...(reasoning
         ? { max_completion_tokens: budget, reasoning_effort: opts?.reasoningEffort ?? SCRIPT_REASONING_EFFORT }
         : { temperature: opts?.temperature ?? 0.85, max_tokens: budget }),

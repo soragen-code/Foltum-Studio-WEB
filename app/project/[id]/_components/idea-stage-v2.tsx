@@ -29,9 +29,9 @@ const KIND_LABEL: Record<Kind, string> = { logline: 'логлайна', synopsis
 /**
  * Поток «Новый проект v2.0» — три шага: Идея → Логлайн → Синопсис.
  *   idea     — выбор режима (своя идея / жанры [+ пожелания]) и ввод → «Сохранить и продолжить»
- *              (строит промпт логлайна и открывает шаг 2, НЕ генерируя).
- *   logline  — «Просмотреть промпт» / «Сгенерировать»; стрим логлайна побуквенно; готовый текст можно
- *              поправить → «Сохранить и продолжить» (утверждает логлайн и запускает синопсис).
+ *              (строит промпт логлайна, открывает шаг 2 и модалку промпта; «Отправить» в модалке запускает генерацию).
+ *   logline  — стрим логлайна побуквенно; поле правки → «Изменить» (модалка промпта → «Отправить»: правка уходит
+ *              диалогом messages с прежними логлайнами); готовый текст можно поправить → «Сохранить и продолжить».
  *   synopsis — синопсис, развернутый из утверждённого логлайна.
  *
  * На экранах логлайна и синопсиса кнопки действий стоят в правом верхнем углу блока, над текстом. Модалка промпта общая для обоих шагов
@@ -71,12 +71,12 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   // Правка логлайна: «что изменить» — уходит в preview/generate вместе с текущим логлайном,
   // чтобы модель дорабатывала его с сохранением контекста, а не писала с нуля.
   const [refineText, setRefineText] = useState('')
-  const [refineSaved, setRefineSaved] = useState(false)
-  // Накопленная история применённых правок логлайна (по порядку). Уходит в промпт вместе с текущей
-  // правкой, чтобы модель не отменяла прежние пожелания («не про воду» → «не про шахты» действуют вместе).
-  const [refineHistory, setRefineHistory] = useState<string[]>([])
-  // Правка, с которой стартовала текущая генерация — фиксируем в момент запуска (без stale-замыкания),
-  // чтобы по завершении добавить её в историю.
+  // Реальный диалог с моделью (живёт в сессии): базовый логлайн L0 + применённые пары «правка → логлайн».
+  // Уходит в API как loglineBase/loglineTurns → бэкенд собирает messages system→user→assistant→user→…,
+  // поэтому прежние правки («не про воду» → «не про шахты») не отменяются моделью.
+  const [loglineBase, setLoglineBase] = useState('')
+  const [loglineTurns, setLoglineTurns] = useState<{ refine: string; logline: string }[]>([])
+  // Правка, с которой стартовала текущая генерация — фиксируем в момент запуска (без stale-замыкания).
   const lastRefineRef = useRef<string>('')
 
   // Ввод менялся после последнего «Сохранить и продолжить» → шаги «Логлайн»/«Синопсис» недоступны,
@@ -105,7 +105,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const invalidateDownstream = () => {
     resetPrompt('logline'); resetPrompt('synopsis'); setPreviewOpen(false)
     setDownstreamReset(true); setLoglineDraft('')
-    setRefineText(''); setRefineSaved(false); setRefineHistory([]); lastRefineRef.current = ''
+    setRefineText(''); setLoglineBase(''); setLoglineTurns([]); lastRefineRef.current = ''
   }
   // Редактирование ввода лишь помечает его изменённым — ничего не сбрасывает.
   const markInputDirty = () => setInputDirty(true)
@@ -121,11 +121,14 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     if (res.job.status === 'completed') {
       setError(''); setCanceled(null); setPreviewOpen(false)
       if (k === 'logline') {
-        // Применённую правку добавляем в историю — следующие правки будут учитывать её (модель не отменит прежнее).
-        if (lastRefineRef.current) { const applied = lastRefineRef.current; setRefineHistory((h) => [...h, applied]); lastRefineRef.current = '' }
-        setInputDirty(false); setInputSaved(true); setDownstreamReset(false); resetPrompt('synopsis'); setRefineText(''); setRefineSaved(false)
-        // Сразу показываем готовый текст (до onRefresh), чтобы поле не пустело.
         const fresh = String(res.job.result?.logline ?? res.job.streamedText ?? '').trim()
+        // Ход диалога: правка → результат становится парой в транскрипте; генерация с нуля → результат = база L0.
+        if (lastRefineRef.current) {
+          const applied = lastRefineRef.current; lastRefineRef.current = ''
+          if (fresh) setLoglineTurns((t) => [...t, { refine: applied, logline: fresh }])
+        } else { setLoglineBase(fresh); setLoglineTurns([]) }
+        setInputDirty(false); setInputSaved(true); setDownstreamReset(false); resetPrompt('synopsis'); setRefineText('')
+        // Сразу показываем готовый текст (до onRefresh), чтобы поле не пустело.
         if (fresh) setLoglineDraft(fresh)
       }
       setView(k)
@@ -183,13 +186,12 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const onWishesChange = (v: string) => { setWishes(v); markInputDirty() }
   const inputBody = () => (mode === 'idea' ? { idea: idea.trim() } : { genres, wishes: wishes.trim() || undefined })
   // Аргументы уточнения логлайна: добавляются только для шага логлайна, когда есть непустая правка и текущий логлайн.
-  const refineArgs = (k: Kind) =>
-    k === 'logline' && refineText.trim() && savedLogline
-      ? { logline: savedLogline, refine: refineText.trim(), ...(refineHistory.length ? { refineHistory } : {}) }
+  // noRefine — принудительно «с нуля» (шаг 1 → модалка, кнопка «Сгенерировать»), даже если поле правки заполнено.
+  const refineArgs = (k: Kind, noRefine = false) =>
+    k === 'logline' && !noRefine && refineText.trim() && savedLogline
+      ? { logline: savedLogline, refine: refineText.trim(), ...(loglineBase ? { loglineBase, loglineTurns } : {}) }
       : {}
-  const onRefineChange = (v: string) => { setRefineText(v); setRefineSaved(false); resetPrompt('logline') }
-  // «Сохранить правки»: фиксируем текст правки (уходит в промпт), но НЕ генерируем — генерация по кнопке «Сгенерировать» вверху.
-  const saveRefine = () => { if (refineText.trim()) { setRefineSaved(true); resetPrompt('logline') } }
+  const onRefineChange = (v: string) => { setRefineText(v); resetPrompt('logline') }
 
   const chooseMode = (m: 'idea' | 'genres') => {
     if (m !== mode) markInputDirty()
@@ -197,27 +199,35 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   }
 
   // Собрать промпт шага k для текущего ввода (+ пристин-копии).
-  const buildPrompt = async (k: Kind): Promise<boolean> => {
+  const buildPrompt = async (k: Kind, noRefine = false): Promise<boolean> => {
     try {
+      const args = refineArgs(k, noRefine)
       const res = await fetch(API[k].preview, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: project.id, ...inputBody(), ...refineArgs(k) }),
+        body: JSON.stringify({ projectId: project.id, ...inputBody(), ...args }),
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) { setError(d?.error ?? 'Не удалось собрать промпт'); return false }
       const p: Prompt = { system: d.system ?? '', user: d.user ?? '', assistant: d.assistant ?? '' }
       setEdit((s) => ({ ...s, [k]: p })); setOrig((s) => ({ ...s, [k]: p }))
-      setNote((s) => ({ ...s, [k]: d.contextNote ?? '' }))
+      const dialogNote = 'loglineBase' in args
+        ? ` Правка уйдёт диалогом из ${2 + loglineTurns.length} ходов: модель видит свои прежние логлайны и все ранние правки. Если отредактировать поля вручную — отправится только ваш текст, одним запросом.`
+        : ''
+      setNote((s) => ({ ...s, [k]: `${d.contextNote ?? ''}${dialogNote}` }))
       setReady((s) => ({ ...s, [k]: true }))
       return true
     } catch { setError('Ошибка сети'); return false }
   }
 
-  const openPreview = async (k: Kind) => {
-    setError('')
+  const resetModalFlags = (k: Kind) => {
     setEditable(FIELD_FLAGS); setRuOn(FIELD_FLAGS); setRuText(FIELD_TEXTS); setRuLoading(FIELD_FLAGS)
     setPromptKind(k)
+  }
+  // Открыть модалку промпта (шаг 2 → «Изменить»): собирает промпт правки и показывает его; отправка — из модалки.
+  const openPreview = async (k: Kind) => {
+    setError('')
+    resetModalFlags(k)
     if (ready[k]) { setPreviewOpen(true); return }
     setPreviewLoading(k)
     const ok = await buildPrompt(k)
@@ -225,16 +235,16 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     if (ok) setPreviewOpen(true)
   }
 
-  const generate = async (k: Kind) => {
-    setError(''); setCanceled(null); jobs[k].clear(); setStarting(k)
+  const generate = async (k: Kind, noRefine = false) => {
+    setError(''); setCanceled(null); jobs[k].clear(); setStarting(k); setPreviewOpen(false)
     if (k === 'logline') {
-      // Активная правка → запомним её, чтобы по завершении добавить в историю. Иначе (генерация
-      // логлайна «с нуля») накопленная история обнуляется: прежние пожелания к старому логлайну неактуальны.
-      if (refineText.trim() && savedLogline) lastRefineRef.current = refineText.trim()
-      else { lastRefineRef.current = ''; setRefineHistory([]) }
+      // Активная правка → запомним её: по завершении она станет ходом диалога. Иначе (генерация
+      // «с нуля») по завершении результат станет новой базой L0, а прежние ходы обнулятся.
+      if (!noRefine && refineText.trim() && savedLogline) lastRefineRef.current = refineText.trim()
+      else { lastRefineRef.current = ''; if (noRefine) setRefineText('') }
     }
     try {
-      const body: any = { projectId: project.id, ...inputBody(), ...refineArgs(k) }
+      const body: any = { projectId: project.id, ...inputBody(), ...refineArgs(k, noRefine) }
       if (isEdited(k)) { body.overrideSystem = edit[k].system; body.overrideUser = edit[k].user; body.overrideAssistant = edit[k].assistant }
       const res = await fetch(API[k].generate, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       const d = await res.json().catch(() => ({}))
@@ -245,8 +255,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     finally { setStarting(null) }
   }
 
-  // Сохранить ввод (идея/жанры/пожелания) и перейти на экран логлайна. Промпт логлайна
-  // перестраивается, если ввод менялся (актуальные пожелания попадают в промпт). Генерацию НЕ запускаем.
+  // Сохранить ввод (идея/жанры/пожелания), перейти на экран логлайна и ОТКРЫТЬ модалку промпта
+  // (генерация «с нуля»). Генерацию запускает кнопка «Отправить» в модалке; закрыть модалку = просто перейти.
   const proceedToLogline = async (reset: boolean) => {
     setError(''); setCanceled(null); setResetConfirmOpen(false)
     if (reset) {
@@ -265,17 +275,17 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       setSavingInput(false)
       onRefresh()
     }
-    const rebuild = reset || inputDirty || !ready.logline
-    if (rebuild) {
-      resetPrompt('logline')
-      setSavingInput(true)
-      const ok = await buildPrompt('logline')
-      setSavingInput(false)
-      if (!ok) return
-    }
+    // Промпт всегда собираем заново «с нуля» (без правки) — именно он показывается в модалке.
+    resetPrompt('logline'); setRefineText('')
+    setSavingInput(true)
+    const ok = await buildPrompt('logline', true)
+    setSavingInput(false)
+    if (!ok) return
     setInputDirty(false)
     setInputSaved(true)
     setView('logline')
+    resetModalFlags('logline')
+    setPreviewOpen(true)
   }
 
   // Шаг 1 → «Сохранить и продолжить». Если ввод изменён и уже есть логлайн/синопсис —
@@ -308,8 +318,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       }
     } catch { setError('Ошибка сети'); return }
     finally { setApproving(false) }
-    // Логлайн утверждён → накопленная история правок больше не нужна (следующие правки будут к новому логлайну).
-    setRefineHistory([]); lastRefineRef.current = ''
+    // Логлайн утверждён → диалог правок больше не нужен (следующие правки будут к новому логлайну).
+    setLoglineBase(''); setLoglineTurns([]); lastRefineRef.current = ''
     // Переходим на экран синопсиса БЕЗ автогенерации — пользователь сам смотрит промпт и жмёт «Сгенерировать».
     setView('synopsis'); onRefresh()
   }
@@ -410,13 +420,9 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   })()
 
   // ─── Кнопки действий результата (правый верхний угол блока, над текстом)
-  const btnGhost = 'flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-semibold transition hover:bg-muted disabled:opacity-50'
   const btnMain = 'flex items-center gap-1.5 rounded-lg bg-secondary px-3 py-1.5 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50'
   const resultActions = (k: Kind, onRegenerate: () => void) => (
     <div className="flex flex-wrap items-center justify-end gap-2" data-testid={`idea-v2-${k}-actions`}>
-      <button onClick={() => openPreview(k)} disabled={previewLoading === k || approving} className={btnGhost} data-testid={`idea-v2-${k}-preview`}>
-        {previewLoading === k ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Собираем промпт…</> : <><Eye className="h-3.5 w-3.5" /> Просмотреть промпт</>}
-      </button>
       <button onClick={onRegenerate} disabled={approving} className={btnMain} data-testid={`idea-v2-${k}-regenerate`}>
         <Wand2 className="h-3.5 w-3.5" /> Перегенерировать
       </button>
@@ -492,6 +498,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     }
 
     const close = () => setPreviewOpen(false)
+    // «Отправить» = закрыть модалку, перейти на шаг и запустить генерацию (с учётом ручных правок полей).
+    const send = () => { setPreviewOpen(false); setView(promptKind); void generate(promptKind) }
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={close} data-testid="idea-v2-preview-modal" data-kind={promptKind}>
         <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -514,8 +522,11 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             {renderField('assistant', 'Assistant (зачин ответа)', 5, 'Необязательно: задайте зачин ответа модели — она продолжит с него. Оставьте пустым, чтобы модель писала с чистого листа.')}
           </div>
           <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
-            <button onClick={close} className="flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110" data-testid="idea-v2-preview-save">
-              <Check className="h-4 w-4" /> Сохранить
+            <button onClick={close} className="flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted" data-testid="idea-v2-preview-cancel">
+              Закрыть
+            </button>
+            <button onClick={send} disabled={generating} className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50" data-testid="idea-v2-preview-send">
+              <Wand2 className="h-4 w-4" /> Отправить
             </button>
           </div>
         </div>
@@ -617,12 +628,9 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2" data-testid="idea-v2-logline-actions">
-              <button onClick={() => openPreview('logline')} disabled={previewLoading === 'logline' || approving || loglineGenerating} className={btnGhost} data-testid="idea-v2-logline-preview">
-                {previewLoading === 'logline' ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Собираем промпт…</> : <><Eye className="h-3.5 w-3.5" /> Просмотреть промпт</>}
-              </button>
               {!loglineGenerating && (
-                <button onClick={() => generate('logline')} disabled={approving} className={btnMain} data-testid="idea-v2-logline-generate">
-                  <Wand2 className="h-3.5 w-3.5" /> Сгенерировать
+                <button onClick={() => generate('logline', true)} disabled={approving} className={btnMain} data-testid="idea-v2-logline-generate">
+                  <Wand2 className="h-3.5 w-3.5" /> {haveText ? 'Перегенерировать' : 'Сгенерировать'}
                 </button>
               )}
             </div>
@@ -672,16 +680,15 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                   />
                   <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
                     <p className="min-w-0 text-[11px] text-muted-foreground">
-                      Правка сохраняет контекст: модель дорабатывает текущий логлайн, а не пишет с нуля. Сохраните правки, при желании посмотрите промпт кнопкой «Просмотреть промпт» и нажмите «Сгенерировать» вверху.
-                      {refineSaved && <span className="ml-1 text-primary">Правки сохранены.</span>}
+                      Правка сохраняет контекст: модель дорабатывает текущий логлайн, помня все прежние правки. Нажмите «Изменить» — откроется промпт, отправка из него.
                     </p>
                     <button
-                      onClick={saveRefine}
-                      disabled={approving || !refineText.trim() || refineSaved}
+                      onClick={() => openPreview('logline')}
+                      disabled={approving || !refineText.trim() || previewLoading === 'logline'}
                       className={`${btnMain} flex-shrink-0`}
-                      data-testid="idea-v2-logline-refine-save"
+                      data-testid="idea-v2-logline-refine-edit"
                     >
-                      <Check className="h-3.5 w-3.5" /> Сохранить правки
+                      {previewLoading === 'logline' ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Собираем промпт…</> : <><Pencil className="h-3.5 w-3.5" /> Изменить</>}
                     </button>
                   </div>
                 </div>
@@ -689,7 +696,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             </>
           ) : (
             <div className="mt-4 rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground" data-testid="idea-v2-logline-empty">
-              Логлайн ещё не сгенерирован. Посмотрите промпт при желании и нажмите «Сгенерировать».
+              Логлайн ещё не сгенерирован. Нажмите «Сгенерировать».
               <p className="mt-2 text-xs">Формула: <span className="italic">{LOGLINE_V2_FORMULA_RU}</span></p>
             </div>
           )}
@@ -739,9 +746,6 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-end gap-2" data-testid="idea-v2-synopsis-actions">
-              <button onClick={() => openPreview('synopsis')} disabled={previewLoading === 'synopsis'} className={btnGhost} data-testid="idea-v2-synopsis-preview">
-                {previewLoading === 'synopsis' ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Собираем промпт…</> : <><Eye className="h-3.5 w-3.5" /> Просмотреть промпт</>}
-              </button>
               <button onClick={() => generate('synopsis')} className={btnMain} data-testid="idea-v2-synopsis-generate">
                 <Wand2 className="h-3.5 w-3.5" /> Сгенерировать
               </button>
@@ -754,7 +758,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             </div>
           )}
           <div className="mt-4 rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground" data-testid="idea-v2-synopsis-empty">
-            Синопсис ещё не сгенерирован. Посмотрите промпт при желании и нажмите «Сгенерировать» — логлайн развернётся в синопсис на 7–10 предложений.
+            Синопсис ещё не сгенерирован. Нажмите «Сгенерировать» — логлайн развернётся в синопсис на 7–10 предложений.
           </div>
           {error && <div className="mt-4">{errorBox}</div>}
           {canceled === 'synopsis' && <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">Генерация синопсиса отменена.</p>}
