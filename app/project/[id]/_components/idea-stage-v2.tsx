@@ -232,7 +232,22 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   // перестраивается, если ввод менялся (актуальные пожелания попадают в промпт). Генерацию НЕ запускаем.
   const proceedToLogline = async (reset: boolean) => {
     setError(''); setCanceled(null); setResetConfirmOpen(false)
-    if (reset) invalidateDownstream()
+    if (reset) {
+      invalidateDownstream()
+      // Реально стираем логлайн/синопсис в БД, иначе после перезагрузки страницы они вернутся.
+      setSavingInput(true)
+      try {
+        const res = await fetch('/api/ai/v2/reset', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id }),
+        })
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}))
+          setSavingInput(false); setError(d?.error ?? 'Не удалось сбросить последующие шаги'); return
+        }
+      } catch { setSavingInput(false); setError('Ошибка сети'); return }
+      setSavingInput(false)
+      onRefresh()
+    }
     const rebuild = reset || inputDirty || !ready.logline
     if (rebuild) {
       resetPrompt('logline')
