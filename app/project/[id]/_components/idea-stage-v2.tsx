@@ -10,18 +10,18 @@ import { useJobPolling, SmoothProgress, StreamingText } from './use-job-polling'
 /** Примерная длительность генерации синопсиса v2 — управляет плавным прогресс-баром. */
 const SYNOPSIS_V2_EXPECTED_SEC = 50
 
-type Screen = 'choose' | 'input' | 'generate'
+type Screen = 'choose' | 'input'
+type Field = 'system' | 'user' | 'assistant'
 
 /**
- * Поток «Новый проект v2.0» (шаг 1 → шаг 2), пошагово по экранам:
- *   choose   — выбор режима двумя блоками по центру: «Своя идея» или «Собрать из жанров».
- *   input    — ввод: текст идеи ИЛИ набор жанров.
- *   generate — отдельная страница «Шаг 2: генерация синопсиса»: модель + две кнопки
- *              «Просмотреть промпт» и «Генерировать синопсис» (с опциональным редактором промпта).
+ * Поток «Новый проект v2.0» — два шага: Идея → Синопсис.
+ *   choose — выбор режима: «Своя идея» или «Собрать из жанров».
+ *   input  — ввод идеи / выбор жанров + кнопка «Генерировать синопсис».
  *
- * Когда задача завершается, воркер сохраняет синопсис в проект и ставит stage="synopsis_v2" —
- * конечную стадию потока v2. onRefresh() подтягивает проект, и этот же экран показывает РЕЗУЛЬТАТ
- * (проза синопсиса + модель). Дальше по пайплайну v1 проект НЕ идёт — поток v2 пока завершается здесь.
+ * Отдельного шага «Промпт» в степпере нет. Промпт можно посмотреть и отредактировать
+ * на странице готового синопсиса (кнопка «Просмотреть промпт» → модалка). Правки промпта
+ * применяются при «Перегенерировать». Перевод полей на русский (кнопка «РУ») — только для
+ * отображения на стороне клиента; в API всегда уходит английский оригинал.
  */
 export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: () => void }) {
   const [mode, setMode] = useState<'idea' | 'genres'>('idea')
@@ -29,27 +29,37 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const [genres, setGenres] = useState<string[]>([])
   const [screen, setScreen] = useState<Screen>('choose')
 
-  // Просмотр / редактирование промпта.
+  // Просмотр / редактирование промпта (модалка на странице синопсиса).
   const [previewOpen, setPreviewOpen] = useState(false)
-  const [nextLoading, setNextLoading] = useState(false) // спиннер на кнопке «Далее к генерации» (сборка промпта)
   const [previewLoading, setPreviewLoading] = useState(false) // спиннер сборки промпта на экране результата
-  const [promptReady, setPromptReady] = useState(false) // промпт собран для ТЕКУЩЕГО ввода → шаг «Промпт» доступен
+  const [promptReady, setPromptReady] = useState(false) // промпт собран для ТЕКУЩЕГО ввода
   const [inputDirty, setInputDirty] = useState(false)   // ввод менялся после последней генерации → шаг «Синопсис» недоступен
+
+  // Редактируемые значения промпта + «пристин»-копии для кнопки «Сбросить».
   const [editSystem, setEditSystem] = useState('')
   const [editUser, setEditUser] = useState('')
   const [editAssistant, setEditAssistant] = useState('')
+  const [origSystem, setOrigSystem] = useState('')
+  const [origUser, setOrigUser] = useState('')
+  const [origAssistant, setOrigAssistant] = useState('')
   const [contextNote, setContextNote] = useState('')
-  const [copied, setCopied] = useState<'system' | 'user' | 'assistant' | null>(null)
+  const [copied, setCopied] = useState<Field | null>(null)
 
-  // Любое изменение идеи/жанров/режима «сбрасывает» промпт и синопсис: следующие шаги обнуляются
-  // и становятся недоступными, пока текущий шаг (сборка промпта / генерация) не будет пройден заново.
+  // Пер-поле: режим редактирования (карандашик), показ русского перевода (РУ), сам перевод и его загрузка.
+  const [editable, setEditable] = useState<Record<Field, boolean>>({ system: false, user: false, assistant: false })
+  const [ruOn, setRuOn] = useState<Record<Field, boolean>>({ system: false, user: false, assistant: false })
+  const [ruText, setRuText] = useState<Record<Field, string>>({ system: '', user: '', assistant: '' })
+  const [ruLoading, setRuLoading] = useState<Record<Field, boolean>>({ system: false, user: false, assistant: false })
+
+  // Любое изменение идеи/жанров/режима «сбрасывает» промпт и синопсис: следующий шаг обнуляется
+  // и становится недоступным, пока текущий шаг не будет пройден заново.
   const invalidateDownstream = () => { setPromptReady(false); setInputDirty(true); setPreviewOpen(false) }
 
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState('')
   const [canceled, setCanceled] = useState(false)
   const activeJobIdRef = useRef<string | null>(null)
-  // Результат v2 уже сохранён в проекте — показываем его; «Сгенерировать заново» возвращает к форме.
+  // Результат v2 уже сохранён в проекте — показываем его; «Начать заново» возвращает к форме.
   const hasResult = project?.stage === SYNOPSIS_V2_STAGE && !!String(project?.synopsis ?? '').trim()
   const [showForm, setShowForm] = useState(false)
 
@@ -70,6 +80,9 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const jobActive = !!job && (job.status === 'pending' || job.status === 'processing')
   const generating = starting || jobActive
 
+  // Промпт отредактирован пользователем относительно собранного оригинала → при перегенерации уйдёт override.
+  const promptEdited = promptReady && (editSystem !== origSystem || editUser !== origUser || editAssistant !== origAssistant)
+
   // Возобновление: если для проекта уже крутится v2-задача (пользователь ушёл и вернулся) — подхватываем её.
   useEffect(() => {
     let ignore = false
@@ -81,7 +94,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
         const j = d?.job
         if (!j || ignore) return
         if (j.status === 'pending' || j.status === 'processing') {
-          setScreen('generate')
+          setShowForm(true); setScreen('input')
           activeJobIdRef.current = j.id
           startPolling(j.id)
         }
@@ -118,8 +131,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     setMode(m); setError(''); setCanceled(false); invalidateDownstream(); setScreen('input')
   }
 
-  // Собрать промпт (system/user/assistant) для текущего ввода и сохранить в state. Единый источник для
-  // «Далее к генерации» и «Просмотреть промпт» на экране результата. Возвращает true при успехе.
+  // Собрать промпт (system/user/assistant) для текущего ввода и сохранить в state (+ пристин-копии).
+  // Используется кнопкой «Просмотреть промпт» на экране результата. Возвращает true при успехе.
   const buildPrompt = async (): Promise<boolean> => {
     try {
       const res = await fetch('/api/ai/v2/synopsis/preview', {
@@ -129,30 +142,18 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) { setError(d?.error ?? 'Не удалось собрать промпт'); return false }
-      setEditSystem(d.system ?? '')
-      setEditUser(d.user ?? '')
-      setEditAssistant(d.assistant ?? '')
+      const sys = d.system ?? '', usr = d.user ?? '', ast = d.assistant ?? ''
+      setEditSystem(sys); setEditUser(usr); setEditAssistant(ast)
+      setOrigSystem(sys); setOrigUser(usr); setOrigAssistant(ast)
       setContextNote(d.contextNote ?? '')
+      setEditable({ system: false, user: false, assistant: false })
+      setRuOn({ system: false, user: false, assistant: false })
+      setRuText({ system: '', user: '', assistant: '' })
+      setRuLoading({ system: false, user: false, assistant: false })
       setPromptReady(true)
       return true
     } catch { setError('Ошибка сети'); return false }
   }
-
-  // «Далее к генерации» теперь СОБИРАЕТ промпт (со спиннером на кнопке) и переходит к шагу «Промпт».
-  // Кнопка «Просмотреть промпт» затем лишь показывает уже собранный промпт, ничего не запрашивая.
-  const goToGenerate = async () => {
-    if (!canProceed) {
-      setError(mode === 'idea' ? 'Опишите идею хотя бы одним–двумя предложениями' : 'Выберите хотя бы один жанр')
-      return
-    }
-    setError(''); setNextLoading(true)
-    const ok = await buildPrompt()
-    setNextLoading(false)
-    if (ok) { setPreviewOpen(false); setScreen('generate') }
-  }
-
-  // Просто открыть модалку с уже собранным промптом (без запроса к серверу).
-  const openPreview = () => { if (promptReady) setPreviewOpen(true) }
 
   // Экран результата: собрать промпт при необходимости (со спиннером) и открыть модалку просмотра.
   const previewFromResult = async () => {
@@ -182,9 +183,18 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     finally { setStarting(false) }
   }
 
-  // Перегенерация с экрана результата: показать экран генерации с прогрессом и запустить генерацию заново.
+  // Запуск генерации с экрана ввода. Если промпт был отредактирован в модалке — уходит override.
+  const startGenerate = () => {
+    if (!canProceed) {
+      setError(mode === 'idea' ? 'Опишите идею хотя бы одним–двумя предложениями' : 'Выберите хотя бы один жанр')
+      return
+    }
+    setCanceled(false); generate(promptEdited)
+  }
+
+  // Перегенерация с экрана результата: запустить заново (с override, если промпт правили и сохранили).
   const regenerateFromResult = () => {
-    setShowForm(true); setScreen('generate'); setCanceled(false); generate(false)
+    setShowForm(true); setCanceled(false); generate(promptEdited)
   }
 
   const cancel = async () => {
@@ -193,7 +203,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     try { await fetch(`/api/ai/jobs/${id}/cancel`, { method: 'POST' }) } catch { /* поллинг повторит */ }
   }
 
-  const copyPrompt = async (which: 'system' | 'user' | 'assistant', text: string) => {
+  const copyPrompt = async (which: Field, text: string) => {
     try {
       await navigator.clipboard.writeText(text ?? '')
       setCopied(which)
@@ -203,35 +213,76 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
 
   const closePreview = () => setPreviewOpen(false)
 
-  // ─────────────────────────────── Степпер потока v2: Идея → Промпт → Синопсис
-  // Клик по шагу возвращает назад; следующие шаги доступны только когда текущий пройден.
-  const currentStepKey: 'idea' | 'prompt' | 'synopsis' =
-    (hasResult && !showForm && !generating) || generating ? 'synopsis'
-      : screen === 'generate' ? 'prompt'
-      : 'idea'
+  // ─────────────── Пер-поле действия модалки промпта
+  const fieldValue: Record<Field, string> = { system: editSystem, user: editUser, assistant: editAssistant }
+  const fieldSetter: Record<Field, (v: string) => void> = { system: setEditSystem, user: setEditUser, assistant: setEditAssistant }
+  const fieldOrig: Record<Field, string> = { system: origSystem, user: origUser, assistant: origAssistant }
+
+  // Карандашик: сделать поле редактируемым/только для просмотра. При включении правки убираем показ перевода.
+  const toggleEdit = (key: Field) => {
+    setEditable((p) => ({ ...p, [key]: !p[key] }))
+    setRuOn((p) => ({ ...p, [key]: false }))
+  }
+
+  // Сбросить поле к собранному оригиналу и убрать перевод.
+  const resetField = (key: Field) => {
+    fieldSetter[key](fieldOrig[key])
+    setRuOn((p) => ({ ...p, [key]: false }))
+    setRuText((p) => ({ ...p, [key]: '' }))
+  }
+
+  // Перевести текущее значение поля на русский (только для отображения).
+  const translateField = async (key: Field) => {
+    setRuLoading((p) => ({ ...p, [key]: true }))
+    try {
+      const res = await fetch('/api/ai/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: fieldValue[key] }),
+      })
+      const d = await res.json().catch(() => ({}))
+      setRuText((p) => ({ ...p, [key]: res.ok ? (d.text ?? '') : '(не удалось перевести)' }))
+    } catch {
+      setRuText((p) => ({ ...p, [key]: '(ошибка сети при переводе)' }))
+    } finally {
+      setRuLoading((p) => ({ ...p, [key]: false }))
+    }
+  }
+
+  // РУ: показать/скрыть перевод. При включении, если перевода ещё нет — запросить.
+  const toggleRu = (key: Field) => {
+    const next = !ruOn[key]
+    setRuOn((p) => ({ ...p, [key]: next }))
+    if (next && !ruText[key]) translateField(key)
+  }
+
+  // Правка значения поля из textarea: чистим перевод (устарел) и обновляем значение.
+  const onFieldChange = (key: Field, v: string) => {
+    fieldSetter[key](v)
+    setRuText((p) => (p[key] ? { ...p, [key]: '' } : p))
+  }
+
+  // ─────────────── Степпер потока v2: Идея → Синопсис (шага «Промпт» нет)
+  const currentStepKey: 'idea' | 'synopsis' =
+    ((hasResult && !showForm && !generating) || generating) ? 'synopsis' : 'idea'
   const stepClickable = {
     idea: !generating,
-    prompt: promptReady && !generating,
     synopsis: hasResult && !inputDirty && !generating,
   }
-  const goStep = (key: 'idea' | 'prompt' | 'synopsis') => {
+  const goStep = (key: 'idea' | 'synopsis') => {
     if (key === currentStepKey || generating) return
     setError(''); setPreviewOpen(false)
     if (key === 'idea') {
       if (!stepClickable.idea) return
       setShowForm(true); setScreen('input')
-    } else if (key === 'prompt') {
-      if (!stepClickable.prompt) return
-      setShowForm(true); setScreen('generate')
     } else {
       if (!stepClickable.synopsis) return
       setShowForm(false)
     }
   }
 
-  const V2_STEPS: { key: 'idea' | 'prompt' | 'synopsis'; label: string }[] = [
+  const V2_STEPS: { key: 'idea' | 'synopsis'; label: string }[] = [
     { key: 'idea', label: 'Идея' },
-    { key: 'prompt', label: 'Промпт' },
     { key: 'synopsis', label: 'Синопсис' },
   ]
   const StepsBar = () => {
@@ -269,10 +320,87 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     )
   }
 
-  // ─────────────────────────── Модалка просмотра / редактирования промпта
-  // Единый рендер: используется и на экране результата, и на экранах формы (шаг «Промпт»).
+  // ─────────────── Модалка просмотра / редактирования промпта (на странице синопсиса)
   const renderPromptModal = () => {
     if (!previewOpen || generating) return null
+
+    const btnBase = 'inline-flex items-center justify-center gap-1 rounded-md border px-1.5 py-1 text-xs font-medium transition'
+    const btnIdle = 'border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground'
+    const btnActive = 'border-primary bg-primary/10 text-primary'
+
+    const renderField = (key: Field, label: string, rows: number, placeholder?: string) => {
+      const isRu = ruOn[key]
+      const loading = ruLoading[key]
+      const canEdit = editable[key] && !isRu
+      const shown = isRu ? (loading ? '' : ruText[key]) : fieldValue[key]
+      return (
+        <div>
+          <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+            <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</label>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => copyPrompt(key, shown)}
+                className={`${btnBase} ${btnIdle}`}
+                title="Скопировать"
+                data-testid={`idea-v2-copy-${key}`}
+              >
+                {copied === key ? <Check className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
+              </button>
+              <button
+                type="button"
+                onClick={() => resetField(key)}
+                className={`${btnBase} ${btnIdle}`}
+                title="Сбросить"
+                data-testid={`idea-v2-reset-${key}`}
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleEdit(key)}
+                className={`${btnBase} ${editable[key] ? btnActive : btnIdle}`}
+                title={editable[key] ? 'Редактирование включено' : 'Редактировать'}
+                aria-pressed={editable[key]}
+                data-testid={`idea-v2-edit-${key}`}
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => toggleRu(key)}
+                className={`${btnBase} ${isRu ? btnActive : btnIdle}`}
+                title="Показать перевод на русский (только просмотр; в API уходит оригинал)"
+                aria-pressed={isRu}
+                data-testid={`idea-v2-ru-${key}`}
+              >
+                РУ
+              </button>
+            </div>
+          </div>
+          <div className="relative">
+            <textarea
+              value={shown}
+              onChange={(e) => onFieldChange(key, e.target.value)}
+              readOnly={!canEdit}
+              rows={rows}
+              placeholder={placeholder}
+              className={`w-full resize-y rounded-lg border px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary ${canEdit ? 'border-input bg-background' : 'border-border bg-muted/40 text-foreground/90'}`}
+              data-testid={`idea-v2-preview-${key}`}
+            />
+            {loading && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg bg-background/60">
+                <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> Переводим…</span>
+              </div>
+            )}
+          </div>
+          {isRu && !loading && (
+            <p className="mt-1 text-[11px] text-muted-foreground">Показан перевод на русский — только для просмотра. В генерацию уходит оригинал.</p>
+          )}
+        </div>
+      )
+    }
+
     return (
       <div
         className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
@@ -305,93 +433,19 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                 <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" /> {contextNote}
               </p>
             )}
-
-            {/* System */}
-            <div>
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  <Pencil className="h-3.5 w-3.5" /> System (правила)
-                </label>
-                <button
-                  onClick={() => copyPrompt('system', editSystem)}
-                  className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium transition hover:bg-muted"
-                  data-testid="idea-v2-copy-system"
-                >
-                  {copied === 'system' ? <><Check className="h-3.5 w-3.5 text-primary" /> Скопировано</> : <><Copy className="h-3.5 w-3.5" /> Копировать</>}
-                </button>
-              </div>
-              <textarea
-                value={editSystem}
-                onChange={(e) => setEditSystem(e.target.value)}
-                rows={10}
-                className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary"
-                data-testid="idea-v2-preview-system"
-              />
-            </div>
-
-            {/* User */}
-            <div>
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  <Pencil className="h-3.5 w-3.5" /> User (запрос)
-                </label>
-                <button
-                  onClick={() => copyPrompt('user', editUser)}
-                  className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium transition hover:bg-muted"
-                  data-testid="idea-v2-copy-user"
-                >
-                  {copied === 'user' ? <><Check className="h-3.5 w-3.5 text-primary" /> Скопировано</> : <><Copy className="h-3.5 w-3.5" /> Копировать</>}
-                </button>
-              </div>
-              <textarea
-                value={editUser}
-                onChange={(e) => setEditUser(e.target.value)}
-                rows={7}
-                className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary"
-                data-testid="idea-v2-preview-user"
-              />
-            </div>
-
-            {/* Assistant */}
-            <div>
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  <Pencil className="h-3.5 w-3.5" /> Assistant (зачин ответа)
-                </label>
-                <button
-                  onClick={() => copyPrompt('assistant', editAssistant)}
-                  className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium transition hover:bg-muted"
-                  data-testid="idea-v2-copy-assistant"
-                >
-                  {copied === 'assistant' ? <><Check className="h-3.5 w-3.5 text-primary" /> Скопировано</> : <><Copy className="h-3.5 w-3.5" /> Копировать</>}
-                </button>
-              </div>
-              <textarea
-                value={editAssistant}
-                onChange={(e) => setEditAssistant(e.target.value)}
-                rows={5}
-                placeholder="Необязательно: задайте зачин ответа модели — она продолжит с него. Оставьте пустым, чтобы модель писала синопсис с чистого листа."
-                className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary"
-                data-testid="idea-v2-preview-assistant"
-              />
-            </div>
+            {renderField('system', 'System (правила)', 10)}
+            {renderField('user', 'User (запрос)', 7)}
+            {renderField('assistant', 'Assistant (зачин ответа)', 5, 'Необязательно: задайте зачин ответа модели — она продолжит с него. Оставьте пустым, чтобы модель писала синопсис с чистого листа.')}
           </div>
 
-          {/* Подвал */}
-          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-5 py-3.5">
+          {/* Подвал — только «Сохранить» */}
+          <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
             <button
               onClick={closePreview}
-              className="rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted"
-              data-testid="idea-v2-preview-cancel"
-            >
-              Закрыть
-            </button>
-            <button
-              onClick={() => generate(true)}
               className="flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110"
-              data-testid="idea-v2-generate-edited"
+              data-testid="idea-v2-preview-save"
             >
-              <Wand2 className="h-4 w-4" /> {hasResult ? 'Перегенерировать с этим промптом' : 'Генерировать с этим промптом'}
+              <Check className="h-4 w-4" /> Сохранить
             </button>
           </div>
         </div>
@@ -473,8 +527,32 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
         <div className="rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive" data-testid="idea-v2-error">{error}</div>
       )}
 
-      {/* ═══════════════════════ Экран 1: выбор режима (два блока по центру) ═══════════════════════ */}
-      {screen === 'choose' && (
+      {/* ═══════════════════════ Генерация: прогресс ═══════════════════════ */}
+      {generating && (
+        <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }} data-testid="idea-v2-step2">
+          <h2 className="flex items-center gap-2 font-display text-xl font-bold">
+            <Wand2 className="h-5 w-5 text-primary" /> Генерация синопсиса
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Отправляется в: <span className="font-semibold text-foreground" data-testid="idea-v2-model">{FABLE_MODEL_LABEL}</span>.
+          </p>
+          <div className="mt-4 space-y-2" data-testid="idea-v2-progress">
+            {job ? (
+              <SmoothProgress job={job} expectedTotalSec={SYNOPSIS_V2_EXPECTED_SEC} />
+            ) : (
+              <p className="inline-flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin text-primary" /> Запуск генерации…</p>
+            )}
+            <StreamingText text={job?.streamedText} active={jobActive} />
+            <div className="flex items-center justify-between gap-2">
+              <p className="min-w-0 text-xs text-muted-foreground">Генерируем синопсис сезона. Текст появляется постепенно; вкладку можно закрыть — прогресс и текст сохранятся.</p>
+              <CancelButton onCancel={cancel} testId="idea-v2-cancel" className="flex-shrink-0" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════ Экран 1: выбор режима ═══════════════════════ */}
+      {!generating && screen === 'choose' && (
         <div className="mx-auto max-w-2xl text-center" data-testid="idea-v2-choose">
           <h2 className="flex items-center justify-center gap-2 font-display text-2xl font-bold">
             <Sparkles className="h-6 w-6 text-primary" /> Новый проект v2.0 — Шаг 1: идея
@@ -525,8 +603,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
         </div>
       )}
 
-      {/* ═══════════════════════ Экран 2: ввод идеи / жанров ═══════════════════════ */}
-      {screen === 'input' && (
+      {/* ═══════════════════════ Экран 2: ввод идеи / жанров + генерация ═══════════════════════ */}
+      {!generating && screen === 'input' && (
         <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }} data-testid="idea-v2-input-screen">
           <button
             onClick={() => { setScreen('choose'); setError('') }}
@@ -574,77 +652,21 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             </div>
           )}
 
-          <button
-            onClick={goToGenerate}
-            disabled={!canProceed || nextLoading}
-            className="mt-5 flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
-            data-testid="idea-v2-next"
-          >
-            {nextLoading
-              ? <><Loader2 className="h-4 w-4 animate-spin" /> Собираем промпт…</>
-              : <>Далее к генерации <ArrowRight className="h-4 w-4" /></>}
-          </button>
-        </div>
-      )}
-
-      {/* ═══════════════════════ Экран 3: Шаг 2 — генерация синопсиса ═══════════════════════ */}
-      {screen === 'generate' && (
-        <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }} data-testid="idea-v2-step2">
-          {!generating && (
-            <button
-              onClick={() => { setScreen('input'); setPreviewOpen(false); setError(''); setCanceled(false) }}
-              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
-              data-testid="idea-v2-back-to-input"
-            >
-              <ArrowLeft className="h-4 w-4" /> Назад к {mode === 'idea' ? 'идее' : 'жанрам'}
-            </button>
-          )}
-
-          <h2 className="mt-3 flex items-center gap-2 font-display text-xl font-bold">
-            <Wand2 className="h-5 w-5 text-primary" /> Шаг 2: генерация синопсиса
-          </h2>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-4 text-sm text-muted-foreground">
             Отправляется в: <span className="font-semibold text-foreground" data-testid="idea-v2-model">{FABLE_MODEL_LABEL}</span>.
             Будет сгенерирован синопсис на 7–10 предложений: предыстория, основной хук (главный клиффхэнгер ближе к концу сезона) и концовка.
           </p>
 
-          {!generating && (
-            <div className="mt-5 flex flex-wrap gap-2">
-              <button
-                onClick={openPreview}
-                disabled={!promptReady}
-                className="flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted disabled:opacity-50"
-                data-testid="idea-v2-preview-open"
-              >
-                <Eye className="h-4 w-4" />
-                Просмотреть промпт
-              </button>
-              <button
-                onClick={() => generate(false)}
-                className="flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
-                data-testid="idea-v2-generate"
-              >
-                <Wand2 className="h-4 w-4" /> {hasResult ? 'Перегенерировать синопсис' : 'Генерировать синопсис'}
-              </button>
-            </div>
-          )}
+          <button
+            onClick={startGenerate}
+            disabled={!canProceed}
+            className="mt-5 flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
+            data-testid="idea-v2-generate"
+          >
+            <Wand2 className="h-4 w-4" /> {hasResult ? 'Перегенерировать синопсис' : 'Генерировать синопсис'}
+          </button>
 
-          {generating && (
-            <div className="mt-4 space-y-2" data-testid="idea-v2-progress">
-              {job ? (
-                <SmoothProgress job={job} expectedTotalSec={SYNOPSIS_V2_EXPECTED_SEC} />
-              ) : (
-                <p className="inline-flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin text-primary" /> Запуск генерации…</p>
-              )}
-              <StreamingText text={job?.streamedText} active={jobActive} />
-              <div className="flex items-center justify-between gap-2">
-                <p className="min-w-0 text-xs text-muted-foreground">Генерируем синопсис сезона. Текст появляется постепенно; вкладку можно закрыть — прогресс и текст сохранятся.</p>
-                <CancelButton onCancel={cancel} testId="idea-v2-cancel" className="flex-shrink-0" />
-              </div>
-            </div>
-          )}
-
-          {canceled && !generating && (
+          {canceled && (
             <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">Генерация отменена. Нажмите кнопку выше, чтобы запустить снова.</p>
           )}
         </div>
