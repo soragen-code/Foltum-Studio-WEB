@@ -45,6 +45,12 @@ export interface SynopsisV2Input {
    * (контекст сохраняется: модель дорабатывает текущий логлайн, а не пишет с нуля).
    */
   refine?: string | null;
+  /**
+   * История ранее применённых правок логлайна (по порядку). Каждая из них УЖЕ учтена в текущем
+   * логлайне и должна оставаться в силе — модель не должна отменять прежние пожелания.
+   * Пример: сначала «не про воду», затем «не про шахты» — обе должны действовать одновременно.
+   */
+  refineHistory?: string[] | null;
 }
 
 /**
@@ -246,7 +252,13 @@ export function loglineV2UserPrompt(input: SynopsisV2Input): string {
 
   // Режим уточнения: контекст сохраняется — модель дорабатывает текущий логлайн по пожеланию продюсера.
   if (refine && prev) {
-    return `${source}\n\nCURRENT LOGLINE:\n"${prev}"\n\nThe producer wants to change it as follows:\n${refine}\n\nRewrite the logline applying this change while keeping everything else that already works. Keep it a single sentence.${tail}`;
+    const history = (input.refineHistory ?? [])
+      .map((h) => (h ?? "").trim())
+      .filter(Boolean);
+    const historyBlock = history.length
+      ? `\n\nEARLIER CHANGE REQUESTS FROM THE PRODUCER (in order — ALL of them are already reflected in the current logline and MUST stay in force; never undo or reverse any of them):\n${history.map((h) => `- ${h}`).join("\n")}`
+      : "";
+    return `${source}\n\nCURRENT LOGLINE:\n"${prev}"${historyBlock}\n\nThe producer NOW wants to change it as follows:\n${refine}\n\nRewrite the logline applying this newest change while keeping everything that already works AND without reverting any of the earlier change requests above. Keep it a single sentence.${tail}`;
   }
 
   return `${source}${tail}`;

@@ -32,6 +32,8 @@ export interface LoglineV2JobParams {
   logline?: string | null;
   /** Правка: что изменить в текущем логлайне (режим уточнения, контекст сохраняется). */
   refine?: string | null;
+  /** История ранее применённых правок логлайна — чтобы модель не отменяла прежние пожелания. */
+  refineHistory?: string[] | null;
   overrideSystem?: string | null;
   overrideUser?: string | null;
   overrideAssistant?: string | null;
@@ -47,8 +49,8 @@ function cleanLogline(raw: string): string {
 async function runLoglineV2JobImpl(jobId: string, projectId: string, params: LoglineV2JobParams): Promise<void> {
   let hb: ReturnType<typeof setInterval> | null = null;
   try {
-    const { idea, genres = [], wishes, logline: prevLogline, refine, overrideSystem, overrideUser, overrideAssistant } = params;
-    const parts = buildLoglineV2Parts({ idea, genres, wishes, logline: prevLogline, refine });
+    const { idea, genres = [], wishes, logline: prevLogline, refine, refineHistory, overrideSystem, overrideUser, overrideAssistant } = params;
+    const parts = buildLoglineV2Parts({ idea, genres, wishes, logline: prevLogline, refine, refineHistory });
     const system = overrideSystem && overrideSystem.trim() ? overrideSystem : parts.system;
     const user = overrideUser && overrideUser.trim() ? overrideUser : parts.user;
     const assistantPrefill = (overrideAssistant ?? parts.assistant ?? "").trim();

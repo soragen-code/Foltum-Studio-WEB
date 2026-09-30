@@ -72,6 +72,12 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   // чтобы модель дорабатывала его с сохранением контекста, а не писала с нуля.
   const [refineText, setRefineText] = useState('')
   const [refineSaved, setRefineSaved] = useState(false)
+  // Накопленная история применённых правок логлайна (по порядку). Уходит в промпт вместе с текущей
+  // правкой, чтобы модель не отменяла прежние пожелания («не про воду» → «не про шахты» действуют вместе).
+  const [refineHistory, setRefineHistory] = useState<string[]>([])
+  // Правка, с которой стартовала текущая генерация — фиксируем в момент запуска (без stale-замыкания),
+  // чтобы по завершении добавить её в историю.
+  const lastRefineRef = useRef<string>('')
 
   // Ввод менялся после последнего «Сохранить и продолжить» → шаги «Логлайн»/«Синопсис» недоступны,
   // но их данные НЕ сбрасываются, пока пользователь не подтвердит сброс в модалке.
@@ -99,6 +105,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const invalidateDownstream = () => {
     resetPrompt('logline'); resetPrompt('synopsis'); setPreviewOpen(false)
     setDownstreamReset(true); setLoglineDraft('')
+    setRefineText(''); setRefineSaved(false); setRefineHistory([]); lastRefineRef.current = ''
   }
   // Редактирование ввода лишь помечает его изменённым — ничего не сбрасывает.
   const markInputDirty = () => setInputDirty(true)
@@ -114,6 +121,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     if (res.job.status === 'completed') {
       setError(''); setCanceled(null); setPreviewOpen(false)
       if (k === 'logline') {
+        // Применённую правку добавляем в историю — следующие правки будут учитывать её (модель не отменит прежнее).
+        if (lastRefineRef.current) { const applied = lastRefineRef.current; setRefineHistory((h) => [...h, applied]); lastRefineRef.current = '' }
         setInputDirty(false); setInputSaved(true); setDownstreamReset(false); resetPrompt('synopsis'); setRefineText(''); setRefineSaved(false)
         // Сразу показываем готовый текст (до onRefresh), чтобы поле не пустело.
         const fresh = String(res.job.result?.logline ?? res.job.streamedText ?? '').trim()
@@ -175,7 +184,9 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const inputBody = () => (mode === 'idea' ? { idea: idea.trim() } : { genres, wishes: wishes.trim() || undefined })
   // Аргументы уточнения логлайна: добавляются только для шага логлайна, когда есть непустая правка и текущий логлайн.
   const refineArgs = (k: Kind) =>
-    k === 'logline' && refineText.trim() && savedLogline ? { logline: savedLogline, refine: refineText.trim() } : {}
+    k === 'logline' && refineText.trim() && savedLogline
+      ? { logline: savedLogline, refine: refineText.trim(), ...(refineHistory.length ? { refineHistory } : {}) }
+      : {}
   const onRefineChange = (v: string) => { setRefineText(v); setRefineSaved(false); resetPrompt('logline') }
   // «Сохранить правки»: фиксируем текст правки (уходит в промпт), но НЕ генерируем — генерация по кнопке «Сгенерировать» вверху.
   const saveRefine = () => { if (refineText.trim()) { setRefineSaved(true); resetPrompt('logline') } }
@@ -216,6 +227,12 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
 
   const generate = async (k: Kind) => {
     setError(''); setCanceled(null); jobs[k].clear(); setStarting(k)
+    if (k === 'logline') {
+      // Активная правка → запомним её, чтобы по завершении добавить в историю. Иначе (генерация
+      // логлайна «с нуля») накопленная история обнуляется: прежние пожелания к старому логлайну неактуальны.
+      if (refineText.trim() && savedLogline) lastRefineRef.current = refineText.trim()
+      else { lastRefineRef.current = ''; setRefineHistory([]) }
+    }
     try {
       const body: any = { projectId: project.id, ...inputBody(), ...refineArgs(k) }
       if (isEdited(k)) { body.overrideSystem = edit[k].system; body.overrideUser = edit[k].user; body.overrideAssistant = edit[k].assistant }
@@ -291,6 +308,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       }
     } catch { setError('Ошибка сети'); return }
     finally { setApproving(false) }
+    // Логлайн утверждён → накопленная история правок больше не нужна (следующие правки будут к новому логлайну).
+    setRefineHistory([]); lastRefineRef.current = ''
     // Переходим на экран синопсиса БЕЗ автогенерации — пользователь сам смотрит промпт и жмёт «Сгенерировать».
     setView('synopsis'); onRefresh()
   }
