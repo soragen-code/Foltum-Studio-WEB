@@ -62,7 +62,7 @@ async function runLoglineV2JobImpl(jobId: string, projectId: string, params: Log
       if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
       try {
         const onDelta = makeJobStreamWriter(jobId);
-        const raw = await streamChatText(system, user, { model: FABLE_MODEL, temperature: 0.8, maxTokens: 800, onDelta, assistantPrefill });
+        const raw = await streamChatText(system, user, { model: FABLE_MODEL, temperature: 0.9, maxTokens: 2048, onDelta, assistantPrefill });
         const full = assistantPrefill ? `${assistantPrefill}${raw ?? ""}` : (raw ?? "");
         const cleaned = cleanLogline(full);
         if (cleaned.length < 20) throw new Error("logline too short / empty");
