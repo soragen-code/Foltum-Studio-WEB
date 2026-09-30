@@ -32,6 +32,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   // Просмотр / редактирование промпта.
   const [previewOpen, setPreviewOpen] = useState(false)
   const [nextLoading, setNextLoading] = useState(false) // спиннер на кнопке «Далее к генерации» (сборка промпта)
+  const [previewLoading, setPreviewLoading] = useState(false) // спиннер сборки промпта на экране результата
   const [promptReady, setPromptReady] = useState(false) // промпт собран для ТЕКУЩЕГО ввода → шаг «Промпт» доступен
   const [inputDirty, setInputDirty] = useState(false)   // ввод менялся после последней генерации → шаг «Синопсис» недоступен
   const [editSystem, setEditSystem] = useState('')
@@ -90,6 +91,20 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id])
 
+  // При первом рендере, если проект был создан из жанров ("[v2 · genres] …"), восстанавливаем режим и
+  // выбранные жанры — чтобы «Перегенерировать»/«Просмотреть промпт» на экране результата работали корректно.
+  useEffect(() => {
+    const raw = String(project?.idea ?? '')
+    if (raw.startsWith('[v2 · genres]')) {
+      setMode('genres')
+      const enList = raw.replace('[v2 · genres]', '').split(',').map((s) => s.trim()).filter(Boolean)
+      const byEn = Object.fromEntries(GENRES.map((g) => [g.en, g.id]))
+      const ids = enList.map((en) => byEn[en] ?? en)
+      if (ids.length) setGenres(ids)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const toggleGenre = (id: string) => {
     setGenres((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]))
     invalidateDownstream()
@@ -103,14 +118,9 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     setMode(m); setError(''); setCanceled(false); invalidateDownstream(); setScreen('input')
   }
 
-  // «Далее к генерации» теперь СОБИРАЕТ промпт (с спиннером на кнопке) и переходит к шагу «Промпт».
-  // Кнопка «Просмотреть промпт» затем лишь показывает уже собранный промпт, ничего не запрашивая.
-  const goToGenerate = async () => {
-    if (!canProceed) {
-      setError(mode === 'idea' ? 'Опишите идею хотя бы одним–двумя предложениями' : 'Выберите хотя бы один жанр')
-      return
-    }
-    setError(''); setNextLoading(true)
+  // Собрать промпт (system/user/assistant) для текущего ввода и сохранить в state. Единый источник для
+  // «Далее к генерации» и «Просмотреть промпт» на экране результата. Возвращает true при успехе.
+  const buildPrompt = async (): Promise<boolean> => {
     try {
       const res = await fetch('/api/ai/v2/synopsis/preview', {
         method: 'POST',
@@ -118,20 +128,41 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
         body: JSON.stringify({ projectId: project.id, ...(mode === 'idea' ? { idea: idea.trim() } : { genres }) }),
       })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok) { setError(d?.error ?? 'Не удалось собрать промпт'); return }
+      if (!res.ok) { setError(d?.error ?? 'Не удалось собрать промпт'); return false }
       setEditSystem(d.system ?? '')
       setEditUser(d.user ?? '')
       setEditAssistant(d.assistant ?? '')
       setContextNote(d.contextNote ?? '')
       setPromptReady(true)
-      setPreviewOpen(false)
-      setScreen('generate')
-    } catch { setError('Ошибка сети') }
-    finally { setNextLoading(false) }
+      return true
+    } catch { setError('Ошибка сети'); return false }
+  }
+
+  // «Далее к генерации» теперь СОБИРАЕТ промпт (со спиннером на кнопке) и переходит к шагу «Промпт».
+  // Кнопка «Просмотреть промпт» затем лишь показывает уже собранный промпт, ничего не запрашивая.
+  const goToGenerate = async () => {
+    if (!canProceed) {
+      setError(mode === 'idea' ? 'Опишите идею хотя бы одним–двумя предложениями' : 'Выберите хотя бы один жанр')
+      return
+    }
+    setError(''); setNextLoading(true)
+    const ok = await buildPrompt()
+    setNextLoading(false)
+    if (ok) { setPreviewOpen(false); setScreen('generate') }
   }
 
   // Просто открыть модалку с уже собранным промптом (без запроса к серверу).
   const openPreview = () => { if (promptReady) setPreviewOpen(true) }
+
+  // Экран результата: собрать промпт при необходимости (со спиннером) и открыть модалку просмотра.
+  const previewFromResult = async () => {
+    setError('')
+    if (promptReady) { setPreviewOpen(true); return }
+    setPreviewLoading(true)
+    const ok = await buildPrompt()
+    setPreviewLoading(false)
+    if (ok) setPreviewOpen(true)
+  }
 
   const generate = async (withOverride: boolean) => {
     setError(''); setCanceled(false); clearJob(); setStarting(true)
@@ -149,6 +180,11 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       else onRefresh()
     } catch { setError('Ошибка сети') }
     finally { setStarting(false) }
+  }
+
+  // Перегенерация с экрана результата: показать экран генерации с прогрессом и запустить генерацию заново.
+  const regenerateFromResult = () => {
+    setShowForm(true); setScreen('generate'); setCanceled(false); generate(false)
   }
 
   const cancel = async () => {
@@ -233,6 +269,136 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     )
   }
 
+  // ─────────────────────────── Модалка просмотра / редактирования промпта
+  // Единый рендер: используется и на экране результата, и на экранах формы (шаг «Промпт»).
+  const renderPromptModal = () => {
+    if (!previewOpen || generating) return null
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+        onClick={closePreview}
+        data-testid="idea-v2-preview-modal"
+      >
+        <div
+          className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Шапка */}
+          <div className="flex items-center justify-between gap-2 border-b border-border px-5 py-3.5">
+            <h3 className="flex items-center gap-2 font-display text-lg font-semibold">
+              <Eye className="h-5 w-5 text-primary" /> Промпт синопсиса
+            </h3>
+            <button
+              onClick={closePreview}
+              className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+              aria-label="Закрыть"
+              data-testid="idea-v2-preview-close"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          {/* Тело — прокручиваемое */}
+          <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
+            {contextNote && (
+              <p className="flex items-start gap-1.5 text-xs text-muted-foreground" data-testid="idea-v2-context-note">
+                <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" /> {contextNote}
+              </p>
+            )}
+
+            {/* System */}
+            <div>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <Pencil className="h-3.5 w-3.5" /> System (правила)
+                </label>
+                <button
+                  onClick={() => copyPrompt('system', editSystem)}
+                  className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium transition hover:bg-muted"
+                  data-testid="idea-v2-copy-system"
+                >
+                  {copied === 'system' ? <><Check className="h-3.5 w-3.5 text-primary" /> Скопировано</> : <><Copy className="h-3.5 w-3.5" /> Копировать</>}
+                </button>
+              </div>
+              <textarea
+                value={editSystem}
+                onChange={(e) => setEditSystem(e.target.value)}
+                rows={10}
+                className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary"
+                data-testid="idea-v2-preview-system"
+              />
+            </div>
+
+            {/* User */}
+            <div>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <Pencil className="h-3.5 w-3.5" /> User (запрос)
+                </label>
+                <button
+                  onClick={() => copyPrompt('user', editUser)}
+                  className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium transition hover:bg-muted"
+                  data-testid="idea-v2-copy-user"
+                >
+                  {copied === 'user' ? <><Check className="h-3.5 w-3.5 text-primary" /> Скопировано</> : <><Copy className="h-3.5 w-3.5" /> Копировать</>}
+                </button>
+              </div>
+              <textarea
+                value={editUser}
+                onChange={(e) => setEditUser(e.target.value)}
+                rows={7}
+                className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary"
+                data-testid="idea-v2-preview-user"
+              />
+            </div>
+
+            {/* Assistant */}
+            <div>
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <Pencil className="h-3.5 w-3.5" /> Assistant (зачин ответа)
+                </label>
+                <button
+                  onClick={() => copyPrompt('assistant', editAssistant)}
+                  className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium transition hover:bg-muted"
+                  data-testid="idea-v2-copy-assistant"
+                >
+                  {copied === 'assistant' ? <><Check className="h-3.5 w-3.5 text-primary" /> Скопировано</> : <><Copy className="h-3.5 w-3.5" /> Копировать</>}
+                </button>
+              </div>
+              <textarea
+                value={editAssistant}
+                onChange={(e) => setEditAssistant(e.target.value)}
+                rows={5}
+                placeholder="Необязательно: задайте зачин ответа модели — она продолжит с него. Оставьте пустым, чтобы модель писала синопсис с чистого листа."
+                className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary"
+                data-testid="idea-v2-preview-assistant"
+              />
+            </div>
+          </div>
+
+          {/* Подвал */}
+          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-5 py-3.5">
+            <button
+              onClick={closePreview}
+              className="rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted"
+              data-testid="idea-v2-preview-cancel"
+            >
+              Закрыть
+            </button>
+            <button
+              onClick={() => generate(true)}
+              className="flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110"
+              data-testid="idea-v2-generate-edited"
+            >
+              <Wand2 className="h-4 w-4" /> {hasResult ? 'Перегенерировать с этим промптом' : 'Генерировать с этим промптом'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   // ─────────────────────────────────────────────────────────────── Результат готов
   if (hasResult && !showForm && !generating) {
     return (
@@ -251,14 +417,40 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           <p className="mt-3 text-xs text-muted-foreground">
             Синопсис сохранён в проекте. Следующие шаги потока v2.0 появятся позже.
           </p>
-          <button
-            onClick={() => { setShowForm(true); setScreen('choose'); setError(''); setCanceled(false); invalidateDownstream() }}
-            className="mt-4 flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted"
-            data-testid="idea-v2-regenerate"
-          >
-            <RotateCcw className="h-4 w-4" /> Сгенерировать заново
-          </button>
+
+          {error && (
+            <div className="mt-4 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive" data-testid="idea-v2-result-error">{error}</div>
+          )}
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              onClick={previewFromResult}
+              disabled={previewLoading}
+              className="flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted disabled:opacity-50"
+              data-testid="idea-v2-result-preview"
+            >
+              {previewLoading
+                ? <><Loader2 className="h-4 w-4 animate-spin" /> Собираем промпт…</>
+                : <><Eye className="h-4 w-4" /> Просмотреть промпт</>}
+            </button>
+            <button
+              onClick={regenerateFromResult}
+              className="flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110"
+              data-testid="idea-v2-result-regenerate"
+            >
+              <Wand2 className="h-4 w-4" /> Перегенерировать
+            </button>
+            <button
+              onClick={() => { setShowForm(true); setScreen('choose'); setError(''); setCanceled(false); invalidateDownstream() }}
+              className="flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted"
+              data-testid="idea-v2-regenerate"
+            >
+              <RotateCcw className="h-4 w-4" /> Начать заново
+            </button>
+          </div>
         </div>
+
+        {renderPromptModal()}
       </div>
     )
   }
@@ -432,7 +624,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                 className="flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
                 data-testid="idea-v2-generate"
               >
-                <Wand2 className="h-4 w-4" /> Генерировать синопсис
+                <Wand2 className="h-4 w-4" /> {hasResult ? 'Перегенерировать синопсис' : 'Генерировать синопсис'}
               </button>
             </div>
           )}
@@ -458,131 +650,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
         </div>
       )}
 
-      {/* ═══════════════════════ Модалка просмотра / редактирования промпта ═══════════════════════ */}
-      {previewOpen && !generating && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={closePreview}
-          data-testid="idea-v2-preview-modal"
-        >
-          <div
-            className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Шапка */}
-            <div className="flex items-center justify-between gap-2 border-b border-border px-5 py-3.5">
-              <h3 className="flex items-center gap-2 font-display text-lg font-semibold">
-                <Eye className="h-5 w-5 text-primary" /> Промпт синопсиса
-              </h3>
-              <button
-                onClick={closePreview}
-                className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                aria-label="Закрыть"
-                data-testid="idea-v2-preview-close"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* Тело — прокручиваемое */}
-            <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
-              {contextNote && (
-                <p className="flex items-start gap-1.5 text-xs text-muted-foreground" data-testid="idea-v2-context-note">
-                  <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" /> {contextNote}
-                </p>
-              )}
-
-              {/* System */}
-              <div>
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    <Pencil className="h-3.5 w-3.5" /> System (правила)
-                  </label>
-                  <button
-                    onClick={() => copyPrompt('system', editSystem)}
-                    className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium transition hover:bg-muted"
-                    data-testid="idea-v2-copy-system"
-                  >
-                    {copied === 'system' ? <><Check className="h-3.5 w-3.5 text-primary" /> Скопировано</> : <><Copy className="h-3.5 w-3.5" /> Копировать</>}
-                  </button>
-                </div>
-                <textarea
-                  value={editSystem}
-                  onChange={(e) => setEditSystem(e.target.value)}
-                  rows={10}
-                  className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary"
-                  data-testid="idea-v2-preview-system"
-                />
-              </div>
-
-              {/* User */}
-              <div>
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    <Pencil className="h-3.5 w-3.5" /> User (запрос)
-                  </label>
-                  <button
-                    onClick={() => copyPrompt('user', editUser)}
-                    className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium transition hover:bg-muted"
-                    data-testid="idea-v2-copy-user"
-                  >
-                    {copied === 'user' ? <><Check className="h-3.5 w-3.5 text-primary" /> Скопировано</> : <><Copy className="h-3.5 w-3.5" /> Копировать</>}
-                  </button>
-                </div>
-                <textarea
-                  value={editUser}
-                  onChange={(e) => setEditUser(e.target.value)}
-                  rows={7}
-                  className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary"
-                  data-testid="idea-v2-preview-user"
-                />
-              </div>
-
-              {/* Assistant */}
-              <div>
-                <div className="mb-1 flex items-center justify-between gap-2">
-                  <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    <Pencil className="h-3.5 w-3.5" /> Assistant (зачин ответа)
-                  </label>
-                  <button
-                    onClick={() => copyPrompt('assistant', editAssistant)}
-                    className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs font-medium transition hover:bg-muted"
-                    data-testid="idea-v2-copy-assistant"
-                  >
-                    {copied === 'assistant' ? <><Check className="h-3.5 w-3.5 text-primary" /> Скопировано</> : <><Copy className="h-3.5 w-3.5" /> Копировать</>}
-                  </button>
-                </div>
-                <textarea
-                  value={editAssistant}
-                  onChange={(e) => setEditAssistant(e.target.value)}
-                  rows={5}
-                  placeholder="Необязательно: задайте зачин ответа модели — она продолжит с него. Оставьте пустым, чтобы модель писала синопсис с чистого листа."
-                  className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary"
-                  data-testid="idea-v2-preview-assistant"
-                />
-              </div>
-            </div>
-
-            {/* Подвал */}
-            <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-5 py-3.5">
-              <button
-                onClick={closePreview}
-                className="rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted"
-                data-testid="idea-v2-preview-cancel"
-              >
-                Закрыть
-              </button>
-              <button
-                onClick={() => generate(true)}
-                className="flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110"
-                data-testid="idea-v2-generate-edited"
-              >
-                <Wand2 className="h-4 w-4" /> Генерировать с этим промптом
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {renderPromptModal()}
     </div>
   )
 }
