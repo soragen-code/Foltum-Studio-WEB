@@ -28,8 +28,9 @@ const KIND_LABEL: Record<Kind, string> = { logline: 'логлайна', synopsis
 
 /**
  * Поток «Новый проект v2.0» — три шага: Идея → Логлайн → Синопсис.
- *   idea     — выбор режима (своя идея / жанры [+ пожелания]) и ввод → «Сохранить и продолжить»
- *              (строит промпт логлайна, открывает шаг 2 и модалку промпта; «Отправить» в модалке запускает генерацию).
+ *   idea     — выбор режима (своя идея / жанры [+ пожелания]) и ввод → «Продолжить»
+ *              (строит промпт логлайна и открывает модалку, оставаясь на шаге 1; «Отправить» в модалке →
+ *              переход на шаг 2 + генерация; «Закрыть» → остаёмся на шаге 1).
  *   logline  — стрим логлайна побуквенно; поле правки → «Изменить» (модалка промпта → «Отправить»: правка уходит
  *              диалогом messages с прежними логлайнами); готовый текст можно поправить → «Сохранить и продолжить».
  *   synopsis — синопсис, развернутый из утверждённого логлайна.
@@ -45,11 +46,11 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const [screen, setScreen] = useState<Screen>('choose')
   // Пожелания продюсера (только режим жанров). В БД не хранятся — уходят в preview/generate через inputBody.
   const [wishes, setWishes] = useState('')
-  // Модалка-предупреждение о сбросе последующих шагов (при «Сохранить и продолжить» с изменённым вводом).
+  // Модалка-предупреждение о сбросе последующих шагов (при «Продолжить» с изменённым вводом).
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   // Пользователь подтвердил сброс → уже сохранённые логлайн/синопсис скрываются до новой генерации логлайна.
   const [downstreamReset, setDownstreamReset] = useState(false)
-  // Ввод шага 1 сохранён («Сохранить и продолжить») → экран логлайна доступен ещё до генерации.
+  // Ввод шага 1 зафиксирован («Отправить» в модалке промпта) → экран логлайна доступен.
   // Также удерживает экран логлайна в «дыре» между завершением job и onRefresh (нет мигания на шаг 1).
   const [inputSaved, setInputSaved] = useState(false)
   const [savingInput, setSavingInput] = useState(false)
@@ -79,7 +80,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   // Правка, с которой стартовала текущая генерация — фиксируем в момент запуска (без stale-замыкания).
   const lastRefineRef = useRef<string>('')
 
-  // Ввод менялся после последнего «Сохранить и продолжить» → шаги «Логлайн»/«Синопсис» недоступны,
+  // Ввод менялся после последнего «Продолжить» → шаги «Логлайн»/«Синопсис» недоступны,
   // но их данные НЕ сбрасываются, пока пользователь не подтвердит сброс в модалке.
   const [inputDirty, setInputDirty] = useState(false)
 
@@ -255,8 +256,9 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     finally { setStarting(null) }
   }
 
-  // Сохранить ввод (идея/жанры/пожелания), перейти на экран логлайна и ОТКРЫТЬ модалку промпта
-  // (генерация «с нуля»). Генерацию запускает кнопка «Отправить» в модалке; закрыть модалку = просто перейти.
+  // «Продолжить» на шаге 1: сохранить ввод (идея/жанры/пожелания) и ОТКРЫТЬ модалку промпта логлайна
+  // (генерация «с нуля»). Остаёмся на шаге 1: переход на шаг 2 + генерация — только по «Отправить» в модалке;
+  // «Закрыть» — остаёмся на шаге 1.
   const proceedToLogline = async (reset: boolean) => {
     setError(''); setCanceled(null); setResetConfirmOpen(false)
     if (reset) {
@@ -282,13 +284,11 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     setSavingInput(false)
     if (!ok) return
     setInputDirty(false)
-    setInputSaved(true)
-    setView('logline')
     resetModalFlags('logline')
     setPreviewOpen(true)
   }
 
-  // Шаг 1 → «Сохранить и продолжить». Если ввод изменён и уже есть логлайн/синопсис —
+  // Шаг 1 → «Продолжить». Если ввод изменён и уже есть логлайн/синопсис —
   // сначала модалка-предупреждение о сбросе; иначе обычный переход без сброса.
   const saveInputAndContinue = () => {
     if (!canProceed) {
@@ -499,7 +499,12 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
 
     const close = () => setPreviewOpen(false)
     // «Отправить» = закрыть модалку, перейти на шаг и запустить генерацию (с учётом ручных правок полей).
-    const send = () => { setPreviewOpen(false); setView(promptKind); void generate(promptKind) }
+    const send = () => {
+      setPreviewOpen(false)
+      if (promptKind === 'logline') setInputSaved(true) // ввод шага 1 зафиксирован → шаг 2 доступен
+      setView(promptKind)
+      void generate(promptKind)
+    }
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={close} data-testid="idea-v2-preview-modal" data-kind={promptKind}>
         <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -606,7 +611,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   }
 
   // ═══════════════════════ Шаг 2: логлайн ═══════════════════════
-  // Экран доступен сразу после «Сохранить и продолжить» (inputSaved) — ещё до генерации; inputSaved же
+  // Экран доступен сразу после «Отправить» в модалке промпта (inputSaved); inputSaved же
   // удерживает его между завершением job и onRefresh, чтобы не было отката на шаг 1.
   const loglineGenerating = activeKind === 'logline'
   if ((currentView === 'logline' && (hasLogline || inputSaved)) || loglineGenerating) {
@@ -914,7 +919,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
               className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
               data-testid="idea-v2-generate"
             >
-              {savingInput ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />} Сохранить и продолжить
+              {savingInput ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />} Продолжить
             </button>
           </div>
         </div>
