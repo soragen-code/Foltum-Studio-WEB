@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, Wand2, Sparkles, Lightbulb, Eye, Pencil, Check, ArrowLeft, Tags, Info, BookOpen, RotateCcw } from 'lucide-react'
+import { Loader2, Wand2, Sparkles, Lightbulb, Eye, Pencil, ArrowLeft, ArrowRight, Tags, Info, BookOpen, RotateCcw } from 'lucide-react'
 import { GENRES } from '@/lib/idea'
 import { FABLE_MODEL_LABEL, SYNOPSIS_V2_STAGE } from '@/lib/idea-v2'
 import { CancelButton } from './cancel-button'
@@ -10,12 +10,14 @@ import { useJobPolling, SmoothProgress, StreamingText } from './use-job-polling'
 /** Примерная длительность генерации синопсиса v2 — управляет плавным прогресс-баром. */
 const SYNOPSIS_V2_EXPECTED_SEC = 50
 
+type Screen = 'choose' | 'input' | 'generate'
+
 /**
- * Поток «Новый проект v2.0» (шаг 1):
- *   1. Пользователь описывает идею ИЛИ собирает набор жанров и подтверждает выбор.
- *   2. Показываем модель («Claude Fable 5.1») и даём просмотреть/отредактировать промпт,
- *      либо сгенерировать без просмотра.
- *   3. Генерируем синопсис (7–10 предложений: предыстория, основной хук ближе к концу, концовка).
+ * Поток «Новый проект v2.0» (шаг 1 → шаг 2), пошагово по экранам:
+ *   choose   — выбор режима двумя блоками по центру: «Своя идея» или «Собрать из жанров».
+ *   input    — ввод: текст идеи ИЛИ набор жанров.
+ *   generate — отдельная страница «Шаг 2: генерация синопсиса»: модель + две кнопки
+ *              «Просмотреть промпт» и «Генерировать синопсис» (с опциональным редактором промпта).
  *
  * Когда задача завершается, воркер сохраняет синопсис в проект и ставит stage="synopsis_v2" —
  * конечную стадию потока v2. onRefresh() подтягивает проект, и этот же экран показывает РЕЗУЛЬТАТ
@@ -25,7 +27,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const [mode, setMode] = useState<'idea' | 'genres'>('idea')
   const [idea, setIdea] = useState<string>(project?.idea && !String(project.idea).startsWith('[v2 · genres]') ? project.idea : '')
   const [genres, setGenres] = useState<string[]>([])
-  const [confirmed, setConfirmed] = useState(false)
+  const [screen, setScreen] = useState<Screen>('choose')
 
   // Просмотр / редактирование промпта.
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -70,7 +72,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
         const j = d?.job
         if (!j || ignore) return
         if (j.status === 'pending' || j.status === 'processing') {
-          setConfirmed(true)
+          setScreen('generate')
           activeJobIdRef.current = j.id
           startPolling(j.id)
         }
@@ -83,14 +85,18 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const toggleGenre = (id: string) =>
     setGenres((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]))
 
-  const canConfirm = mode === 'idea' ? idea.trim().length >= 10 : genres.length > 0
+  const canProceed = mode === 'idea' ? idea.trim().length >= 10 : genres.length > 0
 
-  const confirmStep1 = () => {
-    if (!canConfirm) {
+  const chooseMode = (m: 'idea' | 'genres') => {
+    setMode(m); setError(''); setCanceled(false); setPreviewOpen(false); setScreen('input')
+  }
+
+  const goToGenerate = () => {
+    if (!canProceed) {
       setError(mode === 'idea' ? 'Опишите идею хотя бы одним–двумя предложениями' : 'Выберите хотя бы один жанр')
       return
     }
-    setError(''); setConfirmed(true)
+    setError(''); setPreviewOpen(false); setScreen('generate')
   }
 
   const openPreview = async () => {
@@ -135,6 +141,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     try { await fetch(`/api/ai/jobs/${id}/cancel`, { method: 'POST' }) } catch { /* поллинг повторит */ }
   }
 
+  // ─────────────────────────────────────────────────────────────── Результат готов
   if (hasResult && !showForm && !generating) {
     return (
       <div className="space-y-6" data-testid="idea-stage-v2">
@@ -152,7 +159,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             Синопсис сохранён в проекте. Следующие шаги потока v2.0 появятся позже.
           </p>
           <button
-            onClick={() => { setShowForm(true); setConfirmed(false); setError(''); setCanceled(false) }}
+            onClick={() => { setShowForm(true); setScreen('choose'); setError(''); setCanceled(false) }}
             className="mt-4 flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted"
             data-testid="idea-v2-regenerate"
           >
@@ -174,110 +181,146 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           <ArrowLeft className="h-4 w-4" /> К готовому синопсису
         </button>
       )}
-      {/* Шаг 1 — идея или жанры */}
-      <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="flex items-center gap-2 font-display text-xl font-bold">
-            <Sparkles className="h-5 w-5 text-primary" /> Новый проект v2.0 — Шаг 1: идея
+
+      {error && (
+        <div className="rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive" data-testid="idea-v2-error">{error}</div>
+      )}
+
+      {/* ═══════════════════════ Экран 1: выбор режима (два блока по центру) ═══════════════════════ */}
+      {screen === 'choose' && (
+        <div className="mx-auto max-w-2xl text-center" data-testid="idea-v2-choose">
+          <h2 className="flex items-center justify-center gap-2 font-display text-2xl font-bold">
+            <Sparkles className="h-6 w-6 text-primary" /> Новый проект v2.0 — Шаг 1: идея
           </h2>
-        </div>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Опишите свою идею словами или соберите набор жанров — и ИИ придумает историю. Дальше вы сможете просмотреть
-          и при желании отредактировать промпт перед генерацией синопсиса.
-        </p>
+          <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">
+            Выберите, с чего начать. Опишите свою идею словами или соберите набор жанров — и ИИ придумает историю.
+          </p>
 
-        <div className="mt-4 flex flex-wrap gap-1 rounded-lg border border-border bg-muted/40 p-1" role="tablist" data-testid="idea-v2-mode-toggle">
-          <button
-            type="button"
-            onClick={() => { setMode('idea'); setConfirmed(false) }}
-            disabled={generating}
-            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${mode === 'idea' ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}
-            data-testid="idea-v2-mode-idea"
-          >
-            <Lightbulb className="h-4 w-4" /> Описать идею
-          </button>
-          <button
-            type="button"
-            onClick={() => { setMode('genres'); setConfirmed(false) }}
-            disabled={generating}
-            className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition sm:text-sm ${mode === 'genres' ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'}`}
-            data-testid="idea-v2-mode-genres"
-          >
-            <Tags className="h-4 w-4" /> Собрать по жанрам
-          </button>
-        </div>
+          <div className="mt-8 grid gap-4 text-left sm:grid-cols-2">
+            {/* (а) Своя идея */}
+            <button
+              type="button"
+              onClick={() => chooseMode('idea')}
+              className="group flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-5 text-left transition hover:border-primary/60"
+              data-testid="idea-v2-choose-idea"
+            >
+              <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Lightbulb className="h-6 w-6" />
+              </div>
+              <div className="font-display text-lg font-semibold">Своя идея</div>
+              <p className="text-sm text-muted-foreground">
+                Опишите замысел своими словами — от одной фразы до нескольких предложений. ИИ развернёт его в синопсис сезона.
+              </p>
+              <span className="mt-1 inline-flex items-center gap-1 text-sm font-semibold text-primary">
+                Описать идею <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" />
+              </span>
+            </button>
 
-        {error && <div className="mt-4 rounded-lg bg-destructive/10 px-4 py-2 text-sm text-destructive" data-testid="idea-v2-error">{error}</div>}
-
-        {mode === 'idea' ? (
-          <textarea
-            value={idea}
-            onChange={(e) => { setIdea(e.target.value); setConfirmed(false) }}
-            placeholder="Например: молодая смотрительница маяка на северном острове находит дневник своей пропавшей предшественницы…"
-            rows={5}
-            disabled={generating || confirmed}
-            className="mt-4 w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary disabled:opacity-60"
-            data-testid="idea-v2-input"
-          />
-        ) : (
-          <div className="mt-4">
-            <p className="mb-2 text-xs font-medium text-muted-foreground">Выберите один или несколько жанров:</p>
-            <div className="flex flex-wrap gap-2" data-testid="idea-v2-genres">
-              {GENRES.map((g) => {
-                const on = genres.includes(g.id)
-                return (
-                  <button
-                    key={g.id}
-                    type="button"
-                    onClick={() => { toggleGenre(g.id); setConfirmed(false) }}
-                    disabled={generating || confirmed}
-                    aria-pressed={on}
-                    className={`rounded-full border px-3 py-1.5 text-xs font-medium transition disabled:opacity-60 ${on ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-foreground hover:border-primary/60'}`}
-                    data-testid={`idea-v2-genre-${g.id}`}
-                  >
-                    {g.label}
-                  </button>
-                )
-              })}
-            </div>
+            {/* (б) Собрать из жанров */}
+            <button
+              type="button"
+              onClick={() => chooseMode('genres')}
+              className="group flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-5 text-left transition hover:border-primary/60"
+              data-testid="idea-v2-choose-genres"
+            >
+              <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Tags className="h-6 w-6" />
+              </div>
+              <div className="font-display text-lg font-semibold">Собрать из жанров</div>
+              <p className="text-sm text-muted-foreground">
+                Нет готовой идеи? Выберите один или несколько жанров — ИИ придумает оригинальный сюжет на их основе.
+              </p>
+              <span className="mt-1 inline-flex items-center gap-1 text-sm font-semibold text-primary">
+                Выбрать жанры <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" />
+              </span>
+            </button>
           </div>
-        )}
+        </div>
+      )}
 
-        {!confirmed ? (
+      {/* ═══════════════════════ Экран 2: ввод идеи / жанров ═══════════════════════ */}
+      {screen === 'input' && (
+        <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }} data-testid="idea-v2-input-screen">
           <button
-            onClick={confirmStep1}
-            disabled={generating || !canConfirm}
-            className="mt-4 flex items-center justify-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
-            data-testid="idea-v2-confirm"
+            onClick={() => { setScreen('choose'); setError('') }}
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
+            data-testid="idea-v2-back-to-choose"
           >
-            <Check className="h-4 w-4" />
-            {mode === 'idea' ? 'Сохранить идею' : 'Подтвердить жанры'}
+            <ArrowLeft className="h-4 w-4" /> Назад к выбору
           </button>
-        ) : (
-          <button
-            onClick={() => setConfirmed(false)}
-            disabled={generating}
-            className="mt-4 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground disabled:opacity-50"
-            data-testid="idea-v2-edit"
-          >
-            <ArrowLeft className="h-4 w-4" /> Изменить {mode === 'idea' ? 'идею' : 'жанры'}
-          </button>
-        )}
-      </div>
 
-      {/* Шаг 2 — промпт и генерация */}
-      {confirmed && (
+          <h2 className="mt-3 flex items-center gap-2 font-display text-xl font-bold">
+            {mode === 'idea'
+              ? <><Lightbulb className="h-5 w-5 text-primary" /> Своя идея</>
+              : <><Tags className="h-5 w-5 text-primary" /> Собрать из жанров</>}
+          </h2>
+
+          {mode === 'idea' ? (
+            <textarea
+              value={idea}
+              onChange={(e) => setIdea(e.target.value)}
+              placeholder="Например: молодая смотрительница маяка на северном острове находит дневник своей пропавшей предшественницы…"
+              rows={5}
+              className="mt-4 w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
+              data-testid="idea-v2-input"
+            />
+          ) : (
+            <div className="mt-4">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">Выберите один или несколько жанров:</p>
+              <div className="flex flex-wrap gap-2" data-testid="idea-v2-genres">
+                {GENRES.map((g) => {
+                  const on = genres.includes(g.id)
+                  return (
+                    <button
+                      key={g.id}
+                      type="button"
+                      onClick={() => toggleGenre(g.id)}
+                      aria-pressed={on}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${on ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-foreground hover:border-primary/60'}`}
+                      data-testid={`idea-v2-genre-${g.id}`}
+                    >
+                      {g.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          <button
+            onClick={goToGenerate}
+            disabled={!canProceed}
+            className="mt-5 flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
+            data-testid="idea-v2-next"
+          >
+            Далее к генерации <ArrowRight className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      {/* ═══════════════════════ Экран 3: Шаг 2 — генерация синопсиса ═══════════════════════ */}
+      {screen === 'generate' && (
         <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }} data-testid="idea-v2-step2">
-          <h3 className="flex items-center gap-2 font-display text-lg font-semibold">
+          {!generating && (
+            <button
+              onClick={() => { setScreen('input'); setPreviewOpen(false); setError(''); setCanceled(false) }}
+              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
+              data-testid="idea-v2-back-to-input"
+            >
+              <ArrowLeft className="h-4 w-4" /> Назад к {mode === 'idea' ? 'идее' : 'жанрам'}
+            </button>
+          )}
+
+          <h2 className="mt-3 flex items-center gap-2 font-display text-xl font-bold">
             <Wand2 className="h-5 w-5 text-primary" /> Шаг 2: генерация синопсиса
-          </h3>
+          </h2>
           <p className="mt-1 text-sm text-muted-foreground">
             Отправляется в: <span className="font-semibold text-foreground" data-testid="idea-v2-model">{FABLE_MODEL_LABEL}</span>.
             Будет сгенерирован синопсис на 7–10 предложений: предыстория, основной хук (главный клиффхэнгер ближе к концу сезона) и концовка.
           </p>
 
           {!generating && (
-            <div className="mt-4 flex flex-wrap gap-2">
+            <div className="mt-5 flex flex-wrap gap-2">
               <button
                 onClick={openPreview}
                 disabled={previewLoading}
@@ -285,7 +328,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                 data-testid="idea-v2-preview-open"
               >
                 {previewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
-                Просмотреть / редактировать промпт
+                Просмотреть промпт
               </button>
               <button
                 onClick={() => generate(false)}
@@ -293,7 +336,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                 className="flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
                 data-testid="idea-v2-generate"
               >
-                <Wand2 className="h-4 w-4" /> Сгенерировать без просмотра
+                <Wand2 className="h-4 w-4" /> Генерировать синопсис
               </button>
             </div>
           )}
@@ -334,7 +377,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                 className="flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110"
                 data-testid="idea-v2-generate-edited"
               >
-                <Wand2 className="h-4 w-4" /> Сгенерировать с этим промптом
+                <Wand2 className="h-4 w-4" /> Генерировать с этим промптом
               </button>
             </div>
           )}
