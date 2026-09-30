@@ -95,8 +95,10 @@ export function ProjectWizard({ project: initialProject, entitlements }: { proje
           <ProjectSteps projectId={project?.id} stage={currentStage} current={stepsCurrent} className="mb-6" />
         )}
 
+        {/* Поток v2 (idea → logline_v2 → synopsis_v2) живёт под одним key: смена stage не ремонтирует IdeaStageV2
+            и не сбрасывает его локальный экран (иначе на миг появлялся шаг 1). */}
         <motion.div
-          key={readOnlyStep ? `step-${readOnlyStep}` : referencesTab ? 'references-tab' : currentStage}
+          key={readOnlyStep ? `step-${readOnlyStep}` : referencesTab ? 'references-tab' : isV2Flow ? 'v2-flow' : currentStage}
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.3 }}

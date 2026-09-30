@@ -41,9 +41,10 @@ export async function POST(request: Request) {
     // Пожелания (режим жанров) пишутся по-русски → в промпт идёт английский перевод. Возвращаем его
     // клиенту (wishesEn): в generate он уйдёт как есть, чтобы промпт совпал с показанным в модалке.
     const wishesEn = await translateToEnglish(wishes);
-    const { system, user: userPrompt, assistant, model, contextIncluded, contextNote } = buildLoglineV2Parts({ idea, genres, wishes: wishesEn, logline, refine, loglineBase, loglineTurns });
+    const { system, user: userPrompt, assistant, model, contextIncluded, contextNote, messages } = buildLoglineV2Parts({ idea, genres, wishes: wishesEn, logline, refine, loglineBase, loglineTurns });
+    // messages — реальный диалог правки (есть только при loglineBase + refine): клиент показывает его в модалке как есть.
     return NextResponse.json(
-      { system, user: userPrompt, assistant, model, contextIncluded, contextNote, wishesEn: wishesEn || undefined },
+      { system, user: userPrompt, assistant, model, contextIncluded, contextNote, wishesEn: wishesEn || undefined, messages },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (err: any) {

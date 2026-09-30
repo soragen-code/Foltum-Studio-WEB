@@ -3,18 +3,59 @@
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, Wand2, Sparkles, Lightbulb, Eye, Pencil, ArrowLeft, ArrowRight, Tags, Info, BookOpen, RotateCcw, Copy, Check, X, Quote } from 'lucide-react'
 import { GENRES } from '@/lib/idea'
-import { FABLE_MODEL_LABEL, SYNOPSIS_V2_STAGE, LOGLINE_V2_STAGE, LOGLINE_V2_FORMULA_RU, LOGLINE_V2_EXAMPLE_RU } from '@/lib/idea-v2'
+import { FABLE_MODEL_LABEL, SYNOPSIS_V2_STAGE, LOGLINE_V2_STAGE, LOGLINE_V2_FORMULA_RU } from '@/lib/idea-v2'
 import { CancelButton } from './cancel-button'
-import { useJobPolling, SmoothProgress, StreamingText } from './use-job-polling'
+import { useJobPolling, SmoothProgress } from './use-job-polling'
 
 /** Примерная длительность генераций v2 — управляет плавным прогресс-баром. */
 const SYNOPSIS_V2_EXPECTED_SEC = 50
+
+/** Единый стиль текста логлайна — и в стриме, и в готовом (редактируемом) виде: один шрифт, размер, межстрочник, отступы, фон. */
+const LOGLINE_TEXT_CLS = 'mt-4 w-full whitespace-pre-wrap break-words rounded-lg border border-input bg-background px-4 py-3 text-base leading-relaxed text-foreground'
+/** Единый стиль текста синопсиса — стрим и готовый вид. Без ограничений по высоте и внутреннего скролла. */
+const SYNOPSIS_TEXT_CLS = 'whitespace-pre-wrap break-words rounded-lg border border-border bg-background px-4 py-3 text-sm leading-relaxed text-foreground'
+
+/** Стрим текста: бокс растёт под содержимое, ничего не обрезается (без maxHeight/скролла). */
+function GrowingStream({ text, active, className, testId }: { text: string; active: boolean; className: string; testId?: string }) {
+  return (
+    <div className={className} data-testid={testId}>
+      {text}
+      {active && <span className="ml-0.5 inline-block h-4 w-1.5 animate-pulse bg-primary align-middle" aria-hidden />}
+    </div>
+  )
+}
+
+/** Textarea с авто-высотой по содержимому: без ползунка resize и фиксированного rows, без внутреннего скролла. */
+function AutoGrowTextarea({ value, onChange, className, testId, disabled }: {
+  value: string; onChange: (v: string) => void; className: string; testId?: string; disabled?: boolean
+}) {
+  const ref = useRef<HTMLTextAreaElement | null>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [value])
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      rows={1}
+      disabled={disabled}
+      className={`${className} resize-none overflow-hidden outline-none transition focus:border-primary focus:ring-1 focus:ring-primary`}
+      data-testid={testId}
+    />
+  )
+}
 
 type Screen = 'choose' | 'input'
 type Field = 'system' | 'user' | 'assistant'
 type Kind = 'logline' | 'synopsis'
 type StepKey = 'idea' | Kind
 type Prompt = { system: string; user: string; assistant: string }
+/** Сообщение реального диалога правки логлайна (то, что уходит в модель как messages). */
+type Msg = { role: 'system' | 'user' | 'assistant'; content: string }
 
 const EMPTY_PROMPT: Prompt = { system: '', user: '', assistant: '' }
 const FIELD_FLAGS = { system: false, user: false, assistant: false }
@@ -32,7 +73,7 @@ const KIND_LABEL: Record<Kind, string> = { logline: 'логлайна', synopsis
  *              (строит промпт логлайна и открывает модалку, оставаясь на шаге 1; «Отправить» в модалке →
  *              переход на шаг 2 + генерация; «Закрыть» → остаёмся на шаге 1).
  *   logline  — стрим логлайна побуквенно; поле правки → «Изменить» (модалка промпта → «Отправить»: правка уходит
- *              диалогом messages с прежними логлайнами); готовый текст можно поправить → «Сохранить и продолжить».
+ *              диалогом messages с прежними логлайнами); готовый текст можно поправить → «Продолжить».
  *   synopsis — синопсис, развернутый из утверждённого логлайна.
  *
  * На экранах логлайна и синопсиса кнопки действий стоят в правом верхнем углу блока, над текстом. Модалка промпта общая для обоих шагов
@@ -100,6 +141,12 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const [ruOn, setRuOn] = useState<Record<Field, boolean>>(FIELD_FLAGS)
   const [ruText, setRuText] = useState<Record<Field, string>>(FIELD_TEXTS)
   const [ruLoading, setRuLoading] = useState<Record<Field, boolean>>(FIELD_FLAGS)
+  // Реальный диалог правки логлайна (из preview): system → задание → L0 → правка 1 → логлайн 1 → … → текущая правка.
+  // Показывается в модалке read-only; null — обычный одиночный запрос (system/user/assistant).
+  const [promptMessages, setPromptMessages] = useState<Msg[] | null>(null)
+  const [msgsRuOn, setMsgsRuOn] = useState(false)
+  const [msgsRu, setMsgsRu] = useState<string[] | null>(null)
+  const [msgsRuLoading, setMsgsRuLoading] = useState(false)
 
   const isEdited = (k: Kind) =>
     ready[k] && (edit[k].system !== orig[k].system || edit[k].user !== orig[k].user || edit[k].assistant !== orig[k].assistant)
@@ -219,8 +266,12 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       const p: Prompt = { system: d.system ?? '', user: d.user ?? '', assistant: d.assistant ?? '' }
       setEdit((s) => ({ ...s, [k]: p })); setOrig((s) => ({ ...s, [k]: p }))
       if (k === 'logline' && typeof d.wishesEn === 'string') setWishesEn(d.wishesEn)
-      const dialogNote = 'loglineBase' in args
-        ? ` Правка уйдёт диалогом из ${2 + loglineTurns.length} ходов: модель видит свои прежние логлайны и все ранние правки. Если отредактировать поля вручную — отправится только ваш текст, одним запросом.`
+      const msgs: Msg[] | null = k === 'logline' && Array.isArray(d.messages) && d.messages.length
+        ? d.messages.filter((m: any) => m && typeof m.content === 'string').map((m: any) => ({ role: m.role, content: m.content }))
+        : null
+      setPromptMessages(msgs); setMsgsRu(null); setMsgsRuOn(false)
+      const dialogNote = msgs
+        ? ` Правка уйдёт диалогом из ${msgs.length} сообщений (ниже показан ровно он): модель видит свои прежние логлайны и все ранние правки. Если отредактировать поля System/User вручную — вместо диалога отправится только ваш текст, одним запросом.`
         : ''
       setNote((s) => ({ ...s, [k]: `${d.contextNote ?? ''}${dialogNote}` }))
       setReady((s) => ({ ...s, [k]: true }))
@@ -370,6 +421,23 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     const next = !ruOn[key]
     setRuOn((p) => ({ ...p, [key]: next }))
     if (next && !ruText[key]) translateField(key)
+  }
+  // РУ для транскрипта диалога: переводим каждое сообщение (параллельно), только для отображения.
+  const toggleMsgsRu = async () => {
+    const next = !msgsRuOn
+    setMsgsRuOn(next)
+    if (!next || msgsRu || !promptMessages) return
+    setMsgsRuLoading(true)
+    try {
+      const out = await Promise.all(promptMessages.map(async (m) => {
+        try {
+          const res = await fetch('/api/ai/translate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: m.content }) })
+          const d = await res.json().catch(() => ({}))
+          return res.ok && typeof d?.text === 'string' && d.text.trim() ? d.text : m.content
+        } catch { return m.content }
+      }))
+      setMsgsRu(out)
+    } finally { setMsgsRuLoading(false) }
   }
   const onFieldChange = (key: Field, v: string) => { setField(key, v); setRuText((p) => (p[key] ? { ...p, [key]: '' } : p)) }
 
@@ -534,9 +602,65 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                 <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" /> {note[promptKind]}
               </p>
             )}
-            {renderField('system', 'System (правила)', 10)}
-            {renderField('user', 'User (запрос)', 7)}
-            {renderField('assistant', 'Assistant (зачин ответа)', 5, 'Необязательно: задайте зачин ответа модели — она продолжит с него. Оставьте пустым, чтобы модель писала с чистого листа.')}
+            {promptKind === 'logline' && promptMessages && promptMessages.length > 0 ? (
+              <>
+                <div data-testid="idea-v2-dialog">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                      Отправляемый диалог · {promptMessages.length} сообщений
+                    </span>
+                    <button
+                      onClick={toggleMsgsRu}
+                      className={`${btnBase} ${msgsRuOn ? btnActive : btnIdle}`}
+                      title="Показать перевод на русский (только для просмотра)"
+                      data-testid="idea-v2-dialog-ru"
+                    >
+                      {msgsRuLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'РУ'}
+                    </button>
+                  </div>
+                  <ol className="space-y-2">
+                    {promptMessages.map((m, i) => {
+                      const isLast = i === promptMessages.length - 1
+                      const label = m.role === 'system' ? 'System (правила)'
+                        : m.role === 'assistant' ? (i === 2 ? 'Assistant · логлайн L0' : `Assistant · логлайн ${Math.floor((i - 1) / 2)}`)
+                        : i === 1 ? 'User · задание'
+                        : isLast ? 'User · текущая правка (уходит сейчас)' : `User · правка ${Math.floor(i / 2)}`
+                      const text = msgsRuOn && msgsRu ? msgsRu[i] : m.content
+                      return (
+                        <li
+                          key={i}
+                          className={`rounded-lg border px-3 py-2 ${m.role === 'assistant' ? 'border-primary/30 bg-primary/5' : isLast ? 'border-amber-500/40 bg-amber-500/5' : 'border-border/60 bg-muted/30'}`}
+                          data-testid="idea-v2-dialog-msg"
+                          data-role={m.role}
+                        >
+                          <div className="mb-1 text-[11px] font-semibold text-muted-foreground">{i + 1}. {label}</div>
+                          <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground/90">{text}</pre>
+                        </li>
+                      )
+                    })}
+                  </ol>
+                  {msgsRuOn && !msgsRuLoading && (
+                    <p className="mt-1 text-[11px] text-muted-foreground">Показан перевод на русский — только для просмотра. В генерацию уходит оригинал.</p>
+                  )}
+                </div>
+                <details className="rounded-lg border border-border/60 px-3 py-2" data-testid="idea-v2-dialog-manual">
+                  <summary className="cursor-pointer text-xs font-semibold text-muted-foreground">
+                    Ручная правка промпта — при изменении полей вместо диалога уйдёт один запрос
+                  </summary>
+                  <div className="mt-3 space-y-5">
+                    {renderField('system', 'System (правила)', 10)}
+                    {renderField('user', 'User (запрос)', 7)}
+                    {renderField('assistant', 'Assistant (зачин ответа)', 5, 'Необязательно: задайте зачин ответа модели — она продолжит с него. Оставьте пустым, чтобы модель писала с чистого листа.')}
+                  </div>
+                </details>
+              </>
+            ) : (
+              <>
+                {renderField('system', 'System (правила)', 10)}
+                {renderField('user', 'User (запрос)', 7)}
+                {renderField('assistant', 'Assistant (зачин ответа)', 5, 'Необязательно: задайте зачин ответа модели — она продолжит с него. Оставьте пустым, чтобы модель писала с чистого листа.')}
+              </>
+            )}
           </div>
           <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
             <button onClick={close} className="flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted" data-testid="idea-v2-preview-cancel">
@@ -609,7 +733,9 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             ) : (
               <p className="inline-flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin text-primary" /> Запуск генерации…</p>
             )}
-            <StreamingText text={j?.streamedText} active={isActive(j)} />
+            {String(j?.streamedText ?? '').trim() && (
+              <GrowingStream text={String(j?.streamedText ?? '')} active={isActive(j)} className={SYNOPSIS_TEXT_CLS} testId="idea-v2-synopsis-streaming" />
+            )}
             <div className="flex items-center justify-between gap-2">
               <p className="min-w-0 text-xs text-muted-foreground">
                 Разворачиваем утверждённый логлайн в синопсис сезона. Вкладку можно закрыть — прогресс и текст сохранятся.
@@ -644,21 +770,14 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                 Модель: <span className="font-semibold text-foreground">{FABLE_MODEL_LABEL}</span>
               </p>
             </div>
-            <div className="flex flex-wrap items-center justify-end gap-2" data-testid="idea-v2-logline-actions">
-              {!loglineGenerating && (
-                <button onClick={() => generate('logline', true)} disabled={approving} className={btnMain} data-testid="idea-v2-logline-generate">
-                  <Wand2 className="h-3.5 w-3.5" /> {haveText ? 'Перегенерировать' : 'Сгенерировать'}
-                </button>
-              )}
-            </div>
           </div>
 
           {loglineGenerating ? (
             <div className="mt-4 space-y-2" data-testid="idea-v2-logline-stream">
               {streamed.trim() ? (
-                <StreamingText text={streamed} active={isActive(j)} className="text-base" maxHeight={200} />
+                <GrowingStream text={streamed} active={isActive(j)} className={LOGLINE_TEXT_CLS} testId="idea-v2-logline-streaming" />
               ) : (
-                <p className="inline-flex items-center gap-2 rounded-lg border border-border/60 bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+                <p className={`${LOGLINE_TEXT_CLS} flex items-center gap-2 text-muted-foreground`}>
                   <Loader2 className="h-4 w-4 animate-spin text-primary" /> Пишем логлайн…
                 </p>
               )}
@@ -669,15 +788,9 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             </div>
           ) : haveText ? (
             <>
-              <textarea
-                value={loglineDraft}
-                onChange={(e) => setLoglineDraft(e.target.value)}
-                rows={3}
-                className="mt-4 w-full resize-y rounded-lg border border-input bg-background px-4 py-3 text-base leading-relaxed outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
-                data-testid="idea-v2-logline-text"
-              />
+              <AutoGrowTextarea value={loglineDraft} onChange={setLoglineDraft} className={LOGLINE_TEXT_CLS} testId="idea-v2-logline-text" />
               <p className="mt-2 text-xs text-muted-foreground">
-                Формула: <span className="italic">{LOGLINE_V2_FORMULA_RU}</span> Текст можно поправить перед сохранением.
+                Текст можно поправить перед сохранением.
                 {loglineDirty && !loglineStale && <span className="ml-1 text-amber-500">Логлайн изменён — синопсис будет построен по новой версии.</span>}
               </p>
               {loglineStale && (
@@ -695,10 +808,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                     className="mt-2 w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
                     data-testid="idea-v2-logline-refine-input"
                   />
-                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                    <p className="min-w-0 text-[11px] text-muted-foreground">
-                      Правка сохраняет контекст: модель дорабатывает текущий логлайн, помня все прежние правки. Нажмите «Изменить» — откроется промпт, отправка из него.
-                    </p>
+                  <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
                     <button
                       onClick={() => openPreview('logline')}
                       disabled={approving || !refineText.trim() || previewLoading === 'logline'}
@@ -713,11 +823,9 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             </>
           ) : (
             <div className="mt-4 rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground" data-testid="idea-v2-logline-empty">
-              Логлайн ещё не сгенерирован. Нажмите «Сгенерировать».
-              <p className="mt-2 text-xs">Формула: <span className="italic">{LOGLINE_V2_FORMULA_RU}</span></p>
+              Логлайн ещё не сгенерирован. Вернитесь на шаг 1 и нажмите «Продолжить» → «Отправить».
             </div>
           )}
-          <p className="mt-1 text-[11px] text-muted-foreground/80">Пример: {LOGLINE_V2_EXAMPLE_RU}</p>
 
           {error && <div className="mt-4">{errorBox}</div>}
           {canceled === 'logline' && <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">Генерация логлайна отменена.</p>}
@@ -736,7 +844,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                 data-testid="idea-v2-logline-approve"
               >
                 {approving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                Сохранить и продолжить
+                Продолжить
               </button>
           </div>
         </div>
@@ -746,7 +854,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   }
 
   // ═══════════════════════ Шаг 3: синопсис — до генерации ═══════════════════════
-  // Переход сюда по «Сохранить и продолжить» на логлайне. Синопсис НЕ генерируется автоматически:
+  // Переход сюда по «Продолжить» на логлайне. Синопсис НЕ генерируется автоматически:
   // пользователь сам смотрит промпт и жмёт «Сгенерировать».
   if (currentView === 'synopsis' && !hasSynopsis) {
     return (
@@ -814,7 +922,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
               <span className="mr-1 not-italic font-semibold text-primary">Логлайн:</span>{savedLogline}
             </div>
           )}
-          <div className="mt-4 whitespace-pre-line rounded-lg border border-border bg-background px-4 py-3 text-sm leading-relaxed" data-testid="idea-v2-result-text">
+          <div className={`mt-4 ${SYNOPSIS_TEXT_CLS}`} data-testid="idea-v2-result-text">
             {String(project.synopsis).trim()}
           </div>
           <p className="mt-3 text-xs text-muted-foreground">Синопсис сохранён в проекте. Следующие шаги потока v2.0 появятся позже.</p>
