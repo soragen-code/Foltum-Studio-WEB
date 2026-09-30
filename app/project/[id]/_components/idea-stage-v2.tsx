@@ -46,7 +46,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const [screen, setScreen] = useState<Screen>('choose')
   // Пожелания продюсера (только режим жанров). В БД не хранятся — уходят в preview/generate через inputBody.
   const [wishes, setWishes] = useState('')
-  // Модалка-предупреждение о сбросе последующих шагов (при «Продолжить» с изменённым вводом).
+  // Модалка-предупреждение о сбросе последующих шагов — показывается ТОЛЬКО после «Отправить» в модалке промпта, если ввод менялся.
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   // Пользователь подтвердил сброс → уже сохранённые логлайн/синопсис скрываются до новой генерации логлайна.
   const [downstreamReset, setDownstreamReset] = useState(false)
@@ -102,9 +102,10 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     ready[k] && (edit[k].system !== orig[k].system || edit[k].user !== orig[k].user || edit[k].assistant !== orig[k].assistant)
   const resetPrompt = (k: Kind) => setReady((p) => ({ ...p, [k]: false }))
 
-  // Сброс последующих шагов — вызывается ТОЛЬКО после подтверждения в модалке.
+  // Сброс последующих шагов — вызывается ТОЛЬКО после подтверждения в модалке-предупреждении.
+  // Промпт логлайна НЕ сбрасываем: он уже собран и (возможно) отредактирован в модалке — уходит в генерацию.
   const invalidateDownstream = () => {
-    resetPrompt('logline'); resetPrompt('synopsis'); setPreviewOpen(false)
+    resetPrompt('synopsis'); setPreviewOpen(false)
     setDownstreamReset(true); setLoglineDraft('')
     setRefineText(''); setLoglineBase(''); setLoglineTurns([]); lastRefineRef.current = ''
   }
@@ -256,47 +257,48 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     finally { setStarting(null) }
   }
 
-  // «Продолжить» на шаге 1: сохранить ввод (идея/жанры/пожелания) и ОТКРЫТЬ модалку промпта логлайна
-  // (генерация «с нуля»). Остаёмся на шаге 1: переход на шаг 2 + генерация — только по «Отправить» в модалке;
-  // «Закрыть» — остаёмся на шаге 1.
-  const proceedToLogline = async (reset: boolean) => {
-    setError(''); setCanceled(null); setResetConfirmOpen(false)
-    if (reset) {
-      invalidateDownstream()
-      // Реально стираем логлайн/синопсис в БД, иначе после перезагрузки страницы они вернутся.
-      setSavingInput(true)
-      try {
-        const res = await fetch('/api/ai/v2/reset', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id }),
-        })
-        if (!res.ok) {
-          const d = await res.json().catch(() => ({}))
-          setSavingInput(false); setError(d?.error ?? 'Не удалось сбросить последующие шаги'); return
-        }
-      } catch { setSavingInput(false); setError('Ошибка сети'); return }
-      setSavingInput(false)
-      onRefresh()
+  // «Продолжить» на шаге 1: собрать промпт логлайна «с нуля» и ОТКРЫТЬ модалку. Остаёмся на шаге 1,
+  // ничего не сбрасываем и не генерируем. Дальше — только из модалки: «Отправить» (→ при изменённом вводе
+  // сначала предупреждение о сбросе) или «Закрыть» (остаёмся на шаге 1, всё как было).
+  const continueFromIdea = async () => {
+    if (!canProceed) {
+      setError(mode === 'idea' ? 'Опишите идею хотя бы одним–двумя предложениями' : 'Выберите хотя бы один жанр')
+      return
     }
-    // Промпт всегда собираем заново «с нуля» (без правки) — именно он показывается в модалке.
+    setError(''); setCanceled(null)
     resetPrompt('logline'); setRefineText('')
     setSavingInput(true)
     const ok = await buildPrompt('logline', true)
     setSavingInput(false)
     if (!ok) return
-    setInputDirty(false)
     resetModalFlags('logline')
     setPreviewOpen(true)
   }
 
-  // Шаг 1 → «Продолжить». Если ввод изменён и уже есть логлайн/синопсис —
-  // сначала модалка-предупреждение о сбросе; иначе обычный переход без сброса.
-  const saveInputAndContinue = () => {
-    if (!canProceed) {
-      setError(mode === 'idea' ? 'Опишите идею хотя бы одним–двумя предложениями' : 'Выберите хотя бы один жанр')
-      return
-    }
-    if (inputDirty && (hasLogline || hasSynopsis)) { setResetConfirmOpen(true); return }
-    void proceedToLogline(false)
+  // Финал «Отправить» для логлайна с шага 1: фиксируем ввод, открываем шаг 2, запускаем генерацию с нуля.
+  const commitLoglineFromIdea = () => {
+    setInputDirty(false); setInputSaved(true); setView('logline')
+    void generate('logline', true)
+  }
+
+  // Подтверждение в предупреждении «Изменения затронут следующие шаги» (после «Отправить»):
+  // реально стираем логлайн/синопсис в БД (иначе вернутся после перезагрузки), затем шаг 2 + генерация.
+  const confirmResetAndSend = async () => {
+    setResetConfirmOpen(false); setError('')
+    setSavingInput(true)
+    try {
+      const res = await fetch('/api/ai/v2/reset', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: project.id }),
+      })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        setSavingInput(false); setError(d?.error ?? 'Не удалось сбросить последующие шаги'); return
+      }
+    } catch { setSavingInput(false); setError('Ошибка сети'); return }
+    setSavingInput(false)
+    invalidateDownstream()
+    onRefresh()
+    commitLoglineFromIdea()
   }
 
   // Утвердить (возможно отредактированный) логлайн и перейти на экран синопсиса (без автогенерации).
@@ -501,7 +503,11 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     // «Отправить» = закрыть модалку, перейти на шаг и запустить генерацию (с учётом ручных правок полей).
     const send = () => {
       setPreviewOpen(false)
-      if (promptKind === 'logline') setInputSaved(true) // ввод шага 1 зафиксирован → шаг 2 доступен
+      if (promptKind === 'logline' && currentView === 'idea') {
+        // С шага 1: если ввод менялся при уже готовом логлайне/синопсисе — сначала предупреждение о сбросе.
+        if (inputDirty && (hasLogline || hasSynopsis)) { setResetConfirmOpen(true); return }
+        commitLoglineFromIdea(); return
+      }
       setView(promptKind)
       void generate(promptKind)
     }
@@ -561,7 +567,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             <button onClick={close} className="rounded-lg border border-border bg-background px-5 py-2.5 text-sm font-semibold text-foreground transition hover:bg-muted" data-testid="idea-v2-reset-cancel">
               Отмена
             </button>
-            <button onClick={() => void proceedToLogline(true)} className="flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110" data-testid="idea-v2-reset-confirm">
+            <button onClick={() => void confirmResetAndSend()} className="flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110" data-testid="idea-v2-reset-confirm">
               <RotateCcw className="h-4 w-4" /> Продолжить и сбросить
             </button>
           </div>
@@ -914,7 +920,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
 
           <div className="mt-6 flex items-center justify-end border-t border-border pt-4" data-testid="idea-v2-input-footer">
             <button
-              onClick={saveInputAndContinue}
+              onClick={() => void continueFromIdea()}
               disabled={!canProceed || savingInput}
               className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
               data-testid="idea-v2-generate"
