@@ -71,6 +71,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   // Правка логлайна: «что изменить» — уходит в preview/generate вместе с текущим логлайном,
   // чтобы модель дорабатывала его с сохранением контекста, а не писала с нуля.
   const [refineText, setRefineText] = useState('')
+  const [refineSaved, setRefineSaved] = useState(false)
 
   // Ввод менялся после последнего «Сохранить и продолжить» → шаги «Логлайн»/«Синопсис» недоступны,
   // но их данные НЕ сбрасываются, пока пользователь не подтвердит сброс в модалке.
@@ -113,7 +114,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     if (res.job.status === 'completed') {
       setError(''); setCanceled(null); setPreviewOpen(false)
       if (k === 'logline') {
-        setInputDirty(false); setInputSaved(true); setDownstreamReset(false); resetPrompt('synopsis'); setRefineText('')
+        setInputDirty(false); setInputSaved(true); setDownstreamReset(false); resetPrompt('synopsis'); setRefineText(''); setRefineSaved(false)
         // Сразу показываем готовый текст (до onRefresh), чтобы поле не пустело.
         const fresh = String(res.job.result?.logline ?? res.job.streamedText ?? '').trim()
         if (fresh) setLoglineDraft(fresh)
@@ -175,7 +176,9 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   // Аргументы уточнения логлайна: добавляются только для шага логлайна, когда есть непустая правка и текущий логлайн.
   const refineArgs = (k: Kind) =>
     k === 'logline' && refineText.trim() && savedLogline ? { logline: savedLogline, refine: refineText.trim() } : {}
-  const onRefineChange = (v: string) => { setRefineText(v); resetPrompt('logline') }
+  const onRefineChange = (v: string) => { setRefineText(v); setRefineSaved(false); resetPrompt('logline') }
+  // «Сохранить правки»: фиксируем текст правки (уходит в промпт), но НЕ генерируем — генерация по кнопке «Сгенерировать» вверху.
+  const saveRefine = () => { if (refineText.trim()) { setRefineSaved(true); resetPrompt('logline') } }
 
   const chooseMode = (m: 'idea' | 'genres') => {
     if (m !== mode) markInputDirty()
@@ -583,7 +586,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
               <button onClick={() => openPreview('logline')} disabled={previewLoading === 'logline' || approving || loglineGenerating} className={btnGhost} data-testid="idea-v2-logline-preview">
                 {previewLoading === 'logline' ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Собираем промпт…</> : <><Eye className="h-3.5 w-3.5" /> Просмотреть промпт</>}
               </button>
-              {!haveText && !loglineGenerating && (
+              {!loglineGenerating && (
                 <button onClick={() => generate('logline')} disabled={approving} className={btnMain} data-testid="idea-v2-logline-generate">
                   <Wand2 className="h-3.5 w-3.5" /> Сгенерировать
                 </button>
@@ -634,14 +637,17 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                     data-testid="idea-v2-logline-refine-input"
                   />
                   <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-                    <p className="min-w-0 text-[11px] text-muted-foreground">Правка сохраняет контекст: модель дорабатывает текущий логлайн, а не пишет с нуля. Отправляемый промпт можно посмотреть кнопкой «Просмотреть промпт».</p>
+                    <p className="min-w-0 text-[11px] text-muted-foreground">
+                      Правка сохраняет контекст: модель дорабатывает текущий логлайн, а не пишет с нуля. Сохраните правки, при желании посмотрите промпт кнопкой «Просмотреть промпт» и нажмите «Сгенерировать» вверху.
+                      {refineSaved && <span className="ml-1 text-primary">Правки сохранены.</span>}
+                    </p>
                     <button
-                      onClick={() => generate('logline')}
-                      disabled={approving || !refineText.trim()}
+                      onClick={saveRefine}
+                      disabled={approving || !refineText.trim() || refineSaved}
                       className={`${btnMain} flex-shrink-0`}
-                      data-testid="idea-v2-logline-refine-apply"
+                      data-testid="idea-v2-logline-refine-save"
                     >
-                      <Wand2 className="h-3.5 w-3.5" /> Обновить логлайн
+                      <Check className="h-3.5 w-3.5" /> Сохранить правки
                     </button>
                   </div>
                 </div>
