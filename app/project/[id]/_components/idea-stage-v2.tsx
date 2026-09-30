@@ -31,12 +31,18 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
 
   // Просмотр / редактирование промпта.
   const [previewOpen, setPreviewOpen] = useState(false)
-  const [previewLoading, setPreviewLoading] = useState(false)
+  const [nextLoading, setNextLoading] = useState(false) // спиннер на кнопке «Далее к генерации» (сборка промпта)
+  const [promptReady, setPromptReady] = useState(false) // промпт собран для ТЕКУЩЕГО ввода → шаг «Промпт» доступен
+  const [inputDirty, setInputDirty] = useState(false)   // ввод менялся после последней генерации → шаг «Синопсис» недоступен
   const [editSystem, setEditSystem] = useState('')
   const [editUser, setEditUser] = useState('')
   const [editAssistant, setEditAssistant] = useState('')
   const [contextNote, setContextNote] = useState('')
   const [copied, setCopied] = useState<'system' | 'user' | 'assistant' | null>(null)
+
+  // Любое изменение идеи/жанров/режима «сбрасывает» промпт и синопсис: следующие шаги обнуляются
+  // и становятся недоступными, пока текущий шаг (сборка промпта / генерация) не будет пройден заново.
+  const invalidateDownstream = () => { setPromptReady(false); setInputDirty(true); setPreviewOpen(false) }
 
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState('')
@@ -51,7 +57,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     onFinish: (res) => {
       activeJobIdRef.current = null
       if (res.job.status === 'completed') {
-        setError(''); setCanceled(false); setShowForm(false); setPreviewOpen(false)
+        setError(''); setCanceled(false); setShowForm(false); setPreviewOpen(false); setInputDirty(false)
         onRefresh() // синопсис сохранён (stage="synopsis_v2") — этот экран покажет результат
       } else if (res.job.status === 'canceled') {
         setCanceled(true)
@@ -84,25 +90,27 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id])
 
-  const toggleGenre = (id: string) =>
+  const toggleGenre = (id: string) => {
     setGenres((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]))
+    invalidateDownstream()
+  }
+
+  const onIdeaChange = (v: string) => { setIdea(v); invalidateDownstream() }
 
   const canProceed = mode === 'idea' ? idea.trim().length >= 10 : genres.length > 0
 
   const chooseMode = (m: 'idea' | 'genres') => {
-    setMode(m); setError(''); setCanceled(false); setPreviewOpen(false); setScreen('input')
+    setMode(m); setError(''); setCanceled(false); invalidateDownstream(); setScreen('input')
   }
 
-  const goToGenerate = () => {
+  // «Далее к генерации» теперь СОБИРАЕТ промпт (с спиннером на кнопке) и переходит к шагу «Промпт».
+  // Кнопка «Просмотреть промпт» затем лишь показывает уже собранный промпт, ничего не запрашивая.
+  const goToGenerate = async () => {
     if (!canProceed) {
       setError(mode === 'idea' ? 'Опишите идею хотя бы одним–двумя предложениями' : 'Выберите хотя бы один жанр')
       return
     }
-    setError(''); setPreviewOpen(false); setScreen('generate')
-  }
-
-  const openPreview = async () => {
-    setError(''); setPreviewLoading(true)
+    setError(''); setNextLoading(true)
     try {
       const res = await fetch('/api/ai/v2/synopsis/preview', {
         method: 'POST',
@@ -115,10 +123,15 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       setEditUser(d.user ?? '')
       setEditAssistant(d.assistant ?? '')
       setContextNote(d.contextNote ?? '')
-      setPreviewOpen(true)
+      setPromptReady(true)
+      setPreviewOpen(false)
+      setScreen('generate')
     } catch { setError('Ошибка сети') }
-    finally { setPreviewLoading(false) }
+    finally { setNextLoading(false) }
   }
+
+  // Просто открыть модалку с уже собранным промптом (без запроса к серверу).
+  const openPreview = () => { if (promptReady) setPreviewOpen(true) }
 
   const generate = async (withOverride: boolean) => {
     setError(''); setCanceled(false); clearJob(); setStarting(true)
@@ -154,10 +167,77 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
 
   const closePreview = () => setPreviewOpen(false)
 
+  // ─────────────────────────────── Степпер потока v2: Идея → Промпт → Синопсис
+  // Клик по шагу возвращает назад; следующие шаги доступны только когда текущий пройден.
+  const currentStepKey: 'idea' | 'prompt' | 'synopsis' =
+    (hasResult && !showForm && !generating) || generating ? 'synopsis'
+      : screen === 'generate' ? 'prompt'
+      : 'idea'
+  const stepClickable = {
+    idea: !generating,
+    prompt: promptReady && !generating,
+    synopsis: hasResult && !inputDirty && !generating,
+  }
+  const goStep = (key: 'idea' | 'prompt' | 'synopsis') => {
+    if (key === currentStepKey || generating) return
+    setError(''); setPreviewOpen(false)
+    if (key === 'idea') {
+      if (!stepClickable.idea) return
+      setShowForm(true); setScreen('input')
+    } else if (key === 'prompt') {
+      if (!stepClickable.prompt) return
+      setShowForm(true); setScreen('generate')
+    } else {
+      if (!stepClickable.synopsis) return
+      setShowForm(false)
+    }
+  }
+
+  const V2_STEPS: { key: 'idea' | 'prompt' | 'synopsis'; label: string }[] = [
+    { key: 'idea', label: 'Идея' },
+    { key: 'prompt', label: 'Промпт' },
+    { key: 'synopsis', label: 'Синопсис' },
+  ]
+  const StepsBar = () => {
+    const curIdx = V2_STEPS.findIndex((s) => s.key === currentStepKey)
+    return (
+      <div className="flex flex-wrap items-center gap-1.5 text-xs" data-testid="idea-v2-steps">
+        {V2_STEPS.map((s, i) => {
+          const active = s.key === currentStepKey
+          const reached = i <= curIdx
+          const canClick = stepClickable[s.key] && !active
+          return (
+            <div key={s.key} className="flex items-center gap-1.5">
+              <button
+                type="button"
+                disabled={!canClick}
+                onClick={() => goStep(s.key)}
+                data-testid={`idea-v2-step-${s.key}`}
+                data-active={active ? 'true' : undefined}
+                aria-current={active ? 'step' : undefined}
+                className={`rounded-full border px-3 py-1 font-medium transition ${
+                  active
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : reached
+                      ? 'border-border hover:border-primary/60'
+                      : 'border-border/50 text-muted-foreground/50'
+                } ${canClick ? 'cursor-pointer' : 'cursor-default'} disabled:cursor-not-allowed`}
+              >
+                {`${i + 1} · ${s.label}`}
+              </button>
+              {i < V2_STEPS.length - 1 && <span className="text-muted-foreground/40">→</span>}
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
   // ─────────────────────────────────────────────────────────────── Результат готов
   if (hasResult && !showForm && !generating) {
     return (
       <div className="space-y-6" data-testid="idea-stage-v2">
+        <StepsBar />
         <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }} data-testid="idea-v2-result">
           <h2 className="flex items-center gap-2 font-display text-xl font-bold">
             <BookOpen className="h-5 w-5 text-primary" /> Новый проект v2.0 — синопсис готов
@@ -172,7 +252,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             Синопсис сохранён в проекте. Следующие шаги потока v2.0 появятся позже.
           </p>
           <button
-            onClick={() => { setShowForm(true); setScreen('choose'); setError(''); setCanceled(false) }}
+            onClick={() => { setShowForm(true); setScreen('choose'); setError(''); setCanceled(false); invalidateDownstream() }}
             className="mt-4 flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted"
             data-testid="idea-v2-regenerate"
           >
@@ -185,6 +265,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
 
   return (
     <div className="space-y-6" data-testid="idea-stage-v2">
+      <StepsBar />
+
       {hasResult && !generating && (
         <button
           onClick={() => setShowForm(false)}
@@ -271,7 +353,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           {mode === 'idea' ? (
             <textarea
               value={idea}
-              onChange={(e) => setIdea(e.target.value)}
+              onChange={(e) => onIdeaChange(e.target.value)}
               placeholder="Например: молодая смотрительница маяка на северном острове находит дневник своей пропавшей предшественницы…"
               rows={5}
               className="mt-4 w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
@@ -302,11 +384,13 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
 
           <button
             onClick={goToGenerate}
-            disabled={!canProceed}
+            disabled={!canProceed || nextLoading}
             className="mt-5 flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
             data-testid="idea-v2-next"
           >
-            Далее к генерации <ArrowRight className="h-4 w-4" />
+            {nextLoading
+              ? <><Loader2 className="h-4 w-4 animate-spin" /> Собираем промпт…</>
+              : <>Далее к генерации <ArrowRight className="h-4 w-4" /></>}
           </button>
         </div>
       )}
@@ -336,16 +420,15 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             <div className="mt-5 flex flex-wrap gap-2">
               <button
                 onClick={openPreview}
-                disabled={previewLoading}
+                disabled={!promptReady}
                 className="flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted disabled:opacity-50"
                 data-testid="idea-v2-preview-open"
               >
-                {previewLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Eye className="h-4 w-4" />}
+                <Eye className="h-4 w-4" />
                 Просмотреть промпт
               </button>
               <button
                 onClick={() => generate(false)}
-                disabled={previewLoading}
                 className="flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50"
                 data-testid="idea-v2-generate"
               >

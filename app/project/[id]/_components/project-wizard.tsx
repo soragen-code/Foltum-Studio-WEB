@@ -13,7 +13,7 @@ import { IdeaStageV2 } from './idea-stage-v2'
 import { LoglineStage } from './logline-stage'
 import { ReferencesStage } from './references-stage'
 import { StoryStage } from './story-stage'
-import { ProjectSteps, ProjectStepsV2, BackToCurrentStep, isStepPassed, type ProjectStepKey } from './project-steps'
+import { ProjectSteps, BackToCurrentStep, isStepPassed, type ProjectStepKey } from './project-steps'
 import { SCENE_RESOLUTION } from '@/lib/power-tier'
 import { Gauge, ArrowLeft } from 'lucide-react'
 import { motion } from 'framer-motion'
@@ -89,7 +89,8 @@ export function ProjectWizard({ project: initialProject, entitlements }: { proje
         </div>
 
         {isV2Flow ? (
-          <ProjectStepsV2 current={currentStage === 'synopsis_v2' ? 'synopsis' : 'idea'} className="mb-6" />
+          // Поток v2 рендерит собственный интерактивный степпер (Идея → Промпт → Синопсис) внутри IdeaStageV2.
+          null
         ) : (
           <ProjectSteps projectId={project?.id} stage={currentStage} current={stepsCurrent} className="mb-6" />
         )}
