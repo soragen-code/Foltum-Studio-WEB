@@ -1,5 +1,5 @@
 export const dynamic = "force-dynamic";
-export const maxDuration = 800; // синопсис-задача крутится в фоне этой инвокации через after()
+export const maxDuration = 800; // задача логлайна крутится в фоне этой инвокации через after()
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -7,16 +7,16 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
-import { runSynopsisV2Job, SYNOPSIS_V2_JOB_TYPE } from "@/lib/workers/synopsis-v2-job";
+import { runLoglineV2Job, LOGLINE_V2_JOB_TYPE } from "@/lib/workers/logline-v2-job";
 
 /**
- * POST /api/ai/v2/synopsis  { projectId, idea? | genres?, overrideSystem?, overrideUser? }
+ * POST /api/ai/v2/logline  { projectId, idea? | genres?, overrideSystem?, overrideUser?, overrideAssistant? }
  *
- * «Новый проект v2.0»: идея / жанры → синопсис (7–10 предложений) моделью «Claude Fable 5.1».
- * Создаёт фоновую GenerationJob (type "synopsis_v2") и сразу возвращает { jobId }; фактическая
- * генерация идёт в фоне (after()) через runSynopsisV2Job, клиент поллит GET /api/jobs/[id].
- * Идемпотентно: активная задача возвращается как есть. Если пользователь смотрел/правил промпт,
- * передаются overrideSystem/overrideUser (раздельно) — воркер отправит именно их двумя messages.
+ * «Новый проект v2.0», шаг 2: идея / жанры → логлайн (1 предложение по формуле) моделью «Claude Fable 5.1».
+ * Создаёт фоновую GenerationJob (type "logline_v2") и сразу возвращает { jobId }. Идемпотентно:
+ * активная задача возвращается как есть.
+ *
+ * GET /api/ai/v2/logline?projectId=... → последняя задача логлайна (возобновление после перезагрузки).
  */
 const generateSchema = z.object({
   projectId: z.string().min(1),
@@ -32,7 +32,7 @@ export async function POST(request: Request) {
     const session = await auth();
     if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const limited = rateLimitByUser(request, "ai:v2:synopsis", session.user.email, RATE_LIMITS.ai);
+    const limited = rateLimitByUser(request, "ai:v2:logline", session.user.email, RATE_LIMITS.ai);
     if (limited) return limited;
 
     const body = await request.json().catch(() => null);
@@ -52,30 +52,25 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Synopsis and characters are already confirmed" }, { status: 409 });
 
     // Реапаем мёртвые задачи, затем переиспользуем активную (идемпотентность — рефреш не должен плодить задачи).
-    await failStaleJobs({ projectId, type: SYNOPSIS_V2_JOB_TYPE });
+    await failStaleJobs({ projectId, type: LOGLINE_V2_JOB_TYPE });
     const active = await prisma.generationJob.findFirst({
-      where: { projectId, type: SYNOPSIS_V2_JOB_TYPE, status: { in: ["pending", "processing"] } },
+      where: { projectId, type: LOGLINE_V2_JOB_TYPE, status: { in: ["pending", "processing"] } },
       orderBy: { createdAt: "desc" },
     });
     if (active) return NextResponse.json({ jobId: active.id, resumed: true });
 
     const job = await prisma.generationJob.create({
-      data: { type: SYNOPSIS_V2_JOB_TYPE, status: "pending", progress: 0, message: "Starting…", projectId },
+      data: { type: LOGLINE_V2_JOB_TYPE, status: "pending", progress: 0, message: "Starting…", projectId },
     });
-    // v2: синопсис строится на основе утверждённого логлайна (если он есть).
-    const logline = project.loglineApproved && project.logline?.trim() ? project.logline.trim() : null;
-    runInBackground(() => runSynopsisV2Job(job.id, projectId, { idea, genres, logline, overrideSystem, overrideUser, overrideAssistant }));
+    runInBackground(() => runLoglineV2Job(job.id, projectId, { idea, genres, overrideSystem, overrideUser, overrideAssistant }));
     return NextResponse.json({ jobId: job.id, resumed: false });
   } catch (err: any) {
-    console.error("Synopsis v2 generation error:", err);
+    console.error("Logline v2 generation error:", err);
     return NextResponse.json({ error: "Generation failed: " + (err?.message ?? "Unknown error") }, { status: 500 });
   }
 }
 
-/**
- * GET /api/ai/v2/synopsis?projectId=… → последняя v2-задача синопсиса проекта (для возобновления
- * прогресса/стрима после перезагрузки страницы).
- */
+/** GET: последняя v2-задача логлайна проекта. */
 export async function GET(request: Request) {
   const session = await auth();
   if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -88,9 +83,9 @@ export async function GET(request: Request) {
   const project = await prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true } });
   if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
-  await failStaleJobs({ projectId, type: SYNOPSIS_V2_JOB_TYPE });
+  await failStaleJobs({ projectId, type: LOGLINE_V2_JOB_TYPE });
   const latest = await prisma.generationJob.findFirst({
-    where: { projectId, type: SYNOPSIS_V2_JOB_TYPE },
+    where: { projectId, type: LOGLINE_V2_JOB_TYPE },
     orderBy: { createdAt: "desc" },
   });
   let result: any = null;

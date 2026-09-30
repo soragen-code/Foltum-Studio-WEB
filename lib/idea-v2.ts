@@ -21,6 +21,12 @@ export const FABLE_MODEL = "anthropic/claude-opus-5";
  */
 export const SYNOPSIS_V2_STAGE = "synopsis_v2";
 
+/**
+ * Промежуточная стадия потока v2: логлайн сгенерирован и ждёт аппрува пользователя
+ * (Идея → Логлайн → Синопсис). Тоже вне пайплайна v1.
+ */
+export const LOGLINE_V2_STAGE = "logline_v2";
+
 /** Человекочитаемый лейбл модели для UI и превью промпта. */
 export const FABLE_MODEL_LABEL = "Claude Fable 5.1";
 
@@ -29,6 +35,8 @@ export interface SynopsisV2Input {
   idea?: string | null;
   /** Идентификаторы выбранных жанров (используются, когда идея не задана). */
   genres?: string[];
+  /** Утверждённый логлайн — если задан, синопсис разворачивает именно его. */
+  logline?: string | null;
 }
 
 /**
@@ -68,6 +76,15 @@ ${languageRule}`;
 /** User-промпт синопсиса v2: либо идея пользователя, либо задание придумать историю по жанрам. */
 export function synopsisV2UserPrompt(input: SynopsisV2Input): string {
   const idea = (input.idea ?? "").trim();
+  const logline = (input.logline ?? "").trim();
+  if (logline) {
+    const source = idea
+      ? `\n\nORIGINAL IDEA (for context):\n${idea}`
+      : input.genres?.length
+        ? `\n\nGENRE(S): ${genresToEnglish(input.genres).join(", ")}`
+        : "";
+    return `LOGLINE:\n${logline}${source}\n\nWrite the season synopsis prose expanding THIS logline (7-10 sentences: backstory, the awaited main hook near the end, and the ending). Keep the logline's hero, goal and stakes; keep character names exactly as in the logline.`;
+  }
   if (idea) {
     return `IDEA:\n${idea}\n\nWrite the season synopsis prose now (7-10 sentences: backstory, the awaited main hook near the end, and the ending).`;
   }
@@ -126,7 +143,9 @@ export function buildSynopsisV2Parts(input: SynopsisV2Input): {
     assistant: synopsisV2AssistantPrefill(input),
     model: FABLE_MODEL_LABEL,
     contextIncluded: SYNOPSIS_V2_CONTEXT_INCLUDED,
-    contextNote: SYNOPSIS_V2_CONTEXT_NOTE,
+    contextNote: (input.logline ?? "").trim()
+      ? "Синопсис строится на основе утверждённого логлайна (+ ваша идея/жанры). Другой контекст проекта не передаётся."
+      : SYNOPSIS_V2_CONTEXT_NOTE,
   };
 }
 
@@ -155,4 +174,81 @@ RULES: no other keys, no explanations, no markdown, no code fences. The title mu
 /** User-промпт мета-вызова v2. */
 export function synopsisV2MetaUserPrompt(synopsis: string): string {
   return `SEASON SYNOPSIS:\n${synopsis.trim()}\n\nReturn the JSON with "title" and "language" now.`;
+}
+
+/* ───────────── Логлайн v2: Идея/жанры → 1 предложение по формуле ───────────── */
+
+/** Пример формулы логлайна для русского UI (в API уходят английские правила LOGLINE_V2_RULES). */
+export const LOGLINE_V2_FORMULA_RU = "Когда [событие], [герой] должен [цель], иначе [ставка].";
+export const LOGLINE_V2_EXAMPLE_RU =
+  "Когда банк отбирает его дом, бывший трейдер должен за 30 дней отыграть миллион на рынке, где сам же всех и обманул.";
+
+/** Правила логлайна v2 (английский — уходит в system). */
+const LOGLINE_V2_RULES = `Write ONE LOGLINE for the season — exactly ONE sentence — following this formula:
+"When [event], [hero] must [goal], or else [stakes]."
+
+- [event] — the inciting incident that shatters the hero's normal life.
+- [hero] — the protagonist, with a short defining trait or role (you may name them).
+- [goal] — a concrete, visual goal the hero must achieve, ideally with a deadline or a sharp constraint.
+- [stakes] — what the hero loses if they fail; make it personal and high.
+
+Adapt the connecting words naturally to the output language, but keep the four parts of the formula in this order.
+
+FORMAT: output ONLY the single sentence — no title, no label, no quotes around it, no markdown, no explanations, no alternatives.
+
+CRAFT: gripping, specific and concrete, made for short vertical AI-drama episodes (cliffhanger-driven, mobile vertical feed). No generic filler, no clichés.
+
+ORIGINALITY: all characters, names and places are invented and original — never real people, celebrities, brands, landmarks or existing franchises. If a character is named, the name is ALWAYS an English first name + surname in Latin letters (A-Z), regardless of the story's setting or language.`;
+
+export function loglineV2SystemPrompt(input: SynopsisV2Input): string {
+  const idea = (input.idea ?? "").trim();
+  const languageRule = idea
+    ? "LANGUAGE: write the logline in the SAME language as the user's idea (Russian idea → Russian logline, English idea → English logline, etc.). Character names stay in Latin letters."
+    : "LANGUAGE: no idea text was given, only genres — write the logline in Russian. Character names stay in Latin letters.";
+  return `You are a head writer for short-form vertical AI drama series.
+
+${LOGLINE_V2_RULES}
+
+${languageRule}`;
+}
+
+export function loglineV2UserPrompt(input: SynopsisV2Input): string {
+  const idea = (input.idea ?? "").trim();
+  const tail = `\n\nWrite the one-sentence logline now: "When [event], [hero] must [goal], or else [stakes]."`;
+  if (idea) return `IDEA:\n${idea}${tail}`;
+  const genres = input.genres ?? [];
+  const english = genresToEnglish(genres);
+  const premises = genres
+    .map((g) => (GENRE_BY_ID[(g ?? "").trim().toLowerCase()] as { premise?: string } | undefined)?.premise)
+    .filter(Boolean) as string[];
+  const premiseBlock = premises.length
+    ? `\n\nGENRE PREMISE(S) TO FOLLOW:\n${premises.map((p) => `- ${p}`).join("\n")}`
+    : "";
+  return `The producer has NOT written a story. Invent an original, gripping story in the following genre(s): ${english.join(", ") || "drama"}. Combine them if more than one is given, avoid clichés, and surprise the viewer while staying coherent.${premiseBlock}${tail}`;
+}
+
+/** Assistant-prefill логлайна — по умолчанию пуст. */
+export function loglineV2AssistantPrefill(_input: SynopsisV2Input): string {
+  return "";
+}
+
+export const LOGLINE_V2_CONTEXT_NOTE =
+  "Контекст проекта не передаётся — логлайн генерируется только из вашей идеи/жанров.";
+
+export function buildLoglineV2Parts(input: SynopsisV2Input): {
+  system: string;
+  user: string;
+  assistant: string;
+  model: string;
+  contextIncluded: boolean;
+  contextNote: string;
+} {
+  return {
+    system: loglineV2SystemPrompt(input),
+    user: loglineV2UserPrompt(input),
+    assistant: loglineV2AssistantPrefill(input),
+    model: FABLE_MODEL_LABEL,
+    contextIncluded: false,
+    contextNote: LOGLINE_V2_CONTEXT_NOTE,
+  };
 }

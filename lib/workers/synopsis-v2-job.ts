@@ -43,6 +43,8 @@ export const SYNOPSIS_V2_EXPECTED_SEC = 45;
 export interface SynopsisV2JobParams {
   idea?: string | null;
   genres?: string[];
+  /** Утверждённый логлайн проекта — синопсис разворачивает его. */
+  logline?: string | null;
   /** Отредактированный пользователем system-промпт (если он смотрел/правил превью). */
   overrideSystem?: string | null;
   /** Отредактированный пользователем user-промпт. */
@@ -61,8 +63,8 @@ function titleFromFirstLine(prose: string): string {
 async function runSynopsisV2JobImpl(jobId: string, projectId: string, params: SynopsisV2JobParams): Promise<void> {
   let hb: ReturnType<typeof setInterval> | null = null;
   try {
-    const { idea, genres = [], overrideSystem, overrideUser, overrideAssistant } = params;
-    const parts = buildSynopsisV2Parts({ idea, genres });
+    const { idea, genres = [], logline, overrideSystem, overrideUser, overrideAssistant } = params;
+    const parts = buildSynopsisV2Parts({ idea, genres, logline });
     // Реально отправляемый промпт: правки пользователя имеют приоритет над сгенерированными.
     // system и user уходят в модель двумя messages; assistant-prefill — третьим (если задан).
     const system = overrideSystem && overrideSystem.trim() ? overrideSystem : parts.system;

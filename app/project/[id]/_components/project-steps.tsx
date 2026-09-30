@@ -25,7 +25,8 @@ export const PROJECT_STEPS: { key: ProjectStepKey; label: string }[] = [
 export function projectStageIndex(stage: string | null | undefined): number {
   switch (stage) {
     case 'idea': return 0
-    case 'logline': return 1
+    case 'logline':
+    case 'logline_v2': return 1 // «Новый проект v2.0»: логлайн ждёт аппрува
     case 'synopsis':
     case 'synopsis_v2': return 2 // «Новый проект v2.0»: конечная стадия потока v2 (синопсис)
     case 'structure': return 3
