@@ -26,6 +26,8 @@ export const LOGLINE_V2_EXPECTED_SEC = 15;
 export interface LoglineV2JobParams {
   idea?: string | null;
   genres?: string[];
+  /** Пожелания продюсера (режим жанров). */
+  wishes?: string | null;
   overrideSystem?: string | null;
   overrideUser?: string | null;
   overrideAssistant?: string | null;
@@ -41,8 +43,8 @@ function cleanLogline(raw: string): string {
 async function runLoglineV2JobImpl(jobId: string, projectId: string, params: LoglineV2JobParams): Promise<void> {
   let hb: ReturnType<typeof setInterval> | null = null;
   try {
-    const { idea, genres = [], overrideSystem, overrideUser, overrideAssistant } = params;
-    const parts = buildLoglineV2Parts({ idea, genres });
+    const { idea, genres = [], wishes, overrideSystem, overrideUser, overrideAssistant } = params;
+    const parts = buildLoglineV2Parts({ idea, genres, wishes });
     const system = overrideSystem && overrideSystem.trim() ? overrideSystem : parts.system;
     const user = overrideUser && overrideUser.trim() ? overrideUser : parts.user;
     const assistantPrefill = (overrideAssistant ?? parts.assistant ?? "").trim();

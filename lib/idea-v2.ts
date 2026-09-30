@@ -37,6 +37,8 @@ export interface SynopsisV2Input {
   genres?: string[];
   /** Утверждённый логлайн — если задан, синопсис разворачивает именно его. */
   logline?: string | null;
+  /** Пожелания продюсера (только для режима жанров, шаг логлайна). */
+  wishes?: string | null;
 }
 
 /**
@@ -224,7 +226,9 @@ export function loglineV2UserPrompt(input: SynopsisV2Input): string {
   const premiseBlock = premises.length
     ? `\n\nGENRE PREMISE(S) TO FOLLOW:\n${premises.map((p) => `- ${p}`).join("\n")}`
     : "";
-  return `The producer has NOT written a story. Invent an original, gripping story in the following genre(s): ${english.join(", ") || "drama"}. Combine them if more than one is given, avoid clichés, and surprise the viewer while staying coherent.${premiseBlock}${tail}`;
+  const wishes = (input.wishes ?? "").trim();
+  const wishesBlock = wishes ? `\n\nPRODUCER'S WISHES (incorporate into the logline):\n${wishes}` : "";
+  return `The producer has NOT written a story. Invent an original, gripping story in the following genre(s): ${english.join(", ") || "drama"}. Combine them if more than one is given, avoid clichés, and surprise the viewer while staying coherent.${premiseBlock}${wishesBlock}${tail}`;
 }
 
 /** Assistant-prefill логлайна — по умолчанию пуст. */
