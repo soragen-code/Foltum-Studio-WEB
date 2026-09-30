@@ -39,6 +39,12 @@ export interface SynopsisV2Input {
   logline?: string | null;
   /** Пожелания продюсера (только для режима жанров, шаг логлайна). */
   wishes?: string | null;
+  /**
+   * Правка логлайна: что продюсер хочет изменить в ТЕКУЩЕМ логлайне (input.logline).
+   * Если задано вместе с logline — промпт логлайна собирается в режиме уточнения
+   * (контекст сохраняется: модель дорабатывает текущий логлайн, а не пишет с нуля).
+   */
+  refine?: string | null;
 }
 
 /**
@@ -216,20 +222,34 @@ ${languageRule}`;
 
 export function loglineV2UserPrompt(input: SynopsisV2Input): string {
   const idea = (input.idea ?? "").trim();
+  const refine = (input.refine ?? "").trim();
+  const prev = (input.logline ?? "").trim();
   const tail = `\n\nWrite the one-sentence logline now: "When [event], [hero] must [goal], or else [stakes]."`;
-  if (idea) return `IDEA:\n${idea}${tail}`;
-  const genres = input.genres ?? [];
-  const english = genresToEnglish(genres);
-  const premises = genres
-    .map((g) => (GENRE_BY_ID[(g ?? "").trim().toLowerCase()] as { premise?: string } | undefined)?.premise)
-    .filter(Boolean) as string[];
-  const premiseBlock = premises.length
-    ? `\n\nGENRE PREMISE(S) TO FOLLOW:\n${premises.map((p) => `- ${p}`).join("\n")}`
-    : "";
-  const wishes = (input.wishes ?? "").trim();
-  const wishesBlock = wishes ? `\n\nPRODUCER'S WISHES (incorporate into the logline):\n${wishes}` : "";
-  const freshnessBlock = `\n\nFRESHNESS (avoid repeating the same idea): invent a genuinely original, specific, human-scale premise and pick a DIFFERENT angle each time. Do NOT default to overused high-concept hooks — in particular AVOID any "a mysterious voice / sound / signal / song / broadcast (from radios, phones, TVs, speakers, headphones) that controls, kills, freezes, hypnotises or transforms everyone who hears it" premise, and avoid generic end-of-the-world / last-transmitter / last-signal / mass-hypnosis setups, unless a selected genre EXPLICITLY demands it. Ground the story in a concrete character and situation and surprise the viewer.`;
-  return `The producer has NOT written a story. Invent an original, gripping story in the following genre(s): ${english.join(", ") || "drama"}. Combine them if more than one is given, avoid clichés, and surprise the viewer while staying coherent.${premiseBlock}${wishesBlock}${freshnessBlock}${tail}`;
+
+  // Источник (идея пользователя или набор жанров) — общий и для первой генерации, и для правки.
+  let source: string;
+  if (idea) {
+    source = `IDEA:\n${idea}`;
+  } else {
+    const genres = input.genres ?? [];
+    const english = genresToEnglish(genres);
+    const premises = genres
+      .map((g) => (GENRE_BY_ID[(g ?? "").trim().toLowerCase()] as { premise?: string } | undefined)?.premise)
+      .filter(Boolean) as string[];
+    const premiseBlock = premises.length
+      ? `\n\nGENRE PREMISE(S) TO FOLLOW:\n${premises.map((p) => `- ${p}`).join("\n")}`
+      : "";
+    const wishes = (input.wishes ?? "").trim();
+    const wishesBlock = wishes ? `\n\nPRODUCER'S WISHES (incorporate into the logline):\n${wishes}` : "";
+    source = `The producer has NOT written a story. Invent an original, gripping story in the following genre(s): ${english.join(", ") || "drama"}. Combine them if more than one is given, avoid clichés, and surprise the viewer while staying coherent.${premiseBlock}${wishesBlock}`;
+  }
+
+  // Режим уточнения: контекст сохраняется — модель дорабатывает текущий логлайн по пожеланию продюсера.
+  if (refine && prev) {
+    return `${source}\n\nCURRENT LOGLINE:\n"${prev}"\n\nThe producer wants to change it as follows:\n${refine}\n\nRewrite the logline applying this change while keeping everything else that already works. Keep it a single sentence.${tail}`;
+  }
+
+  return `${source}${tail}`;
 }
 
 /** Assistant-prefill логлайна — по умолчанию пуст. */

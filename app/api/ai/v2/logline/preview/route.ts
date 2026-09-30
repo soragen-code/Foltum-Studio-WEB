@@ -15,6 +15,8 @@ const previewSchema = z.object({
   idea: z.string().trim().max(20000).optional(),
   genres: z.array(z.string().max(80)).max(30).optional(),
   wishes: z.string().max(2000).optional(),
+  logline: z.string().max(4000).optional(),
+  refine: z.string().max(4000).optional(),
 });
 
 export async function POST(request: Request) {
@@ -28,12 +30,12 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null);
     const parsed = previewSchema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
-    const { projectId, idea, genres, wishes } = parsed.data;
+    const { projectId, idea, genres, wishes, logline, refine } = parsed.data;
 
     const project = await prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true } });
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
-    const { system, user: userPrompt, assistant, model, contextIncluded, contextNote } = buildLoglineV2Parts({ idea, genres, wishes });
+    const { system, user: userPrompt, assistant, model, contextIncluded, contextNote } = buildLoglineV2Parts({ idea, genres, wishes, logline, refine });
     return NextResponse.json(
       { system, user: userPrompt, assistant, model, contextIncluded, contextNote },
       { headers: { "Cache-Control": "no-store" } },

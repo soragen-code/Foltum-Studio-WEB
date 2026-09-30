@@ -28,6 +28,10 @@ export interface LoglineV2JobParams {
   genres?: string[];
   /** Пожелания продюсера (режим жанров). */
   wishes?: string | null;
+  /** Текущий логлайн — база для режима уточнения (см. refine). */
+  logline?: string | null;
+  /** Правка: что изменить в текущем логлайне (режим уточнения, контекст сохраняется). */
+  refine?: string | null;
   overrideSystem?: string | null;
   overrideUser?: string | null;
   overrideAssistant?: string | null;
@@ -43,8 +47,8 @@ function cleanLogline(raw: string): string {
 async function runLoglineV2JobImpl(jobId: string, projectId: string, params: LoglineV2JobParams): Promise<void> {
   let hb: ReturnType<typeof setInterval> | null = null;
   try {
-    const { idea, genres = [], wishes, overrideSystem, overrideUser, overrideAssistant } = params;
-    const parts = buildLoglineV2Parts({ idea, genres, wishes });
+    const { idea, genres = [], wishes, logline: prevLogline, refine, overrideSystem, overrideUser, overrideAssistant } = params;
+    const parts = buildLoglineV2Parts({ idea, genres, wishes, logline: prevLogline, refine });
     const system = overrideSystem && overrideSystem.trim() ? overrideSystem : parts.system;
     const user = overrideUser && overrideUser.trim() ? overrideUser : parts.user;
     const assistantPrefill = (overrideAssistant ?? parts.assistant ?? "").trim();
@@ -62,7 +66,7 @@ async function runLoglineV2JobImpl(jobId: string, projectId: string, params: Log
       if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
       try {
         const onDelta = makeJobStreamWriter(jobId);
-        const raw = await streamChatText(system, user, { model: FABLE_MODEL, temperature: 0.9, maxTokens: 2048, onDelta, assistantPrefill });
+        const raw = await streamChatText(system, user, { model: FABLE_MODEL, temperature: 0.8, maxTokens: 2048, onDelta, assistantPrefill });
         const full = assistantPrefill ? `${assistantPrefill}${raw ?? ""}` : (raw ?? "");
         const cleaned = cleanLogline(full);
         if (cleaned.length < 20) throw new Error("logline too short / empty");
