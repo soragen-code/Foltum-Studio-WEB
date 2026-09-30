@@ -13,7 +13,7 @@ import { IdeaStageV2 } from './idea-stage-v2'
 import { LoglineStage } from './logline-stage'
 import { ReferencesStage } from './references-stage'
 import { StoryStage } from './story-stage'
-import { ProjectSteps, BackToCurrentStep, isStepPassed, type ProjectStepKey } from './project-steps'
+import { ProjectSteps, ProjectStepsV2, BackToCurrentStep, isStepPassed, type ProjectStepKey } from './project-steps'
 import { SCENE_RESOLUTION } from '@/lib/power-tier'
 import { Gauge, ArrowLeft } from 'lucide-react'
 import { motion } from 'framer-motion'
@@ -42,6 +42,9 @@ export function ProjectWizard({ project: initialProject, entitlements }: { proje
   // После генерации синопсиса проект получает stage="synopsis_v2" — конечную стадию потока v2 (НЕ входит
   // в пайплайн v1): на ней всегда (и без ?flow=v2) рендерится экран v2 с результатом синопсиса.
   const flowV2 = searchParams?.get('flow') === 'v2'
+  // Активен ли самостоятельный поток v2 (экран идеи v2 или конечная стадия synopsis_v2). На нём вместо
+  // пятишагового степпера v1 показываем короткий степпер v2 «Идея → Синопсис».
+  const isV2Flow = (currentStage === 'idea' && flowV2) || currentStage === 'synopsis_v2'
   const stepParam = searchParams?.get('step') as ProjectStepKey | null
   // Поток v2 самостоятельный: на стадии synopsis_v2 read-only экраны v1 не открываем.
   const readOnlyStep: ProjectStepKey | null =
@@ -85,7 +88,11 @@ export function ProjectWizard({ project: initialProject, entitlements }: { proje
           </div>
         </div>
 
-        <ProjectSteps projectId={project?.id} stage={currentStage} current={stepsCurrent} className="mb-6" />
+        {isV2Flow ? (
+          <ProjectStepsV2 current={currentStage === 'synopsis_v2' ? 'synopsis' : 'idea'} className="mb-6" />
+        ) : (
+          <ProjectSteps projectId={project?.id} stage={currentStage} current={stepsCurrent} className="mb-6" />
+        )}
 
         <motion.div
           key={readOnlyStep ? `step-${readOnlyStep}` : referencesTab ? 'references-tab' : currentStage}

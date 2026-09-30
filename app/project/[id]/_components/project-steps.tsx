@@ -63,6 +63,43 @@ export function ProjectSteps({ projectId, stage, current, className }: { project
   )
 }
 
+/**
+ * Степпер потока «Новый проект v2.0». Отдельный, самостоятельный путь: Идея → Синопсис — и на этом он
+ * заканчивается (v2 НЕ продолжается в пайплайн v1: логлайн/сюжет/серии здесь не показываются). Оба шага
+ * не кликабельны — это чистый индикатор прогресса потока v2.
+ */
+export type ProjectStepV2Key = 'idea' | 'synopsis'
+
+export const PROJECT_STEPS_V2: { key: ProjectStepV2Key; label: string }[] = [
+  { key: 'idea', label: 'Идея' },
+  { key: 'synopsis', label: 'Синопсис' },
+]
+
+export function ProjectStepsV2({ current, className }: { current: ProjectStepV2Key; className?: string }) {
+  const currentIdx = PROJECT_STEPS_V2.findIndex((s) => s.key === current)
+  return (
+    <div className={`flex flex-wrap items-center gap-2 text-xs ${className ?? ''}`} data-testid="project-steps-v2">
+      {PROJECT_STEPS_V2.map((s, idx) => {
+        const active = s.key === current
+        const reached = idx <= currentIdx
+        const cls = `rounded-full border px-3 py-1 font-medium transition ${active ? 'border-primary bg-primary text-primary-foreground' : reached ? 'border-border' : 'border-border/50 text-muted-foreground/50'}`
+        return (
+          <span
+            key={s.key}
+            data-testid={`project-step-v2-${s.key}`}
+            data-active={active ? 'true' : undefined}
+            aria-current={active ? 'step' : undefined}
+            aria-disabled={!reached ? 'true' : undefined}
+            className={cls}
+          >
+            {`${idx + 1} · ${s.label}`}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
 /** «← Назад к текущему шагу» — shown above a read-only stage view. */
 export function BackToCurrentStep({ projectId }: { projectId: string }) {
   return (
