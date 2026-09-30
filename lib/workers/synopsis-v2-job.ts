@@ -8,17 +8,15 @@
  *     в модель двумя messages в одном вызове streamChatText;
  *   • логирует реально отправленный промпт (в т.ч. отредактированный) с kind "synopsis_v2"
  *     — за счёт runWithPromptContext + авто-лога в streamChatText (lib/ai.ts);
- *   • сохраняет синопсис в Project тем же путём, что v1 (stage="synopsis"), поэтому после
- *     готовности проект бесшовно уходит в обычный пайплайн (шаг 2 «Синопсис»).
+ *   • мета-вызов {title, language} — на СОБСТВЕННЫХ промптах v2 (lib/idea-v2.ts), без шаблонов v1;
+ *   • сохраняет синопсис в Project и ставит stage=SYNOPSIS_V2_STAGE ("synopsis_v2") — отдельную
+ *     конечную стадию v2, НЕ входящую в пайплайн v1: поток v2 пока завершается показом синопсиса.
  */
 import { prisma } from "@/lib/db";
 import { updateJob, completeJob, failJob, heartbeatJob, markCanceled, isCancelRequested } from "@/lib/jobs";
 import { makeJobStreamWriter, flushStreamedText } from "@/lib/stream-progress";
 import { streamChatText, streamChatJSON } from "@/lib/ai";
 import {
-  synopsisMetaSchema,
-  synopsisMetaSystemPrompt,
-  synopsisMetaUserPrompt,
   genresToEnglish,
   normalizeLanguage,
   stripMarkup,
@@ -26,7 +24,15 @@ import {
 } from "@/lib/idea";
 import { resolveProjectName } from "@/lib/project-name";
 import { runWithPromptContext } from "@/lib/prompt-log";
-import { FABLE_MODEL, buildSynopsisV2Parts, resolveV2Language } from "@/lib/idea-v2";
+import {
+  FABLE_MODEL,
+  SYNOPSIS_V2_STAGE,
+  buildSynopsisV2Parts,
+  resolveV2Language,
+  synopsisV2MetaSchema,
+  synopsisV2MetaSystemPrompt,
+  synopsisV2MetaUserPrompt,
+} from "@/lib/idea-v2";
 
 /** GenerationJob.type для задачи «идея v2 → синопсис» (новое строковое значение, без миграции схемы). */
 export const SYNOPSIS_V2_JOB_TYPE = "synopsis_v2";
@@ -95,8 +101,8 @@ async function runSynopsisV2JobImpl(jobId: string, projectId: string, params: Sy
     let language: IdeaLanguage | null = null;
     try {
       await heartbeatJob(jobId);
-      const metaRaw = await streamChatJSON(synopsisMetaSystemPrompt(), synopsisMetaUserPrompt(synopsis), { temperature: 0.4, maxTokens: 2000 });
-      const meta = synopsisMetaSchema.parse(metaRaw);
+      const metaRaw = await streamChatJSON(synopsisV2MetaSystemPrompt(), synopsisV2MetaUserPrompt(synopsis), { model: FABLE_MODEL, temperature: 0.4, maxTokens: 2000 });
+      const meta = synopsisV2MetaSchema.parse(metaRaw);
       title = stripMarkup(meta.title ?? "").replace(/\s+/g, " ").trim();
       if (meta.language) language = normalizeLanguage(meta.language, languageHintText || synopsis);
     } catch (e) {
@@ -105,7 +111,7 @@ async function runSynopsisV2JobImpl(jobId: string, projectId: string, params: Sy
     if (!title) title = titleFromFirstLine(synopsis);
     if (!language) language = defaultLanguage;
 
-    // ── 3. Сохранение + завершение (тот же контракт, что v1 — проект уходит на stage="synopsis"). ──
+    // ── 3. Сохранение + завершение. stage="synopsis_v2" — конечная стадия v2: пайплайн v1 НЕ продолжается. ──
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
     await updateJob(jobId, { progress: 80, message: "Saving synopsis…" });
     await prisma.project.update({
@@ -115,7 +121,7 @@ async function runSynopsisV2JobImpl(jobId: string, projectId: string, params: Sy
         synopsis,
         language,
         synopsisApproved: false,
-        stage: "synopsis",
+        stage: SYNOPSIS_V2_STAGE,
         name: resolveProjectName(title, idea && idea.trim() ? idea : synopsis),
       },
     });

@@ -1,9 +1,9 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, Wand2, Sparkles, Lightbulb, Eye, Pencil, Check, ArrowLeft, Tags, Info } from 'lucide-react'
+import { Loader2, Wand2, Sparkles, Lightbulb, Eye, Pencil, Check, ArrowLeft, Tags, Info, BookOpen, RotateCcw } from 'lucide-react'
 import { GENRES } from '@/lib/idea'
-import { FABLE_MODEL_LABEL } from '@/lib/idea-v2'
+import { FABLE_MODEL_LABEL, SYNOPSIS_V2_STAGE } from '@/lib/idea-v2'
 import { CancelButton } from './cancel-button'
 import { useJobPolling, SmoothProgress, StreamingText } from './use-job-polling'
 
@@ -17,8 +17,9 @@ const SYNOPSIS_V2_EXPECTED_SEC = 50
  *      либо сгенерировать без просмотра.
  *   3. Генерируем синопсис (7–10 предложений: предыстория, основной хук ближе к концу, концовка).
  *
- * Когда задача завершается, роут переводит проект на stage="synopsis" — onRefresh() показывает
- * обычный экран синопсиса (шаг 2), и проект дальше идёт по стандартному пайплайну.
+ * Когда задача завершается, воркер сохраняет синопсис в проект и ставит stage="synopsis_v2" —
+ * конечную стадию потока v2. onRefresh() подтягивает проект, и этот же экран показывает РЕЗУЛЬТАТ
+ * (проза синопсиса + модель). Дальше по пайплайну v1 проект НЕ идёт — поток v2 пока завершается здесь.
  */
 export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: () => void }) {
   const [mode, setMode] = useState<'idea' | 'genres'>('idea')
@@ -37,14 +38,17 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const [error, setError] = useState('')
   const [canceled, setCanceled] = useState(false)
   const activeJobIdRef = useRef<string | null>(null)
+  // Результат v2 уже сохранён в проекте — показываем его; «Сгенерировать заново» возвращает к форме.
+  const hasResult = project?.stage === SYNOPSIS_V2_STAGE && !!String(project?.synopsis ?? '').trim()
+  const [showForm, setShowForm] = useState(false)
 
   const { job, start: startPolling, clear: clearJob } = useJobPolling({
     intervalMs: 800,
     onFinish: (res) => {
       activeJobIdRef.current = null
       if (res.job.status === 'completed') {
-        setError(''); setCanceled(false)
-        onRefresh() // проект переведён на stage="synopsis" — мастер отрисует шаг 2
+        setError(''); setCanceled(false); setShowForm(false); setPreviewOpen(false)
+        onRefresh() // синопсис сохранён (stage="synopsis_v2") — этот экран покажет результат
       } else if (res.job.status === 'canceled') {
         setCanceled(true)
       } else {
@@ -131,8 +135,45 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     try { await fetch(`/api/ai/jobs/${id}/cancel`, { method: 'POST' }) } catch { /* поллинг повторит */ }
   }
 
+  if (hasResult && !showForm && !generating) {
+    return (
+      <div className="space-y-6" data-testid="idea-stage-v2">
+        <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }} data-testid="idea-v2-result">
+          <h2 className="flex items-center gap-2 font-display text-xl font-bold">
+            <BookOpen className="h-5 w-5 text-primary" /> Новый проект v2.0 — синопсис готов
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Модель: <span className="font-semibold text-foreground" data-testid="idea-v2-result-model">{FABLE_MODEL_LABEL}</span>
+          </p>
+          <div className="mt-4 whitespace-pre-line rounded-lg border border-border bg-background px-4 py-3 text-sm leading-relaxed" data-testid="idea-v2-result-text">
+            {String(project.synopsis).trim()}
+          </div>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Синопсис сохранён в проекте. Следующие шаги потока v2.0 появятся позже.
+          </p>
+          <button
+            onClick={() => { setShowForm(true); setConfirmed(false); setError(''); setCanceled(false) }}
+            className="mt-4 flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted"
+            data-testid="idea-v2-regenerate"
+          >
+            <RotateCcw className="h-4 w-4" /> Сгенерировать заново
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6" data-testid="idea-stage-v2">
+      {hasResult && !generating && (
+        <button
+          onClick={() => setShowForm(false)}
+          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground"
+          data-testid="idea-v2-back-to-result"
+        >
+          <ArrowLeft className="h-4 w-4" /> К готовому синопсису
+        </button>
+      )}
       {/* Шаг 1 — идея или жанры */}
       <div className="rounded-xl border border-border bg-card p-4 sm:p-6" style={{ boxShadow: 'var(--shadow-md)' }}>
         <div className="flex flex-wrap items-center justify-between gap-2">

@@ -8,10 +8,19 @@
  * В этом режиме для LLM используется ТОЛЬКО одна модель — «Claude Fable 5.1» (лейбл для UI/логов);
  * на бэкенд отправляется реальный slug WaveSpeed (Claude Opus 5), под которым работает шлюз.
  */
+import { z } from "zod";
+// Из v1 берём только ДАННЫЕ/утилиты (жанры, определение языка) — промпт-шаблоны v2 собственные.
 import { GENRE_BY_ID, genresToEnglish, detectLanguage, type IdeaLanguage } from "@/lib/idea";
 
 /** Реальный slug модели на шлюзе WaveSpeed (то, что уходит в бэкенд). */
 export const FABLE_MODEL = "anthropic/claude-opus-5";
+/**
+ * Стадия проекта, на которой ЗАВЕРШАЕТСЯ поток v2 (пока — после генерации синопсиса).
+ * Это отдельное значение, НЕ входящее в пайплайн v1 (idea/logline/synopsis/structure/...),
+ * поэтому проект не подхватывается экранами/стадиями v1 и остаётся на экране v2 с результатом.
+ */
+export const SYNOPSIS_V2_STAGE = "synopsis_v2";
+
 /** Человекочитаемый лейбл модели для UI и превью промпта. */
 export const FABLE_MODEL_LABEL = "Claude Fable 5.1";
 
@@ -108,4 +117,31 @@ export function buildSynopsisV2Parts(input: SynopsisV2Input): {
     contextIncluded: SYNOPSIS_V2_CONTEXT_INCLUDED,
     contextNote: SYNOPSIS_V2_CONTEXT_NOTE,
   };
+}
+
+/* ───────────── Мета-вызов v2: {title, language} из готовой прозы синопсиса ───────────── */
+
+/** Схема ответа мета-вызова v2 (собственная, не зависит от шаблонов v1). */
+export const synopsisV2MetaSchema = z.object({
+  title: z.string().max(120).optional().nullable(),
+  language: z.string().max(16).optional().nullable(),
+});
+export type SynopsisV2Meta = z.infer<typeof synopsisV2MetaSchema>;
+
+/** System-промпт мета-вызова v2: название сериала + язык прозы, строго JSON. */
+export function synopsisV2MetaSystemPrompt(): string {
+  return `You are a series editor for short-form vertical AI drama. You receive a finished season synopsis (prose) and name the series.
+
+Return ONLY a valid JSON object with exactly these keys:
+{
+  "title": "<an original, catchy series title of 1-4 words, written in the SAME language as the synopsis, without quotes or trailing punctuation>",
+  "language": "<ISO 639-1 code of the language the synopsis is written in, e.g. \"ru\" or \"en\">"
+}
+
+RULES: no other keys, no explanations, no markdown, no code fences. The title must not reuse real brands, celebrities or existing franchises.`;
+}
+
+/** User-промпт мета-вызова v2. */
+export function synopsisV2MetaUserPrompt(synopsis: string): string {
+  return `SEASON SYNOPSIS:\n${synopsis.trim()}\n\nReturn the JSON with "title" and "language" now.`;
 }

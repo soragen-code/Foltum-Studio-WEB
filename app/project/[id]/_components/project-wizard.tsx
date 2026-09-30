@@ -33,22 +33,24 @@ export function ProjectWizard({ project: initialProject, entitlements }: { proje
   const currentStage = project?.stage ?? 'synopsis'
   // Optional «"References" tab (stage 5), opened via ?tab=references from the season/episode screens.
   const searchParams = useSearchParams()
-  const referencesTab = searchParams?.get('tab') === 'references' && isNewFlow(project) && currentStage !== 'idea'
+  const referencesTab = searchParams?.get('tab') === 'references' && isNewFlow(project) && currentStage !== 'idea' && currentStage !== 'synopsis_v2'
   // Read-only view of a PASSED stage, opened from the project step bar (?step=idea|logline|synopsis|story).
   // Only stages the project already went through are allowed; anything else falls back to the current stage.
   // Nothing here changes project.stage.
   // «Новый проект v2.0» — отдельный поток идея/жанры → просмотр промпта → синопсис (Claude Fable 5.1).
   // Метка потока живёт в URL (?flow=v2); при стадии idea рендерим экран v2 вместо обычного idea-stage.
-  // После генерации синопсиса проект переходит на stage="synopsis" и дальше идёт обычным пайплайном.
+  // После генерации синопсиса проект получает stage="synopsis_v2" — конечную стадию потока v2 (НЕ входит
+  // в пайплайн v1): на ней всегда (и без ?flow=v2) рендерится экран v2 с результатом синопсиса.
   const flowV2 = searchParams?.get('flow') === 'v2'
   const stepParam = searchParams?.get('step') as ProjectStepKey | null
+  // Поток v2 самостоятельный: на стадии synopsis_v2 read-only экраны v1 не открываем.
   const readOnlyStep: ProjectStepKey | null =
-    stepParam && stepParam !== 'scenes' && isStepPassed(stepParam, currentStage) ? stepParam : null
+    currentStage !== 'synopsis_v2' && stepParam && stepParam !== 'scenes' && isStepPassed(stepParam, currentStage) ? stepParam : null
   const stepsCurrent: ProjectStepKey = readOnlyStep ?? (
     referencesTab ? 'scenes'
     : currentStage === 'idea' ? 'idea'
     : currentStage === 'logline' ? 'logline'
-    : currentStage === 'synopsis' ? 'synopsis'
+    : currentStage === 'synopsis' || currentStage === 'synopsis_v2' ? 'synopsis'
     : currentStage === 'structure' ? 'story'
     : 'scenes')
 
@@ -108,7 +110,7 @@ export function ProjectWizard({ project: initialProject, entitlements }: { proje
               <ReferencesStage project={project} onRefresh={refreshProject} optional />
             </div>
           )}
-          {!readOnlyStep && !referencesTab && currentStage === 'idea' && flowV2 && (
+          {!readOnlyStep && !referencesTab && ((currentStage === 'idea' && flowV2) || currentStage === 'synopsis_v2') && (
             <IdeaStageV2 project={project} onRefresh={refreshProject} />
           )}
           {!readOnlyStep && !referencesTab && currentStage === 'idea' && !flowV2 && (
