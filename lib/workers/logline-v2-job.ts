@@ -1,6 +1,6 @@
 /**
- * Фоновый воркер потока «Новый проект v2.0»: идея / жанры → ЛОГЛАЙН (1 предложение по формуле
- * "When [event], [hero] must [goal], or else [stakes].").
+ * Фоновый воркер потока «Новый проект v2.0»: идея / жанры → ЛОГЛАЙН (1 предложение, 25–40 слов,
+ * без имён персонажей, с сезонным вопросом; язык вывода — выбор пользователя, loglineLanguage).
  *
  *   • модель — только FABLE_MODEL («Claude Fable 5.1»);
  *   • промпт — messages system → user → assistant → … → крайний user из buildLoglineV2Parts (lib/idea-v2.ts)
@@ -17,7 +17,7 @@ import { streamChatText } from "@/lib/ai";
 import { genresToEnglish, stripMarkup } from "@/lib/idea";
 import { translateToEnglish, translateLoglineRefines, translateNonEnglishLines } from "@/lib/translate-en";
 import { runWithPromptContext } from "@/lib/prompt-log";
-import { FABLE_MODEL, LOGLINE_V2_STAGE, buildLoglineV2Parts, legacyPartsToMessages, normalizeV2Messages, flattenV2Messages, type V2Msg } from "@/lib/idea-v2";
+import { FABLE_MODEL, LOGLINE_V2_STAGE, buildLoglineV2Parts, legacyPartsToMessages, normalizeV2Messages, flattenV2Messages, normalizeLoglineLanguage, LOGLINE_LANGUAGE_CODES, type V2Msg } from "@/lib/idea-v2";
 
 /** GenerationJob.type для задачи «идея v2 → логлайн». */
 export const LOGLINE_V2_JOB_TYPE = "logline_v2";
@@ -27,6 +27,10 @@ export const LOGLINE_V2_EXPECTED_SEC = 15;
 
 export interface LoglineV2JobParams {
   idea?: string | null;
+  /** Английский перевод идеи из preview. Если не передан — переводим здесь. */
+  ideaEn?: string | null;
+  /** Язык вывода логлайна ("Russian", "English", …) — whitelist, дефолт Russian; подставляется в system. */
+  loglineLanguage?: string | null;
   genres?: string[];
   /** Пожелания продюсера (режим жанров), как ввёл пользователь (обычно по-русски). */
   wishes?: string | null;
@@ -95,12 +99,15 @@ function cleanLogline(raw: string): string {
 async function runLoglineV2JobImpl(jobId: string, projectId: string, params: LoglineV2JobParams): Promise<void> {
   let hb: ReturnType<typeof setInterval> | null = null;
   try {
-    const { idea, genres = [], wishes, wishesEn, logline: prevLogline, refine: refineRaw, refineEn, loglineBase, loglineTurns: turnsRaw, overrideMessages, overrideSystem, overrideUser, overrideAssistant } = params;
+    const { idea, ideaEn, loglineLanguage: langRaw, genres = [], wishes, wishesEn, logline: prevLogline, refine: refineRaw, refineEn, loglineBase, loglineTurns: turnsRaw, overrideMessages, overrideSystem, overrideUser, overrideAssistant } = params;
     // В промпт — английские пожелания: перевод из preview (совпадает с модалкой) либо переводим сейчас.
     const wishesForPrompt = (wishesEn ?? "").trim() || (await translateToEnglish(wishes));
+    // Идея — тоже по-английски (перевод из preview либо здесь); язык вывода задаётся строкой OUTPUT LANGUAGE в system.
+    const ideaForPrompt = (ideaEn ?? "").trim() || (await translateToEnglish(idea));
+    const loglineLanguage = normalizeLoglineLanguage(langRaw);
     // Правки логлайна (текущая + история) — тоже только по-английски; та же точка, что и в preview (паритет).
     const { refine, loglineTurns } = await translateLoglineRefines({ refine: refineRaw, refineEn, loglineTurns: turnsRaw });
-    const parts = buildLoglineV2Parts({ idea, genres, wishes: wishesForPrompt, logline: prevLogline, refine, loglineBase, loglineTurns });
+    const parts = buildLoglineV2Parts({ idea: ideaForPrompt, loglineLanguage, genres, wishes: wishesForPrompt, logline: prevLogline, refine, loglineBase, loglineTurns });
     // system (правила) первым. Ручные правки из модалки (overrideMessages) имеют приоритет.
     let messages = resolveV2Messages(parts.messages, { overrideMessages, overrideSystem, overrideUser, overrideAssistant });
     // Ручная правка крайнего user в модалке могла быть дописана по-русски → переводим не-английские строки.
@@ -146,6 +153,8 @@ async function runLoglineV2JobImpl(jobId: string, projectId: string, params: Log
       data: {
         idea: ideaForStore,
         logline,
+        // Выбранный язык логлайна — в Project.language (ISO), чтобы восстановить выбор на другом устройстве.
+        language: LOGLINE_LANGUAGE_CODES[loglineLanguage],
         loglineApproved: false,
         // Новый логлайн обнуляет синопсис прошлой итерации.
         synopsis: null,

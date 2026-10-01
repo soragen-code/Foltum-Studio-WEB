@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, Wand2, Sparkles, Lightbulb, Eye, Pencil, ArrowLeft, ArrowRight, Tags, Info, BookOpen, RotateCcw, Copy, Check, X, Quote } from 'lucide-react'
 import { GENRES } from '@/lib/idea'
-import { FABLE_MODEL_LABEL, SYNOPSIS_V2_STAGE, LOGLINE_V2_STAGE, LOGLINE_V2_FORMULA_RU } from '@/lib/idea-v2'
+import { FABLE_MODEL_LABEL, SYNOPSIS_V2_STAGE, LOGLINE_V2_STAGE, LOGLINE_V2_FORMULA_RU, LOGLINE_LANGUAGES, LOGLINE_LANGUAGE_CODES, DEFAULT_LOGLINE_LANGUAGE, normalizeLoglineLanguage, type LoglineLanguage } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from './cancel-button'
 import { useJobPolling, SmoothProgress } from './use-job-polling'
@@ -116,6 +116,27 @@ const storeDialog = (projectId: string, base: string, turns: LoglineDialog['turn
   } catch { /* localStorage недоступен */ }
 }
 
+/** Язык логлайна — выбор пользователя на шаге 1. Хранится в localStorage по projectId; уходит параметром loglineLanguage. */
+const langKey = (projectId: string) => `foltum:v2:logline-lang:${projectId}`
+const loadLang = (projectId: string): LoglineLanguage | null => {
+  try {
+    const raw = window.localStorage.getItem(langKey(projectId))
+    return raw && (LOGLINE_LANGUAGES as readonly string[]).includes(raw) ? (raw as LoglineLanguage) : null
+  } catch { return null }
+}
+const storeLang = (projectId: string, lang: LoglineLanguage) => {
+  try { window.localStorage.setItem(langKey(projectId), lang) } catch { /* localStorage недоступен */ }
+}
+/** Подписи языков (нативные названия — одинаковы для RU/EN UI). */
+const LANG_LABELS: Record<LoglineLanguage, string> = { Russian: 'Русский', English: 'English', Spanish: 'Español', German: 'Deutsch', French: 'Français' }
+/** Язык логлайна по умолчанию — язык интерфейса (ru → Русский, иначе English). */
+const langFromLocale = (locale: string): LoglineLanguage => (locale === 'ru' ? 'Russian' : 'English')
+/** Восстановление с другого устройства: ISO-код Project.language → язык логлайна (только если логлайн уже сгенерирован). */
+const langFromCode = (code: unknown): LoglineLanguage | null => {
+  const hit = (Object.keys(LOGLINE_LANGUAGE_CODES) as LoglineLanguage[]).find((l) => LOGLINE_LANGUAGE_CODES[l] === code)
+  return hit ?? null
+}
+
 const API: Record<Kind, { generate: string; preview: string }> = {
   logline: { generate: '/api/ai/v2/logline', preview: '/api/ai/v2/logline/preview' },
   synopsis: { generate: '/api/ai/v2/synopsis', preview: '/api/ai/v2/synopsis/preview' },
@@ -132,7 +153,8 @@ const KIND_LABEL: Record<Kind, string> = { logline: 'логлайна', synopsis
  *   synopsis — синопсис, развернутый из утверждённого логлайна.
  *
  * Основная кнопка перехода («Продолжить» / «Сгенерировать») на всех шагах стоит ВНЕ карточки, под ней. Модалка промпта общая
- * для обоих шагов: диалог messages без system (правила в первом user), новые сверху, редактируется только крайний user;
+ * для обоих шагов: system (правила + язык) закреплён сверху, ниже диалог user/assistant (первый user — буквально ввод
+ * пользователя: жанры / идея / пожелания по-английски), новые сверху, редактируются только system и крайний user;
  * кнопки «Скопировать историю» и «RU». Перевод RU — только для отображения; в API всегда уходит английский оригинал.
  */
 export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: () => void }) {
@@ -145,6 +167,10 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   // Английский перевод пожеланий, полученный из preview (промпт в модалке показан с ним).
   // Уходит в generate как wishesEn, чтобы в модель попал ровно показанный текст. Сбрасывается при правке поля.
   const [wishesEn, setWishesEn] = useState('')
+  // Английский перевод идеи из preview — уходит в generate как ideaEn (паритет с модалкой). Сбрасывается при правке идеи.
+  const [ideaEn, setIdeaEn] = useState('')
+  // Язык логлайна (п. «Язык логлайна» на шаге 1): localStorage по projectId → Project.language (если логлайн уже есть) → язык UI.
+  const [loglineLang, setLoglineLang] = useState<LoglineLanguage>(DEFAULT_LOGLINE_LANGUAGE)
   // Модалка-предупреждение о сбросе последующих шагов — показывается ТОЛЬКО после «Отправить» в модалке промпта, если ввод менялся.
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false)
   // Пользователь подтвердил сброс → уже сохранённые логлайн/синопсис скрываются до новой генерации логлайна.
@@ -195,7 +221,12 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const [inputDirty, setInputDirty] = useState(false)
 
   // ─── Промпты (по шагам): диалог messages из preview (system первым) + правки system и крайнего user
-  const { t } = useTranslation()
+  const { t, locale } = useTranslation()
+  useEffect(() => {
+    const saved = loadLang(project.id) ?? (String(project?.logline ?? '').trim() ? langFromCode(project?.language) : null)
+    setLoglineLang(saved ?? langFromLocale(locale))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id])
   const [promptKind, setPromptKind] = useState<Kind>('logline')
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewLoading, setPreviewLoading] = useState<Kind | null>(null)
@@ -302,12 +333,20 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     setGenres((prev) => (prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]))
     markInputDirty()
   }
-  const onIdeaChange = (v: string) => { setIdea(v); markInputDirty() }
+  const onIdeaChange = (v: string) => { setIdea(v); setIdeaEn(''); markInputDirty() }
+  // Смена языка логлайна: запоминаем по проекту, пересобираем промпт (system содержит строку OUTPUT LANGUAGE).
+  const onLangChange = (v: string) => {
+    const lang = normalizeLoglineLanguage(v)
+    setLoglineLang(lang); storeLang(project.id, lang); resetPrompt('logline'); markInputDirty()
+  }
   const canProceed = mode === 'idea' ? idea.trim().length >= 10 : genres.length > 0
   const onWishesChange = (v: string) => { setWishes(v); setWishesEn(''); markInputDirty() }
-  const inputBody = () => (mode === 'idea'
-    ? { idea: idea.trim() }
-    : { genres, wishes: wishes.trim() || undefined, wishesEn: wishes.trim() && wishesEn ? wishesEn : undefined })
+  const inputBody = () => ({
+    loglineLanguage: loglineLang,
+    ...(mode === 'idea'
+      ? { idea: idea.trim(), ideaEn: ideaEn || undefined }
+      : { genres, wishes: wishes.trim() || undefined, wishesEn: wishes.trim() && wishesEn ? wishesEn : undefined }),
+  })
   // Аргументы уточнения логлайна: добавляются только для шага логлайна, когда есть непустая правка и текущий логлайн.
   // noRefine — принудительно «с нуля» (шаг 1 → модалка, кнопка «Сгенерировать»), даже если поле правки заполнено.
   const refineArgs = (k: Kind, noRefine = false) =>
@@ -334,6 +373,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       const d = await res.json().catch(() => ({}))
       if (!res.ok) { setError(d?.error ?? 'Не удалось собрать промпт'); return null }
       if (k === 'logline' && typeof d.wishesEn === 'string') setWishesEn(d.wishesEn)
+      if (k === 'logline' && typeof d.ideaEn === 'string') setIdeaEn(d.ideaEn)
       const refineEnNow = k === 'logline' && typeof d.refineEn === 'string' ? d.refineEn : ''
       if (k === 'logline') setRefineEn(refineEnNow)
       // messages без system (правила в первом user). Старый ответ с system/user — маппим в один user на лету.
@@ -1136,9 +1176,22 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             </div>
           )}
 
+          <div className="mt-5 flex flex-wrap items-center gap-2" data-testid="idea-v2-logline-language">
+            <label htmlFor="idea-v2-logline-lang" className="text-xs font-medium text-muted-foreground">{t('ideaV2.loglineLanguage')}:</label>
+            <select
+              id="idea-v2-logline-lang"
+              value={loglineLang}
+              onChange={(e) => onLangChange(e.target.value)}
+              className="rounded-lg border border-input bg-background px-3 py-1.5 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
+              data-testid="idea-v2-logline-lang"
+            >
+              {LOGLINE_LANGUAGES.map((l) => <option key={l} value={l}>{LANG_LABELS[l]}</option>)}
+            </select>
+          </div>
+
           <p className="mt-4 text-sm text-muted-foreground">
             Отправляется в: <span className="font-semibold text-foreground" data-testid="idea-v2-model">{FABLE_MODEL_LABEL}</span>.
-            На следующем шаге можно просмотреть промпт и сгенерировать логлайн — одно предложение по формуле «{LOGLINE_V2_FORMULA_RU}». После утверждения он развернётся в синопсис на 7–10 предложений.
+            На следующем шаге можно просмотреть промпт и сгенерировать логлайн — {LOGLINE_V2_FORMULA_RU}. После утверждения он развернётся в синопсис на 7–10 предложений.
           </p>
 
           {canceled === 'logline' && (

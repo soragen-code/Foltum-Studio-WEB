@@ -115,6 +115,8 @@ export interface SynopsisV2Input {
    * user(правка)→assistant(логлайн) в транскрипте, поэтому прежние правки не отменяются моделью.
    */
   loglineTurns?: { refine: string; logline: string }[] | null;
+  /** Язык вывода логлайна (английское название: "Russian", "English", …); whitelist LOGLINE_LANGUAGES, дефолт Russian. */
+  loglineLanguage?: string | null;
 }
 
 /**
@@ -161,7 +163,7 @@ export function synopsisV2UserPrompt(input: SynopsisV2Input): string {
       : input.genres?.length
         ? `\n\nGENRE(S): ${genresToEnglish(input.genres).join(", ")}`
         : "";
-    return `LOGLINE:\n${logline}${source}\n\nWrite the season synopsis prose expanding THIS logline (7-10 sentences: backstory, the awaited main hook near the end, and the ending). Keep the logline's hero, goal and stakes; keep character names exactly as in the logline.`;
+    return `LOGLINE:\n${logline}${source}\n\nWrite the season synopsis prose expanding THIS logline (7-10 sentences: backstory, the awaited main hook near the end, and the ending). Keep the logline's hero, goal and stakes. The logline deliberately names no characters — invent original names yourself (English first name + surname in Latin letters).`;
   }
   if (idea) {
     return `IDEA:\n${idea}\n\nWrite the season synopsis prose now (7-10 sentences: backstory, the awaited main hook near the end, and the ending).`;
@@ -260,65 +262,77 @@ export function synopsisV2MetaUserPrompt(synopsis: string): string {
   return `SEASON SYNOPSIS:\n${synopsis.trim()}\n\nReturn the JSON with "title" and "language" now.`;
 }
 
-/* ───────────── Логлайн v2: Идея/жанры → 1 предложение по формуле ───────────── */
+/* ───────────── Логлайн v2: Идея/жанры → 1 предложение (25–40 слов, без имён, сезонный вопрос) ───────────── */
 
-/** Пример формулы логлайна для русского UI (в API уходят английские правила LOGLINE_V2_RULES). */
-export const LOGLINE_V2_FORMULA_RU = "Когда [событие], [герой] должен [цель], иначе [ставка].";
-export const LOGLINE_V2_EXAMPLE_RU =
-  "Когда банк отбирает его дом, бывший трейдер должен за 30 дней отыграть миллион на рынке, где сам же всех и обманул.";
-
-/** Правила логлайна v2 (английский — уходит в system). */
-const LOGLINE_V2_RULES = `Write ONE LOGLINE for the season — exactly ONE sentence — following this formula:
-"When [event], [hero] must [goal], or else [stakes]."
-
-- [event] — the inciting incident that shatters the hero's normal life.
-- [hero] — the protagonist, with a short defining trait or role (you may name them).
-- [goal] — a concrete, visual goal the hero must achieve, ideally with a deadline or a sharp constraint.
-- [stakes] — what the hero loses if they fail; make it personal and high.
-
-Adapt the connecting words naturally to the output language, but keep the four parts of the formula in this order.
-
-FORMAT: output ONLY the single sentence — no title, no label, no quotes around it, no markdown, no explanations, no alternatives.
-
-CRAFT: gripping, specific and concrete, made for short vertical AI-drama episodes (cliffhanger-driven, mobile vertical feed). No generic filler, no clichés.
-
-ORIGINALITY: all characters, names and places are invented and original — never real people, celebrities, brands, landmarks or existing franchises. If a character is named, the name is ALWAYS an English first name + surname in Latin letters (A-Z), regardless of the story's setting or language.`;
-
-export function loglineV2SystemPrompt(input: SynopsisV2Input): string {
-  const idea = (input.idea ?? "").trim();
-  const languageRule = idea
-    ? "LANGUAGE: write the logline in the SAME language as the user's idea (Russian idea → Russian logline, English idea → English logline, etc.). Character names stay in Latin letters."
-    : "LANGUAGE: no idea text was given, only genres — write the logline in Russian. Character names stay in Latin letters.";
-  return `You are a head writer for short-form vertical AI drama series.
-
-${LOGLINE_V2_RULES}
-
-${languageRule}`;
+/** Языки вывода логлайна (whitelist для API; значение — английское название языка, подставляется в system). */
+export const LOGLINE_LANGUAGES = ["Russian", "English", "Spanish", "German", "French"] as const;
+export type LoglineLanguage = (typeof LOGLINE_LANGUAGES)[number];
+export const DEFAULT_LOGLINE_LANGUAGE: LoglineLanguage = "Russian";
+/** Соответствие языка логлайна ISO-коду Project.language. */
+export const LOGLINE_LANGUAGE_CODES: Record<LoglineLanguage, IdeaLanguage> = {
+  Russian: "ru",
+  English: "en",
+  Spanish: "es",
+  German: "de",
+  French: "fr",
+};
+/** Нормализация значения с клиента: whitelist, иначе дефолт ("Russian"). */
+export function normalizeLoglineLanguage(value: unknown): LoglineLanguage {
+  const v = typeof value === "string" ? value.trim() : "";
+  const hit = LOGLINE_LANGUAGES.find((l) => l.toLowerCase() === v.toLowerCase());
+  return hit ?? DEFAULT_LOGLINE_LANGUAGE;
 }
 
-/** Тейл-инструкция: собственно попросить одно предложение по формуле. */
-const LOGLINE_V2_TAIL = `\n\nWrite the one-sentence logline now: "When [event], [hero] must [goal], or else [stakes]."`;
+/** Краткое описание правил логлайна для русского UI (в API уходят английские правила LOGLINE_V2_RULES). */
+export const LOGLINE_V2_FORMULA_RU =
+  "одно предложение, 25–40 слов, в настоящем времени, без имён персонажей: герой (профессия или черта), событие, цель, антагонист или дилемма и сезонный вопрос";
+export const LOGLINE_V2_EXAMPLE_RU =
+  "Уволенная реставраторша икон соглашается подделать чудотворный образ для криминального епископа, чтобы выкупить дочь из долгов, но подлинник начинает исцелять людей, и к финалу сезона придётся решить, кто из них настоящая святая.";
 
-/** Источник задания (идея пользователя либо набор жанров) — общий для первой генерации и для правок. */
+/** Правила логлайна v2 (английский — уходит в system; строка OUTPUT LANGUAGE добавляется из выбора пользователя). */
+const LOGLINE_V2_RULES = `You are a development executive writing loglines for a vertical micro-series (60–100 second episodes, 50–60 episodes per season, cliffhanger-driven).
+
+INPUT HANDLING
+The user message is free text. Classify it yourself:
+- Only genres listed (e.g. "thriller, romance, post-apocalypse") → invent protagonist, world and situation from scratch.
+- A story idea (one or more sentences) → treat it as the seed: keep its core mechanic and protagonist's situation, you may invent everything else. Infer the genres from it.
+- Genres + idea → genres are hard constraints, idea is the seed.
+- If the input references an existing film, book or show, borrow only its mechanic — never its plot, names or world.
+
+LOGLINE RULES
+One sentence, 25–40 words, present tense, no character names. It must contain:
+1. Protagonist defined by a job or trait
+2. The event that breaks their normal
+3. Their goal
+4. The antagonistic force or dilemma
+5. The season question — the unresolved tension planted in the premise that can only pay off near the end of the season, not in one scene
+Every logline must include at least one concrete noun that could only exist in this genre combination (an object, a job, a rule of the world).
+
+OUTPUT
+Return exactly one logline following all rules above. Logline only — no title, no preamble, no commentary, no explanation.`;
+
+/** Авто-system логлайна: правила + одна строка с языком вывода. Единый источник для job, preview и «Сбросить к авто». */
+export function loglineV2SystemPrompt(input: SynopsisV2Input): string {
+  const lang = normalizeLoglineLanguage(input.loglineLanguage);
+  return `${LOGLINE_V2_RULES}\nOUTPUT LANGUAGE: write the logline in ${lang}.`;
+}
+
+/**
+ * Первый user — буквально ввод пользователя, без обёрток и инструкций:
+ * жанры (английские названия через запятую) первой строкой, затем идея и/или пожелания (уже на английском),
+ * разделённые пустой строкой.
+ */
 function loglineV2Source(input: SynopsisV2Input): string {
   const idea = (input.idea ?? "").trim();
-  if (idea) return `IDEA:\n${idea}`;
-  const genres = input.genres ?? [];
-  const english = genresToEnglish(genres);
-  const premises = genres
-    .map((g) => (GENRE_BY_ID[(g ?? "").trim().toLowerCase()] as { premise?: string } | undefined)?.premise)
-    .filter(Boolean) as string[];
-  const premiseBlock = premises.length
-    ? `\n\nGENRE PREMISE(S) TO FOLLOW:\n${premises.map((p) => `- ${p}`).join("\n")}`
-    : "";
+  const english = genresToEnglish(input.genres ?? []).filter(Boolean);
   const wishes = (input.wishes ?? "").trim();
-  const wishesBlock = wishes ? `\n\nPRODUCER'S WISHES (incorporate into the logline):\n${wishes}` : "";
-  return `The producer has NOT written a story. Invent an original, gripping story in the following genre(s): ${english.join(", ") || "drama"}. Combine them if more than one is given, avoid clichés, and surprise the viewer while staying coherent.${premiseBlock}${wishesBlock}`;
+  const blocks = [english.join(", "), idea, wishes].filter(Boolean);
+  return blocks.join("\n\n") || "drama";
 }
 
-/** Инструкция для хода-правки. В messages-режиме модель видит текущий логлайн как свой предыдущий ответ. */
+/** Ход-правка — голый текст пожелания (уже переведённый на английский). */
 function loglineV2RefineInstruction(refine: string): string {
-  return `The producer now wants to change the logline as follows:\n${refine}\n\nRewrite the logline applying this newest change while keeping everything that already works and without reverting any earlier change. Keep it a single sentence.${LOGLINE_V2_TAIL}`;
+  return refine.trim();
 }
 
 export function loglineV2UserPrompt(input: SynopsisV2Input): string {
@@ -326,13 +340,12 @@ export function loglineV2UserPrompt(input: SynopsisV2Input): string {
   const refine = (input.refine ?? "").trim();
   const prev = (input.logline ?? "").trim();
 
-  // Fallback (нет транскрипта, напр. после перезагрузки страницы): одноходовая правка
-  // с явным указанием текущего логлайна. В messages-режиме этот текст используется только для лога.
+  // Fallback (нет транскрипта): одноходовая правка с текущим логлайном — минимально.
   if (refine && prev) {
-    return `${source}\n\nCURRENT LOGLINE:\n"${prev}"\n\n${loglineV2RefineInstruction(refine)}`;
+    return `${source}\n\nCurrent logline: "${prev}"\n\n${loglineV2RefineInstruction(refine)}`;
   }
 
-  return `${source}${LOGLINE_V2_TAIL}`;
+  return source;
 }
 
 /** Assistant-prefill логлайна — по умолчанию пуст. */
@@ -351,7 +364,7 @@ export function buildLoglineV2Parts(input: SynopsisV2Input): {
   contextIncluded: boolean;
   contextNote: string;
   /**
-   * Что реально уходит в модель: system (правила) → user (источник + задание) → assistant (L0) →
+   * Что реально уходит в модель: system (правила + язык) → user (ввод пользователя) → assistant (L0) →
    * user (правка 1) → assistant (логлайн 1) → ... → крайний user (текущая правка).
    * Без базы L0 (напр. после перезагрузки) базой становится текущий логлайн (input.logline): история
    * правок пуста, но модель всё равно видит прежний ответ как свой.
@@ -373,7 +386,7 @@ export function buildLoglineV2Parts(input: SynopsisV2Input): {
     // Реальный диалог: модель видит собственные прежние ответы, и прежние правки не отменяются.
     messages = [
       { role: "system", content: system },
-      { role: "user", content: `${loglineV2Source(input)}${LOGLINE_V2_TAIL}` },
+      { role: "user", content: loglineV2Source(input) },
       { role: "assistant", content: base },
     ];
     for (const t of turns) {
