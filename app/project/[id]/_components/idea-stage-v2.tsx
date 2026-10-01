@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, Wand2, Sparkles, Lightbulb, Eye, Pencil, ArrowLeft, ArrowRight, Tags, Info, BookOpen, RotateCcw, Copy, Check, X } from 'lucide-react'
+import { Loader2, Wand2, Sparkles, Lightbulb, Eye, Pencil, ArrowLeft, ArrowRight, Tags, Info, BookOpen, RotateCcw, Copy, Check, X, ChevronDown, ChevronRight } from 'lucide-react'
 import { GENRES } from '@/lib/idea'
 import { FABLE_MODEL_LABEL, SYNOPSIS_V2_STAGE, SYNOPSIS_LANGUAGES, SYNOPSIS_LANGUAGE_CODES, DEFAULT_SYNOPSIS_LANGUAGE, normalizeSynopsisLanguage, normalizeEpisodesCount, DEFAULT_EPISODES_COUNT, MIN_EPISODES_COUNT, MAX_EPISODES_COUNT, type SynopsisLanguage } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
@@ -38,27 +38,23 @@ const withSystem = (m: Msg[], text: string): Msg[] => (m[0]?.role === 'system' ?
 /** Сообщения без system (история user/assistant). */
 const nonSystem = (m: Msg[]) => m.filter((x) => x.role !== 'system')
 
-/** Индекс крайнего (самого нового) user-сообщения — единственного редактируемого. */
+/** Индекс крайнего (самого нового) user-сообщения — текущего (неотправленного) запроса. */
 const lastUserIdx = (m: Msg[]) => { for (let i = m.length - 1; i >= 0; i--) if (m[i].role === 'user') return i; return -1 }
-/** Диалог с учётом правки крайнего user — ровно то, что уйдёт в API при ручном редактировании. */
-const withLastUser = (m: Msg[], text: string): Msg[] => {
-  const i = lastUserIdx(m)
-  return i < 0 ? m : m.map((x, j) => (j === i ? { ...x, content: text } : x))
-}
 /** Хронологический текст истории для буфера обмена: «SYSTEM:» первым, далее «USER:» / «ASSISTANT:», через пустую строку. */
 const historyText = (m: Msg[]) => m.map((x) => `${x.role.toUpperCase()}:\n${x.content}`).join('\n\n')
 
 /**
- * Черновик промпта: отредактированные system и крайний user БЕЗ вызова ИИ + кэш собранного промпта. В проекте нет
- * поля под черновик и миграции не делаем → localStorage по ключу projectId+kind.
- *   orig/sysOrig — авто-значения на момент сборки: правка (edit/sysEdit) применяется, только если заново собранный
- *                  текст совпал с ними (иначе правка устарела — берём авто; для system это и есть «Сбросить к авто»
+ * Черновик промпта: отредактированный system БЕЗ вызова ИИ + кэш собранного промпта. В проекте нет
+ * поля под черновик и миграции не делаем → localStorage по ключу projectId+kind. История (user/assistant)
+ * не редактируется — всегда авто-собранная.
+ *   sysOrig      — авто-system на момент сборки: правка sysEdit применяется, только если заново собранный
+ *                  system совпал с ним (иначе правка устарела — берём авто; это и есть «Сбросить к авто»
  *                  с актуальным шаблоном/языком/количеством эпизодов).
  *   fp + list    — «отпечаток» вводных и собранный диалог: если отпечаток текущих вводных совпал — модалка
  *                  открывается из кэша без запроса preview (промпт персистентен между открытиями/перезагрузкой).
  */
 type PromptDraft = {
-  orig: string; edit: string; sysOrig?: string; sysEdit?: string
+  sysOrig?: string; sysEdit?: string
   fp?: string; list?: Msg[]; note?: string; refineEn?: string; wishesEn?: string; ideaEn?: string
 }
 const draftKey = (projectId: string, k: Kind) => `foltum:v2:prompt-draft:${projectId}:${k}`
@@ -67,7 +63,7 @@ const loadDraft = (projectId: string, k: Kind): PromptDraft | null => {
     const raw = typeof window !== 'undefined' ? window.localStorage.getItem(draftKey(projectId, k)) : null
     if (!raw) return null
     const d = JSON.parse(raw)
-    if (!d || typeof d.orig !== 'string' || typeof d.edit !== 'string') return null
+    if (!d || typeof d !== 'object') return null
     if (d.list !== undefined && !(Array.isArray(d.list) && d.list.every((m: any) => m && (m.role === 'system' || m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string'))) delete d.list
     return d
   } catch { return null }
@@ -232,14 +228,14 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const [ready, setReady] = useState<Record<Kind, boolean>>({ synopsis: false })
   // Оригинальный диалог из preview: system (правила) → user (ввод) → assistant (S0) → user (правка) → … → крайний user.
   const [msgs, setMsgs] = useState<Record<Kind, Msg[]>>({ synopsis: [] })
-  // Редактируемый текст крайнего user (единственное редактируемое сообщение).
-  const [lastEdit, setLastEdit] = useState<Record<Kind, string>>({ synopsis: '' })
   // Редактируемый текст system (первое сообщение; «Сбросить к авто» возвращает шаблон).
   const [sysEdit, setSysEdit] = useState<Record<Kind, string>>({ synopsis: '' })
   const [note, setNote] = useState<Record<Kind, string>>({ synopsis: '' })
   const [copied, setCopied] = useState(false)
   // Подтверждение «Сохранено» у кнопки «Сохранить» (~1.5 с), модалка остаётся открытой.
   const [saved, setSaved] = useState(false)
+  // Аккордеон «История» в модалке промпта: свёрнут по умолчанию (read-only список, новые сверху).
+  const [historyOpen, setHistoryOpen] = useState(false)
   // Отпечаток вводных, под который собран текущий промпт шага k (для кэша черновика).
   const fpRef = useRef<Record<Kind, string>>({ synopsis: '' })
   // РУ-перевод транскрипта (только отображение; в API уходит английский оригинал).
@@ -247,15 +243,13 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const [msgsRu, setMsgsRu] = useState<string[] | null>(null)
   const [msgsRuLoading, setMsgsRuLoading] = useState(false)
 
-  const lastUserOrig = (k: Kind) => { const i = lastUserIdx(msgs[k]); return i < 0 ? '' : msgs[k][i].content }
   const sysOrig = (k: Kind) => systemOf(msgs[k])
   const isSysEdited = (k: Kind) => ready[k] && sysEdit[k] !== sysOrig(k)
-  const isEdited = (k: Kind) => ready[k] && (lastEdit[k] !== lastUserOrig(k) || isSysEdited(k))
-  /** Диалог, который уйдёт в API (system [с правкой] + история хронологически + отредактированный крайний user). */
-  const sendMessages = (k: Kind) => withSystem(withLastUser(msgs[k], lastEdit[k]), sysEdit[k])
-  /** Текущее состояние модалки шага k как черновик (правки + кэш собранного промпта под его отпечаток). */
+  /** Диалог, который уйдёт в API: system [с правкой] + авто-собранная история хронологически (не редактируется). */
+  const sendMessages = (k: Kind) => withSystem(msgs[k], sysEdit[k])
+  /** Текущее состояние модалки шага k как черновик (правка system + кэш собранного промпта под его отпечаток). */
   const draftNow = (k: Kind): PromptDraft => ({
-    orig: lastUserOrig(k), edit: lastEdit[k], sysOrig: sysOrig(k), sysEdit: sysEdit[k],
+    sysOrig: sysOrig(k), sysEdit: sysEdit[k],
     fp: fpRef.current[k] || undefined, list: msgs[k], note: note[k],
     refineEn, wishesEn, ideaEn,
   })
@@ -398,9 +392,9 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   }
 
   // Собрать промпт для текущего ввода. Если отпечаток вводных совпал с кэшем черновика — берём промпт из кэша
-  // (без запроса preview, с сохранёнными правками); иначе запрашиваем preview и кладём результат в кэш.
-  // Возвращает собранный диалог и крайний user с учётом черновика, либо null при ошибке.
-  const buildPrompt = async (k: Kind, noRefine = false): Promise<{ list: Msg[]; last: string; sysEdit: string; refineEn: string } | null> => {
+  // (без запроса preview, с сохранённой правкой system); иначе запрашиваем preview и кладём результат в кэш.
+  // Возвращает собранный диалог и system с учётом черновика, либо null при ошибке.
+  const buildPrompt = async (k: Kind, noRefine = false): Promise<{ list: Msg[]; sysEdit: string; refineEn: string } | null> => {
     const fp = fingerprint(k, noRefine)
     const cached = loadDraft(project.id, k)
     if (cached && cached.fp === fp && cached.list && nonSystem(cached.list).length) {
@@ -409,13 +403,12 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       const refineEnNow = cached.refineEn ?? ''
       fpRef.current[k] = fp
       setMsgs((s) => ({ ...s, [k]: list }))
-      setLastEdit((s) => ({ ...s, [k]: cached.edit }))
       setSysEdit((s) => ({ ...s, [k]: sysE }))
       setNote((s) => ({ ...s, [k]: cached.note ?? '' }))
       setWishesEn(cached.wishesEn ?? ''); setIdeaEn(cached.ideaEn ?? ''); setRefineEn(refineEnNow)
       setMsgsRu(null); setMsgsRuOn(false)
       setReady((s) => ({ ...s, [k]: true }))
-      return { list, last: cached.edit, sysEdit: sysE, refineEn: refineEnNow }
+      return { list, sysEdit: sysE, refineEn: refineEnNow }
     }
     try {
       const args = refineArgs(k, noRefine)
@@ -443,12 +436,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
         list = sys ? [{ role: 'system', content: sys }, ...nonSystem(list)] : nonSystem(list)
       }
       setMsgs((s) => ({ ...s, [k]: list }))
-      const li = lastUserIdx(list)
-      const orig = li < 0 ? '' : list[li].content
-      // Сохранённый черновик («Сохранить» в модалке) подхватывается, если собранный крайний user не изменился.
       const draft = loadDraft(project.id, k)
-      const last = draft && draft.orig === orig ? draft.edit : orig
-      setLastEdit((s) => ({ ...s, [k]: last }))
       const sysO = systemOf(list)
       // Черновик system: применяем, если авто-system не изменился (иначе шаблон/язык/N обновились — берём авто).
       const sysE = draft && typeof draft.sysEdit === 'string' && draft.sysEdit.trim() && (draft.sysOrig ?? '') === sysO ? draft.sysEdit : sysO
@@ -456,23 +444,23 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       setMsgsRu(null); setMsgsRuOn(false)
       const hist = nonSystem(list).length
       const dialogNote = hist > 1
-        ? ` Запрос уйдёт диалогом: system (правила) + ${hist} сообщений истории (показаны ниже, новые сверху): модель видит свои прежние ответы и все ранние правки. Редактировать можно system и текущий (крайний) запрос.`
-        : ' Запрос уйдёт как system (правила) + user (ваш ввод); оба можно отредактировать перед отправкой.'
+        ? ` Запрос уйдёт диалогом: system (правила) + ${hist} сообщений истории (свёрнута ниже, новые сверху): модель видит свои прежние ответы и все ранние правки. Редактировать можно только system.`
+        : ' Запрос уйдёт как system (правила) + user (ваш ввод). Редактировать можно только system.'
       const noteText = `${d.contextNote ?? ''}${dialogNote}`
       setNote((s) => ({ ...s, [k]: noteText }))
       setReady((s) => ({ ...s, [k]: true }))
       // Кэш: собранный промпт под отпечаток текущих вводных (+ применённые правки) — следующее открытие без preview.
       fpRef.current[k] = fp
       storeDraft(project.id, k, {
-        orig, edit: last, sysOrig: sysO, sysEdit: sysE, fp, list, note: noteText,
+        sysOrig: sysO, sysEdit: sysE, fp, list, note: noteText,
         refineEn: refineEnNow, wishesEn: typeof d.wishesEn === 'string' ? d.wishesEn : '', ideaEn: typeof d.ideaEn === 'string' ? d.ideaEn : '',
       })
-      return { list, last, sysEdit: sysE, refineEn: refineEnNow }
+      return { list, sysEdit: sysE, refineEn: refineEnNow }
     } catch { setError('Ошибка сети'); return null }
   }
 
   const resetModalFlags = (k: Kind) => {
-    setMsgsRuOn(false); setCopied(false); setSaved(false)
+    setMsgsRuOn(false); setCopied(false); setSaved(false); setHistoryOpen(false)
     setPromptKind(k)
   }
   // «Превью» рядом с любой отправляющей кнопкой: собирает промпт (из кэша, если вводные не менялись) и показывает его.
@@ -492,15 +480,14 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     setError(''); setCanceled(null); jobs[k].clear(); setStarting(k); setPreviewOpen(false)
     try {
       // Генерация НЕ открывает модалку: уходит последний сохранённый промпт («Сохранить» в превью), если он есть
-      // и собран под текущие вводные. Ручная правка system/крайнего user → уходит ВЕСЬ диалог (system + история + правка).
+      // и собран под текущие вводные. Правка system → уходит ВЕСЬ диалог (изменённый system + авто-история).
       const fpNow = fingerprint(k, noRefine)
-      let override: Msg[] | null = ready[k] && fpRef.current[k] === fpNow && isEdited(k) ? sendMessages(k) : null
+      let override: Msg[] | null = ready[k] && fpRef.current[k] === fpNow && isSysEdited(k) ? sendMessages(k) : null
       let refineEnNow = ready[k] && fpRef.current[k] === fpNow ? refineEn : ''
       if (!override && !(ready[k] && fpRef.current[k] === fpNow) && loadDraft(project.id, k)) {
         const b = await buildPrompt(k, noRefine)
         if (b) {
-          const li = lastUserIdx(b.list)
-          if ((li >= 0 && b.last !== b.list[li].content) || b.sysEdit !== systemOf(b.list)) override = withSystem(withLastUser(b.list, b.last), b.sysEdit)
+          if (b.sysEdit !== systemOf(b.list)) override = withSystem(b.list, b.sysEdit)
           if (b.refineEn) refineEnNow = b.refineEn
         }
       }
@@ -570,7 +557,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const curMsgs = msgs[promptKind]
   const curLastIdx = lastUserIdx(curMsgs)
 
-  /** «Скопировать историю»: весь диалог хронологически (SYSTEM/USER/ASSISTANT), английский оригинал, крайний user — с правкой. */
+  /** «Скопировать историю»: весь диалог хронологически (SYSTEM [с правкой] / USER / ASSISTANT), английский оригинал. */
   const copyHistory = async () => {
     try {
       await navigator.clipboard.writeText(historyText(sendMessages(promptKind)))
@@ -578,11 +565,9 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       setTimeout(() => setCopied(false), 1500)
     } catch { /* буфер обмена недоступен */ }
   }
-  const resetLast = () => { setLastEdit((p) => ({ ...p, [promptKind]: lastUserOrig(promptKind) })); setMsgsRu(null) }
   const resetSys = () => { setSysEdit((p) => ({ ...p, [promptKind]: sysOrig(promptKind) })); setMsgsRu(null) }
   const onSysChange = (v: string) => { setSysEdit((p) => ({ ...p, [promptKind]: v })); setMsgsRu(null) }
-  const onLastChange = (v: string) => { setLastEdit((p) => ({ ...p, [promptKind]: v })); setMsgsRu(null) }
-  // РУ для транскрипта: переводим каждое сообщение (параллельно), только для отображения. Крайний user — с учётом правки.
+  // РУ для транскрипта: переводим каждое сообщение (параллельно), только для отображения.
   const toggleMsgsRu = async () => {
     const next = !msgsRuOn
     setMsgsRuOn(next)
@@ -658,17 +643,10 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       {previewLoading === k ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Собираем промпт...</> : <><Eye className="h-3.5 w-3.5" /> Превью</>}
     </button>
   )
-  const resultActions = (k: Kind, onRegenerate: () => void) => (
-    <div className="flex flex-wrap items-center justify-end gap-2" data-testid={`idea-v2-${k}-actions`}>
-      {previewBtn(k, true, `idea-v2-${k}-regenerate-preview`)}
-      <button onClick={onRegenerate} disabled={generating} className={btnMain} data-testid={`idea-v2-${k}-regenerate`}>
-        <Wand2 className="h-3.5 w-3.5" /> Перегенерировать
-      </button>
-    </div>
-  )
 
   // ─── Модалка просмотра / редактирования промпта синопсиса (только «Сохранить» и «Закрыть»; генерацию не запускает)
-  // system закреплён сверху (редактируемый, «Сбросить к авто»); ниже история ОТ НОВЫХ К СТАРЫМ; редактируется только крайний user.
+  // system закреплён сверху (единственное редактируемое, «Сбросить к авто»); ниже история ОТ НОВЫХ К СТАРЫМ —
+  // read-only, свёрнута по умолчанию в аккордеон «История».
   const renderPromptModal = () => {
     if (!previewOpen || generating) return null
     const btnBase = 'inline-flex items-center justify-center gap-1 rounded-md border px-1.5 py-1 text-xs font-medium transition'
@@ -677,7 +655,6 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     const hasSys = curMsgs[0]?.role === 'system'
     const off = hasSys ? 1 : 0 // индекс первого user в curMsgs
     const total = curMsgs.length - off // сообщений истории (без system)
-    const edited = lastEdit[promptKind] !== lastUserOrig(promptKind)
     const sysEdited = isSysEdited(promptKind)
 
     const label = (m: Msg, i: number) => {
@@ -688,7 +665,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     }
 
     const close = () => setPreviewOpen(false)
-    // «Сохранить» = запомнить system + крайний user (localStorage) БЕЗ вызова ИИ; модалка остаётся открытой,
+    // «Сохранить» = запомнить правку system (localStorage) БЕЗ вызова ИИ; модалка остаётся открытой,
     // подпись кнопки на ~1.5 с меняется на «Сохранено». Reset-предупреждение не трогаем.
     const saveDraft = () => {
       storeDraft(project.id, promptKind, draftNow(promptKind))
@@ -715,7 +692,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             <div data-testid="idea-v2-dialog">
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Отправляемый диалог · system + {total} {total === 1 ? 'сообщение' : total < 5 ? 'сообщения' : 'сообщений'} · новые сверху
+                  Отправляемый диалог · system + {total} {total === 1 ? 'сообщение' : total < 5 ? 'сообщения' : 'сообщений'}
                 </span>
                 <div className="flex items-center gap-1">
                   <button
@@ -772,58 +749,47 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                   </div>
                 )
               })()}
-              <ol className="space-y-2">
-                {curMsgs.map((m, i) => ({ m, i })).filter(({ m }) => m.role !== 'system').reverse().map(({ m, i }) => {
-                  const isLastUser = i === curLastIdx
-                  const ruShown = msgsRuOn && !msgsRuLoading && !!msgsRu
-                  const text = ruShown ? msgsRu![i] : isLastUser ? lastEdit[promptKind] : m.content
-                  const canEdit = isLastUser && !msgsRuOn
-                  return (
-                    <li
-                      key={i}
-                      className={`rounded-lg border px-3 py-2 ${m.role === 'assistant' ? 'border-primary/30 bg-primary/5' : isLastUser ? 'border-amber-500/40 bg-amber-500/5' : 'border-border/60 bg-muted/30'}`}
-                      data-testid="idea-v2-dialog-msg"
-                      data-role={m.role}
-                      data-editable={isLastUser ? 'true' : undefined}
-                    >
-                      <div className="mb-1 flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-semibold text-muted-foreground">{i + 1 - off}. {label(m, i)}</span>
-                        {isLastUser && (
-                          <div className="flex items-center gap-1">
-                            {edited && <span className="text-[11px] text-amber-500">изменено</span>}
-                            <button type="button" onClick={resetLast} disabled={!edited} className={`${btnBase} ${btnIdle} disabled:opacity-40`} title="Вернуть исходный текст" data-testid="idea-v2-reset-last">
-                              <RotateCcw className="h-3.5 w-3.5" />
-                            </button>
+              <div className="rounded-lg border border-border/60" data-testid="idea-v2-history" data-open={historyOpen ? 'true' : 'false'}>
+                <button
+                  type="button"
+                  onClick={() => setHistoryOpen((v) => !v)}
+                  aria-expanded={historyOpen}
+                  className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs font-semibold text-muted-foreground transition hover:bg-muted/40 hover:text-foreground"
+                  data-testid="idea-v2-history-toggle"
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    {historyOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                    {t('ideaV2.history')} · {total} {total === 1 ? 'сообщение' : total < 5 ? 'сообщения' : 'сообщений'}
+                  </span>
+                  <span className="text-[11px] font-normal">{t('ideaV2.historyHint')}</span>
+                </button>
+                {historyOpen && (
+                  <ol className="space-y-2 border-t border-border/60 p-2">
+                    {curMsgs.map((m, i) => ({ m, i })).filter(({ m }) => m.role !== 'system').reverse().map(({ m, i }) => {
+                      const isLastUser = i === curLastIdx
+                      const ruShown = msgsRuOn && !msgsRuLoading && !!msgsRu
+                      const text = ruShown ? msgsRu![i] : m.content
+                      return (
+                        <li
+                          key={i}
+                          className={`rounded-lg border px-3 py-2 ${m.role === 'assistant' ? 'border-primary/30 bg-primary/5' : isLastUser ? 'border-amber-500/40 bg-amber-500/5' : 'border-border/60 bg-muted/30'}`}
+                          data-testid="idea-v2-dialog-msg"
+                          data-role={m.role}
+                        >
+                          <div className="mb-1 flex items-center justify-between gap-2">
+                            <span className="text-[11px] font-semibold text-muted-foreground">{i + 1 - off}. {label(m, i)}</span>
                           </div>
-                        )}
-                      </div>
-                      {isLastUser ? (
-                        <div className="relative">
-                          <textarea
-                            value={msgsRuOn && msgsRuLoading ? '' : text}
-                            onChange={(e) => onLastChange(e.target.value)}
-                            readOnly={!canEdit}
-                            rows={Math.min(18, Math.max(4, (text ?? '').split('\n').length + 1))}
-                            className={`w-full resize-y rounded-lg border px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary ${canEdit ? 'border-input bg-background' : 'border-border bg-muted/40 text-foreground/90'}`}
-                            data-testid="idea-v2-preview-user"
-                          />
-                          {msgsRuOn && msgsRuLoading && (
-                            <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg bg-background/60">
-                              <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> Переводим…</span>
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground/90">
-                          {msgsRuOn && msgsRuLoading ? <span className="inline-flex items-center gap-1.5 text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> Переводим…</span> : text}
-                        </pre>
-                      )}
-                    </li>
-                  )
-                })}
-              </ol>
+                          <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground/90">
+                            {msgsRuOn && msgsRuLoading ? <span className="inline-flex items-center gap-1.5 text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> Переводим...</span> : text}
+                          </pre>
+                        </li>
+                      )
+                    })}
+                  </ol>
+                )}
+              </div>
               {msgsRuOn && !msgsRuLoading && (
-                <p className="mt-1 text-[11px] text-muted-foreground">Показан перевод на русский — только для просмотра. В генерацию уходит оригинал; редактирование доступно при выключенном RU.</p>
+                <p className="mt-1 text-[11px] text-muted-foreground">Показан перевод на русский — только для просмотра. В генерацию уходит оригинал; редактирование system доступно при выключенном RU.</p>
               )}
             </div>
           </div>
@@ -831,7 +797,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             <button onClick={close} className="flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted" data-testid="idea-v2-preview-cancel">
               Закрыть
             </button>
-            <button onClick={saveDraft} disabled={generating || !lastEdit[promptKind].trim() || (hasSys && !sysEdit[promptKind].trim())} className={`flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted ${saved ? 'text-primary' : ''}`} data-testid="idea-v2-preview-save">
+            <button onClick={saveDraft} disabled={generating || (hasSys && !sysEdit[promptKind].trim())} className={`flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted ${saved ? 'text-primary' : ''}`} data-testid="idea-v2-preview-save">
               <Check className="h-4 w-4" /> {saved ? t('ideaV2.saved') : t('common.save')}
             </button>
           </div>
@@ -978,7 +944,6 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                 Модель: <span className="font-semibold text-foreground" data-testid="idea-v2-result-model">{FABLE_MODEL_LABEL}</span>
               </p>
             </div>
-            {resultActions('synopsis', () => generate('synopsis', true))}
           </div>
 
           <div className={`mt-4 ${SYNOPSIS_TEXT_CLS}`} data-testid="idea-v2-result-text">
