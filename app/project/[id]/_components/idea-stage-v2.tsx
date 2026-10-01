@@ -74,26 +74,34 @@ const withLastUser = (m: Msg[], text: string): Msg[] => {
 const historyText = (m: Msg[]) => m.map((x) => `${x.role.toUpperCase()}:\n${x.content}`).join('\n\n')
 
 /**
- * Черновик промпта («Сохранить» в модалке): отредактированный крайний user БЕЗ вызова ИИ. В проекте нет поля
- * под черновик промпта и миграции не делаем → localStorage по ключу projectId+kind. Храним и оригинал (orig):
- * черновик применяется только если собранный заново крайний user совпал с orig (иначе он устарел и отбрасывается).
+ * Черновик промпта: отредактированные system и крайний user БЕЗ вызова ИИ + кэш собранного промпта. В проекте нет
+ * поля под черновик и миграции не делаем → localStorage по ключу projectId+kind.
+ *   orig/sysOrig — авто-значения на момент сборки: правка (edit/sysEdit) применяется, только если заново собранный
+ *                  текст совпал с ними (иначе правка устарела — берём авто; для system это и есть «Сбросить к авто»
+ *                  с актуальным шаблоном/языком).
+ *   fp + list    — «отпечаток» вводных и собранный диалог: если отпечаток текущих вводных совпал — модалка
+ *                  открывается из кэша без запроса preview (промпт персистентен между открытиями/перезагрузкой).
  */
-type PromptDraft = { orig: string; edit: string; sysOrig?: string; sysEdit?: string }
+type PromptDraft = {
+  orig: string; edit: string; sysOrig?: string; sysEdit?: string
+  fp?: string; list?: Msg[]; note?: string; refineEn?: string; wishesEn?: string; ideaEn?: string
+}
 const draftKey = (projectId: string, k: Kind) => `foltum:v2:prompt-draft:${projectId}:${k}`
 const loadDraft = (projectId: string, k: Kind): PromptDraft | null => {
   try {
     const raw = typeof window !== 'undefined' ? window.localStorage.getItem(draftKey(projectId, k)) : null
     if (!raw) return null
     const d = JSON.parse(raw)
-    return d && typeof d.orig === 'string' && typeof d.edit === 'string' ? d : null
+    if (!d || typeof d.orig !== 'string' || typeof d.edit !== 'string') return null
+    if (d.list !== undefined && !(Array.isArray(d.list) && d.list.every((m: any) => m && (m.role === 'system' || m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string'))) delete d.list
+    return d
   } catch { return null }
 }
-const storeDraft = (projectId: string, k: Kind, orig: string, edit: string, sysOrig = '', sysEdit = '') => {
-  try {
-    if (edit === orig && sysEdit === sysOrig) window.localStorage.removeItem(draftKey(projectId, k))
-    else window.localStorage.setItem(draftKey(projectId, k), JSON.stringify({ orig, edit, sysOrig, sysEdit } satisfies PromptDraft))
-  } catch { /* localStorage недоступен */ }
+const storeDraft = (projectId: string, k: Kind, d: PromptDraft) => {
+  try { window.localStorage.setItem(draftKey(projectId, k), JSON.stringify(d)) } catch { /* localStorage недоступен */ }
 }
+/** Нормализация строки для отпечатка вводных. */
+const normFp = (v: unknown) => String(v ?? '').trim().replace(/\s+/g, ' ')
 
 /**
  * Диалог правок логлайна (L0 + пары «правка → логлайн») живёт в сессии; чтобы история не терялась при
@@ -239,6 +247,10 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const [sysEdit, setSysEdit] = useState<Record<Kind, string>>({ logline: '', synopsis: '' })
   const [note, setNote] = useState<Record<Kind, string>>({ logline: '', synopsis: '' })
   const [copied, setCopied] = useState(false)
+  // Подтверждение «Сохранено» у кнопки «Сохранить» (~1.5 с), модалка остаётся открытой.
+  const [saved, setSaved] = useState(false)
+  // Отпечаток вводных, под который собран текущий промпт шага k (для кэша черновика).
+  const fpRef = useRef<Record<Kind, string>>({ logline: '', synopsis: '' })
   // РУ-перевод транскрипта (только отображение; в API уходит английский оригинал).
   const [msgsRuOn, setMsgsRuOn] = useState(false)
   const [msgsRu, setMsgsRu] = useState<string[] | null>(null)
@@ -250,6 +262,12 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const isEdited = (k: Kind) => ready[k] && (lastEdit[k] !== lastUserOrig(k) || isSysEdited(k))
   /** Диалог, который уйдёт в API (system [с правкой] + история хронологически + отредактированный крайний user). */
   const sendMessages = (k: Kind) => withSystem(withLastUser(msgs[k], lastEdit[k]), sysEdit[k])
+  /** Текущее состояние модалки шага k как черновик (правки + кэш собранного промпта под его отпечаток). */
+  const draftNow = (k: Kind): PromptDraft => ({
+    orig: lastUserOrig(k), edit: lastEdit[k], sysOrig: sysOrig(k), sysEdit: sysEdit[k],
+    fp: fpRef.current[k] || undefined, list: msgs[k], note: note[k],
+    ...(k === 'logline' ? { refineEn, wishesEn, ideaEn } : {}),
+  })
   const resetPrompt = (k: Kind) => setReady((p) => ({ ...p, [k]: false }))
 
   // Сброс последующих шагов — вызывается ТОЛЬКО после подтверждения в модалке-предупреждении.
@@ -272,6 +290,9 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     activeJobIdRef.current = null
     if (res.job.status === 'completed') {
       setError(''); setCanceled(null); setPreviewOpen(false)
+      // История изменилась (новый ответ модели) → кэш собранного промпта устарел: следующее открытие модалки
+      // пересоберёт диалог с актуальной историей; правки system/user сохраняются (применяются при совпадении авто-текста).
+      { const prev = loadDraft(project.id, k); if (prev) storeDraft(project.id, k, { ...prev, fp: undefined, list: undefined, note: undefined }) }
       if (k === 'logline') {
         const fresh = String(res.job.result?.logline ?? res.job.streamedText ?? '').trim()
         // Ход диалога: правка → результат становится парой в транскрипте; генерация с нуля → результат = база L0.
@@ -360,9 +381,42 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     setMode(m); setError(''); setCanceled(null); setScreen('input')
   }
 
-  // Собрать промпт шага k для текущего ввода. Возвращает собранный диалог и крайний user с учётом сохранённого
-  // черновика (localStorage), либо null при ошибке.
+  /**
+   * Отпечаток вводных промпта шага k: всё, от чего зависит собираемый preview (нормализовано).
+   *   logline  — режим, идея / жанры (сортированы) + пожелания, язык логлайна, правка (текст + текущий логлайн + база L0 + ходы);
+   *   synopsis — режим, идея / жанры, утверждённый логлайн.
+   */
+  const fingerprint = (k: Kind, noRefine = false) => {
+    const src = mode === 'idea'
+      ? { mode, idea: normFp(idea) }
+      : { mode, genres: [...genres].map((g) => normFp(g).toLowerCase()).sort(), wishes: normFp(wishes) }
+    if (k === 'synopsis') return JSON.stringify({ k, ...src, logline: normFp(savedLogline) })
+    const refine = !noRefine && refineText.trim() && savedLogline
+      ? { refine: normFp(refineText), logline: normFp(savedLogline), base: normFp(loglineBase), turns: loglineTurns.map((t) => [normFp(t.refine), normFp(t.logline)]) }
+      : null
+    return JSON.stringify({ k, ...src, lang: loglineLang, refine })
+  }
+
+  // Собрать промпт шага k для текущего ввода. Если отпечаток вводных совпал с кэшем черновика — берём промпт из кэша
+  // (без запроса preview, с сохранёнными правками); иначе запрашиваем preview и кладём результат в кэш.
+  // Возвращает собранный диалог и крайний user с учётом черновика, либо null при ошибке.
   const buildPrompt = async (k: Kind, noRefine = false): Promise<{ list: Msg[]; last: string; sysEdit: string; refineEn: string } | null> => {
+    const fp = fingerprint(k, noRefine)
+    const cached = loadDraft(project.id, k)
+    if (cached && cached.fp === fp && cached.list && nonSystem(cached.list).length) {
+      const list = cached.list
+      const sysE = cached.sysEdit?.trim() ? cached.sysEdit : systemOf(list)
+      const refineEnNow = k === 'logline' ? cached.refineEn ?? '' : ''
+      fpRef.current[k] = fp
+      setMsgs((s) => ({ ...s, [k]: list }))
+      setLastEdit((s) => ({ ...s, [k]: cached.edit }))
+      setSysEdit((s) => ({ ...s, [k]: sysE }))
+      setNote((s) => ({ ...s, [k]: cached.note ?? '' }))
+      if (k === 'logline') { setWishesEn(cached.wishesEn ?? ''); setIdeaEn(cached.ideaEn ?? ''); setRefineEn(refineEnNow) }
+      setMsgsRu(null); setMsgsRuOn(false)
+      setReady((s) => ({ ...s, [k]: true }))
+      return { list, last: cached.edit, sysEdit: sysE, refineEn: refineEnNow }
+    }
     try {
       const args = refineArgs(k, noRefine)
       const res = await fetch(API[k].preview, {
@@ -405,14 +459,21 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       const dialogNote = hist > 1
         ? ` Запрос уйдёт диалогом: system (правила) + ${hist} сообщений истории (показаны ниже, новые сверху): модель видит свои прежние ответы и все ранние правки. Редактировать можно system и текущий (крайний) запрос.`
         : ' Запрос уйдёт как system (правила) + user (задание); оба можно отредактировать перед отправкой.'
-      setNote((s) => ({ ...s, [k]: `${d.contextNote ?? ''}${dialogNote}` }))
+      const noteText = `${d.contextNote ?? ''}${dialogNote}`
+      setNote((s) => ({ ...s, [k]: noteText }))
       setReady((s) => ({ ...s, [k]: true }))
+      // Кэш: собранный промпт под отпечаток текущих вводных (+ применённые правки) — следующее открытие без preview.
+      fpRef.current[k] = fp
+      storeDraft(project.id, k, {
+        orig, edit: last, sysOrig: sysO, sysEdit: sysE, fp, list, note: noteText,
+        ...(k === 'logline' ? { refineEn: refineEnNow, wishesEn: typeof d.wishesEn === 'string' ? d.wishesEn : '', ideaEn: typeof d.ideaEn === 'string' ? d.ideaEn : '' } : {}),
+      })
       return { list, last, sysEdit: sysE, refineEn: refineEnNow }
     } catch { setError('Ошибка сети'); return null }
   }
 
   const resetModalFlags = (k: Kind) => {
-    setMsgsRuOn(false); setCopied(false)
+    setMsgsRuOn(false); setCopied(false); setSaved(false)
     setPromptKind(k)
   }
   // Открыть модалку промпта (шаг 2 → «Изменить»): собирает промпт правки и показывает его; отправка — из модалки.
@@ -458,7 +519,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     finally { setStarting(null) }
   }
 
-  // «Продолжить» на шаге 1: собрать промпт логлайна «с нуля» и ОТКРЫТЬ модалку. Остаёмся на шаге 1,
+  // «Продолжить» на шаге 1: собрать промпт логлайна «с нуля» (из кэша черновика, если вводные не менялись) и ОТКРЫТЬ модалку. Остаёмся на шаге 1,
   // ничего не сбрасываем и не генерируем. Дальше — только из модалки: «Отправить» (→ при изменённом вводе
   // сначала предупреждение о сбросе) или «Закрыть» (остаёмся на шаге 1, всё как было).
   const continueFromIdea = async () => {
@@ -652,15 +713,17 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     }
 
     const close = () => setPreviewOpen(false)
-    // «Сохранить» = запомнить отредактированный крайний user (localStorage) БЕЗ вызова ИИ и закрыть. Reset-предупреждение не трогаем.
+    // «Сохранить» = запомнить system + крайний user (localStorage) БЕЗ вызова ИИ; модалка остаётся открытой,
+    // подпись кнопки на ~1.5 с меняется на «Сохранено». Reset-предупреждение не трогаем.
     const saveDraft = () => {
-      storeDraft(project.id, promptKind, lastUserOrig(promptKind), lastEdit[promptKind], sysOrig(promptKind), sysEdit[promptKind])
-      setPreviewOpen(false)
+      storeDraft(project.id, promptKind, draftNow(promptKind))
+      setSaved(true)
+      setTimeout(() => setSaved(false), 1500)
     }
     // «Отправить» = закрыть модалку, перейти на шаг и запустить генерацию (история + отредактированный крайний user).
     // Сохранённое состояние обновляется тем же содержимым.
     const send = () => {
-      storeDraft(project.id, promptKind, lastUserOrig(promptKind), lastEdit[promptKind], sysOrig(promptKind), sysEdit[promptKind])
+      storeDraft(project.id, promptKind, draftNow(promptKind))
       setPreviewOpen(false)
       if (promptKind === 'logline' && currentView === 'idea') {
         // С шага 1: если ввод менялся при уже готовом логлайне/синопсисе — сначала предупреждение о сбросе.
@@ -806,8 +869,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             <button onClick={close} className="flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted" data-testid="idea-v2-preview-cancel">
               Закрыть
             </button>
-            <button onClick={saveDraft} disabled={generating} className="flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted" data-testid="idea-v2-preview-save">
-              <Check className="h-4 w-4" /> {t('common.save')}
+            <button onClick={saveDraft} disabled={generating} className={`flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted ${saved ? 'text-primary' : ''}`} data-testid="idea-v2-preview-save">
+              <Check className="h-4 w-4" /> {saved ? t('ideaV2.saved') : t('common.save')}
             </button>
             <button onClick={send} disabled={generating || !lastEdit[promptKind].trim() || (hasSys && !sysEdit[promptKind].trim())} className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50" data-testid="idea-v2-preview-send">
               <Wand2 className="h-4 w-4" /> Отправить
