@@ -708,3 +708,6 @@ ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "seasonPlotV2" TEXT;
 
 -- ─── v2 flow, episode level: per-episode screenplay map {"<n>": {"script": ...}}. Additive & idempotent. ───
 ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "episodeScriptsV2" JSONB;
+
+-- v2: референсы серий (вкладка «Референсы» страницы эпизода)
+ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "episodeRefsV2" JSONB;

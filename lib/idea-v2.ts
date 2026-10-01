@@ -701,3 +701,99 @@ export function episodeScriptV2From(map: unknown, n: number): string {
   const v = map && typeof map === "object" ? (map as Record<string, any>)[String(n)] : null;
   return v && typeof v.script === "string" ? v.script : "";
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v2 · уровень эпизода: вкладка «Референсы» (персонажи / локации / реквизит из сценария серии)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type EpisodeRefKindV2 = "character" | "location" | "prop";
+export const EPISODE_REF_KINDS_V2: EpisodeRefKindV2[] = ["character", "location", "prop"];
+export type EpisodeRefImageStatusV2 = "generating" | "done" | "failed";
+/** Элемент рефа серии (Project.episodeRefsV2["<n>"].items[]). prompt — EN, label — на языке синопсиса. */
+export interface EpisodeRefV2 {
+  id: string;
+  kind: EpisodeRefKindV2;
+  label: string;
+  prompt: string;
+  /** Для локаций: признак INT./EXT. из слаглайна. */
+  setting?: "INT" | "EXT" | null;
+  /** Промпт правился вручную — повторное извлечение его не перезатирает. */
+  edited?: boolean;
+  imageUrl?: string | null;
+  imageStatus?: EpisodeRefImageStatusV2 | null;
+  imageError?: string | null;
+}
+
+/** Правила (system) извлечения рефов серии. `<Language>` — язык синопсиса (для label). */
+export const EPISODE_REFS_V2_RULES = `You are a visual development lead preparing the reference sheet for ONE episode of a photorealistic live-action vertical micro-series. The user message is the episode's shooting script (sluglines INT./EXT.).
+
+TASK
+List every visual reference the storyboard artist needs to draw this episode consistently:
+- character — every character who appears on screen (named or a clearly recurring/important unnamed one). One entry per character.
+- location — every distinct location from the sluglines. Keep the INT./EXT. marker and time of day exactly as in the slugline. One entry per distinct location + time of day.
+- prop — only story-important objects that are shown, handled or referenced visually (weapons, documents, phones with key messages, vehicles, jewellery, etc.). Skip trivial set dressing.
+
+FOR EACH ENTRY
+- "kind": "character" | "location" | "prop".
+- "key": short stable English identifier in snake_case (e.g. "anna", "police_station_night", "bloody_knife"). The same thing must always get the same key.
+- "label": short human label in <Language>, prefixed by the type word in <Language> — e.g. for Russian "Персонаж: Анна", "Локация: INT. Полицейский участок — ночь", "Реквизит: окровавленный нож"; for English "Character: Anna", "Location: INT. Police station — night", "Prop: bloody knife". Keep "INT."/"EXT." untranslated in location labels.
+- "setting": "INT" or "EXT" for locations, null otherwise.
+- "prompt": a detailed ENGLISH prompt for a photorealistic image model that produces a consistent reference image:
+  - character: gender, apparent age, ethnicity/skin tone, build, face, hair (colour, length, style), distinctive features, the exact wardrobe worn in this episode (garments, colours, materials), full-length standing figure on a plain neutral background. Infer plausible details from the script; never leave appearance vague.
+  - location: INT. or EXT., type of place, architecture and materials, key furniture and objects the scenes use, time of day, lighting (sources, colour temperature), weather and atmosphere, wide establishing view with no people.
+  - prop: what it is, material, size, colour, condition/wear, distinctive markings, isolated on a plain neutral background, no hands, no people.
+  - No camera brand names, no real people or celebrities, no logos, no text overlays.
+
+OUTPUT
+Return ONLY a JSON object, no markdown fences, no commentary:
+{"refs":[{"kind":"character","key":"...","label":"...","setting":null,"prompt":"..."}]}
+Order: characters first, then locations, then props.`;
+
+export function episodeRefsV2SystemPrompt(language: SynopsisLanguage | string): string {
+  return EPISODE_REFS_V2_RULES.replace(/<Language>/g, String(language || DEFAULT_SYNOPSIS_LANGUAGE));
+}
+
+const refSlug = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48);
+
+/** Разбор ответа модели в список рефов со стабильными id `<kind>-<key>` (дубликаты → суффикс). */
+export function parseEpisodeRefsV2(data: unknown): EpisodeRefV2[] {
+  const list: any[] = Array.isArray((data as any)?.refs) ? (data as any).refs : Array.isArray(data) ? (data as any[]) : [];
+  const seen = new Set<string>();
+  const out: EpisodeRefV2[] = [];
+  for (const r of list) {
+    const kind = EPISODE_REF_KINDS_V2.includes(r?.kind) ? (r.kind as EpisodeRefKindV2) : null;
+    const label = String(r?.label ?? "").trim();
+    const prompt = String(r?.prompt ?? "").trim();
+    if (!kind || !label || !prompt) continue;
+    const base = `${kind}-${refSlug(String(r?.key ?? "")) || refSlug(prompt.split(/[,.]/)[0]) || "ref"}`;
+    let id = base;
+    for (let i = 2; seen.has(id); i++) id = `${base}-${i}`;
+    seen.add(id);
+    const st = String(r?.setting ?? "").toUpperCase();
+    const setting = kind === "location" ? (st === "INT" || st === "EXT" ? st : /\bEXT\./i.test(label) ? "EXT" : /\bINT\./i.test(label) ? "INT" : null) : null;
+    out.push({ id, kind, label: label.slice(0, 200), prompt: prompt.slice(0, 4000), setting });
+  }
+  return out;
+}
+
+/**
+ * Повторное извлечение: новый список из сценария, но для совпавших id сохраняются вручную
+ * отредактированный промпт (edited) и уже сгенерированная картинка (если промпт не поменялся или был ручным).
+ */
+export function mergeEpisodeRefsV2(prev: EpisodeRefV2[], fresh: EpisodeRefV2[]): EpisodeRefV2[] {
+  const byId = new Map(prev.map((r) => [r.id, r]));
+  return fresh.map((f) => {
+    const p = byId.get(f.id);
+    if (!p) return f;
+    const keepPrompt = !!p.edited;
+    const prompt = keepPrompt ? p.prompt : f.prompt;
+    const keepImage = p.imageUrl && (keepPrompt || p.prompt.trim() === f.prompt.trim());
+    return { ...f, prompt, edited: keepPrompt || undefined, ...(keepImage ? { imageUrl: p.imageUrl, imageStatus: "done" as const } : {}) };
+  });
+}
+
+/** Рефы серии n из Project.episodeRefsV2 ({ "<n>": { items, updatedAt } }). */
+export function episodeRefsV2From(map: unknown, n: number): EpisodeRefV2[] {
+  const v = map && typeof map === "object" ? (map as Record<string, any>)[String(n)] : null;
+  return Array.isArray(v?.items) ? (v.items as EpisodeRefV2[]).filter((r) => r && typeof r.id === "string" && typeof r.prompt === "string") : [];
+}
