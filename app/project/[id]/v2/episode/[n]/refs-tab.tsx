@@ -16,7 +16,7 @@ import { RefPromptModal } from './ref-prompt-modal'
  * (GPT Image 2.5 flare). Генерация всегда берёт сохранённый промпт из стора.
  * Обе задачи возобновляются при повторном открытии страницы.
  */
-const API = { refs: '/api/ai/v2/refs', images: '/api/ai/v2/refs/images', face: '/api/ai/v2/refs/face' }
+const API = { refs: '/api/ai/v2/refs', images: '/api/ai/v2/refs/images', face: '/api/ai/v2/refs/face', appearance: '/api/ai/v2/refs/appearance' }
 const EXTRACT_EXPECTED_SEC = 45
 const IMAGE_EXPECTED_SEC = 40
 const isActive = (j: any) => !!j && (j.status === 'pending' || j.status === 'processing')
@@ -253,6 +253,15 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs, ownFace =
                   {genBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} {r.imageUrl ? t('ideaV2.refsRegenerate') : t('ideaV2.refsGenerateOne')}
                 </button>
               </div>
+              {r.kind === 'character' && (
+                <AppearanceRefineControl
+                  projectId={projectId}
+                  n={n}
+                  refItem={r}
+                  disabled={busy}
+                  onRefined={(prompt) => setItems((list) => list.map((x) => (x.id === r.id ? { ...x, prompt, edited: true, promptDirty: true } : x)))}
+                />
+              )}
               {r.imageStatus === 'failed' && r.imageError && <p className="mt-2 text-xs text-destructive">{t('ideaV2.refsImageFailed')}: {r.imageError}</p>}
             </div>
           )
@@ -356,6 +365,67 @@ function FaceRefControl({ projectId, n, refItem, ownFace, disabled, onChanged }:
         </div>
       )}
       {error && <p className="mt-1.5 text-[10px] text-destructive" data-testid="episode-v2-ref-face-error">{error}</p>}
+    </div>
+  )
+}
+
+/**
+ * Контрол «рефайн внешности промптом» для рефа-персонажа (v2).
+ * Пользователь пишет пожелание (на любом языке) → кнопка «Изменить» шлёт текущий EN-промпт + пожелание в LLM
+ * (POST /api/ai/v2/refs/appearance), получает обновлённый EN-промпт, который сохраняется с promptDirty=true
+ * (на кнопке «Промпт» загорается бейдж «new»). Затем пользователь перегенерирует фото по новому промпту.
+ */
+function AppearanceRefineControl({ projectId, n, refItem, disabled, onRefined }: {
+  projectId: string; n: number; refItem: EpisodeRefV2; disabled: boolean
+  onRefined: (prompt: string) => void
+}) {
+  const { t } = useTranslation()
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const apply = async () => {
+    const instruction = text.trim()
+    if (!instruction || busy || disabled) return
+    setError(''); setBusy(true)
+    try {
+      const res = await fetch(API.appearance, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId, episode: n, id: refItem.id, instruction }),
+      })
+      const d = await res.json().catch(() => null)
+      if (!res.ok || !d?.prompt) { setError(d?.error || t('ideaV2.refsAppearanceError')); return }
+      onRefined(d.prompt as string)
+      setText('')
+    } catch { setError(t('ideaV2.refsAppearanceError')) }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <div className="mt-2" data-testid="episode-v2-ref-appearance">
+      <div className="flex items-stretch gap-2">
+        <input
+          type="text"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void apply() } }}
+          disabled={busy || disabled}
+          placeholder={t('ideaV2.refsAppearancePlaceholder')}
+          className="min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-foreground outline-none transition focus:border-foreground/40 disabled:opacity-50"
+          data-testid="episode-v2-ref-appearance-input"
+        />
+        <button
+          type="button"
+          onClick={() => void apply()}
+          disabled={busy || disabled || !text.trim()}
+          className="flex basis-1/5 flex-shrink-0 items-center justify-center gap-1 rounded-md bg-amber-400 px-2 py-1.5 text-xs font-semibold text-black transition hover:bg-amber-300 disabled:opacity-50"
+          data-testid="episode-v2-ref-appearance-apply"
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t('ideaV2.refsAppearanceApply')}
+        </button>
+      </div>
+      {error && <p className="mt-1.5 text-[10px] text-destructive" data-testid="episode-v2-ref-appearance-error">{error}</p>}
     </div>
   )
 }
