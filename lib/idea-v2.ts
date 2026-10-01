@@ -2,8 +2,9 @@
  * «Новый проект v2.0» — отдельный поток идея → синопсис.
  *
  * Единый источник правды для промптов синопсиса v2: и превью (роут .../preview), и генерация
- * (воркер synopsis-v2-job) собирают РАЗДЕЛЬНО system и user через ОДНИ и те же функции, чтобы
- * отредактированный пользователем промпт точно соответствовал тому, что показывалось на превью.
+ * (воркер synopsis-v2-job) собирают messages через ОДНИ и те же функции, чтобы отредактированный
+ * пользователем промпт точно соответствовал тому, что показывалось на превью. Роли system в v2 НЕТ:
+ * правила входят в первый user (см. V2Msg / mergeSystemIntoUser).
  *
  * В этом режиме для LLM используется ТОЛЬКО одна модель — «Claude Fable 5.1» (лейбл для UI/логов);
  * на бэкенд отправляется реальный slug WaveSpeed (Claude Opus 5), под которым работает шлюз.
@@ -26,6 +27,35 @@ export const SYNOPSIS_V2_STAGE = "synopsis_v2";
  * (Идея → Логлайн → Синопсис). Тоже вне пайплайна v1.
  */
 export const LOGLINE_V2_STAGE = "logline_v2";
+
+/**
+ * Сообщение диалога v2. Роли system в v2 НЕТ: все правила (бывший system) входят в ПЕРВЫЙ user
+ * (правила → затем задание), далее чередование assistant (ответ) → user (правка) → … → крайний user.
+ */
+export type V2Msg = { role: "user" | "assistant"; content: string };
+
+/** Склеить бывший system-текст и user-текст в один первый user-месседж (system идёт первым). */
+export function mergeSystemIntoUser(system: string, user: string): string {
+  const s = (system ?? "").trim();
+  const u = (user ?? "").trim();
+  return s && u ? `${s}\n\n${u}` : s || u;
+}
+
+/**
+ * Маппинг «старого» формата (system/user/assistant, в т.ч. сохранённые данные) в messages без system —
+ * на лету, без миграции. assistant-prefill (если есть) уходит последним assistant-сообщением.
+ */
+export function legacyPartsToMessages(system: string, user: string, assistant?: string | null): V2Msg[] {
+  const out: V2Msg[] = [{ role: "user", content: mergeSystemIntoUser(system, user) }];
+  const a = (assistant ?? "").trim();
+  if (a) out.push({ role: "assistant", content: a });
+  return out;
+}
+
+/** Плоский текст диалога для prompt-log («USER:/ASSISTANT:», хронологически). */
+export function flattenV2Messages(messages: V2Msg[]): string {
+  return messages.map((m) => `${m.role.toUpperCase()}:\n${m.content}`).join("\n\n");
+}
 
 /** Человекочитаемый лейбл модели для UI и превью промпта. */
 export const FABLE_MODEL_LABEL = "Claude Fable 5.1";
@@ -154,11 +184,17 @@ export function buildSynopsisV2Parts(input: SynopsisV2Input): {
   model: string;
   contextIncluded: boolean;
   contextNote: string;
+  /** Что реально уходит в модель: БЕЗ system — правила + задание в одном первом user. */
+  messages: V2Msg[];
 } {
+  const system = synopsisV2SystemPrompt(input);
+  const user = synopsisV2UserPrompt(input);
+  const assistant = synopsisV2AssistantPrefill(input);
   return {
-    system: synopsisV2SystemPrompt(input),
-    user: synopsisV2UserPrompt(input),
-    assistant: synopsisV2AssistantPrefill(input),
+    system,
+    user,
+    assistant,
+    messages: legacyPartsToMessages(system, user, assistant),
     model: FABLE_MODEL_LABEL,
     contextIncluded: SYNOPSIS_V2_CONTEXT_INCLUDED,
     contextNote: (input.logline ?? "").trim()
@@ -284,7 +320,12 @@ export function buildLoglineV2Parts(input: SynopsisV2Input): {
   model: string;
   contextIncluded: boolean;
   contextNote: string;
-  messages?: { role: "system" | "user" | "assistant"; content: string }[];
+  /**
+   * Что реально уходит в модель. Роли system НЕТ: правила + задание — один первый user; затем
+   * assistant (L0) → user (правка 1) → assistant (логлайн 1) → … → крайний user (текущая правка).
+   * Без базы L0 (напр. после перезагрузки) — один user с правилами, текущим логлайном и правкой.
+   */
+  messages: V2Msg[];
 } {
   const system = loglineV2SystemPrompt(input);
   const user = loglineV2UserPrompt(input);
@@ -296,14 +337,11 @@ export function buildLoglineV2Parts(input: SynopsisV2Input): {
     (t) => t && (t.refine ?? "").trim() && (t.logline ?? "").trim(),
   );
 
-  // Реальный диалог доступен, только когда есть базовый логлайн L0 и текущая правка.
-  // Тогда модель видит собственные прежние ответы (system → user → assistant → user → ...),
-  // и прежние правки не отменяются. Без базы (напр. после перезагрузки) — fallback в user-промпте.
-  let messages: { role: "system" | "user" | "assistant"; content: string }[] | undefined;
+  let messages: V2Msg[];
   if (refine && base) {
+    // Реальный диалог: модель видит собственные прежние ответы, и прежние правки не отменяются.
     messages = [
-      { role: "system", content: system },
-      { role: "user", content: `${loglineV2Source(input)}${LOGLINE_V2_TAIL}` },
+      { role: "user", content: mergeSystemIntoUser(system, `${loglineV2Source(input)}${LOGLINE_V2_TAIL}`) },
       { role: "assistant", content: base },
     ];
     for (const t of turns) {
@@ -311,6 +349,8 @@ export function buildLoglineV2Parts(input: SynopsisV2Input): {
       messages.push({ role: "assistant", content: (t.logline ?? "").trim() });
     }
     messages.push({ role: "user", content: loglineV2RefineInstruction(refine) });
+  } else {
+    messages = legacyPartsToMessages(system, user, assistant);
   }
 
   return {
@@ -320,6 +360,6 @@ export function buildLoglineV2Parts(input: SynopsisV2Input): {
     model: FABLE_MODEL_LABEL,
     contextIncluded: false,
     contextNote: LOGLINE_V2_CONTEXT_NOTE,
-    ...(messages ? { messages } : {}),
+    messages,
   };
 }

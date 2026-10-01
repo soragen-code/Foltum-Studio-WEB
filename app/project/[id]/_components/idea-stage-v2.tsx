@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Loader2, Wand2, Sparkles, Lightbulb, Eye, Pencil, ArrowLeft, ArrowRight, Tags, Info, BookOpen, RotateCcw, Copy, Check, X, Quote } from 'lucide-react'
 import { GENRES } from '@/lib/idea'
 import { FABLE_MODEL_LABEL, SYNOPSIS_V2_STAGE, LOGLINE_V2_STAGE, LOGLINE_V2_FORMULA_RU } from '@/lib/idea-v2'
+import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from './cancel-button'
 import { useJobPolling, SmoothProgress } from './use-job-polling'
 
@@ -50,16 +51,20 @@ function AutoGrowTextarea({ value, onChange, className, testId, disabled }: {
 }
 
 type Screen = 'choose' | 'input'
-type Field = 'system' | 'user' | 'assistant'
 type Kind = 'logline' | 'synopsis'
 type StepKey = 'idea' | Kind
-type Prompt = { system: string; user: string; assistant: string }
-/** Сообщение реального диалога правки логлайна (то, что уходит в модель как messages). */
-type Msg = { role: 'system' | 'user' | 'assistant'; content: string }
+/** Сообщение диалога с моделью (то, что уходит в API как messages). Роли system нет: правила — в первом user. */
+type Msg = { role: 'user' | 'assistant'; content: string }
 
-const EMPTY_PROMPT: Prompt = { system: '', user: '', assistant: '' }
-const FIELD_FLAGS = { system: false, user: false, assistant: false }
-const FIELD_TEXTS = { system: '', user: '', assistant: '' }
+/** Индекс крайнего (самого нового) user-сообщения — единственного редактируемого. */
+const lastUserIdx = (m: Msg[]) => { for (let i = m.length - 1; i >= 0; i--) if (m[i].role === 'user') return i; return -1 }
+/** Диалог с учётом правки крайнего user — ровно то, что уйдёт в API при ручном редактировании. */
+const withLastUser = (m: Msg[], text: string): Msg[] => {
+  const i = lastUserIdx(m)
+  return i < 0 ? m : m.map((x, j) => (j === i ? { ...x, content: text } : x))
+}
+/** Хронологический текст истории для буфера обмена: «USER:» / «ASSISTANT:», через пустую строку. */
+const historyText = (m: Msg[]) => m.map((x) => `${x.role.toUpperCase()}:\n${x.content}`).join('\n\n')
 
 const API: Record<Kind, { generate: string; preview: string }> = {
   logline: { generate: '/api/ai/v2/logline', preview: '/api/ai/v2/logline/preview' },
@@ -76,9 +81,9 @@ const KIND_LABEL: Record<Kind, string> = { logline: 'логлайна', synopsis
  *              диалогом messages с прежними логлайнами); готовый текст можно поправить → «Продолжить».
  *   synopsis — синопсис, развернутый из утверждённого логлайна.
  *
- * На экранах логлайна и синопсиса кнопки действий стоят в правом верхнем углу блока, над текстом. Модалка промпта общая для обоих шагов
- * (per-field: Копировать / Сбросить / Редактировать / РУ; в подвале — только «Сохранить»).
- * Перевод РУ — только для отображения; в API всегда уходит оригинал.
+ * Основная кнопка перехода («Продолжить» / «Сгенерировать») на всех шагах стоит ВНЕ карточки, под ней. Модалка промпта общая
+ * для обоих шагов: диалог messages без system (правила в первом user), новые сверху, редактируется только крайний user;
+ * кнопки «Скопировать историю» и «RU». Перевод RU — только для отображения; в API всегда уходит английский оригинал.
  */
 export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: () => void }) {
   const [mode, setMode] = useState<'idea' | 'genres'>('idea')
@@ -128,28 +133,27 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   // но их данные НЕ сбрасываются, пока пользователь не подтвердит сброс в модалке.
   const [inputDirty, setInputDirty] = useState(false)
 
-  // ─── Промпты (по шагам): редактируемые + «пристин» для «Сбросить»
+  // ─── Промпты (по шагам): диалог messages из preview (без system) + правка крайнего user
+  const { t } = useTranslation()
   const [promptKind, setPromptKind] = useState<Kind>('logline')
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewLoading, setPreviewLoading] = useState<Kind | null>(null)
   const [ready, setReady] = useState<Record<Kind, boolean>>({ logline: false, synopsis: false })
-  const [edit, setEdit] = useState<Record<Kind, Prompt>>({ logline: EMPTY_PROMPT, synopsis: EMPTY_PROMPT })
-  const [orig, setOrig] = useState<Record<Kind, Prompt>>({ logline: EMPTY_PROMPT, synopsis: EMPTY_PROMPT })
+  // Оригинальный диалог из preview: первый user (правила + задание) → assistant → user (правка) → … → крайний user.
+  const [msgs, setMsgs] = useState<Record<Kind, Msg[]>>({ logline: [], synopsis: [] })
+  // Редактируемый текст крайнего user (единственное редактируемое сообщение).
+  const [lastEdit, setLastEdit] = useState<Record<Kind, string>>({ logline: '', synopsis: '' })
   const [note, setNote] = useState<Record<Kind, string>>({ logline: '', synopsis: '' })
-  const [copied, setCopied] = useState<Field | null>(null)
-  const [editable, setEditable] = useState<Record<Field, boolean>>(FIELD_FLAGS)
-  const [ruOn, setRuOn] = useState<Record<Field, boolean>>(FIELD_FLAGS)
-  const [ruText, setRuText] = useState<Record<Field, string>>(FIELD_TEXTS)
-  const [ruLoading, setRuLoading] = useState<Record<Field, boolean>>(FIELD_FLAGS)
-  // Реальный диалог правки логлайна (из preview): system → задание → L0 → правка 1 → логлайн 1 → … → текущая правка.
-  // Показывается в модалке read-only; null — обычный одиночный запрос (system/user/assistant).
-  const [promptMessages, setPromptMessages] = useState<Msg[] | null>(null)
+  const [copied, setCopied] = useState(false)
+  // РУ-перевод транскрипта (только отображение; в API уходит английский оригинал).
   const [msgsRuOn, setMsgsRuOn] = useState(false)
   const [msgsRu, setMsgsRu] = useState<string[] | null>(null)
   const [msgsRuLoading, setMsgsRuLoading] = useState(false)
 
-  const isEdited = (k: Kind) =>
-    ready[k] && (edit[k].system !== orig[k].system || edit[k].user !== orig[k].user || edit[k].assistant !== orig[k].assistant)
+  const lastUserOrig = (k: Kind) => { const i = lastUserIdx(msgs[k]); return i < 0 ? '' : msgs[k][i].content }
+  const isEdited = (k: Kind) => ready[k] && lastEdit[k] !== lastUserOrig(k)
+  /** Диалог, который уйдёт в API (история хронологически + отредактированный крайний user). */
+  const sendMessages = (k: Kind) => withLastUser(msgs[k], lastEdit[k])
   const resetPrompt = (k: Kind) => setReady((p) => ({ ...p, [k]: false }))
 
   // Сброс последующих шагов — вызывается ТОЛЬКО после подтверждения в модалке-предупреждении.
@@ -263,16 +267,23 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) { setError(d?.error ?? 'Не удалось собрать промпт'); return false }
-      const p: Prompt = { system: d.system ?? '', user: d.user ?? '', assistant: d.assistant ?? '' }
-      setEdit((s) => ({ ...s, [k]: p })); setOrig((s) => ({ ...s, [k]: p }))
       if (k === 'logline' && typeof d.wishesEn === 'string') setWishesEn(d.wishesEn)
-      const msgs: Msg[] | null = k === 'logline' && Array.isArray(d.messages) && d.messages.length
-        ? d.messages.filter((m: any) => m && typeof m.content === 'string').map((m: any) => ({ role: m.role, content: m.content }))
-        : null
-      setPromptMessages(msgs); setMsgsRu(null); setMsgsRuOn(false)
-      const dialogNote = msgs
-        ? ` Правка уйдёт диалогом из ${msgs.length} сообщений (ниже показан ровно он): модель видит свои прежние логлайны и все ранние правки. Если отредактировать поля System/User вручную — вместо диалога отправится только ваш текст, одним запросом.`
-        : ''
+      // messages без system (правила в первом user). Старый ответ с system/user — маппим в один user на лету.
+      let list: Msg[] = Array.isArray(d.messages)
+        ? d.messages.filter((m: any) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string').map((m: any) => ({ role: m.role, content: m.content }))
+        : []
+      if (!list.length) {
+        const merged = [String(d.system ?? '').trim(), String(d.user ?? '').trim()].filter(Boolean).join('\n\n')
+        list = [{ role: 'user', content: merged }]
+        if (String(d.assistant ?? '').trim()) list.push({ role: 'assistant', content: String(d.assistant).trim() })
+      }
+      setMsgs((s) => ({ ...s, [k]: list }))
+      const li = lastUserIdx(list)
+      setLastEdit((s) => ({ ...s, [k]: li < 0 ? '' : list[li].content }))
+      setMsgsRu(null); setMsgsRuOn(false)
+      const dialogNote = list.length > 1
+        ? ` Запрос уйдёт диалогом из ${list.length} сообщений (показан ниже, новые сверху): модель видит свои прежние ответы и все ранние правки. Редактировать можно только текущий (крайний) запрос.`
+        : ' Правила и задание уходят одним сообщением (без системного промпта); его можно отредактировать перед отправкой.'
       setNote((s) => ({ ...s, [k]: `${d.contextNote ?? ''}${dialogNote}` }))
       setReady((s) => ({ ...s, [k]: true }))
       return true
@@ -280,7 +291,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   }
 
   const resetModalFlags = (k: Kind) => {
-    setEditable(FIELD_FLAGS); setRuOn(FIELD_FLAGS); setRuText(FIELD_TEXTS); setRuLoading(FIELD_FLAGS)
+    setMsgsRuOn(false); setCopied(false)
     setPromptKind(k)
   }
   // Открыть модалку промпта (шаг 2 → «Изменить»): собирает промпт правки и показывает его; отправка — из модалки.
@@ -304,7 +315,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     }
     try {
       const body: any = { projectId: project.id, ...inputBody(), ...refineArgs(k, noRefine) }
-      if (isEdited(k)) { body.overrideSystem = edit[k].system; body.overrideUser = edit[k].user; body.overrideAssistant = edit[k].assistant }
+      // Ручная правка крайнего user → уходит ВЕСЬ диалог (история + правка), без system.
+      if (isEdited(k)) body.overrideMessages = sendMessages(k)
       const res = await fetch(API[k].generate, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) { setError(d?.error ?? `Не удалось сгенерировать ${k === 'logline' ? 'логлайн' : 'синопсис'}`); return }
@@ -389,47 +401,28 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     try { await fetch(`/api/ai/jobs/${id}/cancel`, { method: 'POST' }) } catch { /* поллинг повторит */ }
   }
 
-  // ─── Пер-поле действия модалки промпта (для текущего promptKind)
-  const fieldValue = edit[promptKind]
-  const setField = (key: Field, v: string) => setEdit((s) => ({ ...s, [promptKind]: { ...s[promptKind], [key]: v } }))
+  // ─── Действия модалки промпта (для текущего promptKind)
+  const curMsgs = msgs[promptKind]
+  const curLastIdx = lastUserIdx(curMsgs)
 
-  const copyPrompt = async (which: Field, text: string) => {
+  /** «Скопировать историю»: весь диалог хронологически (USER:/ASSISTANT:), английский оригинал, крайний user — с правкой. */
+  const copyHistory = async () => {
     try {
-      await navigator.clipboard.writeText(text ?? '')
-      setCopied(which)
-      setTimeout(() => setCopied((c) => (c === which ? null : c)), 1500)
+      await navigator.clipboard.writeText(historyText(sendMessages(promptKind)))
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
     } catch { /* буфер обмена недоступен */ }
   }
-  const toggleEdit = (key: Field) => { setEditable((p) => ({ ...p, [key]: !p[key] })); setRuOn((p) => ({ ...p, [key]: false })) }
-  const resetField = (key: Field) => {
-    setField(key, orig[promptKind][key])
-    setRuOn((p) => ({ ...p, [key]: false })); setRuText((p) => ({ ...p, [key]: '' }))
-  }
-  const translateField = async (key: Field) => {
-    setRuLoading((p) => ({ ...p, [key]: true }))
-    try {
-      const res = await fetch('/api/ai/translate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: fieldValue[key] }) })
-      const d = await res.json().catch(() => ({}))
-      setRuText((p) => ({ ...p, [key]: res.ok ? (d.text ?? '') : '(не удалось перевести)' }))
-    } catch {
-      setRuText((p) => ({ ...p, [key]: '(ошибка сети при переводе)' }))
-    } finally {
-      setRuLoading((p) => ({ ...p, [key]: false }))
-    }
-  }
-  const toggleRu = (key: Field) => {
-    const next = !ruOn[key]
-    setRuOn((p) => ({ ...p, [key]: next }))
-    if (next && !ruText[key]) translateField(key)
-  }
-  // РУ для транскрипта диалога: переводим каждое сообщение (параллельно), только для отображения.
+  const resetLast = () => { setLastEdit((p) => ({ ...p, [promptKind]: lastUserOrig(promptKind) })); setMsgsRu(null) }
+  const onLastChange = (v: string) => { setLastEdit((p) => ({ ...p, [promptKind]: v })); setMsgsRu(null) }
+  // РУ для транскрипта: переводим каждое сообщение (параллельно), только для отображения. Крайний user — с учётом правки.
   const toggleMsgsRu = async () => {
     const next = !msgsRuOn
     setMsgsRuOn(next)
-    if (!next || msgsRu || !promptMessages) return
+    if (!next || msgsRu) return
     setMsgsRuLoading(true)
     try {
-      const out = await Promise.all(promptMessages.map(async (m) => {
+      const out = await Promise.all(sendMessages(promptKind).map(async (m) => {
         try {
           const res = await fetch('/api/ai/translate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: m.content }) })
           const d = await res.json().catch(() => ({}))
@@ -439,7 +432,6 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       setMsgsRu(out)
     } finally { setMsgsRuLoading(false) }
   }
-  const onFieldChange = (key: Field, v: string) => { setField(key, v); setRuText((p) => (p[key] ? { ...p, [key]: '' } : p)) }
 
   // ─── Степпер: Идея → Логлайн → Синопсис
   const currentStepKey: StepKey = activeKind ?? currentView
@@ -506,75 +498,23 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   )
 
   // ─── Модалка просмотра / редактирования промпта (общая для логлайна и синопсиса)
+  // Показывает диалог messages (без system) ОТ НОВЫХ К СТАРЫМ; редактируется только крайний user.
   const renderPromptModal = () => {
     if (!previewOpen || generating) return null
     const btnBase = 'inline-flex items-center justify-center gap-1 rounded-md border px-1.5 py-1 text-xs font-medium transition'
     const btnIdle = 'border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground'
     const btnActive = 'border-primary bg-primary/10 text-primary'
+    const total = curMsgs.length
+    const edited = isEdited(promptKind)
 
-    const renderField = (key: Field, label: string, rows: number, placeholder?: string) => {
-      const isRu = ruOn[key]
-      const loading = ruLoading[key]
-      const canEdit = editable[key] && !isRu
-      const shown = isRu ? (loading ? '' : ruText[key]) : fieldValue[key]
-      return (
-        <div>
-          <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-            <label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</label>
-            <div className="flex items-center gap-1">
-              <button type="button" onClick={() => copyPrompt(key, shown)} className={`${btnBase} ${btnIdle}`} title="Скопировать" data-testid={`idea-v2-copy-${key}`}>
-                {copied === key ? <Check className="h-3.5 w-3.5 text-primary" /> : <Copy className="h-3.5 w-3.5" />}
-              </button>
-              <button type="button" onClick={() => resetField(key)} className={`${btnBase} ${btnIdle}`} title="Сбросить" data-testid={`idea-v2-reset-${key}`}>
-                <RotateCcw className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => toggleEdit(key)}
-                className={`${btnBase} ${editable[key] ? btnActive : btnIdle}`}
-                title={editable[key] ? 'Редактирование включено' : 'Редактировать'}
-                aria-pressed={editable[key]}
-                data-testid={`idea-v2-edit-${key}`}
-              >
-                <Pencil className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => toggleRu(key)}
-                className={`${btnBase} ${isRu ? btnActive : btnIdle}`}
-                title="Показать перевод на русский (только просмотр; в API уходит оригинал)"
-                aria-pressed={isRu}
-                data-testid={`idea-v2-ru-${key}`}
-              >
-                РУ
-              </button>
-            </div>
-          </div>
-          <div className="relative">
-            <textarea
-              value={shown}
-              onChange={(e) => onFieldChange(key, e.target.value)}
-              readOnly={!canEdit}
-              rows={rows}
-              placeholder={placeholder}
-              className={`w-full resize-y rounded-lg border px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary ${canEdit ? 'border-input bg-background' : 'border-border bg-muted/40 text-foreground/90'}`}
-              data-testid={`idea-v2-preview-${key}`}
-            />
-            {loading && (
-              <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg bg-background/60">
-                <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> Переводим…</span>
-              </div>
-            )}
-          </div>
-          {isRu && !loading && (
-            <p className="mt-1 text-[11px] text-muted-foreground">Показан перевод на русский — только для просмотра. В генерацию уходит оригинал.</p>
-          )}
-        </div>
-      )
+    const label = (m: Msg, i: number) => {
+      if (m.role === 'assistant') return i === 1 ? 'Assistant · ответ L0' : `Assistant · ответ ${Math.floor(i / 2)}`
+      if (i === 0) return total === 1 ? 'User · правила + задание (уходит сейчас)' : 'User · правила + задание'
+      return i === curLastIdx ? 'User · текущая правка (уходит сейчас)' : `User · правка ${Math.floor(i / 2)}`
     }
 
     const close = () => setPreviewOpen(false)
-    // «Отправить» = закрыть модалку, перейти на шаг и запустить генерацию (с учётом ручных правок полей).
+    // «Отправить» = закрыть модалку, перейти на шаг и запустить генерацию (история + отредактированный крайний user).
     const send = () => {
       setPreviewOpen(false)
       if (promptKind === 'logline' && currentView === 'idea') {
@@ -596,77 +536,99 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
               <X className="h-5 w-5" />
             </button>
           </div>
-          <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
+          <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
             {note[promptKind] && (
               <p className="flex items-start gap-1.5 text-xs text-muted-foreground" data-testid="idea-v2-context-note">
                 <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" /> {note[promptKind]}
               </p>
             )}
-            {promptKind === 'logline' && promptMessages && promptMessages.length > 0 ? (
-              <>
-                <div data-testid="idea-v2-dialog">
-                  <div className="mb-2 flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      Отправляемый диалог · {promptMessages.length} сообщений
-                    </span>
-                    <button
-                      onClick={toggleMsgsRu}
-                      className={`${btnBase} ${msgsRuOn ? btnActive : btnIdle}`}
-                      title="Показать перевод на русский (только для просмотра)"
-                      data-testid="idea-v2-dialog-ru"
-                    >
-                      {msgsRuLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'РУ'}
-                    </button>
-                  </div>
-                  <ol className="space-y-2">
-                    {promptMessages.map((m, i) => {
-                      const isLast = i === promptMessages.length - 1
-                      const label = m.role === 'system' ? 'System (правила)'
-                        : m.role === 'assistant' ? (i === 2 ? 'Assistant · логлайн L0' : `Assistant · логлайн ${Math.floor((i - 1) / 2)}`)
-                        : i === 1 ? 'User · задание'
-                        : isLast ? 'User · текущая правка (уходит сейчас)' : `User · правка ${Math.floor(i / 2)}`
-                      const text = msgsRuOn && msgsRu ? msgsRu[i] : m.content
-                      return (
-                        <li
-                          key={i}
-                          className={`rounded-lg border px-3 py-2 ${m.role === 'assistant' ? 'border-primary/30 bg-primary/5' : isLast ? 'border-amber-500/40 bg-amber-500/5' : 'border-border/60 bg-muted/30'}`}
-                          data-testid="idea-v2-dialog-msg"
-                          data-role={m.role}
-                        >
-                          <div className="mb-1 text-[11px] font-semibold text-muted-foreground">{i + 1}. {label}</div>
-                          <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground/90">{text}</pre>
-                        </li>
-                      )
-                    })}
-                  </ol>
-                  {msgsRuOn && !msgsRuLoading && (
-                    <p className="mt-1 text-[11px] text-muted-foreground">Показан перевод на русский — только для просмотра. В генерацию уходит оригинал.</p>
-                  )}
+            <div data-testid="idea-v2-dialog">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Отправляемый диалог · {total} {total === 1 ? 'сообщение' : total < 5 ? 'сообщения' : 'сообщений'} · новые сверху
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => void copyHistory()}
+                    className={`${btnBase} ${copied ? btnActive : btnIdle}`}
+                    title={t('ideaV2.copyHistoryHint')}
+                    data-testid="idea-v2-copy-history"
+                  >
+                    {copied ? <><Check className="h-3.5 w-3.5 text-primary" /> {t('ideaV2.copied')}</> : <><Copy className="h-3.5 w-3.5" /> {t('ideaV2.copyHistory')}</>}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void toggleMsgsRu()}
+                    className={`${btnBase} ${msgsRuOn ? btnActive : btnIdle}`}
+                    title="Показать перевод на русский (только для просмотра; в API уходит оригинал)"
+                    aria-pressed={msgsRuOn}
+                    data-testid="idea-v2-dialog-ru"
+                  >
+                    {msgsRuLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'RU'}
+                  </button>
                 </div>
-                <details className="rounded-lg border border-border/60 px-3 py-2" data-testid="idea-v2-dialog-manual">
-                  <summary className="cursor-pointer text-xs font-semibold text-muted-foreground">
-                    Ручная правка промпта — при изменении полей вместо диалога уйдёт один запрос
-                  </summary>
-                  <div className="mt-3 space-y-5">
-                    {renderField('system', 'System (правила)', 10)}
-                    {renderField('user', 'User (запрос)', 7)}
-                    {renderField('assistant', 'Assistant (зачин ответа)', 5, 'Необязательно: задайте зачин ответа модели — она продолжит с него. Оставьте пустым, чтобы модель писала с чистого листа.')}
-                  </div>
-                </details>
-              </>
-            ) : (
-              <>
-                {renderField('system', 'System (правила)', 10)}
-                {renderField('user', 'User (запрос)', 7)}
-                {renderField('assistant', 'Assistant (зачин ответа)', 5, 'Необязательно: задайте зачин ответа модели — она продолжит с него. Оставьте пустым, чтобы модель писала с чистого листа.')}
-              </>
-            )}
+              </div>
+              <ol className="space-y-2">
+                {curMsgs.map((m, i) => ({ m, i })).reverse().map(({ m, i }) => {
+                  const isLastUser = i === curLastIdx
+                  const ruShown = msgsRuOn && !msgsRuLoading && !!msgsRu
+                  const text = ruShown ? msgsRu![i] : isLastUser ? lastEdit[promptKind] : m.content
+                  const canEdit = isLastUser && !msgsRuOn
+                  return (
+                    <li
+                      key={i}
+                      className={`rounded-lg border px-3 py-2 ${m.role === 'assistant' ? 'border-primary/30 bg-primary/5' : isLastUser ? 'border-amber-500/40 bg-amber-500/5' : 'border-border/60 bg-muted/30'}`}
+                      data-testid="idea-v2-dialog-msg"
+                      data-role={m.role}
+                      data-editable={isLastUser ? 'true' : undefined}
+                    >
+                      <div className="mb-1 flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-semibold text-muted-foreground">{i + 1}. {label(m, i)}</span>
+                        {isLastUser && (
+                          <div className="flex items-center gap-1">
+                            {edited && <span className="text-[11px] text-amber-500">изменено</span>}
+                            <button type="button" onClick={resetLast} disabled={!edited} className={`${btnBase} ${btnIdle} disabled:opacity-40`} title="Вернуть исходный текст" data-testid="idea-v2-reset-last">
+                              <RotateCcw className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      {isLastUser ? (
+                        <div className="relative">
+                          <textarea
+                            value={msgsRuOn && msgsRuLoading ? '' : text}
+                            onChange={(e) => onLastChange(e.target.value)}
+                            readOnly={!canEdit}
+                            rows={Math.min(18, Math.max(4, (text ?? '').split('\n').length + 1))}
+                            className={`w-full resize-y rounded-lg border px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary ${canEdit ? 'border-input bg-background' : 'border-border bg-muted/40 text-foreground/90'}`}
+                            data-testid="idea-v2-preview-user"
+                          />
+                          {msgsRuOn && msgsRuLoading && (
+                            <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg bg-background/60">
+                              <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> Переводим…</span>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground/90">
+                          {msgsRuOn && msgsRuLoading ? <span className="inline-flex items-center gap-1.5 text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> Переводим…</span> : text}
+                        </pre>
+                      )}
+                    </li>
+                  )
+                })}
+              </ol>
+              {msgsRuOn && !msgsRuLoading && (
+                <p className="mt-1 text-[11px] text-muted-foreground">Показан перевод на русский — только для просмотра. В генерацию уходит оригинал; редактирование доступно при выключенном RU.</p>
+              )}
+            </div>
           </div>
           <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
             <button onClick={close} className="flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted" data-testid="idea-v2-preview-cancel">
               Закрыть
             </button>
-            <button onClick={send} disabled={generating} className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50" data-testid="idea-v2-preview-send">
+            <button onClick={send} disabled={generating || !lastEdit[promptKind].trim()} className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50" data-testid="idea-v2-preview-send">
               <Wand2 className="h-4 w-4" /> Отправить
             </button>
           </div>
@@ -711,6 +673,14 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   )
   const cardCls = 'rounded-xl border border-border bg-card p-4 sm:p-6'
   const cardStyle = { boxShadow: 'var(--shadow-md)' }
+  // Единая основная кнопка перехода и подвал шага — ВНЕ карточки, под ней (одинаково на всех трёх шагах).
+  const btnPrimary = 'flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50'
+  const stepFooter = (testId: string, right: React.ReactNode, left?: React.ReactNode) => (
+    <div className="flex flex-wrap items-center justify-between gap-3" data-testid={testId}>
+      <div className="flex flex-wrap items-center gap-3">{left}</div>
+      <div className="flex flex-wrap items-center justify-end gap-3">{right}</div>
+    </div>
+  )
 
   // ═══════════════════════ Генерация синопсиса: прогресс ═══════════════════════
   // (логлайн генерируется прямо на своём экране — см. ниже, стрим под кнопками)
@@ -831,23 +801,29 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           {canceled === 'logline' && <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">Генерация логлайна отменена.</p>}
           {canceled === 'synopsis' && <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">Генерация синопсиса отменена.</p>}
 
-          <div className="mt-6 flex flex-wrap items-center justify-end gap-3 border-t border-border pt-4" data-testid="idea-v2-logline-footer">
-              {hasSynopsis && !loglineDirty && !inputDirty && !loglineGenerating && (
-                <button onClick={() => goStep('synopsis')} className="flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground" data-testid="idea-v2-to-synopsis">
-                  К готовому синопсису <ArrowRight className="h-4 w-4" />
-                </button>
-              )}
-              <button
-                onClick={approveLoglineAndContinue}
-                disabled={approving || loglineGenerating || !haveText || loglineStale || loglineDraft.trim().length < 10}
-                className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
-                data-testid="idea-v2-logline-approve"
-              >
-                {approving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                Продолжить
-              </button>
-          </div>
         </div>
+        {stepFooter(
+          'idea-v2-logline-footer',
+          <>
+            {hasSynopsis && !loglineDirty && !inputDirty && !loglineGenerating && (
+              <button onClick={() => goStep('synopsis')} className="flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground" data-testid="idea-v2-to-synopsis">
+                К готовому синопсису <ArrowRight className="h-4 w-4" />
+              </button>
+            )}
+            <button
+              onClick={approveLoglineAndContinue}
+              disabled={approving || loglineGenerating || !haveText || loglineStale || loglineDraft.trim().length < 10}
+              className={btnPrimary}
+              data-testid="idea-v2-logline-approve"
+            >
+              {approving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+              Продолжить
+            </button>
+          </>,
+          <button onClick={() => goStep('idea')} disabled={!stepClickable.idea} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground disabled:opacity-50" data-testid="idea-v2-logline-back">
+            <ArrowLeft className="h-4 w-4" /> К идее
+          </button>,
+        )}
         {renderPromptModal()}
       </div>
     )
@@ -870,11 +846,6 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                 Модель: <span className="font-semibold text-foreground" data-testid="idea-v2-model">{FABLE_MODEL_LABEL}</span>
               </p>
             </div>
-            <div className="flex flex-wrap items-center justify-end gap-2" data-testid="idea-v2-synopsis-actions">
-              <button onClick={() => generate('synopsis')} className={btnMain} data-testid="idea-v2-synopsis-generate">
-                <Wand2 className="h-3.5 w-3.5" /> Сгенерировать
-              </button>
-            </div>
           </div>
 
           {savedLogline && (
@@ -887,13 +858,16 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           </div>
           {error && <div className="mt-4">{errorBox}</div>}
           {canceled === 'synopsis' && <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">Генерация синопсиса отменена.</p>}
-
-          <div className="mt-6 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-            <button onClick={() => goStep('logline')} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground" data-testid="idea-v2-synopsis-back">
-              <ArrowLeft className="h-4 w-4" /> К логлайну
-            </button>
-          </div>
         </div>
+        {stepFooter(
+          'idea-v2-synopsis-footer',
+          <button onClick={() => generate('synopsis')} className={btnPrimary} data-testid="idea-v2-synopsis-generate">
+            <Wand2 className="h-4 w-4" /> Сгенерировать
+          </button>,
+          <button onClick={() => goStep('logline')} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground" data-testid="idea-v2-synopsis-back">
+            <ArrowLeft className="h-4 w-4" /> К логлайну
+          </button>,
+        )}
         {renderPromptModal()}
       </div>
     )
@@ -929,6 +903,13 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           {error && <div className="mt-4">{errorBox}</div>}
           {canceled === 'synopsis' && <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">Генерация отменена.</p>}
         </div>
+        {stepFooter(
+          'idea-v2-result-footer',
+          null,
+          <button onClick={() => goStep('logline')} disabled={!stepClickable.logline} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground disabled:opacity-50" data-testid="idea-v2-result-back">
+            <ArrowLeft className="h-4 w-4" /> К логлайну
+          </button>,
+        )}
         {renderPromptModal()}
       </div>
     )
@@ -1031,18 +1012,23 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           {canceled === 'logline' && (
             <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">Генерация отменена. Её можно запустить снова на шаге логлайна.</p>
           )}
-
-          <div className="mt-6 flex items-center justify-end border-t border-border pt-4" data-testid="idea-v2-input-footer">
-            <button
-              onClick={() => void continueFromIdea()}
-              disabled={!canProceed || savingInput}
-              className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
-              data-testid="idea-v2-generate"
-            >
-              {savingInput ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />} Продолжить
-            </button>
-          </div>
         </div>
+      )}
+      {screen === 'input' && stepFooter(
+        'idea-v2-input-footer',
+        <button
+          onClick={() => void continueFromIdea()}
+          disabled={!canProceed || savingInput}
+          className={btnPrimary}
+          data-testid="idea-v2-generate"
+        >
+          {savingInput ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />} Продолжить
+        </button>,
+        hasLogline && !inputDirty ? (
+          <button onClick={() => goStep('logline')} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground" data-testid="idea-v2-input-to-logline">
+            К готовому логлайну <ArrowRight className="h-4 w-4" />
+          </button>
+        ) : null,
       )}
 
       {renderPromptModal()}

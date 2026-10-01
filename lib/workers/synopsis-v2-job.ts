@@ -3,9 +3,8 @@
  *
  * Повторяет паттерн synopsis-job.ts (idea → synopsis), но:
  *   • использует ТОЛЬКО модель FABLE_MODEL («Claude Fable 5.1»);
- *   • собирает РАЗДЕЛЬНО system и user через lib/idea-v2.ts (единый с превью-роутом) ИЛИ берёт
- *     присланные пользователем отредактированные тексты (overrideSystem / overrideUser); они уходят
- *     в модель двумя messages в одном вызове streamChatText;
+ *   • собирает messages БЕЗ system (правила в первом user) через lib/idea-v2.ts (единый с превью-роутом)
+ *     ИЛИ берёт присланный из модалки диалог overrideMessages (user/assistant);
  *   • логирует реально отправленный промпт (в т.ч. отредактированный) с kind "synopsis_v2"
  *     — за счёт runWithPromptContext + авто-лога в streamChatText (lib/ai.ts);
  *   • мета-вызов {title, language} — на СОБСТВЕННЫХ промптах v2 (lib/idea-v2.ts), без шаблонов v1;
@@ -32,7 +31,11 @@ import {
   synopsisV2MetaSchema,
   synopsisV2MetaSystemPrompt,
   synopsisV2MetaUserPrompt,
+  mergeSystemIntoUser,
+  flattenV2Messages,
+  type V2Msg,
 } from "@/lib/idea-v2";
+import { resolveV2Messages, trailingAssistantPrefill } from "@/lib/workers/logline-v2-job";
 
 /** GenerationJob.type для задачи «идея v2 → синопсис» (новое строковое значение, без миграции схемы). */
 export const SYNOPSIS_V2_JOB_TYPE = "synopsis_v2";
@@ -45,7 +48,9 @@ export interface SynopsisV2JobParams {
   genres?: string[];
   /** Утверждённый логлайн проекта — синопсис разворачивает его. */
   logline?: string | null;
-  /** Отредактированный пользователем system-промпт (если он смотрел/правил превью). */
+  /** Ручное переопределение из модалки: весь диалог user/assistant (без system). */
+  overrideMessages?: V2Msg[] | null;
+  /** Legacy: отредактированный system-промпт — маппится в первый user на лету. */
   overrideSystem?: string | null;
   /** Отредактированный пользователем user-промпт. */
   overrideUser?: string | null;
@@ -63,13 +68,12 @@ function titleFromFirstLine(prose: string): string {
 async function runSynopsisV2JobImpl(jobId: string, projectId: string, params: SynopsisV2JobParams): Promise<void> {
   let hb: ReturnType<typeof setInterval> | null = null;
   try {
-    const { idea, genres = [], logline, overrideSystem, overrideUser, overrideAssistant } = params;
+    const { idea, genres = [], logline, overrideMessages, overrideSystem, overrideUser, overrideAssistant } = params;
     const parts = buildSynopsisV2Parts({ idea, genres, logline });
-    // Реально отправляемый промпт: правки пользователя имеют приоритет над сгенерированными.
-    // system и user уходят в модель двумя messages; assistant-prefill — третьим (если задан).
-    const system = overrideSystem && overrideSystem.trim() ? overrideSystem : parts.system;
-    const user = overrideUser && overrideUser.trim() ? overrideUser : parts.user;
-    const assistantPrefill = (overrideAssistant ?? parts.assistant ?? "").trim();
+    // Без роли system: правила + задание — один первый user. Правки пользователя из модалки имеют приоритет.
+    const messages = resolveV2Messages(parts.messages, { overrideMessages, overrideSystem, overrideUser, overrideAssistant });
+    const assistantPrefill = trailingAssistantPrefill(messages);
+    const logUser = flattenV2Messages(messages);
     const defaultLanguage = resolveV2Language({ idea, genres });
     const ideaForStore = idea && idea.trim()
       ? idea.trim()
@@ -87,7 +91,7 @@ async function runSynopsisV2JobImpl(jobId: string, projectId: string, params: Sy
       if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
       try {
         const onDelta = makeJobStreamWriter(jobId);
-        const raw = await streamChatText(system, user, { model: FABLE_MODEL, temperature: 0.8, maxTokens: 6000, onDelta, assistantPrefill });
+        const raw = await streamChatText("", logUser, { model: FABLE_MODEL, temperature: 0.8, maxTokens: 6000, onDelta, messages });
         // Если задан assistant-prefill, модель вернёт только продолжение — восстановим полный текст.
         const full = assistantPrefill ? `${assistantPrefill}${raw ?? ""}` : (raw ?? "");
         const cleaned = stripMarkup(full).trim();
@@ -108,7 +112,9 @@ async function runSynopsisV2JobImpl(jobId: string, projectId: string, params: Sy
     let language: IdeaLanguage | null = null;
     try {
       await heartbeatJob(jobId);
-      const metaRaw = await streamChatJSON(synopsisV2MetaSystemPrompt(), synopsisV2MetaUserPrompt(synopsis), { model: FABLE_MODEL, temperature: 0.4, maxTokens: 2000 });
+      // Мета-вызов тоже без system: правила + синопсис в одном user.
+      const metaUser = mergeSystemIntoUser(synopsisV2MetaSystemPrompt(), synopsisV2MetaUserPrompt(synopsis));
+      const metaRaw = await streamChatJSON("", metaUser, { model: FABLE_MODEL, temperature: 0.4, maxTokens: 2000, messages: [{ role: "user", content: metaUser }] });
       const meta = synopsisV2MetaSchema.parse(metaRaw);
       title = stripMarkup(meta.title ?? "").replace(/\s+/g, " ").trim();
       if (meta.language) language = normalizeLanguage(meta.language, languageHintText || synopsis);

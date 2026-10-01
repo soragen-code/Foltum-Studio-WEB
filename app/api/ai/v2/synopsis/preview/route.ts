@@ -36,9 +36,10 @@ export async function POST(request: Request) {
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
     const logline = project.loglineApproved && project.logline?.trim() ? project.logline.trim() : null;
-    const { system, user: userPrompt, assistant, model, contextIncluded, contextNote } = buildSynopsisV2Parts({ idea, genres, logline });
+    const { system, user: userPrompt, assistant, model, contextIncluded, contextNote, messages } = buildSynopsisV2Parts({ idea, genres, logline });
+    // messages — что реально уходит в модель (без system: правила в первом user); клиент показывает именно их.
     return NextResponse.json(
-      { system, user: userPrompt, assistant, model, contextIncluded, contextNote },
+      { system, user: userPrompt, assistant, model, contextIncluded, contextNote, messages },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (err: any) {

@@ -3,7 +3,8 @@
  * "When [event], [hero] must [goal], or else [stakes].").
  *
  *   • модель — только FABLE_MODEL («Claude Fable 5.1»);
- *   • промпт — buildLoglineV2Parts (lib/idea-v2.ts) или присланные пользователем override-тексты;
+ *   • промпт — messages БЕЗ system (правила в первом user) из buildLoglineV2Parts (lib/idea-v2.ts)
+ *     или присланный из модалки диалог overrideMessages (история + отредактированный крайний user);
  *   • логируется с kind "logline_v2" (runWithPromptContext + авто-лог streamChatText);
  *   • сохраняет логлайн в Project (logline, loglineApproved=false) и ставит stage="logline_v2" —
  *     экран логлайна ждёт аппрува, после которого генерируется синопсис. Синопсис прошлой итерации
@@ -16,7 +17,7 @@ import { streamChatText } from "@/lib/ai";
 import { genresToEnglish, stripMarkup } from "@/lib/idea";
 import { translateToEnglish } from "@/lib/translate-en";
 import { runWithPromptContext } from "@/lib/prompt-log";
-import { FABLE_MODEL, LOGLINE_V2_STAGE, buildLoglineV2Parts } from "@/lib/idea-v2";
+import { FABLE_MODEL, LOGLINE_V2_STAGE, buildLoglineV2Parts, legacyPartsToMessages, flattenV2Messages, type V2Msg } from "@/lib/idea-v2";
 
 /** GenerationJob.type для задачи «идея v2 → логлайн». */
 export const LOGLINE_V2_JOB_TYPE = "logline_v2";
@@ -39,9 +40,39 @@ export interface LoglineV2JobParams {
   loglineBase?: string | null;
   /** Применённые пары «правка → логлайн» по порядку — становятся ходами диалога. */
   loglineTurns?: { refine: string; logline: string }[] | null;
+  /**
+   * Ручное переопределение из модалки: ВЕСЬ диалог (user/assistant, без system) — история хронологически
+   * + отредактированный крайний user. Если задан — уходит как есть вместо собранного диалога.
+   */
+  overrideMessages?: V2Msg[] | null;
+  /** Legacy-переопределение (system/user/assistant) — маппится в один первый user на лету. */
   overrideSystem?: string | null;
   overrideUser?: string | null;
   overrideAssistant?: string | null;
+}
+
+/** Выбрать реально отправляемый диалог: override из модалки → legacy-override → собранный диалог. */
+export function resolveV2Messages(
+  built: V2Msg[],
+  o: { overrideMessages?: V2Msg[] | null; overrideSystem?: string | null; overrideUser?: string | null; overrideAssistant?: string | null },
+): V2Msg[] {
+  const manual = (o.overrideMessages ?? []).filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content.trim());
+  if (manual.length) return manual;
+  const sys = (o.overrideSystem ?? "").trim();
+  const usr = (o.overrideUser ?? "").trim();
+  const asst = (o.overrideAssistant ?? "").trim();
+  if (sys || usr || asst) {
+    // Legacy: один user (system-текст первым, затем user-текст); пустые поля берём из собранного первого user.
+    const first = built[0]?.content ?? "";
+    return legacyPartsToMessages(sys, usr || (sys ? "" : first), asst);
+  }
+  return built;
+}
+
+/** Если диалог заканчивается assistant (prefill-зачин) — модель продолжит с него; вернём этот зачин. */
+export function trailingAssistantPrefill(messages: V2Msg[]): string {
+  const last = messages[messages.length - 1];
+  return last && last.role === "assistant" ? last.content : "";
 }
 
 /** Снять обёрточные кавычки и оставить первое непустое «предложение-абзац». */
@@ -54,20 +85,15 @@ function cleanLogline(raw: string): string {
 async function runLoglineV2JobImpl(jobId: string, projectId: string, params: LoglineV2JobParams): Promise<void> {
   let hb: ReturnType<typeof setInterval> | null = null;
   try {
-    const { idea, genres = [], wishes, wishesEn, logline: prevLogline, refine, loglineBase, loglineTurns, overrideSystem, overrideUser, overrideAssistant } = params;
+    const { idea, genres = [], wishes, wishesEn, logline: prevLogline, refine, loglineBase, loglineTurns, overrideMessages, overrideSystem, overrideUser, overrideAssistant } = params;
     // В промпт — английские пожелания: перевод из preview (совпадает с модалкой) либо переводим сейчас.
     const wishesForPrompt = (wishesEn ?? "").trim() || (await translateToEnglish(wishes));
     const parts = buildLoglineV2Parts({ idea, genres, wishes: wishesForPrompt, logline: prevLogline, refine, loglineBase, loglineTurns });
-    const system = overrideSystem && overrideSystem.trim() ? overrideSystem : parts.system;
-    const user = overrideUser && overrideUser.trim() ? overrideUser : parts.user;
-    const assistantPrefill = (overrideAssistant ?? parts.assistant ?? "").trim();
-    // Если пользователь вручную отредактировал промпт (overrides) — шлём именно его тексты, без диалога.
-    const edited = Boolean(
-      (overrideSystem && overrideSystem.trim()) ||
-      (overrideUser && overrideUser.trim()) ||
-      (overrideAssistant && overrideAssistant.trim()),
-    );
-    const messages = edited ? undefined : parts.messages;
+    // Без роли system: правила в первом user. Ручные правки из модалки (overrideMessages) имеют приоритет.
+    const messages = resolveV2Messages(parts.messages, { overrideMessages, overrideSystem, overrideUser, overrideAssistant });
+    const assistantPrefill = trailingAssistantPrefill(messages);
+    // Для prompt-log: system пуст, в user — весь плоский диалог.
+    const logUser = flattenV2Messages(messages);
     const ideaForStore = idea && idea.trim()
       ? idea.trim()
       : `[v2 · genres] ${genresToEnglish(genres).join(", ") || "—"}`;
@@ -82,7 +108,7 @@ async function runLoglineV2JobImpl(jobId: string, projectId: string, params: Log
       if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
       try {
         const onDelta = makeJobStreamWriter(jobId);
-        const raw = await streamChatText(system, user, { model: FABLE_MODEL, temperature: 0.8, maxTokens: 2048, onDelta, assistantPrefill, messages });
+        const raw = await streamChatText("", logUser, { model: FABLE_MODEL, temperature: 0.8, maxTokens: 2048, onDelta, messages });
         const full = assistantPrefill ? `${assistantPrefill}${raw ?? ""}` : (raw ?? "");
         const cleaned = cleanLogline(full);
         if (cleaned.length < 20) throw new Error("logline too short / empty");

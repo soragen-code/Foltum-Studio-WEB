@@ -10,7 +10,7 @@ import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runLoglineV2Job, LOGLINE_V2_JOB_TYPE } from "@/lib/workers/logline-v2-job";
 
 /**
- * POST /api/ai/v2/logline  { projectId, idea? | genres?, overrideSystem?, overrideUser?, overrideAssistant? }
+ * POST /api/ai/v2/logline  { projectId, idea? | genres?, overrideMessages? }
  *
  * «Новый проект v2.0», шаг 2: идея / жанры → логлайн (1 предложение по формуле) моделью «Claude Fable 5.1».
  * Создаёт фоновую GenerationJob (type "logline_v2") и сразу возвращает { jobId }. Идемпотентно:
@@ -29,6 +29,7 @@ const generateSchema = z.object({
   refine: z.string().max(4000).optional(),
   loglineBase: z.string().max(4000).optional(),
   loglineTurns: z.array(z.object({ refine: z.string().max(4000), logline: z.string().max(4000) })).max(50).optional(),
+  overrideMessages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(60000) })).max(101).optional(),
   overrideSystem: z.string().max(60000).optional(),
   overrideUser: z.string().max(60000).optional(),
   overrideAssistant: z.string().max(60000).optional(),
@@ -45,7 +46,7 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null);
     const parsed = generateSchema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
-    const { projectId, idea, genres, wishes, wishesEn, logline, refine, loglineBase, loglineTurns, overrideSystem, overrideUser, overrideAssistant } = parsed.data;
+    const { projectId, idea, genres, wishes, wishesEn, logline, refine, loglineBase, loglineTurns, overrideMessages, overrideSystem, overrideUser, overrideAssistant } = parsed.data;
 
     if (!(idea && idea.trim()) && !(genres && genres.length))
       return NextResponse.json({ error: "Provide an idea or at least one genre" }, { status: 400 });
@@ -69,7 +70,7 @@ export async function POST(request: Request) {
     const job = await prisma.generationJob.create({
       data: { type: LOGLINE_V2_JOB_TYPE, status: "pending", progress: 0, message: "Starting…", projectId },
     });
-    runInBackground(() => runLoglineV2Job(job.id, projectId, { idea, genres, wishes, wishesEn, logline, refine, loglineBase, loglineTurns, overrideSystem, overrideUser, overrideAssistant }));
+    runInBackground(() => runLoglineV2Job(job.id, projectId, { idea, genres, wishes, wishesEn, logline, refine, loglineBase, loglineTurns, overrideMessages, overrideSystem, overrideUser, overrideAssistant }));
     return NextResponse.json({ jobId: job.id, resumed: false });
   } catch (err: any) {
     console.error("Logline v2 generation error:", err);

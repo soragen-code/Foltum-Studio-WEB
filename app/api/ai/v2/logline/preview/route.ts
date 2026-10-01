@@ -42,7 +42,7 @@ export async function POST(request: Request) {
     // клиенту (wishesEn): в generate он уйдёт как есть, чтобы промпт совпал с показанным в модалке.
     const wishesEn = await translateToEnglish(wishes);
     const { system, user: userPrompt, assistant, model, contextIncluded, contextNote, messages } = buildLoglineV2Parts({ idea, genres, wishes: wishesEn, logline, refine, loglineBase, loglineTurns });
-    // messages — реальный диалог правки (есть только при loglineBase + refine): клиент показывает его в модалке как есть.
+    // messages — реальный диалог БЕЗ system (правила в первом user; при loglineBase + refine — многоходовый): клиент показывает его как есть.
     return NextResponse.json(
       { system, user: userPrompt, assistant, model, contextIncluded, contextNote, wishesEn: wishesEn || undefined, messages },
       { headers: { "Cache-Control": "no-store" } },
