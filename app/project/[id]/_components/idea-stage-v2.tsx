@@ -53,8 +53,15 @@ function AutoGrowTextarea({ value, onChange, className, testId, disabled }: {
 type Screen = 'choose' | 'input'
 type Kind = 'logline' | 'synopsis'
 type StepKey = 'idea' | Kind
-/** Сообщение диалога с моделью (то, что уходит в API как messages). Роли system нет: правила — в первом user. */
-type Msg = { role: 'user' | 'assistant'; content: string }
+/** Сообщение диалога с моделью (то, что уходит в API как messages). system — всегда первым (правила), затем user/assistant. */
+type Msg = { role: 'system' | 'user' | 'assistant'; content: string }
+
+/** Текст system (первое сообщение), либо '' если его нет. */
+const systemOf = (m: Msg[]) => (m[0]?.role === 'system' ? m[0].content : '')
+/** Диалог с заменённым system (если system есть первым). */
+const withSystem = (m: Msg[], text: string): Msg[] => (m[0]?.role === 'system' ? [{ role: 'system', content: text }, ...m.slice(1)] : m)
+/** Сообщения без system (история user/assistant). */
+const nonSystem = (m: Msg[]) => m.filter((x) => x.role !== 'system')
 
 /** Индекс крайнего (самого нового) user-сообщения — единственного редактируемого. */
 const lastUserIdx = (m: Msg[]) => { for (let i = m.length - 1; i >= 0; i--) if (m[i].role === 'user') return i; return -1 }
@@ -63,7 +70,7 @@ const withLastUser = (m: Msg[], text: string): Msg[] => {
   const i = lastUserIdx(m)
   return i < 0 ? m : m.map((x, j) => (j === i ? { ...x, content: text } : x))
 }
-/** Хронологический текст истории для буфера обмена: «USER:» / «ASSISTANT:», через пустую строку. */
+/** Хронологический текст истории для буфера обмена: «SYSTEM:» первым, далее «USER:» / «ASSISTANT:», через пустую строку. */
 const historyText = (m: Msg[]) => m.map((x) => `${x.role.toUpperCase()}:\n${x.content}`).join('\n\n')
 
 /**
@@ -71,7 +78,7 @@ const historyText = (m: Msg[]) => m.map((x) => `${x.role.toUpperCase()}:\n${x.co
  * под черновик промпта и миграции не делаем → localStorage по ключу projectId+kind. Храним и оригинал (orig):
  * черновик применяется только если собранный заново крайний user совпал с orig (иначе он устарел и отбрасывается).
  */
-type PromptDraft = { orig: string; edit: string }
+type PromptDraft = { orig: string; edit: string; sysOrig?: string; sysEdit?: string }
 const draftKey = (projectId: string, k: Kind) => `foltum:v2:prompt-draft:${projectId}:${k}`
 const loadDraft = (projectId: string, k: Kind): PromptDraft | null => {
   try {
@@ -81,10 +88,31 @@ const loadDraft = (projectId: string, k: Kind): PromptDraft | null => {
     return d && typeof d.orig === 'string' && typeof d.edit === 'string' ? d : null
   } catch { return null }
 }
-const storeDraft = (projectId: string, k: Kind, orig: string, edit: string) => {
+const storeDraft = (projectId: string, k: Kind, orig: string, edit: string, sysOrig = '', sysEdit = '') => {
   try {
-    if (edit === orig) window.localStorage.removeItem(draftKey(projectId, k))
-    else window.localStorage.setItem(draftKey(projectId, k), JSON.stringify({ orig, edit } satisfies PromptDraft))
+    if (edit === orig && sysEdit === sysOrig) window.localStorage.removeItem(draftKey(projectId, k))
+    else window.localStorage.setItem(draftKey(projectId, k), JSON.stringify({ orig, edit, sysOrig, sysEdit } satisfies PromptDraft))
+  } catch { /* localStorage недоступен */ }
+}
+
+/**
+ * Диалог правок логлайна (L0 + пары «правка → логлайн») живёт в сессии; чтобы история не терялась при
+ * перезагрузке страницы — дублируем в localStorage по projectId (без миграции БД). Применяется только если
+ * сохранённая база/крайний логлайн согласуются с сохранённым в проекте логлайном.
+ */
+type LoglineDialog = { base: string; turns: { refine: string; logline: string }[] }
+const dialogKey = (projectId: string) => `foltum:v2:logline-dialog:${projectId}`
+const loadDialog = (projectId: string): LoglineDialog | null => {
+  try {
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem(dialogKey(projectId)) : null
+    const d = raw ? JSON.parse(raw) : null
+    return d && typeof d.base === 'string' && Array.isArray(d.turns) ? d : null
+  } catch { return null }
+}
+const storeDialog = (projectId: string, base: string, turns: LoglineDialog['turns']) => {
+  try {
+    if (!base) window.localStorage.removeItem(dialogKey(projectId))
+    else window.localStorage.setItem(dialogKey(projectId), JSON.stringify({ base, turns } satisfies LoglineDialog))
   } catch { /* localStorage недоступен */ }
 }
 
@@ -152,21 +180,32 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const [loglineTurns, setLoglineTurns] = useState<{ refine: string; logline: string }[]>([])
   // Правка, с которой стартовала текущая генерация — фиксируем в момент запуска (без stale-замыкания).
   const lastRefineRef = useRef<string>('')
+  // Восстановление диалога правок после перезагрузки: берём из localStorage, если он согласуется с сохранённым логлайном.
+  useEffect(() => {
+    const d = loadDialog(project.id)
+    if (!d || !savedLogline) return
+    const lastKnown = d.turns.length ? d.turns[d.turns.length - 1].logline : d.base
+    if (lastKnown.trim() === savedLogline) { setLoglineBase(d.base); setLoglineTurns(d.turns) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id])
+  useEffect(() => { storeDialog(project.id, loglineBase, loglineTurns) }, [project.id, loglineBase, loglineTurns])
 
   // Ввод менялся после последнего «Продолжить» → шаги «Логлайн»/«Синопсис» недоступны,
   // но их данные НЕ сбрасываются, пока пользователь не подтвердит сброс в модалке.
   const [inputDirty, setInputDirty] = useState(false)
 
-  // ─── Промпты (по шагам): диалог messages из preview (без system) + правка крайнего user
+  // ─── Промпты (по шагам): диалог messages из preview (system первым) + правки system и крайнего user
   const { t } = useTranslation()
   const [promptKind, setPromptKind] = useState<Kind>('logline')
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewLoading, setPreviewLoading] = useState<Kind | null>(null)
   const [ready, setReady] = useState<Record<Kind, boolean>>({ logline: false, synopsis: false })
-  // Оригинальный диалог из preview: первый user (правила + задание) → assistant → user (правка) → … → крайний user.
+  // Оригинальный диалог из preview: system (правила) → user (задание) → assistant → user (правка) → … → крайний user.
   const [msgs, setMsgs] = useState<Record<Kind, Msg[]>>({ logline: [], synopsis: [] })
   // Редактируемый текст крайнего user (единственное редактируемое сообщение).
   const [lastEdit, setLastEdit] = useState<Record<Kind, string>>({ logline: '', synopsis: '' })
+  // Редактируемый текст system (первое сообщение; «Сбросить к авто» возвращает шаблон).
+  const [sysEdit, setSysEdit] = useState<Record<Kind, string>>({ logline: '', synopsis: '' })
   const [note, setNote] = useState<Record<Kind, string>>({ logline: '', synopsis: '' })
   const [copied, setCopied] = useState(false)
   // РУ-перевод транскрипта (только отображение; в API уходит английский оригинал).
@@ -175,9 +214,11 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const [msgsRuLoading, setMsgsRuLoading] = useState(false)
 
   const lastUserOrig = (k: Kind) => { const i = lastUserIdx(msgs[k]); return i < 0 ? '' : msgs[k][i].content }
-  const isEdited = (k: Kind) => ready[k] && lastEdit[k] !== lastUserOrig(k)
-  /** Диалог, который уйдёт в API (история хронологически + отредактированный крайний user). */
-  const sendMessages = (k: Kind) => withLastUser(msgs[k], lastEdit[k])
+  const sysOrig = (k: Kind) => systemOf(msgs[k])
+  const isSysEdited = (k: Kind) => ready[k] && sysEdit[k] !== sysOrig(k)
+  const isEdited = (k: Kind) => ready[k] && (lastEdit[k] !== lastUserOrig(k) || isSysEdited(k))
+  /** Диалог, который уйдёт в API (system [с правкой] + история хронологически + отредактированный крайний user). */
+  const sendMessages = (k: Kind) => withSystem(withLastUser(msgs[k], lastEdit[k]), sysEdit[k])
   const resetPrompt = (k: Kind) => setReady((p) => ({ ...p, [k]: false }))
 
   // Сброс последующих шагов — вызывается ТОЛЬКО после подтверждения в модалке-предупреждении.
@@ -282,7 +323,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
 
   // Собрать промпт шага k для текущего ввода. Возвращает собранный диалог и крайний user с учётом сохранённого
   // черновика (localStorage), либо null при ошибке.
-  const buildPrompt = async (k: Kind, noRefine = false): Promise<{ list: Msg[]; last: string; refineEn: string } | null> => {
+  const buildPrompt = async (k: Kind, noRefine = false): Promise<{ list: Msg[]; last: string; sysEdit: string; refineEn: string } | null> => {
     try {
       const args = refineArgs(k, noRefine)
       const res = await fetch(API[k].preview, {
@@ -297,12 +338,16 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       if (k === 'logline') setRefineEn(refineEnNow)
       // messages без system (правила в первом user). Старый ответ с system/user — маппим в один user на лету.
       let list: Msg[] = Array.isArray(d.messages)
-        ? d.messages.filter((m: any) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string').map((m: any) => ({ role: m.role, content: m.content }))
+        ? d.messages.filter((m: any) => m && (m.role === 'system' || m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string').map((m: any) => ({ role: m.role, content: m.content }))
         : []
-      if (!list.length) {
-        const merged = [String(d.system ?? '').trim(), String(d.user ?? '').trim()].filter(Boolean).join('\n\n')
-        list = [{ role: 'user', content: merged }]
+      if (!nonSystem(list).length) {
+        list = [{ role: 'user', content: String(d.user ?? '').trim() }]
         if (String(d.assistant ?? '').trim()) list.push({ role: 'assistant', content: String(d.assistant).trim() })
+      }
+      // system — всегда первым: из messages либо из отдельного поля system ответа preview.
+      if (list[0]?.role !== 'system') {
+        const sys = String(d.system ?? '').trim()
+        list = sys ? [{ role: 'system', content: sys }, ...nonSystem(list)] : nonSystem(list)
       }
       setMsgs((s) => ({ ...s, [k]: list }))
       const li = lastUserIdx(list)
@@ -311,13 +356,18 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       const draft = loadDraft(project.id, k)
       const last = draft && draft.orig === orig ? draft.edit : orig
       setLastEdit((s) => ({ ...s, [k]: last }))
+      const sysO = systemOf(list)
+      // Черновик system: применяем, если авто-system не изменился (иначе шаблон обновился — берём авто).
+      const sysE = draft && typeof draft.sysEdit === 'string' && draft.sysEdit.trim() && (draft.sysOrig ?? '') === sysO ? draft.sysEdit : sysO
+      setSysEdit((s) => ({ ...s, [k]: sysE }))
       setMsgsRu(null); setMsgsRuOn(false)
-      const dialogNote = list.length > 1
-        ? ` Запрос уйдёт диалогом из ${list.length} сообщений (показан ниже, новые сверху): модель видит свои прежние ответы и все ранние правки. Редактировать можно только текущий (крайний) запрос.`
-        : ' Правила и задание уходят одним сообщением (без системного промпта); его можно отредактировать перед отправкой.'
+      const hist = nonSystem(list).length
+      const dialogNote = hist > 1
+        ? ` Запрос уйдёт диалогом: system (правила) + ${hist} сообщений истории (показаны ниже, новые сверху): модель видит свои прежние ответы и все ранние правки. Редактировать можно system и текущий (крайний) запрос.`
+        : ' Запрос уйдёт как system (правила) + user (задание); оба можно отредактировать перед отправкой.'
       setNote((s) => ({ ...s, [k]: `${d.contextNote ?? ''}${dialogNote}` }))
       setReady((s) => ({ ...s, [k]: true }))
-      return { list, last, refineEn: refineEnNow }
+      return { list, last, sysEdit: sysE, refineEn: refineEnNow }
     } catch { setError('Ошибка сети'); return null }
   }
 
@@ -347,7 +397,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
         const b = await buildPrompt(k, noRefine)
         if (b) {
           const li = lastUserIdx(b.list)
-          if (li >= 0 && b.last !== b.list[li].content) override = withLastUser(b.list, b.last)
+          if ((li >= 0 && b.last !== b.list[li].content) || b.sysEdit !== systemOf(b.list)) override = withSystem(withLastUser(b.list, b.last), b.sysEdit)
           if (b.refineEn) refineEnNow = b.refineEn
         }
       }
@@ -456,6 +506,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     } catch { /* буфер обмена недоступен */ }
   }
   const resetLast = () => { setLastEdit((p) => ({ ...p, [promptKind]: lastUserOrig(promptKind) })); setMsgsRu(null) }
+  const resetSys = () => { setSysEdit((p) => ({ ...p, [promptKind]: sysOrig(promptKind) })); setMsgsRu(null) }
+  const onSysChange = (v: string) => { setSysEdit((p) => ({ ...p, [promptKind]: v })); setMsgsRu(null) }
   const onLastChange = (v: string) => { setLastEdit((p) => ({ ...p, [promptKind]: v })); setMsgsRu(null) }
   // РУ для транскрипта: переводим каждое сообщение (параллельно), только для отображения. Крайний user — с учётом правки.
   const toggleMsgsRu = async () => {
@@ -540,31 +592,35 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   )
 
   // ─── Модалка просмотра / редактирования промпта (общая для логлайна и синопсиса)
-  // Показывает диалог messages (без system) ОТ НОВЫХ К СТАРЫМ; редактируется только крайний user.
+  // system закреплён сверху (редактируемый, «Сбросить к авто»); ниже история ОТ НОВЫХ К СТАРЫМ; редактируется только крайний user.
   const renderPromptModal = () => {
     if (!previewOpen || generating) return null
     const btnBase = 'inline-flex items-center justify-center gap-1 rounded-md border px-1.5 py-1 text-xs font-medium transition'
     const btnIdle = 'border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground'
     const btnActive = 'border-primary bg-primary/10 text-primary'
-    const total = curMsgs.length
-    const edited = isEdited(promptKind)
+    const hasSys = curMsgs[0]?.role === 'system'
+    const off = hasSys ? 1 : 0 // индекс первого user в curMsgs
+    const total = curMsgs.length - off // сообщений истории (без system)
+    const edited = lastEdit[promptKind] !== lastUserOrig(promptKind)
+    const sysEdited = isSysEdited(promptKind)
 
     const label = (m: Msg, i: number) => {
-      if (m.role === 'assistant') return i === 1 ? 'Assistant · ответ L0' : `Assistant · ответ ${Math.floor(i / 2)}`
-      if (i === 0) return total === 1 ? 'User · правила + задание (уходит сейчас)' : 'User · правила + задание'
-      return i === curLastIdx ? 'User · текущая правка (уходит сейчас)' : `User · правка ${Math.floor(i / 2)}`
+      const j = i - off // позиция в истории: 0 — первый user, 1 — L0, 2 — правка 1, 3 — логлайн 1, …
+      if (m.role === 'assistant') return j === 1 ? 'Assistant · ответ L0' : `Assistant · ответ ${Math.floor(j / 2)}`
+      if (j === 0) return total === 1 ? 'User · задание (уходит сейчас)' : 'User · задание'
+      return i === curLastIdx ? 'User · текущая правка (уходит сейчас)' : `User · правка ${Math.floor(j / 2)}`
     }
 
     const close = () => setPreviewOpen(false)
     // «Сохранить» = запомнить отредактированный крайний user (localStorage) БЕЗ вызова ИИ и закрыть. Reset-предупреждение не трогаем.
     const saveDraft = () => {
-      storeDraft(project.id, promptKind, lastUserOrig(promptKind), lastEdit[promptKind])
+      storeDraft(project.id, promptKind, lastUserOrig(promptKind), lastEdit[promptKind], sysOrig(promptKind), sysEdit[promptKind])
       setPreviewOpen(false)
     }
     // «Отправить» = закрыть модалку, перейти на шаг и запустить генерацию (история + отредактированный крайний user).
     // Сохранённое состояние обновляется тем же содержимым.
     const send = () => {
-      storeDraft(project.id, promptKind, lastUserOrig(promptKind), lastEdit[promptKind])
+      storeDraft(project.id, promptKind, lastUserOrig(promptKind), lastEdit[promptKind], sysOrig(promptKind), sysEdit[promptKind])
       setPreviewOpen(false)
       if (promptKind === 'logline' && currentView === 'idea') {
         // С шага 1: если ввод менялся при уже готовом логлайне/синопсисе — сначала предупреждение о сбросе.
@@ -594,7 +650,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             <div data-testid="idea-v2-dialog">
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Отправляемый диалог · {total} {total === 1 ? 'сообщение' : total < 5 ? 'сообщения' : 'сообщений'} · новые сверху
+                  Отправляемый диалог · system + {total} {total === 1 ? 'сообщение' : total < 5 ? 'сообщения' : 'сообщений'} · новые сверху
                 </span>
                 <div className="flex items-center gap-1">
                   <button
@@ -618,8 +674,41 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                   </button>
                 </div>
               </div>
+              {hasSys && (() => {
+                const ruShown = msgsRuOn && !msgsRuLoading && !!msgsRu
+                const text = ruShown ? msgsRu![0] : sysEdit[promptKind]
+                const canEdit = !msgsRuOn
+                return (
+                  <div className="mb-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2" data-testid="idea-v2-dialog-system" data-editable="true">
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-muted-foreground" title={t('ideaV2.systemHint')}>System · {t('ideaV2.system')} (правила, уходит первым)</span>
+                      <div className="flex items-center gap-1">
+                        {sysEdited && <span className="text-[11px] text-amber-500">изменено</span>}
+                        <button type="button" onClick={resetSys} disabled={!sysEdited} className={`${btnBase} ${btnIdle} disabled:opacity-40`} title={t('board.resetPrompt')} data-testid="idea-v2-reset-system">
+                          <RotateCcw className="h-3.5 w-3.5" /> {t('board.resetPrompt')}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="relative">
+                      <textarea
+                        value={msgsRuOn && msgsRuLoading ? '' : text}
+                        onChange={(e) => onSysChange(e.target.value)}
+                        readOnly={!canEdit}
+                        rows={Math.min(14, Math.max(3, (text ?? '').split('\n').length + 1))}
+                        className={`w-full resize-y rounded-lg border px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary ${canEdit ? 'border-input bg-background' : 'border-border bg-muted/40 text-foreground/90'}`}
+                        data-testid="idea-v2-preview-system"
+                      />
+                      {msgsRuOn && msgsRuLoading && (
+                        <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg bg-background/60">
+                          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> Переводим…</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })()}
               <ol className="space-y-2">
-                {curMsgs.map((m, i) => ({ m, i })).reverse().map(({ m, i }) => {
+                {curMsgs.map((m, i) => ({ m, i })).filter(({ m }) => m.role !== 'system').reverse().map(({ m, i }) => {
                   const isLastUser = i === curLastIdx
                   const ruShown = msgsRuOn && !msgsRuLoading && !!msgsRu
                   const text = ruShown ? msgsRu![i] : isLastUser ? lastEdit[promptKind] : m.content
@@ -633,7 +722,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                       data-editable={isLastUser ? 'true' : undefined}
                     >
                       <div className="mb-1 flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-semibold text-muted-foreground">{i + 1}. {label(m, i)}</span>
+                        <span className="text-[11px] font-semibold text-muted-foreground">{i + 1 - off}. {label(m, i)}</span>
                         {isLastUser && (
                           <div className="flex items-center gap-1">
                             {edited && <span className="text-[11px] text-amber-500">изменено</span>}
@@ -680,7 +769,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             <button onClick={saveDraft} disabled={generating} className="flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted" data-testid="idea-v2-preview-save">
               <Check className="h-4 w-4" /> {t('common.save')}
             </button>
-            <button onClick={send} disabled={generating || !lastEdit[promptKind].trim()} className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50" data-testid="idea-v2-preview-send">
+            <button onClick={send} disabled={generating || !lastEdit[promptKind].trim() || (hasSys && !sysEdit[promptKind].trim())} className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50" data-testid="idea-v2-preview-send">
               <Wand2 className="h-4 w-4" /> Отправить
             </button>
           </div>

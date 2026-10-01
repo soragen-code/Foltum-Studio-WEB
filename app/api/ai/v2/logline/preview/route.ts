@@ -45,7 +45,7 @@ export async function POST(request: Request) {
     // шлёт его в generate и хранит в loglineTurns, чтобы вся история user/assistant была английской.
     const { refine: refineEn, loglineTurns: turnsEn } = await translateLoglineRefines({ refine, loglineTurns });
     const { system, user: userPrompt, assistant, model, contextIncluded, contextNote, messages } = buildLoglineV2Parts({ idea, genres, wishes: wishesEn, logline, refine: refineEn, loglineBase, loglineTurns: turnsEn });
-    // messages — реальный диалог БЕЗ system (правила в первом user; при loglineBase + refine — многоходовый): клиент показывает его как есть.
+    // messages — реальный диалог: system (правила) → user → assistant → … (при refine — многоходовый): клиент показывает его как есть.
     return NextResponse.json(
       { system, user: userPrompt, assistant, model, contextIncluded, contextNote, wishesEn: wishesEn || undefined, refineEn: refineEn || undefined, messages },
       { headers: { "Cache-Control": "no-store" } },

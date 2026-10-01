@@ -37,7 +37,7 @@ export async function POST(request: Request) {
 
     const logline = project.loglineApproved && project.logline?.trim() ? project.logline.trim() : null;
     const { system, user: userPrompt, assistant, model, contextIncluded, contextNote, messages } = buildSynopsisV2Parts({ idea, genres, logline });
-    // messages — что реально уходит в модель (без system: правила в первом user); клиент показывает именно их.
+    // messages — что реально уходит в модель: system (правила) → user (задание); клиент показывает именно их.
     return NextResponse.json(
       { system, user: userPrompt, assistant, model, contextIncluded, contextNote, messages },
       { headers: { "Cache-Control": "no-store" } },

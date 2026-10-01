@@ -31,7 +31,7 @@ const generateSchema = z.object({
   refineEn: z.string().max(8000).optional(),
   loglineBase: z.string().max(4000).optional(),
   loglineTurns: z.array(z.object({ refine: z.string().max(4000), logline: z.string().max(4000) })).max(50).optional(),
-  overrideMessages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(60000) })).max(101).optional(),
+  overrideMessages: z.array(z.object({ role: z.enum(["system", "user", "assistant"]), content: z.string().max(60000) })).max(101).optional(),
   overrideSystem: z.string().max(60000).optional(),
   overrideUser: z.string().max(60000).optional(),
   overrideAssistant: z.string().max(60000).optional(),

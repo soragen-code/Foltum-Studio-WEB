@@ -3,8 +3,8 @@
  *
  * Единый источник правды для промптов синопсиса v2: и превью (роут .../preview), и генерация
  * (воркер synopsis-v2-job) собирают messages через ОДНИ и те же функции, чтобы отредактированный
- * пользователем промпт точно соответствовал тому, что показывалось на превью. Роли system в v2 НЕТ:
- * правила входят в первый user (см. V2Msg / mergeSystemIntoUser).
+ * пользователем промпт точно соответствовал тому, что показывалось на превью. Диалог ВСЕГДА начинается
+ * с роли system (правила), далее user (задание / L0-источник) → assistant → … → крайний user (см. V2Msg).
  *
  * В этом режиме для LLM используется ТОЛЬКО одна модель — «Claude Fable 5.1» (лейбл для UI/логов);
  * на бэкенд отправляется реальный slug WaveSpeed (Claude Opus 5), под которым работает шлюз.
@@ -29,30 +29,60 @@ export const SYNOPSIS_V2_STAGE = "synopsis_v2";
 export const LOGLINE_V2_STAGE = "logline_v2";
 
 /**
- * Сообщение диалога v2. Роли system в v2 НЕТ: все правила (бывший system) входят в ПЕРВЫЙ user
- * (правила → затем задание), далее чередование assistant (ответ) → user (правка) → … → крайний user.
+ * Сообщение диалога v2: system (правила — ВСЕГДА первым, чтобы модель не дрейфовала) → user (задание / L0-источник)
+ * → assistant (ответ) → user (правка) → … → крайний user. Первый user содержит ТОЛЬКО своё содержимое, без правил.
  */
-export type V2Msg = { role: "user" | "assistant"; content: string };
+export type V2Msg = { role: "system" | "user" | "assistant"; content: string };
 
-/** Склеить бывший system-текст и user-текст в один первый user-месседж (system идёт первым). */
+/** Склеить system-текст и user-текст в один текст (system первым). Для одиночных вызовов, где нужен один user. */
 export function mergeSystemIntoUser(system: string, user: string): string {
   const s = (system ?? "").trim();
   const u = (user ?? "").trim();
   return s && u ? `${s}\n\n${u}` : s || u;
 }
 
-/**
- * Маппинг «старого» формата (system/user/assistant, в т.ч. сохранённые данные) в messages без system —
- * на лету, без миграции. assistant-prefill (если есть) уходит последним assistant-сообщением.
- */
+/** Собрать messages из частей: [system, user, (assistant-prefill)]. */
 export function legacyPartsToMessages(system: string, user: string, assistant?: string | null): V2Msg[] {
-  const out: V2Msg[] = [{ role: "user", content: mergeSystemIntoUser(system, user) }];
+  const out: V2Msg[] = [];
+  const sys = (system ?? "").trim();
+  if (sys) out.push({ role: "system", content: sys });
+  out.push({ role: "user", content: (user ?? "").trim() });
   const a = (assistant ?? "").trim();
   if (a) out.push({ role: "assistant", content: a });
   return out;
 }
 
-/** Плоский текст диалога для prompt-log («USER:/ASSISTANT:», хронологически). */
+/**
+ * Если в начале user-текста стоит system-текст (старый формат «правила слиты в первый user», сохранённые
+ * черновики/override) — отрезаем его. Иначе текст как есть.
+ */
+export function stripSystemPrefix(system: string, content: string): string {
+  const sys = (system ?? "").trim();
+  const c = (content ?? "").trim();
+  return sys && c.startsWith(sys) ? c.slice(sys.length).replace(/^\s+/, "") : c;
+}
+
+/**
+ * Нормализация присланного диалога (override из модалки, старые данные) к каноническому виду с system первым:
+ *   • system уже есть первым → оставляем как есть (в т.ч. отредактированный пользователем);
+ *   • system нет → вставляем автоматический из шаблона правил (defaultSystem);
+ *   • из первого user отрезаем префикс system-текста, если он там обнаружен (старый слитый формат).
+ * Прочие system-сообщения не на первой позиции отбрасываются.
+ */
+export function normalizeV2Messages(messages: V2Msg[], defaultSystem: string): V2Msg[] {
+  const list = (messages ?? []).filter((m) => m && typeof m.content === "string");
+  const sys = list[0]?.role === "system" ? list[0].content.trim() : (defaultSystem ?? "").trim();
+  const rest = list.filter((m) => m.role !== "system");
+  const firstUser = rest.findIndex((m) => m.role === "user");
+  const body = rest.map((m, i) =>
+    i === firstUser
+      ? { role: "user" as const, content: stripSystemPrefix(sys, stripSystemPrefix(defaultSystem, m.content)) }
+      : m,
+  );
+  return sys ? [{ role: "system", content: sys }, ...body] : body;
+}
+
+/** Плоский текст диалога для prompt-log («SYSTEM:/USER:/ASSISTANT:», хронологически). */
 export function flattenV2Messages(messages: V2Msg[]): string {
   return messages.map((m) => `${m.role.toUpperCase()}:\n${m.content}`).join("\n\n");
 }
@@ -184,7 +214,7 @@ export function buildSynopsisV2Parts(input: SynopsisV2Input): {
   model: string;
   contextIncluded: boolean;
   contextNote: string;
-  /** Что реально уходит в модель: БЕЗ system — правила + задание в одном первом user. */
+  /** Что реально уходит в модель: system (правила) → user (задание) → (assistant-prefill). */
   messages: V2Msg[];
 } {
   const system = synopsisV2SystemPrompt(input);
@@ -321,9 +351,10 @@ export function buildLoglineV2Parts(input: SynopsisV2Input): {
   contextIncluded: boolean;
   contextNote: string;
   /**
-   * Что реально уходит в модель. Роли system НЕТ: правила + задание — один первый user; затем
-   * assistant (L0) → user (правка 1) → assistant (логлайн 1) → … → крайний user (текущая правка).
-   * Без базы L0 (напр. после перезагрузки) — один user с правилами, текущим логлайном и правкой.
+   * Что реально уходит в модель: system (правила) → user (источник + задание) → assistant (L0) →
+   * user (правка 1) → assistant (логлайн 1) → ... → крайний user (текущая правка).
+   * Без базы L0 (напр. после перезагрузки) базой становится текущий логлайн (input.logline): история
+   * правок пуста, но модель всё равно видит прежний ответ как свой.
    */
   messages: V2Msg[];
 } {
@@ -332,7 +363,7 @@ export function buildLoglineV2Parts(input: SynopsisV2Input): {
   const assistant = loglineV2AssistantPrefill(input);
 
   const refine = (input.refine ?? "").trim();
-  const base = (input.loglineBase ?? "").trim();
+  const base = (input.loglineBase ?? "").trim() || (input.logline ?? "").trim();
   const turns = (input.loglineTurns ?? []).filter(
     (t) => t && (t.refine ?? "").trim() && (t.logline ?? "").trim(),
   );
@@ -341,7 +372,8 @@ export function buildLoglineV2Parts(input: SynopsisV2Input): {
   if (refine && base) {
     // Реальный диалог: модель видит собственные прежние ответы, и прежние правки не отменяются.
     messages = [
-      { role: "user", content: mergeSystemIntoUser(system, `${loglineV2Source(input)}${LOGLINE_V2_TAIL}`) },
+      { role: "system", content: system },
+      { role: "user", content: `${loglineV2Source(input)}${LOGLINE_V2_TAIL}` },
       { role: "assistant", content: base },
     ];
     for (const t of turns) {

@@ -22,7 +22,7 @@ const generateSchema = z.object({
   projectId: z.string().min(1),
   idea: z.string().trim().max(20000).optional(),
   genres: z.array(z.string().max(80)).max(30).optional(),
-  overrideMessages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(60000) })).max(101).optional(),
+  overrideMessages: z.array(z.object({ role: z.enum(["system", "user", "assistant"]), content: z.string().max(60000) })).max(101).optional(),
   overrideSystem: z.string().max(60000).optional(),
   overrideUser: z.string().max(60000).optional(),
   overrideAssistant: z.string().max(60000).optional(),
