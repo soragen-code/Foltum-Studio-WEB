@@ -29,3 +29,38 @@ export async function translateToEnglish(text: string | null | undefined): Promi
     return t;
   }
 }
+
+/** Пары «правка → логлайн» (история диалога правок логлайна v2). */
+export type LoglineTurn = { refine: string; logline: string };
+
+/**
+ * Правки логлайна v2 → английский. ЕДИНАЯ точка для job (logline-v2-job) и preview (logline/preview):
+ *   • refine — текущая правка (по-русски из поля шага 2); если клиент прислал refineEn (перевод из preview) —
+ *     берём его без повторного перевода, чтобы в модель ушёл ровно показанный в модалке текст;
+ *   • loglineTurns[].refine — история правок; обычно уже английская (клиент хранит перевод) → no-op.
+ * Английский/пустой текст translateToEnglish возвращает как есть.
+ */
+export async function translateLoglineRefines(input: {
+  refine?: string | null;
+  refineEn?: string | null;
+  loglineTurns?: LoglineTurn[] | null;
+}): Promise<{ refine: string | undefined; loglineTurns: LoglineTurn[] | null | undefined }> {
+  const raw = (input.refine ?? "").trim();
+  const refine = raw ? (input.refineEn ?? "").trim() || (await translateToEnglish(raw)) : "";
+  const loglineTurns = input.loglineTurns
+    ? await Promise.all(input.loglineTurns.map(async (t) => ({ ...t, refine: await translateToEnglish(t.refine) })))
+    : input.loglineTurns;
+  return { refine: refine || undefined, loglineTurns };
+}
+
+/**
+ * Переводит только НЕ-английские строки текста (английские — как есть). Для ручной правки крайнего user
+ * в модалке промпта: обёртка инструкции английская, пользователь мог дописать правку по-русски.
+ */
+export async function translateNonEnglishLines(text: string): Promise<string> {
+  const lines = (text ?? "").split(/\r?\n/);
+  const needs = (l: string) => !!l.trim() && detectLanguage(l) !== "en";
+  if (!lines.some(needs)) return text;
+  const out = await Promise.all(lines.map((l) => (needs(l) ? translateToEnglish(l) : Promise.resolve(l))));
+  return out.join("\n");
+}

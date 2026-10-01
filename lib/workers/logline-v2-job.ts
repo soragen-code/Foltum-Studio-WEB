@@ -15,7 +15,7 @@ import { updateJob, completeJob, failJob, heartbeatJob, markCanceled, isCancelRe
 import { makeJobStreamWriter, flushStreamedText } from "@/lib/stream-progress";
 import { streamChatText } from "@/lib/ai";
 import { genresToEnglish, stripMarkup } from "@/lib/idea";
-import { translateToEnglish } from "@/lib/translate-en";
+import { translateToEnglish, translateLoglineRefines, translateNonEnglishLines } from "@/lib/translate-en";
 import { runWithPromptContext } from "@/lib/prompt-log";
 import { FABLE_MODEL, LOGLINE_V2_STAGE, buildLoglineV2Parts, legacyPartsToMessages, flattenV2Messages, type V2Msg } from "@/lib/idea-v2";
 
@@ -34,8 +34,10 @@ export interface LoglineV2JobParams {
   wishesEn?: string | null;
   /** Текущий логлайн — база для режима уточнения (см. refine). */
   logline?: string | null;
-  /** Правка: что изменить в текущем логлайне (режим уточнения, контекст сохраняется). */
+  /** Правка: что изменить в текущем логлайне (режим уточнения, контекст сохраняется). Обычно по-русски → переводится. */
   refine?: string | null;
+  /** Английский перевод правки из preview — уходит как есть (паритет с модалкой), без повторного перевода. */
+  refineEn?: string | null;
   /** Базовый логлайн L0 — для сборки реального диалога messages. */
   loglineBase?: string | null;
   /** Применённые пары «правка → логлайн» по порядку — становятся ходами диалога. */
@@ -85,12 +87,20 @@ function cleanLogline(raw: string): string {
 async function runLoglineV2JobImpl(jobId: string, projectId: string, params: LoglineV2JobParams): Promise<void> {
   let hb: ReturnType<typeof setInterval> | null = null;
   try {
-    const { idea, genres = [], wishes, wishesEn, logline: prevLogline, refine, loglineBase, loglineTurns, overrideMessages, overrideSystem, overrideUser, overrideAssistant } = params;
+    const { idea, genres = [], wishes, wishesEn, logline: prevLogline, refine: refineRaw, refineEn, loglineBase, loglineTurns: turnsRaw, overrideMessages, overrideSystem, overrideUser, overrideAssistant } = params;
     // В промпт — английские пожелания: перевод из preview (совпадает с модалкой) либо переводим сейчас.
     const wishesForPrompt = (wishesEn ?? "").trim() || (await translateToEnglish(wishes));
+    // Правки логлайна (текущая + история) — тоже только по-английски; та же точка, что и в preview (паритет).
+    const { refine, loglineTurns } = await translateLoglineRefines({ refine: refineRaw, refineEn, loglineTurns: turnsRaw });
     const parts = buildLoglineV2Parts({ idea, genres, wishes: wishesForPrompt, logline: prevLogline, refine, loglineBase, loglineTurns });
     // Без роли system: правила в первом user. Ручные правки из модалки (overrideMessages) имеют приоритет.
-    const messages = resolveV2Messages(parts.messages, { overrideMessages, overrideSystem, overrideUser, overrideAssistant });
+    let messages = resolveV2Messages(parts.messages, { overrideMessages, overrideSystem, overrideUser, overrideAssistant });
+    // Ручная правка крайнего user в модалке могла быть дописана по-русски → переводим не-английские строки.
+    // Только для хода правки (диалог > 1 сообщения): первый user (правила + идея) уходит как в обычном пути.
+    if (overrideMessages?.length && messages.length > 1 && messages[messages.length - 1].role === "user") {
+      const last = messages[messages.length - 1];
+      messages = [...messages.slice(0, -1), { role: "user", content: await translateNonEnglishLines(last.content) }];
+    }
     const assistantPrefill = trailingAssistantPrefill(messages);
     // Для prompt-log: system пуст, в user — весь плоский диалог.
     const logUser = flattenV2Messages(messages);

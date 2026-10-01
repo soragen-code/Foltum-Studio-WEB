@@ -27,6 +27,8 @@ const generateSchema = z.object({
   wishesEn: z.string().max(4000).optional(),
   logline: z.string().max(4000).optional(),
   refine: z.string().max(4000).optional(),
+  /** Английский перевод правки из preview — уходит в промпт как есть. */
+  refineEn: z.string().max(8000).optional(),
   loglineBase: z.string().max(4000).optional(),
   loglineTurns: z.array(z.object({ refine: z.string().max(4000), logline: z.string().max(4000) })).max(50).optional(),
   overrideMessages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(60000) })).max(101).optional(),
@@ -46,7 +48,7 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null);
     const parsed = generateSchema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
-    const { projectId, idea, genres, wishes, wishesEn, logline, refine, loglineBase, loglineTurns, overrideMessages, overrideSystem, overrideUser, overrideAssistant } = parsed.data;
+    const { projectId, idea, genres, wishes, wishesEn, logline, refine, refineEn, loglineBase, loglineTurns, overrideMessages, overrideSystem, overrideUser, overrideAssistant } = parsed.data;
 
     if (!(idea && idea.trim()) && !(genres && genres.length))
       return NextResponse.json({ error: "Provide an idea or at least one genre" }, { status: 400 });
@@ -70,7 +72,7 @@ export async function POST(request: Request) {
     const job = await prisma.generationJob.create({
       data: { type: LOGLINE_V2_JOB_TYPE, status: "pending", progress: 0, message: "Starting…", projectId },
     });
-    runInBackground(() => runLoglineV2Job(job.id, projectId, { idea, genres, wishes, wishesEn, logline, refine, loglineBase, loglineTurns, overrideMessages, overrideSystem, overrideUser, overrideAssistant }));
+    runInBackground(() => runLoglineV2Job(job.id, projectId, { idea, genres, wishes, wishesEn, logline, refine, refineEn, loglineBase, loglineTurns, overrideMessages, overrideSystem, overrideUser, overrideAssistant }));
     return NextResponse.json({ jobId: job.id, resumed: false });
   } catch (err: any) {
     console.error("Logline v2 generation error:", err);

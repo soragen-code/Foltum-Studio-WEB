@@ -5,7 +5,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { buildLoglineV2Parts } from "@/lib/idea-v2";
-import { translateToEnglish } from "@/lib/translate-en";
+import { translateToEnglish, translateLoglineRefines } from "@/lib/translate-en";
 
 /**
  * POST /api/ai/v2/logline/preview  { projectId, idea? | genres? }
@@ -41,10 +41,13 @@ export async function POST(request: Request) {
     // Пожелания (режим жанров) пишутся по-русски → в промпт идёт английский перевод. Возвращаем его
     // клиенту (wishesEn): в generate он уйдёт как есть, чтобы промпт совпал с показанным в модалке.
     const wishesEn = await translateToEnglish(wishes);
-    const { system, user: userPrompt, assistant, model, contextIncluded, contextNote, messages } = buildLoglineV2Parts({ idea, genres, wishes: wishesEn, logline, refine, loglineBase, loglineTurns });
+    // Правка логлайна (шаг 2) тоже пишется по-русски → в промпт только английский. Возвращаем refineEn: клиент
+    // шлёт его в generate и хранит в loglineTurns, чтобы вся история user/assistant была английской.
+    const { refine: refineEn, loglineTurns: turnsEn } = await translateLoglineRefines({ refine, loglineTurns });
+    const { system, user: userPrompt, assistant, model, contextIncluded, contextNote, messages } = buildLoglineV2Parts({ idea, genres, wishes: wishesEn, logline, refine: refineEn, loglineBase, loglineTurns: turnsEn });
     // messages — реальный диалог БЕЗ system (правила в первом user; при loglineBase + refine — многоходовый): клиент показывает его как есть.
     return NextResponse.json(
-      { system, user: userPrompt, assistant, model, contextIncluded, contextNote, wishesEn: wishesEn || undefined, messages },
+      { system, user: userPrompt, assistant, model, contextIncluded, contextNote, wishesEn: wishesEn || undefined, refineEn: refineEn || undefined, messages },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (err: any) {
