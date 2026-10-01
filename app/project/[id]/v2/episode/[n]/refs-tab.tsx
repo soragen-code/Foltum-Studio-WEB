@@ -1,17 +1,19 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, Wand2, Copy, Check, Languages, RefreshCw, ImageIcon, Sparkles } from 'lucide-react'
-import { FABLE_MODEL_LABEL, type EpisodeRefV2 } from '@/lib/idea-v2'
+import { Loader2, Wand2, Eye, RefreshCw, ImageIcon, Sparkles } from 'lucide-react'
+import { FABLE_MODEL_LABEL, stripRefKindPrefixV2, type EpisodeRefV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from '../../../_components/cancel-button'
 import { useJobPolling, SmoothProgress } from '../../../_components/use-job-polling'
+import { RefPromptModal } from './ref-prompt-modal'
 
 /**
  * Поток v2 · вкладка «Референсы» серии n.
  * «Извлечь» → воркер episode_refs_v2 (FABLE_MODEL) раскладывает сценарий на персонажей / локации (INT./EXT.) / реквизит
- * с EN-промптами. Каждый блок: метка, редактируемый EN-промпт (сохраняется по blur, edited=true), «RU» — перевод только
- * для показа, «Копировать», превью + «Перегенерировать». «Сгенерировать все» → воркер episode_ref_images_v2.
+ * с EN-промптами. Каждый блок: бейдж типа, метка (без префикса типа), «Промпт» → модалка (правка EN + RU-перевод для
+ * показа + «Копировать» + «Сохранить»/«Закрыть»), превью + «Перегенерировать». «Сгенерировать все» → episode_ref_images_v2
+ * (GPT Image 2.5 flare). Генерация всегда берёт сохранённый промпт из стора.
  * Обе задачи возобновляются при повторном открытии страницы.
  */
 const API = { refs: '/api/ai/v2/refs', images: '/api/ai/v2/refs/images' }
@@ -24,12 +26,7 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
 }) {
   const { t } = useTranslation()
   const [items, setItems] = useState<EpisodeRefV2[]>(initialRefs)
-  const [drafts, setDrafts] = useState<Record<string, string>>({})
-  const [ruOn, setRuOn] = useState<Record<string, boolean>>({})
-  const [ru, setRu] = useState<Record<string, { src: string; text: string }>>({})
-  const [ruLoading, setRuLoading] = useState<Record<string, boolean>>({})
-  const [copiedId, setCopiedId] = useState('')
-  const [savingId, setSavingId] = useState('')
+  const [promptId, setPromptId] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [starting, setStarting] = useState<'' | 'extract' | 'images'>('')
@@ -128,40 +125,6 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
     try { await fetch(`/api/ai/jobs/${id}/cancel`, { method: 'POST' }) } catch { /* поллинг повторит */ }
   }
 
-  const currentPrompt = (r: EpisodeRefV2) => drafts[r.id] ?? r.prompt
-
-  const savePrompt = async (r: EpisodeRefV2) => {
-    const next = drafts[r.id]
-    if (next === undefined || next === r.prompt) return
-    setSavingId(r.id)
-    try {
-      const res = await fetch(API.refs, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId, episode: n, id: r.id, prompt: next }) })
-      if (!res.ok) { const d = await res.json().catch(() => ({})); setError(d?.error ?? t('ideaV2.refsSaveFailed')); return }
-      setItems((list) => list.map((x) => (x.id === r.id ? { ...x, prompt: next, edited: true } : x)))
-      setDrafts((d) => { const c = { ...d }; delete c[r.id]; return c })
-    } catch { setError(t('ideaV2.refsNetworkError')) }
-    finally { setSavingId('') }
-  }
-
-  const toggleRu = async (r: EpisodeRefV2) => {
-    const next = !ruOn[r.id]
-    setRuOn((s) => ({ ...s, [r.id]: next }))
-    const src = currentPrompt(r)
-    if (!next || ru[r.id]?.src === src) return
-    setRuLoading((s) => ({ ...s, [r.id]: true }))
-    try {
-      const res = await fetch('/api/ai/translate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: src }) })
-      const d = await res.json().catch(() => ({}))
-      const text = res.ok && typeof d?.text === 'string' && d.text.trim() ? d.text : src
-      setRu((s) => ({ ...s, [r.id]: { src, text } }))
-    } catch { setRu((s) => ({ ...s, [r.id]: { src, text: src } })) }
-    finally { setRuLoading((s) => ({ ...s, [r.id]: false })) }
-  }
-
-  const copy = async (r: EpisodeRefV2) => {
-    try { await navigator.clipboard.writeText(currentPrompt(r)); setCopiedId(r.id); setTimeout(() => setCopiedId(''), 1500) } catch { /* буфер недоступен */ }
-  }
-
   const btnMain = 'flex items-center gap-1.5 rounded-lg bg-secondary px-3 py-1.5 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50'
   const btnPrimary = 'flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50'
   const btnGhost = 'inline-flex items-center gap-1.5 rounded-lg border border-border bg-transparent px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-muted/60 hover:border-foreground/30 disabled:opacity-50'
@@ -229,8 +192,6 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
 
       <div className="mt-4 space-y-3">
         {items.map((r) => {
-          const showRu = !!ruOn[r.id]
-          const value = currentPrompt(r)
           const genBusy = r.imageStatus === 'generating' && generatingImages
           return (
             <div key={r.id} className="rounded-lg border border-border/70 bg-muted/20 p-3 sm:p-4" data-testid={`episode-v2-ref-${r.id}`}>
@@ -238,32 +199,14 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${kindBadge[r.kind] ?? 'bg-muted text-muted-foreground'}`}>{t(`ideaV2.refsKind.${r.kind}`)}</span>
-                    <span className="text-sm font-semibold text-foreground" data-testid="episode-v2-ref-label">{r.label}</span>
+                    <span className="text-sm font-semibold text-foreground" data-testid="episode-v2-ref-label">{stripRefKindPrefixV2(r.label)}</span>
                     {r.edited && <span className="text-[10px] text-muted-foreground">· {t('ideaV2.refsEdited')}</span>}
-                    {savingId === r.id && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
                   </div>
-                  {showRu ? (
-                    <div className="mt-2 min-h-[96px] whitespace-pre-wrap break-words rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground" data-testid="episode-v2-ref-ru">
-                      {ruLoading[r.id] ? <span className="inline-flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin" /> {t('ideaV2.refsTranslating')}</span> : (ru[r.id]?.text ?? value)}
-                    </div>
-                  ) : (
-                    <textarea
-                      value={value}
-                      onChange={(e) => setDrafts((d) => ({ ...d, [r.id]: e.target.value }))}
-                      onBlur={() => void savePrompt(r)}
-                      rows={4}
-                      className="mt-2 w-full resize-y rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
-                      data-testid="episode-v2-ref-prompt"
-                    />
-                  )}
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <button onClick={() => void toggleRu(r)} className={btnGhost} aria-pressed={showRu} data-testid="episode-v2-ref-ru-toggle" title={t('ideaV2.refsRuHint')}>
-                      <Languages className="h-3.5 w-3.5" /> {showRu ? 'EN' : 'RU'}
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <button onClick={() => setPromptId(r.id)} className={btnGhost} data-testid="episode-v2-ref-view-prompt">
+                      <Eye className="h-3.5 w-3.5" /> {t('ideaV2.refsViewPrompt')}
                     </button>
-                    <button onClick={() => void copy(r)} className={btnGhost} data-testid="episode-v2-ref-copy">
-                      {copiedId === r.id ? <><Check className="h-3.5 w-3.5" /> {t('ideaV2.refsCopied')}</> : <><Copy className="h-3.5 w-3.5" /> {t('ideaV2.refsCopy')}</>}
-                    </button>
-                    <button onClick={() => void runImages([r.id])} disabled={busy || !value.trim() || drafts[r.id] !== undefined} className={btnMain} data-testid="episode-v2-ref-regenerate" title={drafts[r.id] !== undefined ? t('ideaV2.refsSaveFirst') : undefined}>
+                    <button onClick={() => void runImages([r.id])} disabled={busy || !r.prompt.trim()} className={btnMain} data-testid="episode-v2-ref-regenerate">
                       <RefreshCw className="h-3.5 w-3.5" /> {r.imageUrl ? t('ideaV2.refsRegenerate') : t('ideaV2.refsGenerateOne')}
                     </button>
                   </div>
@@ -273,7 +216,7 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
                   {genBusy ? <Loader2 className="h-5 w-5 animate-spin text-primary" /> : r.imageUrl ? (
                     <a href={r.imageUrl} target="_blank" rel="noreferrer" className="block h-full w-full">
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={r.imageUrl} alt={r.label} className="h-full w-full object-cover" loading="lazy" />
+                      <img src={r.imageUrl} alt={stripRefKindPrefixV2(r.label)} className="h-full w-full object-cover" loading="lazy" />
                     </a>
                   ) : <ImageIcon className="h-5 w-5 text-muted-foreground/50" />}
                 </div>
@@ -282,6 +225,19 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
           )
         })}
       </div>
+      {(() => {
+        const pr = promptId ? items.find((x) => x.id === promptId) : null
+        return pr ? (
+          <RefPromptModal
+            key={pr.id}
+            projectId={projectId}
+            n={n}
+            refItem={pr}
+            onSaved={(prompt) => setItems((list) => list.map((x) => (x.id === pr.id ? { ...x, prompt, edited: true } : x)))}
+            onClose={() => setPromptId('')}
+          />
+        ) : null
+      })()}
     </div>
   )
 }

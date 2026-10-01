@@ -1,11 +1,12 @@
 /**
  * Фоновый воркер потока v2 (вкладка «Референсы» → «Сгенерировать все референсы» / перегенерация одного):
- * картинки рефов серии N. Тот же image-пайплайн, что у v1-рефов (generateImage → GPT Image 2.0 на WaveSpeed,
- * uploadRemoteToS3, 9:16, стиль VISUAL_STYLE), но отдельный v2-воркер: пишет только в Project.episodeRefsV2.
+ * картинки рефов серии N. Тот же image-пайплайн (generateImage → WaveSpeed, uploadRemoteToS3, 9:16, стиль VISUAL_STYLE),
+ * но модель — GPT Image 2.5 flare (modelSlug = WAVESPEED_GPT_IMAGE_25_FLARE_T2I, quality medium) только здесь;
+ * v1-воркеры остаются на дефолтном GPT Image 2.0. Отдельный v2-воркер: пишет только в Project.episodeRefsV2.
  * Каждый реф обновляется атомарно (patchEpisodeRefV2) — превью появляются по мере готовности.
  */
 import { prisma } from "@/lib/db";
-import { generateImage, GenerationCanceledError } from "@/lib/providers/image-provider";
+import { generateImage, GenerationCanceledError, WAVESPEED_GPT_IMAGE_25_FLARE_T2I } from "@/lib/providers/image-provider";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
 import { VISUAL_STYLE, NEUTRAL_BACKGROUND_LINE, REFERENCE_ASPECT_RATIO, VISUAL_STYLE_ID } from "@/lib/visual-style";
@@ -52,7 +53,7 @@ async function runImpl(jobId: string, projectId: string, { episode, ids }: Episo
       }
       await updateJob(jobId, { progress: pct(), message: `${r.label} (${done + 1}/${total})…` });
       try {
-        const remote = await generateImage({ prompt: episodeRefImagePromptV2(r), aspect_ratio: REFERENCE_ASPECT_RATIO }, { jobId, shouldCancel: canceled });
+        const remote = await generateImage({ prompt: episodeRefImagePromptV2(r), aspect_ratio: REFERENCE_ASPECT_RATIO, modelSlug: WAVESPEED_GPT_IMAGE_25_FLARE_T2I }, { jobId, shouldCancel: canceled });
         if (await canceled()) throw new GenerationCanceledError();
         const url = await uploadRemoteToS3(remote, `media/public/v2-refs/${projectId}/${episode}/${VISUAL_STYLE_ID}/${r.id}-${Date.now()}.png`, "image/png");
         await patchEpisodeRefV2(projectId, episode, r.id, { imageUrl: url, imageStatus: "done", imageError: null });

@@ -724,6 +724,14 @@ export interface EpisodeRefV2 {
   imageError?: string | null;
 }
 
+/** Срезать ведущий префикс типа из метки рефа («Персонаж: Анна» → «Анна»); INT./EXT. не трогается. */
+const REF_KIND_PREFIX_RE = /^\s*(?:персонаж|персонажи|локация|локации|место|реквизит|предмет|character|characters|location|locations|prop|props|object)\s*[:：—–-]\s*/i;
+export function stripRefKindPrefixV2(label: string): string {
+  const s = String(label ?? "").trim();
+  const out = s.replace(REF_KIND_PREFIX_RE, "").trim();
+  return out || s;
+}
+
 /** Правила (system) извлечения рефов серии. `<Language>` — язык синопсиса (для label). */
 export const EPISODE_REFS_V2_RULES = `You are a visual development lead preparing the reference sheet for ONE episode of a photorealistic live-action vertical micro-series. The user message is the episode's shooting script (sluglines INT./EXT.).
 
@@ -736,7 +744,7 @@ List every visual reference the storyboard artist needs to draw this episode con
 FOR EACH ENTRY
 - "kind": "character" | "location" | "prop".
 - "key": short stable English identifier in snake_case (e.g. "anna", "police_station_night", "bloody_knife"). The same thing must always get the same key.
-- "label": short human label in <Language>, prefixed by the type word in <Language> — e.g. for Russian "Персонаж: Анна", "Локация: INT. Полицейский участок — ночь", "Реквизит: окровавленный нож"; for English "Character: Anna", "Location: INT. Police station — night", "Prop: bloody knife". Keep "INT."/"EXT." untranslated in location labels.
+- "label": short human label in <Language> containing ONLY the designation itself — the character's name, the location name with its slugline, or the prop name. NEVER prefix it with the type word (no "Персонаж:", "Локация:", "Реквизит:", "Character:", "Location:", "Prop:" or similar) — the type is shown separately from "kind". E.g. for Russian "Анна", "INT. Полицейский участок — ночь", "Окровавленный нож"; for English "Anna", "INT. Police station — night", "Bloody knife". Keep "INT."/"EXT." untranslated in location labels (they are part of the location name, not a type prefix).
 - "setting": "INT" or "EXT" for locations, null otherwise.
 - "prompt": a detailed ENGLISH prompt for a photorealistic image model that produces a consistent reference image:
   - character: gender, apparent age, ethnicity/skin tone, build, face, hair (colour, length, style), distinctive features, the exact wardrobe worn in this episode (garments, colours, materials), full-length standing figure on a plain neutral background. Infer plausible details from the script; never leave appearance vague.
@@ -762,7 +770,7 @@ export function parseEpisodeRefsV2(data: unknown): EpisodeRefV2[] {
   const out: EpisodeRefV2[] = [];
   for (const r of list) {
     const kind = EPISODE_REF_KINDS_V2.includes(r?.kind) ? (r.kind as EpisodeRefKindV2) : null;
-    const label = String(r?.label ?? "").trim();
+    const label = stripRefKindPrefixV2(String(r?.label ?? ""));
     const prompt = String(r?.prompt ?? "").trim();
     if (!kind || !label || !prompt) continue;
     const base = `${kind}-${refSlug(String(r?.key ?? "")) || refSlug(prompt.split(/[,.]/)[0]) || "ref"}`;

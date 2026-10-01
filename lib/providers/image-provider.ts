@@ -26,6 +26,14 @@ export interface FluxInput {
   image_input?: string[];
   /** GPT Image 2.0 resolution tier. Default "2k"; the 5×5 storyboard sheet asks for "4k" so sliced panels stay usable. */
   resolution?: "1k" | "2k" | "4k";
+  /**
+   * Optional WaveSpeed text-to-image slug override. Unset → GPT Image 2.0 (WAVESPEED_GPT_IMAGE_T2I) — every v1 worker
+   * relies on this default. v2 episode refs pass WAVESPEED_GPT_IMAGE_25_FLARE_T2I. With image_input the matching
+   * edit slug is used (see WAVESPEED_EDIT_SLUG_FOR).
+   */
+  modelSlug?: string;
+  /** Optional quality override; default "high" for GPT Image 2.0, "medium" for GPT Image 2.5. */
+  quality?: "low" | "medium" | "high" | "xhigh" | "max";
 }
 
 export interface ImageGenerationInput extends FluxInput {
@@ -42,6 +50,14 @@ export interface ImageGenerationState {
 /** WaveSpeed GPT Image 2.0 endpoints (text-to-image / multi-reference edit). */
 export const WAVESPEED_GPT_IMAGE_T2I = "openai/gpt-image-2/text-to-image";
 export const WAVESPEED_GPT_IMAGE_EDIT = "openai/gpt-image-2/edit";
+/** WaveSpeed GPT Image 2.5 (flare tier) — used ONLY by the v2 episode-refs worker (opt-in via FluxInput.modelSlug). */
+export const WAVESPEED_GPT_IMAGE_25_FLARE_T2I = "openai/gpt-image-2.5-flare/text-to-image";
+export const WAVESPEED_GPT_IMAGE_25_FLARE_EDIT = "openai/gpt-image-2.5-flare/edit";
+/** Text-to-image slug → multi-reference edit slug of the same model. */
+const WAVESPEED_EDIT_SLUG_FOR: Record<string, string> = {
+  [WAVESPEED_GPT_IMAGE_T2I]: WAVESPEED_GPT_IMAGE_EDIT,
+  [WAVESPEED_GPT_IMAGE_25_FLARE_T2I]: WAVESPEED_GPT_IMAGE_25_FLARE_EDIT,
+};
 /**
  * Backward-compat aliases. The whole codebase imports these SEEDREAM_* symbols
  * (keyframe / reangle / region-plate / sub-location / storyboard / visual-style);
@@ -78,12 +94,15 @@ export function buildWaveSpeedImageRequest(input: ImageGenerationInput): { slug:
   // NOTE: GPT Image 2.0 has NO `seed` parameter, so the caller-supplied seed is intentionally dropped
   // (extra keys are silently ignored by the API — output is provider-random).
   const resolution = input.resolution === "1k" || input.resolution === "4k" ? input.resolution : "2k";
-  const body: Record<string, unknown> = { prompt: input.prompt, aspect_ratio, resolution, quality: "high", output_format: "png", enable_sync_mode: false };
+  // Default (no modelSlug) = GPT Image 2.0 with quality "high" — unchanged for every v1 worker.
+  const t2i = input.modelSlug && WAVESPEED_EDIT_SLUG_FOR[input.modelSlug] ? input.modelSlug : WAVESPEED_GPT_IMAGE_T2I;
+  const quality = input.quality ?? (t2i === WAVESPEED_GPT_IMAGE_T2I ? "high" : "medium");
+  const body: Record<string, unknown> = { prompt: input.prompt, aspect_ratio, resolution, quality, output_format: "png", enable_sync_mode: false };
   if (refs.length) {
     body.images = refs;
-    return { slug: WAVESPEED_GPT_IMAGE_EDIT, body };
+    return { slug: WAVESPEED_EDIT_SLUG_FOR[t2i], body };
   }
-  return { slug: WAVESPEED_GPT_IMAGE_T2I, body };
+  return { slug: t2i, body };
 }
 
 function wsUnwrap(body: any): any {
@@ -196,7 +215,7 @@ export async function generateImage(input: FluxInput, context: GenerateImageCont
   // Cancel is checked BEFORE the task is created so a canceled job never pays for a new one.
   if (shouldCancel && (await shouldCancel())) throw new GenerationCanceledError();
   const attempt: GenerationAttempt = {
-    ...logContext, attempt: 1, phase: "reference", model: SEEDREAM_MODEL,
+    ...logContext, attempt: 1, phase: "reference", model: input.modelSlug && WAVESPEED_EDIT_SLUG_FOR[input.modelSlug] ? input.modelSlug : SEEDREAM_MODEL,
     status: "submitting", style: VISUAL_STYLE_ID,
     input: safeDiagnosticInput({ prompt: input.prompt, aspect_ratio: input.aspect_ratio ?? "9:16", size: "2K", provider: "wavespeed" }),
   };
