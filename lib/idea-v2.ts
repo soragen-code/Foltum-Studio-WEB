@@ -723,6 +723,8 @@ export interface EpisodeRefV2 {
   edited?: boolean;
   /** Промпт изменён, но изображение ещё не перегенерировано (бейдж «new» на кнопке промпта). */
   promptDirty?: boolean;
+  /** Пользовательское фото-референс (только для персонажей): публичный S3 URL. Подаётся первым в image_input генерации. */
+  userRefUrl?: string | null;
   imageUrl?: string | null;
   imageStatus?: EpisodeRefImageStatusV2 | null;
   imageError?: string | null;
@@ -803,7 +805,9 @@ export function mergeEpisodeRefsV2(prev: EpisodeRefV2[], fresh: EpisodeRefV2[]):
     const keepPrompt = !!p.edited;
     const prompt = keepPrompt ? p.prompt : f.prompt;
     const keepImage = p.imageUrl && (keepPrompt || p.prompt.trim() === f.prompt.trim());
-    return { ...f, prompt, edited: keepPrompt || undefined, ...(keepImage ? { imageUrl: p.imageUrl, imageStatus: "done" as const } : {}) };
+    // Сохраняем прикреплённое пользователем фото-референс внешности (userRefUrl) при повторном извлечении.
+    const keepFace = f.kind === "character" && p.userRefUrl?.trim() ? { userRefUrl: p.userRefUrl } : {};
+    return { ...f, prompt, edited: keepPrompt || undefined, ...keepFace, ...(keepImage ? { imageUrl: p.imageUrl, imageStatus: "done" as const } : {}) };
   });
 }
 

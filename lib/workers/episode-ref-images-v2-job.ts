@@ -19,15 +19,20 @@ export const EPISODE_REF_IMAGE_V2_EXPECTED_SEC = 40; // на один реф
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Финальный промпт image-модели: стиль + кадрирование по типу рефа + EN-промпт пользователя. */
-export function episodeRefImagePromptV2(ref: Pick<EpisodeRefV2, "kind" | "prompt" | "setting">): string {
+/** Инструкция удержания личности, когда к рефу персонажа прикреплено пользовательское фото (image_input). */
+const FACE_REF_LINE =
+  "IMPORTANT: a reference photo of a real person is provided. Preserve that person's facial identity and features (face shape, eyes, nose, mouth, skin tone, hair) so the character clearly looks like them; adapt only clothing, pose, and styling to match the description and visual style.";
+
+/** Финальный промпт image-модели: стиль + кадрирование по типу рефа + (опц.) удержание лица + EN-промпт пользователя. */
+export function episodeRefImagePromptV2(ref: Pick<EpisodeRefV2, "kind" | "prompt" | "setting" | "userRefUrl">): string {
   const framing =
     ref.kind === "character"
       ? `Character reference sheet image: ONE fictional adult (or child if stated) shown full-length head to toe, standing upright in a neutral pose, facing the camera. ${NEUTRAL_BACKGROUND_LINE}`
       : ref.kind === "location"
         ? `Location reference plate: wide establishing photograph of the place, ${ref.setting === "EXT" ? "exterior" : ref.setting === "INT" ? "interior" : "the setting"}, no people, no text.`
         : `Prop reference image: the single object isolated and fully in frame on a plain neutral-grey background, no hands, no people, no text.`;
-  return `[VISUAL STYLE]: ${VISUAL_STYLE}\n${framing}\n${ref.prompt.trim()}`;
+  const faceLine = ref.kind === "character" && ref.userRefUrl?.trim() ? `\n${FACE_REF_LINE}` : "";
+  return `[VISUAL STYLE]: ${VISUAL_STYLE}\n${framing}${faceLine}\n${ref.prompt.trim()}`;
 }
 
 export interface EpisodeRefImagesV2JobParams { episode: number; ids: string[] }
@@ -53,7 +58,8 @@ async function runImpl(jobId: string, projectId: string, { episode, ids }: Episo
       }
       await updateJob(jobId, { progress: pct(), message: `${r.label} (${done + 1}/${total})…` });
       try {
-        const remote = await generateImage({ prompt: episodeRefImagePromptV2(r), aspect_ratio: REFERENCE_ASPECT_RATIO, modelSlug: WAVESPEED_GPT_IMAGE_25_FLARE_T2I }, { jobId, shouldCancel: canceled });
+        const faceRef = r.kind === "character" && r.userRefUrl?.trim() ? [r.userRefUrl.trim()] : undefined;
+        const remote = await generateImage({ prompt: episodeRefImagePromptV2(r), aspect_ratio: REFERENCE_ASPECT_RATIO, modelSlug: WAVESPEED_GPT_IMAGE_25_FLARE_T2I, ...(faceRef ? { image_input: faceRef } : {}) }, { jobId, shouldCancel: canceled });
         if (await canceled()) throw new GenerationCanceledError();
         const url = await uploadRemoteToS3(remote, `media/public/v2-refs/${projectId}/${episode}/${VISUAL_STYLE_ID}/${r.id}-${Date.now()}.png`, "image/png");
         await patchEpisodeRefV2(projectId, episode, r.id, { imageUrl: url, imageStatus: "done", imageError: null, promptDirty: false });

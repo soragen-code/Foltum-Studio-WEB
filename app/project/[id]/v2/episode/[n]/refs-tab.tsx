@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, Wand2, Eye, RefreshCw, ImageIcon, Sparkles, X } from 'lucide-react'
+import { Loader2, Wand2, Eye, RefreshCw, ImageIcon, Sparkles, X, Upload, UserRound, Lock } from 'lucide-react'
 import { FABLE_MODEL_LABEL, stripRefKindPrefixV2, type EpisodeRefV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from '../../../_components/cancel-button'
@@ -16,13 +16,13 @@ import { RefPromptModal } from './ref-prompt-modal'
  * (GPT Image 2.5 flare). Генерация всегда берёт сохранённый промпт из стора.
  * Обе задачи возобновляются при повторном открытии страницы.
  */
-const API = { refs: '/api/ai/v2/refs', images: '/api/ai/v2/refs/images' }
+const API = { refs: '/api/ai/v2/refs', images: '/api/ai/v2/refs/images', face: '/api/ai/v2/refs/face' }
 const EXTRACT_EXPECTED_SEC = 45
 const IMAGE_EXPECTED_SEC = 40
 const isActive = (j: any) => !!j && (j.status === 'pending' || j.status === 'processing')
 
-export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
-  projectId: string; n: number; hasScript: boolean; initialRefs: EpisodeRefV2[]
+export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs, ownFace = false }: {
+  projectId: string; n: number; hasScript: boolean; initialRefs: EpisodeRefV2[]; ownFace?: boolean
 }) {
   const { t } = useTranslation()
   const [items, setItems] = useState<EpisodeRefV2[]>(initialRefs)
@@ -230,6 +230,16 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
                 </div>
                 {r.role?.trim() && <div className="mt-0.5 text-xs text-muted-foreground" data-testid="episode-v2-ref-role">{r.role.trim()}</div>}
               </div>
+              {r.kind === 'character' && (
+                <FaceRefControl
+                  projectId={projectId}
+                  n={n}
+                  refItem={r}
+                  ownFace={ownFace}
+                  disabled={busy}
+                  onChanged={(userRefUrl) => setItems((list) => list.map((x) => (x.id === r.id ? { ...x, userRefUrl } : x)))}
+                />
+              )}
               <div className="mt-3 flex overflow-hidden rounded-md border border-border">
                 <button onClick={() => setPromptId(r.id)} className={btnFlat} data-testid="episode-v2-ref-view-prompt">
                   <Eye className="h-3.5 w-3.5" /> {t('ideaV2.refsViewPrompt')}
@@ -266,6 +276,82 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
           <img src={lightbox.url} alt={lightbox.alt} className="max-h-full max-w-full object-contain" onClick={(e) => e.stopPropagation()} />
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * Контрол «фото-референс внешности» для рефа-персонажа (v2).
+ * Пользователь прикрепляет своё фото → при генерации изображения рефа оно подаётся в модель как image_input,
+ * чтобы персонаж был похож на человека с фото. Gate own_face (Basic+). POST/DELETE → /api/ai/v2/refs/face.
+ */
+function FaceRefControl({ projectId, n, refItem, ownFace, disabled, onChanged }: {
+  projectId: string; n: number; refItem: EpisodeRefV2; ownFace: boolean; disabled: boolean
+  onChanged: (userRefUrl: string | null) => void
+}) {
+  const { t } = useTranslation()
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const url = refItem.userRefUrl?.trim() || ''
+
+  const upload = async (file: File) => {
+    setError(''); setBusy(true)
+    try {
+      const fd = new FormData()
+      fd.append('projectId', projectId)
+      fd.append('episode', String(n))
+      fd.append('id', refItem.id)
+      fd.append('file', file)
+      const res = await fetch(API.face, { method: 'POST', body: fd })
+      const d = await res.json().catch(() => null)
+      if (!res.ok || !d?.userRefUrl) { setError(d?.error || t('ideaV2.refsFaceError')); return }
+      onChanged(d.userRefUrl as string)
+    } catch { setError(t('ideaV2.refsFaceError')) }
+    finally { setBusy(false); if (inputRef.current) inputRef.current.value = '' }
+  }
+
+  const remove = async () => {
+    setError(''); setBusy(true)
+    try {
+      const fd = new FormData()
+      fd.append('projectId', projectId)
+      fd.append('episode', String(n))
+      fd.append('id', refItem.id)
+      const res = await fetch(API.face, { method: 'DELETE', body: fd })
+      if (!res.ok) { const d = await res.json().catch(() => null); setError(d?.error || t('ideaV2.refsFaceError')); return }
+      onChanged(null)
+    } catch { setError(t('ideaV2.refsFaceError')) }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <div className="mt-3 rounded-md border border-dashed border-border/80 bg-background/40 p-2.5" data-testid="episode-v2-ref-face">
+      <div className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground">
+        <UserRound className="h-3.5 w-3.5 text-muted-foreground" /> {t('ideaV2.refsFaceTitle')}
+      </div>
+      {url ? (
+        <div className="mt-2 flex items-center gap-2">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={url} alt={t('ideaV2.refsFaceTitle')} className="h-12 w-12 flex-shrink-0 rounded-md border border-border object-cover" />
+          <button type="button" onClick={() => void remove()} disabled={busy || disabled} className="inline-flex items-center gap-1 rounded-md border border-border bg-transparent px-2 py-1 text-[11px] text-foreground transition hover:bg-muted/60 disabled:opacity-50" data-testid="episode-v2-ref-face-remove">
+            {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />} {t('ideaV2.refsFaceRemove')}
+          </button>
+        </div>
+      ) : ownFace ? (
+        <div className="mt-2">
+          <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f) }} data-testid="episode-v2-ref-face-input" />
+          <button type="button" onClick={() => inputRef.current?.click()} disabled={busy || disabled} className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-border px-2.5 py-1.5 text-[11px] text-foreground transition hover:bg-muted/60 disabled:opacity-50" data-testid="episode-v2-ref-face-upload">
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} {t('ideaV2.refsFaceUpload')}
+          </button>
+          <p className="mt-1.5 text-[10px] leading-snug text-muted-foreground">{t('ideaV2.refsFaceHint')}</p>
+        </div>
+      ) : (
+        <div className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-[11px] text-muted-foreground" data-testid="episode-v2-ref-face-locked">
+          <Lock className="h-3.5 w-3.5" /> {t('ideaV2.refsFaceLocked')}
+        </div>
+      )}
+      {error && <p className="mt-1.5 text-[10px] text-destructive" data-testid="episode-v2-ref-face-error">{error}</p>}
     </div>
   )
 }

@@ -2,6 +2,7 @@ import { auth } from '@/auth'
 import { redirect } from 'next/navigation'
 import { prisma } from '@/lib/db'
 import { seasonPlotEpisodeSummary, episodeScriptV2From, episodeRefsV2From } from '@/lib/idea-v2'
+import { canUse } from '@/lib/entitlements'
 import { EpisodeV2View } from './episode-v2-view'
 
 export const dynamic = 'force-dynamic'
@@ -16,8 +17,9 @@ export default async function EpisodeV2Page({ params }: { params: Promise<{ id: 
   if (!session?.user) redirect('/login')
   const { id, n: nRaw } = await params
 
-  const user = await prisma.user.findUnique({ where: { email: session.user.email! }, select: { id: true } })
+  const user = await prisma.user.findUnique({ where: { email: session.user.email! }, select: { id: true, subscriptionTier: true, subscriptionExpiresAt: true } })
   if (!user) redirect('/login')
+  const ownFace = canUse(user, 'own_face')
   const project = await prisma.project.findFirst({
     where: { id, userId: user.id },
     select: { id: true, name: true, seasonPlotV2: true, episodeScriptsV2: true, episodeRefsV2: true },
@@ -38,6 +40,7 @@ export default async function EpisodeV2Page({ params }: { params: Promise<{ id: 
       initialScript={episodeScriptV2From(project.episodeScriptsV2, n)}
       initialRefs={episodeRefsV2From(project.episodeRefsV2, n)}
       backHref={back}
+      ownFace={ownFace}
     />
   )
 }

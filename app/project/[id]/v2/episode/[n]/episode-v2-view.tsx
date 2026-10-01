@@ -62,8 +62,8 @@ const storeDialog = (pid: string, n: number, base: string, turns: ScriptTurn[]) 
   } catch { /* localStorage недоступен */ }
 }
 
-export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScript, initialRefs = [], backHref }: {
-  projectId: string; projectTitle: string; n: number; summary: string; initialScript: string; initialRefs?: EpisodeRefV2[]; backHref: string
+export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScript, initialRefs = [], backHref, ownFace = false }: {
+  projectId: string; projectTitle: string; n: number; summary: string; initialScript: string; initialRefs?: EpisodeRefV2[]; backHref: string; ownFace?: boolean
 }) {
   const { t, locale } = useTranslation()
   const TABS: { key: TabKey; label: string; icon: typeof FileText }[] = [
@@ -373,7 +373,7 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
           </div>
           <div className="mt-4" role="tabpanel">
             {tab === 'script' && renderScriptTab()}
-            {tab === 'refs' && <EpisodeRefsTab projectId={projectId} n={n} hasScript={!!script && !generating} initialRefs={initialRefs} />}
+            {tab === 'refs' && <EpisodeRefsTab projectId={projectId} n={n} hasScript={!!script && !generating} initialRefs={initialRefs} ownFace={ownFace} />}
           </div>
           {error && tab === 'script' && <div className="mt-4">{errorBox}</div>}
         </div>
