@@ -243,8 +243,6 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id])
   useEffect(() => { storePlotDialog(project.id, plotBase, plotTurns) }, [project.id, plotBase, plotTurns])
-  // Переход шаг 3 → structure («Продолжить» на шаге 3).
-  const [approving, setApproving] = useState(false)
 
   // Ввод менялся после последнего «Продолжить» → шаг «Синопсис» недоступен,
   // но его данные НЕ сбрасываются, пока пользователь не подтвердит сброс в модалке.
@@ -613,20 +611,6 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     setPlotRefineText(''); setPlotRefineEn('')
     setView('plot')
     void generate('plot', true)
-  }
-
-  // «Продолжить» на шаге 3: утверждаем синопсис → проект переходит в стадию structure (история сезона, StoryStage).
-  const continueFromPlot = async () => {
-    if (!hasPlot || generating || approving) return
-    setError(''); setApproving(true)
-    try {
-      const res = await fetch(`/api/projects/${project.id}/approve-synopsis`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ synopsis: savedSynopsis }),
-      })
-      if (!res.ok) { const d = await res.json().catch(() => ({})); setError(d?.error ?? 'Не удалось перейти к следующему шагу'); return }
-      onRefresh()
-    } catch { setError('Ошибка сети') }
-    finally { setApproving(false) }
   }
 
   // Подтверждение в предупреждении «Изменения затронут синопсис» (после «Продолжить»):
@@ -1203,9 +1187,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
         </div>
         {stepFooter(
           'idea-v2-plot-result-footer',
-          <button onClick={() => void continueFromPlot()} disabled={generating || approving || inputDirty} className={btnPrimary} data-testid="idea-v2-plot-continue">
-            {approving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Продолжить <ArrowRight className="h-4 w-4" />
-          </button>,
+          // Шаг 3 — финальный шаг потока v2: перехода к следующей стадии (structure / v1) нет.
+          null,
           <button onClick={() => goStep('synopsis')} disabled={!stepClickable.synopsis} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground disabled:opacity-50" data-testid="idea-v2-plot-result-back">
             <ArrowLeft className="h-4 w-4" /> {t('ideaV2.toSynopsis')}
           </button>,

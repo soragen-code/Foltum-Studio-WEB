@@ -29,7 +29,7 @@ export function projectStageIndex(stage: string | null | undefined): number {
     case 'logline_v2': return 1 // «Новый проект v2.0»: логлайн ждёт аппрува
     case 'synopsis':
     case 'synopsis_v2': return 2 // «Новый проект v2.0»: конечная стадия потока v2 (синопсис)
-    case 'season_plot_v2': return 2 // «Новый проект v2.0»: шаг 3 (сюжет сезона) — до перехода в structure
+    case 'season_plot_v2': return 2 // «Новый проект v2.0»: шаг 3 (сюжет сезона) — финальный шаг v2, в structure не переходит
     case 'structure': return 3
     case 'characters':
     case 'references':
