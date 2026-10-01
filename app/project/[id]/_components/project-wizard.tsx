@@ -43,7 +43,7 @@ export function ProjectWizard({ project: initialProject, entitlements }: { proje
   // в пайплайн v1): на ней всегда (и без ?flow=v2) рендерится экран v2 с результатом синопсиса.
   const flowV2 = searchParams?.get('flow') === 'v2'
   // Активен ли самостоятельный поток v2 (экран идеи v2 или конечная стадия synopsis_v2). На нём вместо
-  // пятишагового степпера v1 показываем короткий степпер v2 «Идея → Логлайн → Синопсис».
+  // пятишагового степпера v1 показываем короткий степпер v2 «Идея → Синопсис».
   const isV2Flow = (currentStage === 'idea' && flowV2) || currentStage === 'synopsis_v2' || currentStage === 'logline_v2'
   const stepParam = searchParams?.get('step') as ProjectStepKey | null
   // Поток v2 самостоятельный: на стадии synopsis_v2 read-only экраны v1 не открываем.
@@ -89,13 +89,13 @@ export function ProjectWizard({ project: initialProject, entitlements }: { proje
         </div>
 
         {isV2Flow ? (
-          // Поток v2 рендерит собственный интерактивный степпер (Идея → Промпт → Синопсис) внутри IdeaStageV2.
+          // Поток v2 рендерит собственный интерактивный степпер (Идея → Синопсис) внутри IdeaStageV2.
           null
         ) : (
           <ProjectSteps projectId={project?.id} stage={currentStage} current={stepsCurrent} className="mb-6" />
         )}
 
-        {/* Поток v2 (idea → logline_v2 → synopsis_v2) живёт под одним key: смена stage не ремонтирует IdeaStageV2
+        {/* Поток v2 (idea → synopsis_v2) живёт под одним key: смена stage не ремонтирует IdeaStageV2
             и не сбрасывает его локальный экран (иначе на миг появлялся шаг 1). */}
         <motion.div
           key={readOnlyStep ? `step-${readOnlyStep}` : referencesTab ? 'references-tab' : isV2Flow ? 'v2-flow' : currentStage}

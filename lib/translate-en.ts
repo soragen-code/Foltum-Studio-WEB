@@ -53,6 +53,23 @@ export async function translateLoglineRefines(input: {
   return { refine: refine || undefined, loglineTurns };
 }
 
+/** Пары «правка → синопсис» (история диалога правок синопсиса v2). */
+export type SynopsisTurn = { refine: string; synopsis: string };
+
+/** Правки синопсиса v2 → английский (та же логика, что translateLoglineRefines; единая точка для job и preview). */
+export async function translateSynopsisRefines(input: {
+  refine?: string | null;
+  refineEn?: string | null;
+  synopsisTurns?: SynopsisTurn[] | null;
+}): Promise<{ refine: string | undefined; synopsisTurns: SynopsisTurn[] | null | undefined }> {
+  const raw = (input.refine ?? "").trim();
+  const refine = raw ? (input.refineEn ?? "").trim() || (await translateToEnglish(raw)) : "";
+  const synopsisTurns = input.synopsisTurns
+    ? await Promise.all(input.synopsisTurns.map(async (t) => ({ ...t, refine: await translateToEnglish(t.refine) })))
+    : input.synopsisTurns;
+  return { refine: refine || undefined, synopsisTurns };
+}
+
 /**
  * Переводит только НЕ-английские строки текста (английские — как есть). Для ручной правки крайнего user
  * в модалке промпта: обёртка инструкции английская, пользователь мог дописать правку по-русски.

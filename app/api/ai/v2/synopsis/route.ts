@@ -8,11 +8,14 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runSynopsisV2Job, SYNOPSIS_V2_JOB_TYPE } from "@/lib/workers/synopsis-v2-job";
+import { normalizeSynopsisLanguage, normalizeEpisodesCount } from "@/lib/idea-v2";
 
 /**
- * POST /api/ai/v2/synopsis  { projectId, idea? | genres?, overrideMessages? }
+ * POST /api/ai/v2/synopsis  { projectId, idea? | genres?, wishes?, synopsisLanguage?, episodesCount?, refine?, synopsisBase?, synopsisTurns?, overrideMessages? }
  *
- * «Новый проект v2.0»: идея / жанры → синопсис (7–10 предложений) моделью «Claude Fable 5.1».
+ * «Новый проект v2.0»: идея / жанры → синопсис (7–10 предложений) моделью «Claude Fable 5.1», напрямую
+ * (шаг логлайна в v2 убран). Правки — многоходовый диалог (synopsisBase/synopsisTurns), язык и количество
+ * эпизодов — выбор пользователя (whitelist / clamp 10–100 на бэкенде).
  * Создаёт фоновую GenerationJob (type "synopsis_v2") и сразу возвращает { jobId }; фактическая
  * генерация идёт в фоне (after()) через runSynopsisV2Job, клиент поллит GET /api/jobs/[id].
  * Идемпотентно: активная задача возвращается как есть. Если пользователь смотрел/правил промпт,
@@ -21,7 +24,17 @@ import { runSynopsisV2Job, SYNOPSIS_V2_JOB_TYPE } from "@/lib/workers/synopsis-v
 const generateSchema = z.object({
   projectId: z.string().min(1),
   idea: z.string().trim().max(20000).optional(),
+  ideaEn: z.string().max(20000).optional(),
   genres: z.array(z.string().max(80)).max(30).optional(),
+  wishes: z.string().max(2000).optional(),
+  wishesEn: z.string().max(4000).optional(),
+  synopsisLanguage: z.string().max(32).optional(),
+  episodesCount: z.coerce.number().optional(),
+  synopsis: z.string().max(20000).optional(),
+  refine: z.string().max(4000).optional(),
+  refineEn: z.string().max(8000).optional(),
+  synopsisBase: z.string().max(20000).optional(),
+  synopsisTurns: z.array(z.object({ refine: z.string().max(8000), synopsis: z.string().max(20000) })).max(50).optional(),
   overrideMessages: z.array(z.object({ role: z.enum(["system", "user", "assistant"]), content: z.string().max(60000) })).max(101).optional(),
   overrideSystem: z.string().max(60000).optional(),
   overrideUser: z.string().max(60000).optional(),
@@ -39,7 +52,9 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null);
     const parsed = generateSchema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
-    const { projectId, idea, genres, overrideMessages, overrideSystem, overrideUser, overrideAssistant } = parsed.data;
+    const { projectId, idea, ideaEn, genres, wishes, wishesEn, synopsisLanguage: langRaw, episodesCount: epRaw, synopsis, refine, refineEn, synopsisBase, synopsisTurns, overrideMessages, overrideSystem, overrideUser, overrideAssistant } = parsed.data;
+    const synopsisLanguage = normalizeSynopsisLanguage(langRaw);
+    const episodesCount = normalizeEpisodesCount(epRaw);
 
     if (!(idea && idea.trim()) && !(genres && genres.length))
       return NextResponse.json({ error: "Provide an idea or at least one genre" }, { status: 400 });
@@ -63,9 +78,9 @@ export async function POST(request: Request) {
     const job = await prisma.generationJob.create({
       data: { type: SYNOPSIS_V2_JOB_TYPE, status: "pending", progress: 0, message: "Starting…", projectId },
     });
-    // v2: синопсис строится на основе утверждённого логлайна (если он есть).
-    const logline = project.loglineApproved && project.logline?.trim() ? project.logline.trim() : null;
-    runInBackground(() => runSynopsisV2Job(job.id, projectId, { idea, genres, logline, overrideMessages, overrideSystem, overrideUser, overrideAssistant }));
+    // Правка: текущий синопсис — из тела либо из проекта (после перезагрузки клиент мог его не прислать).
+    const currentSynopsis = (synopsis ?? "").trim() || (refine ? (project.synopsis ?? "").trim() : "") || null;
+    runInBackground(() => runSynopsisV2Job(job.id, projectId, { idea, ideaEn, genres, wishes, wishesEn, synopsisLanguage, episodesCount, synopsis: currentSynopsis, refine, refineEn, synopsisBase, synopsisTurns, overrideMessages, overrideSystem, overrideUser, overrideAssistant }));
     return NextResponse.json({ jobId: job.id, resumed: false });
   } catch (err: any) {
     console.error("Synopsis v2 generation error:", err);

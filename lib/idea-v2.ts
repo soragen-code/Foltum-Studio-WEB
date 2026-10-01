@@ -11,7 +11,7 @@
  */
 import { z } from "zod";
 // Из v1 берём только ДАННЫЕ/утилиты (жанры, определение языка) — промпт-шаблоны v2 собственные.
-import { GENRE_BY_ID, genresToEnglish, detectLanguage, type IdeaLanguage } from "@/lib/idea";
+import { genresToEnglish, detectLanguage, type IdeaLanguage } from "@/lib/idea";
 
 /** Реальный slug модели на шлюзе WaveSpeed (то, что уходит в бэкенд). */
 export const FABLE_MODEL = "anthropic/claude-opus-5";
@@ -95,28 +95,36 @@ export interface SynopsisV2Input {
   idea?: string | null;
   /** Идентификаторы выбранных жанров (используются, когда идея не задана). */
   genres?: string[];
-  /** Утверждённый логлайн — если задан, синопсис разворачивает именно его. */
+  /**
+   * Текущий синопсис (для правки без транскрипта) — v2-поток строит синопсис прямо из идеи.
+   * Поле `logline` оставлено для обратной совместимости (старые проекты / v1) и в v2-промпт НЕ попадает.
+   */
+  synopsis?: string | null;
   logline?: string | null;
-  /** Пожелания продюсера (только для режима жанров, шаг логлайна). */
+  /** Пожелания продюсера (свободный текст, уже на английском). */
   wishes?: string | null;
   /**
-   * Правка логлайна: что продюсер хочет изменить в ТЕКУЩЕМ логлайне (input.logline).
-   * Если задано вместе с logline — промпт логлайна собирается в режиме уточнения
-   * (контекст сохраняется: модель дорабатывает текущий логлайн, а не пишет с нуля).
+   * Правка: что продюсер хочет изменить в ТЕКУЩЕМ тексте (логлайн — для buildLoglineV2Parts,
+   * синопсис — для buildSynopsisV2Parts). Голый текст пожелания (на английском).
    */
   refine?: string | null;
+  /** Первый (базовый) логлайн L0, сгенерированный без правок (шаг логлайна, legacy/v1). */
+  loglineBase?: string | null;
+  /** Применённые пары «правка → полученный логлайн» по порядку (шаг логлайна, legacy/v1). */
+  loglineTurns?: { refine: string; logline: string }[] | null;
+  /** Язык вывода логлайна (английское название: "Russian", "English", ...); whitelist LOGLINE_LANGUAGES, дефолт Russian. */
+  loglineLanguage?: string | null;
   /**
-   * Первый (базовый) логлайн L0, сгенерированный без правок. Нужен, чтобы собрать реальный
+   * Первый (базовый) синопсис S0, сгенерированный без правок. Нужен, чтобы собрать реальный
    * диалог system→user→assistant для messages-режима (модель видит собственные прежние ответы).
    */
-  loglineBase?: string | null;
-  /**
-   * Применённые пары «правка → полученный логлайн» по порядку. Каждая пара становится ходом
-   * user(правка)→assistant(логлайн) в транскрипте, поэтому прежние правки не отменяются моделью.
-   */
-  loglineTurns?: { refine: string; logline: string }[] | null;
-  /** Язык вывода логлайна (английское название: "Russian", "English", …); whitelist LOGLINE_LANGUAGES, дефолт Russian. */
-  loglineLanguage?: string | null;
+  synopsisBase?: string | null;
+  /** Применённые пары «правка → полученный синопсис» по порядку (каждая — ход user→assistant). */
+  synopsisTurns?: { refine: string; synopsis: string }[] | null;
+  /** Язык вывода синопсиса (английское название); whitelist SYNOPSIS_LANGUAGES, дефолт Russian. */
+  synopsisLanguage?: string | null;
+  /** Количество эпизодов сезона (10–100, дефолт 50) — подставляется в system как <N>. */
+  episodesCount?: number | null;
 }
 
 /**
@@ -128,64 +136,87 @@ export function resolveV2Language(input: SynopsisV2Input): IdeaLanguage {
   return "ru";
 }
 
-/** Общие правила формата синопсиса v2 (7–10 предложений: предыстория, основной хук, концовка). */
-const SYNOPSIS_V2_RULES = `Write a SINGLE season SYNOPSIS as flowing prose of 7 to 10 sentences. Output ONLY the prose — no title, no headings, no labels, no bullet points, no markdown.
+/* ───────────── Количество эпизодов (общее для job/preview/UI) ───────────── */
 
-The synopsis MUST contain the following three elements, woven naturally into the prose. Do NOT print the words "backstory", "hook" or "ending" as labels — they must be felt as content, not written as headers:
-1. BACKSTORY — the setting and the situation before the central conflict: who the protagonist is, the world they live in, and what is at stake.
-2. THE MAIN HOOK — the single payoff the audience anticipates from the very first episode. It lands near the END of the season and is the central cliffhanger, the awaited moment the whole series builds toward. Make unmistakably clear WHAT that awaited moment is.
-3. THE ENDING — how the season resolves or twists after the hook pays off.
+export const MIN_EPISODES_COUNT = 10;
+export const MAX_EPISODES_COUNT = 100;
+export const DEFAULT_EPISODES_COUNT = 50;
 
-CRAFT: a strong protagonist with a clear want and a clear fear, escalating conflict, real dramatic turning points, and an emotional, gripping tone made for short vertical AI-drama episodes (very short, cliffhanger-driven, mobile vertical feed). Be specific and concrete — no generic filler.
-
-ORIGINALITY: all characters, names and places are invented and original — never real people, celebrities, brands, landmarks or existing franchises. Character names are ALWAYS an English first name + surname in Latin letters (A-Z), regardless of the story's setting or language.`;
-
-/** System-промпт синопсиса v2. Правила — на английском; язык ВЫВОДА зависит от идеи/жанров. */
-export function synopsisV2SystemPrompt(input: SynopsisV2Input): string {
-  const idea = (input.idea ?? "").trim();
-  const languageRule = idea
-    ? "LANGUAGE: write the synopsis in the SAME language as the user's idea (Russian idea → Russian synopsis, English idea → English synopsis, etc.)."
-    : "LANGUAGE: no idea text was given, only genres — write the synopsis in Russian.";
-  return `You are a head writer for short-form vertical AI drama series.
-
-${SYNOPSIS_V2_RULES}
-
-${languageRule}`;
+/** Нормализация количества эпизодов: целое в диапазоне 10–100, иначе дефолт 50. */
+export function normalizeEpisodesCount(value: unknown): number {
+  const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(n)) return DEFAULT_EPISODES_COUNT;
+  const i = Math.round(n);
+  return Math.min(MAX_EPISODES_COUNT, Math.max(MIN_EPISODES_COUNT, i));
 }
 
-/** User-промпт синопсиса v2: либо идея пользователя, либо задание придумать историю по жанрам. */
+/**
+ * System-правила синопсиса v2 (английский; `<N>` — количество эпизодов, `<Language>` — язык вывода).
+ * Текст — один-в-один от продюсера; подстановки делает synopsisV2SystemPrompt.
+ */
+const SYNOPSIS_V2_RULES = `You are a development executive writing season synopses for a vertical micro-series (60–100 second episodes, cliffhanger-driven). This season has <N> episodes — scale the amount of plot, the number of turning points and the pacing of the main hook to that length.
+
+INPUT HANDLING
+The user message is free text. Classify it yourself:
+- Only genres listed (e.g. "thriller, romance, post-apocalypse") → invent protagonist, world and situation from scratch.
+- A story idea (one or more sentences) → treat it as the seed: keep its core mechanic and protagonist's situation, you may invent everything else. Infer the genres from it.
+- Genres + idea → genres are hard constraints, idea is the seed.
+- If the input references an existing film, book or show, borrow only its mechanic — never its plot, names or world.
+
+SYNOPSIS RULES
+Flowing prose, 7–10 sentences, present tense. No title, no headings, no labels, no bullet points, no markdown. It must contain, woven naturally into the prose:
+1. The backstory — the world and the protagonist's normal before the central conflict
+2. Protagonist defined by a job or trait, with a clear want and a clear fear
+3. The event that breaks their normal
+4. Their goal
+5. The antagonistic force or dilemma, escalating through the season
+6. The main hook of the season — the single awaited payoff planted in the premise that the whole series builds toward; it lands near the END of the season, not in one scene. Make unmistakably clear WHAT that awaited moment is.
+7. The ending — how the season resolves or twists after the hook pays off
+Every synopsis must include at least one concrete noun that could only exist in this genre combination (an object, a job, a rule of the world).
+
+ORIGINALITY
+All characters, names and places are invented and original — never real people, celebrities, brands, landmarks or existing franchises. Character names are ALWAYS an English first name + surname in Latin letters (A-Z), regardless of the story's setting or language.
+
+OUTPUT
+Return exactly one synopsis following all rules above. Synopsis only — no title, no preamble, no commentary, no explanation.
+OUTPUT LANGUAGE: write the synopsis in <Language>.`;
+
+/** System-промпт синопсиса v2: правила с подставленными количеством эпизодов и языком вывода. */
+export function synopsisV2SystemPrompt(input: SynopsisV2Input): string {
+  const n = normalizeEpisodesCount(input.episodesCount);
+  const lang = normalizeSynopsisLanguage(input.synopsisLanguage);
+  return SYNOPSIS_V2_RULES.replace(/<N>/g, String(n)).replace(/<Language>/g, lang);
+}
+
+/**
+ * Первый user синопсиса — буквально ввод пользователя, без обёрток и инструкций:
+ * жанры (английские названия через запятую) первой строкой, затем идея и/или пожелания (уже на английском),
+ * разделённые пустой строкой. Та же схема, что и у логлайна.
+ */
+export function synopsisV2Source(input: SynopsisV2Input): string {
+  return loglineV2Source(input);
+}
+
+/** Ход-правка синопсиса — голый текст пожелания (уже переведённый на английский). */
+function synopsisV2RefineInstruction(refine: string): string {
+  return refine.trim();
+}
+
+/** User-промпт синопсиса v2: голый ввод; fallback-правка без транскрипта — ввод + текущий синопсис + правка. */
 export function synopsisV2UserPrompt(input: SynopsisV2Input): string {
-  const idea = (input.idea ?? "").trim();
-  const logline = (input.logline ?? "").trim();
-  if (logline) {
-    const source = idea
-      ? `\n\nORIGINAL IDEA (for context):\n${idea}`
-      : input.genres?.length
-        ? `\n\nGENRE(S): ${genresToEnglish(input.genres).join(", ")}`
-        : "";
-    return `LOGLINE:\n${logline}${source}\n\nWrite the season synopsis prose expanding THIS logline (7-10 sentences: backstory, the awaited main hook near the end, and the ending). Keep the logline's hero, goal and stakes. The logline deliberately names no characters — invent original names yourself (English first name + surname in Latin letters).`;
+  const source = synopsisV2Source(input);
+  const refine = (input.refine ?? "").trim();
+  const prev = (input.synopsis ?? "").trim();
+  if (refine && prev) {
+    return `${source}\n\nCurrent synopsis: "${prev}"\n\n${synopsisV2RefineInstruction(refine)}`;
   }
-  if (idea) {
-    return `IDEA:\n${idea}\n\nWrite the season synopsis prose now (7-10 sentences: backstory, the awaited main hook near the end, and the ending).`;
-  }
-  const genres = input.genres ?? [];
-  const english = genresToEnglish(genres);
-  const premises = genres
-    .map((g) => {
-      const entry = GENRE_BY_ID[(g ?? "").trim().toLowerCase()] as { premise?: string } | undefined;
-      return entry?.premise;
-    })
-    .filter(Boolean) as string[];
-  const premiseBlock = premises.length
-    ? `\n\nGENRE PREMISE(S) TO FOLLOW:\n${premises.map((p) => `- ${p}`).join("\n")}`
-    : "";
-  return `The producer has NOT written a story. Invent an original, gripping story in the following genre(s): ${english.join(", ") || "drama"}. Combine them if more than one is given, avoid clichés, and surprise the viewer while staying coherent.${premiseBlock}\n\nWrite the season synopsis prose now (7-10 sentences: backstory, the awaited main hook near the end, and the ending).`;
+  return source;
 }
 
 /**
  * Пояснение для UI: передаётся ли в промпт синопсиса v2 какой-либо дополнительный контекст проекта.
  *
- * Для шага синопсиса доп. контекст НЕ подмешивается: промпт формируется ТОЛЬКО из идеи/жанров
+ * Для шага синопсиса доп. контекст НЕ подмешивается: промпт формируется ТОЛЬКО из идеи/жанров/пожеланий
  * пользователя (см. synopsisV2SystemPrompt / synopsisV2UserPrompt) — ни RAG, ни история проекта,
  * ни ранее сохранённые данные в него не попадают.
  */
@@ -194,21 +225,18 @@ export const SYNOPSIS_V2_CONTEXT_NOTE =
   "Контекст проекта не передаётся — синопсис генерируется только из вашей идеи/жанров.";
 
 /**
- * Собрать РАЗДЕЛЬНО system и user синопсиса v2 + лейбл модели и индикатор контекста.
- *
- * Один источник правды: и превью-роут, и воркер генерации собирают промпт через эту функцию.
- * Пользователь видит и редактирует ДВА отдельных блока — что уходит в system и что в user;
- * в модель они отправляются двумя messages в одном вызове streamChatText.
- */
-/**
  * Assistant «prefill» синопсиса. По умолчанию пуст: модель пишет ответ с чистого листа. Пользователь
  * может задать его в модалке просмотра промпта — тогда он уйдёт третьим (assistant) message и модель
- * продолжит с него. Держим отдельной функцией, чтобы при желании задать дефолтный зачин в одном месте.
+ * продолжит с него.
  */
 export function synopsisV2AssistantPrefill(_input: SynopsisV2Input): string {
   return "";
 }
 
+/**
+ * Собрать system / user / assistant синопсиса v2 + реальную цепочку messages.
+ * Один источник правды: и превью-роут, и воркер генерации собирают промпт через эту функцию.
+ */
 export function buildSynopsisV2Parts(input: SynopsisV2Input): {
   system: string;
   user: string;
@@ -216,42 +244,69 @@ export function buildSynopsisV2Parts(input: SynopsisV2Input): {
   model: string;
   contextIncluded: boolean;
   contextNote: string;
-  /** Что реально уходит в модель: system (правила) → user (задание) → (assistant-prefill). */
+  /**
+   * Что реально уходит в модель: system (правила + N + язык) → user (ввод пользователя) → assistant (S0) →
+   * user (правка 1) → assistant (синопсис 1) → ... → крайний user (текущая правка).
+   * Без базы S0 (напр. после перезагрузки) базой становится текущий синопсис (input.synopsis).
+   */
   messages: V2Msg[];
 } {
   const system = synopsisV2SystemPrompt(input);
   const user = synopsisV2UserPrompt(input);
   const assistant = synopsisV2AssistantPrefill(input);
+
+  const refine = (input.refine ?? "").trim();
+  const base = (input.synopsisBase ?? "").trim() || (input.synopsis ?? "").trim();
+  const turns = (input.synopsisTurns ?? []).filter(
+    (t) => t && (t.refine ?? "").trim() && (t.synopsis ?? "").trim(),
+  );
+
+  let messages: V2Msg[];
+  if (refine && base) {
+    messages = [
+      { role: "system", content: system },
+      { role: "user", content: synopsisV2Source(input) },
+      { role: "assistant", content: base },
+    ];
+    for (const t of turns) {
+      messages.push({ role: "user", content: synopsisV2RefineInstruction((t.refine ?? "").trim()) });
+      messages.push({ role: "assistant", content: (t.synopsis ?? "").trim() });
+    }
+    messages.push({ role: "user", content: synopsisV2RefineInstruction(refine) });
+  } else {
+    messages = legacyPartsToMessages(system, user, assistant);
+  }
+
   return {
     system,
     user,
     assistant,
-    messages: legacyPartsToMessages(system, user, assistant),
+    messages,
     model: FABLE_MODEL_LABEL,
     contextIncluded: SYNOPSIS_V2_CONTEXT_INCLUDED,
-    contextNote: (input.logline ?? "").trim()
-      ? "Синопсис строится на основе утверждённого логлайна (+ ваша идея/жанры). Другой контекст проекта не передаётся."
-      : SYNOPSIS_V2_CONTEXT_NOTE,
+    contextNote: SYNOPSIS_V2_CONTEXT_NOTE,
   };
 }
 
-/* ───────────── Мета-вызов v2: {title, language} из готовой прозы синопсиса ───────────── */
+/* ───────────── Мета-вызов v2: {title, language, logline} из готовой прозы синопсиса ───────────── */
 
 /** Схема ответа мета-вызова v2 (собственная, не зависит от шаблонов v1). */
 export const synopsisV2MetaSchema = z.object({
   title: z.string().max(120).optional().nullable(),
   language: z.string().max(16).optional().nullable(),
+  logline: z.string().max(600).optional().nullable(),
 });
 export type SynopsisV2Meta = z.infer<typeof synopsisV2MetaSchema>;
 
-/** System-промпт мета-вызова v2: название сериала + язык прозы, строго JSON. */
+/** System-промпт мета-вызова v2: название сериала + язык прозы + логлайн (для Project.logline), строго JSON. */
 export function synopsisV2MetaSystemPrompt(): string {
   return `You are a series editor for short-form vertical AI drama. You receive a finished season synopsis (prose) and name the series.
 
 Return ONLY a valid JSON object with exactly these keys:
 {
   "title": "<an original, catchy series title of 1-4 words, written in the SAME language as the synopsis, without quotes or trailing punctuation>",
-  "language": "<ISO 639-1 code of the language the synopsis is written in, e.g. \"ru\" or \"en\">"
+  "language": "<ISO 639-1 code of the language the synopsis is written in, e.g. \"ru\" or \"en\">",
+  "logline": "<ONE sentence of 25-40 words, present tense, in the SAME language as the synopsis, with NO character names: protagonist (job or trait), the breaking event, the goal, the antagonist or dilemma and the season-long question>"
 }
 
 RULES: no other keys, no explanations, no markdown, no code fences. The title must not reuse real brands, celebrities or existing franchises.`;
@@ -259,7 +314,7 @@ RULES: no other keys, no explanations, no markdown, no code fences. The title mu
 
 /** User-промпт мета-вызова v2. */
 export function synopsisV2MetaUserPrompt(synopsis: string): string {
-  return `SEASON SYNOPSIS:\n${synopsis.trim()}\n\nReturn the JSON with "title" and "language" now.`;
+  return `SEASON SYNOPSIS:\n${synopsis.trim()}\n\nReturn the JSON with "title", "language" and "logline" now.`;
 }
 
 /* ───────────── Логлайн v2: Идея/жанры → 1 предложение (25–40 слов, без имён, сезонный вопрос) ───────────── */
@@ -282,6 +337,13 @@ export function normalizeLoglineLanguage(value: unknown): LoglineLanguage {
   const hit = LOGLINE_LANGUAGES.find((l) => l.toLowerCase() === v.toLowerCase());
   return hit ?? DEFAULT_LOGLINE_LANGUAGE;
 }
+
+/** Языки вывода синопсиса — тот же whitelist, что и у логлайна (один селектор «Язык синопсиса» в UI). */
+export const SYNOPSIS_LANGUAGES = LOGLINE_LANGUAGES;
+export type SynopsisLanguage = LoglineLanguage;
+export const DEFAULT_SYNOPSIS_LANGUAGE: SynopsisLanguage = DEFAULT_LOGLINE_LANGUAGE;
+export const SYNOPSIS_LANGUAGE_CODES = LOGLINE_LANGUAGE_CODES;
+export const normalizeSynopsisLanguage = normalizeLoglineLanguage;
 
 /** Краткое описание правил логлайна для русского UI (в API уходят английские правила LOGLINE_V2_RULES). */
 export const LOGLINE_V2_FORMULA_RU =
