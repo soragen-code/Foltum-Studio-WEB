@@ -1,12 +1,14 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, Wand2, Sparkles, Lightbulb, Eye, Pencil, ArrowLeft, ArrowRight, Tags, Info, BookOpen, RotateCcw, Copy, Check, X, ChevronDown, ChevronRight, ListOrdered } from 'lucide-react'
+import Link from 'next/link'
+import { Loader2, Wand2, Sparkles, Lightbulb, Eye, Pencil, ArrowLeft, ArrowRight, Tags, Info, BookOpen, RotateCcw, Copy, Check, X, ChevronDown, ChevronRight, ListOrdered, Lock } from 'lucide-react'
 import { GENRES } from '@/lib/idea'
 import { FABLE_MODEL_LABEL, SYNOPSIS_V2_STAGE, SEASON_PLOT_V2_STAGE, parseSeasonPlotV2, SYNOPSIS_LANGUAGES, SYNOPSIS_LANGUAGE_CODES, DEFAULT_SYNOPSIS_LANGUAGE, normalizeSynopsisLanguage, normalizeEpisodesCount, DEFAULT_EPISODES_COUNT, MIN_EPISODES_COUNT, MAX_EPISODES_COUNT, type SynopsisLanguage } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from './cancel-button'
 import { useJobPolling, SmoothProgress } from './use-job-polling'
+import { PromptModal } from './v2-prompt-modal'
 
 /** Примерная длительность генерации синопсиса v2 — управляет плавным прогресс-баром. */
 const SYNOPSIS_V2_EXPECTED_SEC = 50
@@ -204,6 +206,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   // Шаг 3: сюжет сезона по сериям (Project.seasonPlotV2) — есть только на стадии season_plot_v2 (правка синопсиса его сбрасывает).
   const savedPlot = String(project?.seasonPlotV2 ?? '').trim()
   const hasPlot = stage === SEASON_PLOT_V2_STAGE && hasSynopsis && !!savedPlot
+  // Сюжет сезона утверждён → шаги 1–3 только для чтения; редактируются лишь сценарии серий (страница эпизода).
+  const locked = stage === SEASON_PLOT_V2_STAGE && !!savedPlot
   const autoView: StepKey = hasPlot ? 'plot' : hasSynopsis ? 'synopsis' : 'idea'
   const [view, setView] = useState<StepKey | null>(null) // null → autoView
   const currentView: StepKey = view ?? autoView
@@ -439,6 +443,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const onPlotRefineChange = (v: string) => { setPlotRefineText(v); setPlotRefineEn(''); resetPrompt('plot') }
 
   const chooseMode = (m: 'idea' | 'genres') => {
+    if (locked) return
     if (m !== mode) markInputDirty()
     setMode(m); setError(''); setCanceled(null); setScreen('input')
   }
@@ -552,6 +557,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   }
 
   const generate = async (k: Kind, noRefine = false) => {
+    if (locked) return
     setError(''); setCanceled(null); jobs[k].clear(); setStarting(k); setPreviewOpen(false)
     try {
       // Генерация НЕ открывает модалку: уходит последний сохранённый промпт («Сохранить» в превью), если он есть
@@ -586,6 +592,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   // (уйдёт последний сохранённый промпт из «Превью», если он есть). При изменённом вводе и готовом синопсисе —
   // сначала предупреждение о сбросе.
   const continueFromIdea = () => {
+    if (locked) return
     if (!canProceed) {
       setError(mode === 'idea' ? 'Опишите идею хотя бы одним–двумя предложениями' : 'Выберите хотя бы один жанр')
       return
@@ -606,6 +613,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   // «Продолжить» на шаге 2: синопсис принят как основа → шаг 3 + генерация сюжета сезона «с нуля»
   // (уйдёт сохранённый в «Превью» system, если он есть). Бэкенд ставит synopsisApproved и stage=season_plot_v2.
   const continueFromSynopsis = () => {
+    if (locked) return
     if (!hasSynopsis || inputDirty || generating) return
     setError(''); setCanceled(null)
     setPlotRefineText(''); setPlotRefineEn('')
@@ -641,7 +649,6 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
 
   // ─── Действия модалки промпта (для текущего promptKind)
   const curMsgs = msgs[promptKind]
-  const curLastIdx = lastUserIdx(curMsgs)
 
   /** «Скопировать историю»: весь диалог хронологически (SYSTEM [с правкой] / USER / ASSISTANT), английский оригинал. */
   const copyHistory = async () => {
@@ -737,22 +744,6 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   // read-only, свёрнута по умолчанию в аккордеон «История».
   const renderPromptModal = () => {
     if (!previewOpen || generating) return null
-    const btnBase = 'inline-flex items-center justify-center gap-1 rounded-md border px-1.5 py-1 text-xs font-medium transition'
-    const btnIdle = 'border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground'
-    const btnActive = 'border-primary bg-primary/10 text-primary'
-    const hasSys = curMsgs[0]?.role === 'system'
-    const off = hasSys ? 1 : 0 // индекс первого user в curMsgs
-    const total = curMsgs.length - off // сообщений истории (без system)
-    const sysEdited = isSysEdited(promptKind)
-
-    const label = (m: Msg, i: number) => {
-      const j = i - off // позиция в истории: 0 — первый user, 1 — S0, 2 — правка 1, 3 — синопсис 1, …
-      if (m.role === 'assistant') return j === 1 ? `Assistant · ответ ${promptKind === 'plot' ? 'P0' : 'S0'}` : `Assistant · ответ ${Math.floor(j / 2)}`
-      if (j === 0) return total === 1 ? 'User · задание (уходит сейчас)' : 'User · задание'
-      return i === curLastIdx ? 'User · текущая правка (уходит сейчас)' : `User · правка ${Math.floor(j / 2)}`
-    }
-
-    const close = () => setPreviewOpen(false)
     // «Сохранить» = запомнить правку system (localStorage) БЕЗ вызова ИИ; модалка остаётся открытой,
     // подпись кнопки на ~1.5 с меняется на «Сохранено». Reset-предупреждение не трогаем.
     const saveDraft = () => {
@@ -761,136 +752,30 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       setTimeout(() => setSaved(false), 1500)
     }
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={close} data-testid="idea-v2-preview-modal" data-kind={promptKind}>
-        <div className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl" onClick={(e) => e.stopPropagation()}>
-          <div className="flex items-center justify-between gap-2 border-b border-border px-5 py-3.5">
-            <h3 className="flex items-center gap-2 font-display text-lg font-semibold">
-              <Eye className="h-5 w-5 text-primary" /> Промпт {KIND_LABEL[promptKind]}
-            </h3>
-            <button onClick={close} className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Закрыть" data-testid="idea-v2-preview-close">
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-          <div className="flex-1 space-y-4 overflow-y-auto px-5 py-4">
-            {note[promptKind] && (
-              <p className="flex items-start gap-1.5 text-xs text-muted-foreground" data-testid="idea-v2-context-note">
-                <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" /> {note[promptKind]}
-              </p>
-            )}
-            <div data-testid="idea-v2-dialog">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  Отправляемый диалог · system + {total} {total === 1 ? 'сообщение' : total < 5 ? 'сообщения' : 'сообщений'}
-                </span>
-                <div className="flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => void copyHistory()}
-                    className={`${btnBase} ${copied ? btnActive : btnIdle}`}
-                    title={t('ideaV2.copyHistoryHint')}
-                    data-testid="idea-v2-copy-history"
-                  >
-                    {copied ? <><Check className="h-3.5 w-3.5 text-primary" /> {t('ideaV2.copied')}</> : <><Copy className="h-3.5 w-3.5" /> {t('ideaV2.copyHistory')}</>}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void toggleMsgsRu()}
-                    className={`${btnBase} ${msgsRuOn ? btnActive : btnIdle}`}
-                    title="Показать перевод на русский (только для просмотра; в API уходит оригинал)"
-                    aria-pressed={msgsRuOn}
-                    data-testid="idea-v2-dialog-ru"
-                  >
-                    {msgsRuLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'RU'}
-                  </button>
-                </div>
-              </div>
-              {hasSys && (() => {
-                const ruShown = msgsRuOn && !msgsRuLoading && !!msgsRu
-                const text = ruShown ? msgsRu![0] : sysEdit[promptKind]
-                const canEdit = !msgsRuOn
-                return (
-                  <div className="mb-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2" data-testid="idea-v2-dialog-system" data-editable="true">
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-semibold text-muted-foreground" title={t('ideaV2.systemHint')}>System · {t('ideaV2.system')} (правила, уходит первым)</span>
-                      <div className="flex items-center gap-1">
-                        {sysEdited && <span className="text-[11px] text-amber-500">изменено</span>}
-                        <button type="button" onClick={resetSys} disabled={!sysEdited} className={`${btnBase} ${btnIdle} disabled:opacity-40`} title={t('board.resetPrompt')} data-testid="idea-v2-reset-system">
-                          <RotateCcw className="h-3.5 w-3.5" /> {t('board.resetPrompt')}
-                        </button>
-                      </div>
-                    </div>
-                    <div className="relative">
-                      <textarea
-                        value={msgsRuOn && msgsRuLoading ? '' : text}
-                        onChange={(e) => onSysChange(e.target.value)}
-                        readOnly={!canEdit}
-                        rows={Math.min(14, Math.max(3, (text ?? '').split('\n').length + 1))}
-                        className={`w-full resize-y rounded-lg border px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary ${canEdit ? 'border-input bg-background' : 'border-border bg-muted/40 text-foreground/90'}`}
-                        data-testid="idea-v2-preview-system"
-                      />
-                      {msgsRuOn && msgsRuLoading && (
-                        <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg bg-background/60">
-                          <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> Переводим…</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )
-              })()}
-              <div className="rounded-lg border border-border/60" data-testid="idea-v2-history" data-open={historyOpen ? 'true' : 'false'}>
-                <button
-                  type="button"
-                  onClick={() => setHistoryOpen((v) => !v)}
-                  aria-expanded={historyOpen}
-                  className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-xs font-semibold text-muted-foreground transition hover:bg-muted/40 hover:text-foreground"
-                  data-testid="idea-v2-history-toggle"
-                >
-                  <span className="inline-flex items-center gap-1.5">
-                    {historyOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                    {t('ideaV2.history')} · {total} {total === 1 ? 'сообщение' : total < 5 ? 'сообщения' : 'сообщений'}
-                  </span>
-                  <span className="text-[11px] font-normal">{t('ideaV2.historyHint')}</span>
-                </button>
-                {historyOpen && (
-                  <ol className="space-y-2 border-t border-border/60 p-2">
-                    {curMsgs.map((m, i) => ({ m, i })).filter(({ m }) => m.role !== 'system').reverse().map(({ m, i }) => {
-                      const isLastUser = i === curLastIdx
-                      const ruShown = msgsRuOn && !msgsRuLoading && !!msgsRu
-                      const text = ruShown ? msgsRu![i] : m.content
-                      return (
-                        <li
-                          key={i}
-                          className={`rounded-lg border px-3 py-2 ${m.role === 'assistant' ? 'border-primary/30 bg-primary/5' : isLastUser ? 'border-amber-500/40 bg-amber-500/5' : 'border-border/60 bg-muted/30'}`}
-                          data-testid="idea-v2-dialog-msg"
-                          data-role={m.role}
-                        >
-                          <div className="mb-1 flex items-center justify-between gap-2">
-                            <span className="text-[11px] font-semibold text-muted-foreground">{i + 1 - off}. {label(m, i)}</span>
-                          </div>
-                          <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground/90">
-                            {msgsRuOn && msgsRuLoading ? <span className="inline-flex items-center gap-1.5 text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> Переводим...</span> : text}
-                          </pre>
-                        </li>
-                      )
-                    })}
-                  </ol>
-                )}
-              </div>
-              {msgsRuOn && !msgsRuLoading && (
-                <p className="mt-1 text-[11px] text-muted-foreground">Показан перевод на русский — только для просмотра. В генерацию уходит оригинал; редактирование system доступно при выключенном RU.</p>
-              )}
-            </div>
-          </div>
-          <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
-            <button onClick={close} className="flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted" data-testid="idea-v2-preview-cancel">
-              Закрыть
-            </button>
-            <button onClick={saveDraft} disabled={generating || (hasSys && !sysEdit[promptKind].trim())} className={`flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted ${saved ? 'text-primary' : ''}`} data-testid="idea-v2-preview-save">
-              <Check className="h-4 w-4" /> {saved ? t('ideaV2.saved') : t('common.save')}
-            </button>
-          </div>
-        </div>
-      </div>
+      <PromptModal
+        kind={promptKind}
+        title={`Промпт ${KIND_LABEL[promptKind]}`}
+        firstAnswerTag={promptKind === 'plot' ? 'P0' : 'S0'}
+        messages={curMsgs}
+        sysEdit={sysEdit[promptKind]}
+        sysEdited={isSysEdited(promptKind)}
+        note={note[promptKind]}
+        onSysChange={onSysChange}
+        onResetSys={resetSys}
+        copied={copied}
+        onCopy={() => void copyHistory()}
+        ruOn={msgsRuOn}
+        ruLoading={msgsRuLoading}
+        ru={msgsRu}
+        onToggleRu={() => void toggleMsgsRu()}
+        historyOpen={historyOpen}
+        onToggleHistory={() => setHistoryOpen((v) => !v)}
+        saved={saved}
+        saveDisabled={generating}
+        onSave={saveDraft}
+        onClose={() => setPreviewOpen(false)}
+        readOnly={locked}
+      />
     )
   }
 
@@ -1042,7 +927,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           {inputDirty && (
             <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-result-stale">Идея, жанры, язык или число эпизодов изменились — вернитесь на шаг 1 и нажмите «Продолжить», чтобы перегенерировать синопсис.</p>
           )}
-          {!inputDirty && (
+          {locked && <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="idea-v2-locked"><Lock className="h-3.5 w-3.5" /> {t('ideaV2.lockedHint')}</p>}
+          {!inputDirty && !locked && (
             <div className="mt-5 rounded-lg border border-border/70 bg-muted/30 px-4 py-3" data-testid="idea-v2-synopsis-refine">
               <label htmlFor="idea-v2-synopsis-refine-input" className="text-xs font-semibold text-foreground">Что изменить в синопсисе?</label>
               <textarea
@@ -1074,7 +960,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
         </div>
         {stepFooter(
           'idea-v2-result-footer',
-          <div className="flex flex-wrap items-center gap-2">
+          locked ? null : <div className="flex flex-wrap items-center gap-2">
             {previewBtn('plot', true, 'idea-v2-result-plot-preview', inputDirty)}
             <button onClick={continueFromSynopsis} disabled={generating || inputDirty} className={btnPrimary} data-testid="idea-v2-result-continue">
               Продолжить <ArrowRight className="h-4 w-4" />
@@ -1143,7 +1029,12 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             <ol className="mt-4 space-y-3" data-testid="idea-v2-plot-episodes">
               {episodesList.map((ep, i) => (
                 <li key={`${ep.n}-${i}`} className="rounded-lg border border-border bg-background px-4 py-3" data-testid="idea-v2-plot-episode" data-n={ep.n}>
-                  <div className="text-xs font-semibold uppercase tracking-wide text-primary">{t('ideaV2.episode')} {ep.n}</div>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-primary">{t('ideaV2.episode')} {ep.n}</div>
+                    <Link href={`/project/${project.id}/v2/episode/${ep.n}`} className={btnMain} data-testid="idea-v2-plot-episode-open">
+                      {t('ideaV2.open')} <ArrowRight className="h-3.5 w-3.5" />
+                    </Link>
+                  </div>
                   <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">{ep.text}</p>
                 </li>
               ))}
@@ -1155,7 +1046,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           {inputDirty && (
             <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-plot-stale">Идея, жанры, язык или число эпизодов изменились — вернитесь на шаг 1 и нажмите «Продолжить», чтобы перегенерировать синопсис и сюжет.</p>
           )}
-          {!inputDirty && (
+          {locked && <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="idea-v2-locked"><Lock className="h-3.5 w-3.5" /> {t('ideaV2.lockedHint')}</p>}
+          {!inputDirty && !locked && (
             <div className="mt-5 rounded-lg border border-border/70 bg-muted/30 px-4 py-3" data-testid="idea-v2-plot-refine">
               <label htmlFor="idea-v2-plot-refine-input" className="text-xs font-semibold text-foreground">Что изменить в сюжете сезона?</label>
               <textarea
@@ -1214,13 +1106,13 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             Выберите, с чего начать. Опишите свою идею словами или соберите набор жанров — и ИИ придумает историю.
           </p>
           <div className="mt-8 grid gap-4 text-left sm:grid-cols-2">
-            <button type="button" onClick={() => chooseMode('idea')} className="group flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-5 text-left transition hover:border-primary/60" data-testid="idea-v2-choose-idea">
+            <button type="button" onClick={() => chooseMode('idea')} disabled={locked} className="group disabled:opacity-50 flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-5 text-left transition hover:border-primary/60" data-testid="idea-v2-choose-idea">
               <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary/10 text-primary"><Lightbulb className="h-6 w-6" /></div>
               <div className="font-display text-lg font-semibold">Своя идея</div>
               <p className="text-sm text-muted-foreground">Опишите замысел своими словами — от одной фразы до нескольких предложений. ИИ развернёт её в синопсис сезона.</p>
               <span className="mt-1 inline-flex items-center gap-1 text-sm font-semibold text-primary">Описать идею <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" /></span>
             </button>
-            <button type="button" onClick={() => chooseMode('genres')} className="group flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-5 text-left transition hover:border-primary/60" data-testid="idea-v2-choose-genres">
+            <button type="button" onClick={() => chooseMode('genres')} disabled={locked} className="group disabled:opacity-50 flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-5 text-left transition hover:border-primary/60" data-testid="idea-v2-choose-genres">
               <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary/10 text-primary"><Tags className="h-6 w-6" /></div>
               <div className="font-display text-lg font-semibold">Собрать из жанров</div>
               <p className="text-sm text-muted-foreground">Нет готовой идеи? Выберите один или несколько жанров — ИИ придумает оригинальный сюжет на их основе.</p>
@@ -1240,6 +1132,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             <textarea
               value={idea}
               onChange={(e) => onIdeaChange(e.target.value)}
+              readOnly={locked}
               placeholder="Например: молодая смотрительница маяка на северном острове находит дневник своей пропавшей предшественницы…"
               rows={5}
               className="mt-4 w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
@@ -1256,6 +1149,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                       key={g.id}
                       type="button"
                       onClick={() => toggleGenre(g.id)}
+                      disabled={locked}
                       aria-pressed={on}
                       className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${on ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-foreground hover:border-primary/60'}`}
                       data-testid={`idea-v2-genre-${g.id}`}
@@ -1269,6 +1163,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
               <textarea
                 value={wishes}
                 onChange={(e) => onWishesChange(e.target.value)}
+                readOnly={locked}
                 placeholder="Опишите пожелания к сюжету, тону, героям… (необязательно)"
                 rows={3}
                 maxLength={2000}
@@ -1285,6 +1180,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                 id="idea-v2-synopsis-lang"
                 value={synopsisLang}
                 onChange={(e) => onLangChange(e.target.value)}
+                disabled={locked}
                 className="rounded-lg border border-input bg-background px-3 py-1.5 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
                 data-testid="idea-v2-synopsis-lang"
               >
@@ -1302,6 +1198,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                 step={1}
                 value={episodesText}
                 onChange={(e) => onEpisodesChange(e.target.value)}
+                disabled={locked}
                 onBlur={(e) => commitEpisodes(e.target.value)}
                 className="w-24 rounded-lg border border-input bg-background px-3 py-1.5 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
                 data-testid="idea-v2-episodes-count"
@@ -1316,6 +1213,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             «Превью» — посмотреть и при необходимости отредактировать/сохранить промпт перед отправкой.
           </p>
 
+          {locked && <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="idea-v2-locked"><Lock className="h-3.5 w-3.5" /> {t('ideaV2.lockedHint')}</p>}
           {canceled === 'synopsis' && (
             <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">Генерация отменена. Её можно запустить снова на шаге синопсиса.</p>
           )}
@@ -1323,7 +1221,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       )}
       {screen === 'input' && stepFooter(
         'idea-v2-input-footer',
-        <div className="flex flex-wrap items-center gap-2">
+        locked ? null : <div className="flex flex-wrap items-center gap-2">
           {previewBtn('synopsis', true, 'idea-v2-generate-preview', !canProceed || savingInput)}
           <button
             onClick={continueFromIdea}

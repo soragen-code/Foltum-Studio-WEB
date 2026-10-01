@@ -98,3 +98,19 @@ export async function translateNonEnglishLines(text: string): Promise<string> {
   const out = await Promise.all(lines.map((l) => (needs(l) ? translateToEnglish(l) : Promise.resolve(l))));
   return out.join("\n");
 }
+
+export type ScriptTurn = { refine: string; script: string };
+
+/** Сценарий эпизода v2: правки RU→EN (крайняя + ходы диалога) — так же, как translatePlotRefines. */
+export async function translateScriptRefines(input: {
+  refine?: string | null;
+  refineEn?: string | null;
+  scriptTurns?: ScriptTurn[] | null;
+}): Promise<{ refine: string | undefined; scriptTurns: ScriptTurn[] | null | undefined }> {
+  const raw = (input.refine ?? "").trim();
+  const refine = raw ? (input.refineEn ?? "").trim() || (await translateToEnglish(raw)) : "";
+  const scriptTurns = input.scriptTurns
+    ? await Promise.all(input.scriptTurns.map(async (t) => ({ ...t, refine: await translateToEnglish(t.refine) })))
+    : input.scriptTurns;
+  return { refine: refine || undefined, scriptTurns };
+}

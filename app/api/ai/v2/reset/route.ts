@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { isSeasonPlotV2Locked, SEASON_PLOT_V2_LOCKED_ERROR } from "@/lib/idea-v2";
 
 /**
  * POST /api/ai/v2/reset  { projectId }
@@ -28,11 +29,13 @@ export async function POST(request: Request) {
     if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
     const project = await prisma.project.findFirst({
       where: { id: projectId, userId: user.id },
-      select: { id: true, charactersApproved: true },
+      select: { id: true, charactersApproved: true, stage: true, seasonPlotV2: true },
     });
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
     if (project.charactersApproved)
       return NextResponse.json({ error: "Synopsis and characters are already confirmed" }, { status: 409 });
+    if (isSeasonPlotV2Locked(project))
+      return NextResponse.json({ error: SEASON_PLOT_V2_LOCKED_ERROR, locked: true }, { status: 409 });
 
     await prisma.project.update({
       where: { id: projectId },

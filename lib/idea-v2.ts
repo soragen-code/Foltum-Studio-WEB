@@ -478,6 +478,13 @@ export function buildLoglineV2Parts(input: SynopsisV2Input): {
 /** Project.stage после генерации сюжета сезона v2 (конечная стадия v2 до перехода в structure). */
 export const SEASON_PLOT_V2_STAGE = "season_plot_v2";
 
+/** Сюжет сезона утверждён (стадия season_plot_v2 + непустой seasonPlotV2) → шаги 1–3 только для чтения;
+ *  редактируются лишь сценарии серий. Используется фронтом и роутами v2 (synopsis/plot/logline/reset). */
+export function isSeasonPlotV2Locked(p: { stage?: string | null; seasonPlotV2?: unknown } | null | undefined): boolean {
+  return !!p && p.stage === SEASON_PLOT_V2_STAGE && String(p.seasonPlotV2 ?? "").trim().length > 0;
+}
+export const SEASON_PLOT_V2_LOCKED_ERROR = "Season plot is approved — only episode scripts can be edited";
+
 /** Правила (system) сюжета сезона v2. `<N>` — количество эпизодов, `<Language>` — язык синопсиса. Текст — дословно по ТЗ. */
 export const SEASON_PLOT_V2_RULES = `You are a development executive breaking an approved season synopsis into an episode-by-episode season plot for a vertical micro-series (60–100 second episodes, cliffhanger-driven). This season has exactly <N> episodes.
 
@@ -601,4 +608,96 @@ export function parseSeasonPlotV2(text: string | null | undefined): SeasonPlotEp
 export function synopsisLanguageFromCode(code: string | null | undefined): SynopsisLanguage {
   const found = SYNOPSIS_LANGUAGES.find((name) => SYNOPSIS_LANGUAGE_CODES[name] === code);
   return normalizeSynopsisLanguage(found);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v2 · уровень эпизода: вкладка «Сценарий» (диалоговый сценарий под вертикаль, слаглайны INT./EXT.)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Правила (system) сценария эпизода v2. `<Language>` — язык синопсиса. Текст — дословно по ТЗ. */
+export const EPISODE_SCRIPT_V2_RULES = `You are a screenwriter writing the shooting script for a single episode of a vertical micro-series (one 60–100 second episode, cliffhanger-driven).
+
+INPUT HANDLING
+The user message contains the short plot summary of THIS episode; later messages may contain change requests. Dramatize exactly what the summary describes — do not add new plot beats, do not resolve the episode's ending cliffhanger. Apply the newest change request while keeping everything that already works.
+
+SCRIPT RULES
+- Standard screenplay form in plain text.
+- Every scene starts with a slugline beginning with INT. or EXT. (interior/exterior), then the LOCATION, then time of day — e.g. "INT. POLICE STATION — NIGHT" or "EXT. ROOFTOP — DAY". An episode may have one or more scenes; start a new slugline at every location or time change.
+- Under each slugline: brief action/description lines in present tense, then character cues (CHARACTER NAME in caps) with their dialogue. Parentheticals for delivery only when needed.
+- Keep it tight — this is 60–100 seconds of screen time. Lean on visual action and sharp dialogue.
+- The episode ENDS on its intriguing moment / cliffhanger exactly as implied by the summary; the final beat is that hook.
+- Use the character names already present in the summary. Any new minor character gets an English first name + surname in Latin letters (A-Z). No real people, brands, landmarks or existing franchises.
+
+OUTPUT
+Return only the screenplay (sluglines, action, dialogue). No title page, no episode number, no preamble, no commentary, no markdown.
+OUTPUT LANGUAGE: write all action and dialogue in <Language>. Keep the INT./EXT. slugline prefixes in English (INT./EXT.) regardless of language.`;
+
+export interface EpisodeScriptV2Input {
+  /** Краткий сюжет серии (из Project.seasonPlotV2 по "#<n>") — первый user как есть. */
+  summary?: string | null;
+  /** Язык синопсиса (английское название) → <Language>. */
+  synopsisLanguage?: string | null;
+  /** Текущий сценарий (fallback-правка без транскрипта). */
+  script?: string | null;
+  /** Правка (уже на английском). */
+  refine?: string | null;
+  /** Базовый сценарий S0 и применённые пары «правка → сценарий». */
+  scriptBase?: string | null;
+  scriptTurns?: { refine: string; script: string }[] | null;
+}
+
+export function episodeScriptV2SystemPrompt(input: EpisodeScriptV2Input): string {
+  return EPISODE_SCRIPT_V2_RULES.replace(/<Language>/g, normalizeSynopsisLanguage(input.synopsisLanguage));
+}
+
+export const EPISODE_SCRIPT_V2_CONTEXT_NOTE =
+  "Контекст сезона не передаётся — сценарий пишется только по краткому сюжету этой серии.";
+
+/**
+ * Единый источник для превью и воркера сценария эпизода v2:
+ * system → user (краткий сюжет серии как есть) → assistant (S0) → user (правка EN) → assistant → ... → крайний user.
+ */
+export function buildEpisodeScriptV2Parts(input: EpisodeScriptV2Input): {
+  system: string;
+  user: string;
+  assistant: string;
+  model: string;
+  contextIncluded: boolean;
+  contextNote: string;
+  messages: V2Msg[];
+} {
+  const system = episodeScriptV2SystemPrompt(input);
+  const source = (input.summary ?? "").trim();
+  const refine = (input.refine ?? "").trim();
+  const prev = (input.script ?? "").trim();
+  const base = (input.scriptBase ?? "").trim() || prev;
+  const turns = (input.scriptTurns ?? []).filter((t) => t && (t.refine ?? "").trim() && (t.script ?? "").trim());
+  let messages: V2Msg[];
+  if (refine && base) {
+    messages = [
+      { role: "system", content: system },
+      { role: "user", content: source },
+      { role: "assistant", content: base },
+    ];
+    for (const t of turns) {
+      messages.push({ role: "user", content: (t.refine ?? "").trim() });
+      messages.push({ role: "assistant", content: (t.script ?? "").trim() });
+    }
+    messages.push({ role: "user", content: refine });
+  } else {
+    messages = legacyPartsToMessages(system, source, "");
+  }
+  return { system, user: source, assistant: "", messages, model: FABLE_MODEL_LABEL, contextIncluded: false, contextNote: EPISODE_SCRIPT_V2_CONTEXT_NOTE };
+}
+
+/** Краткий сюжет серии n из Project.seasonPlotV2 (null — серии нет). */
+export function seasonPlotEpisodeSummary(plot: string | null | undefined, n: number): string | null {
+  const ep = (parseSeasonPlotV2(plot) ?? []).find((e) => e.n === n);
+  return ep && ep.text.trim() ? ep.text.trim() : null;
+}
+
+/** Сценарий серии n из Project.episodeScriptsV2 ({ "<n>": { script } }). */
+export function episodeScriptV2From(map: unknown, n: number): string {
+  const v = map && typeof map === "object" ? (map as Record<string, any>)[String(n)] : null;
+  return v && typeof v.script === "string" ? v.script : "";
 }

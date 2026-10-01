@@ -8,6 +8,7 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runLoglineV2Job, LOGLINE_V2_JOB_TYPE } from "@/lib/workers/logline-v2-job";
+import { isSeasonPlotV2Locked, SEASON_PLOT_V2_LOCKED_ERROR } from "@/lib/idea-v2";
 
 /**
  * POST /api/ai/v2/logline  { projectId, idea? | genres?, loglineLanguage?, overrideMessages? }
@@ -64,6 +65,8 @@ export async function POST(request: Request) {
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
     if (project.charactersApproved)
       return NextResponse.json({ error: "Synopsis and characters are already confirmed" }, { status: 409 });
+    if (isSeasonPlotV2Locked(project))
+      return NextResponse.json({ error: SEASON_PLOT_V2_LOCKED_ERROR, locked: true }, { status: 409 });
 
     // Реапаем мёртвые задачи, затем переиспользуем активную (идемпотентность — рефреш не должен плодить задачи).
     await failStaleJobs({ projectId, type: LOGLINE_V2_JOB_TYPE });

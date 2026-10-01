@@ -705,3 +705,6 @@ ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "beatMeta" JSONB;
 
 -- ─── v2 flow step 3: episode-by-episode season plot (plain text with "#<n>" markers). Additive & idempotent. ───
 ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "seasonPlotV2" TEXT;
+
+-- ─── v2 flow, episode level: per-episode screenplay map {"<n>": {"script": ...}}. Additive & idempotent. ───
+ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "episodeScriptsV2" JSONB;

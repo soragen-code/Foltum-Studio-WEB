@@ -8,7 +8,7 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runSeasonPlotV2Job, SEASON_PLOT_V2_JOB_TYPE } from "@/lib/workers/season-plot-v2-job";
-import { normalizeSynopsisLanguage, normalizeEpisodesCount, synopsisLanguageFromCode } from "@/lib/idea-v2";
+import { normalizeSynopsisLanguage, normalizeEpisodesCount, synopsisLanguageFromCode, isSeasonPlotV2Locked, SEASON_PLOT_V2_LOCKED_ERROR } from "@/lib/idea-v2";
 
 /**
  * POST /api/ai/v2/plot  { projectId, synopsis?, synopsisLanguage?, episodesCount?, refine?, plot?, plotBase?, plotTurns?, overrideMessages? }
@@ -52,6 +52,8 @@ export async function POST(request: Request) {
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
     if (project.charactersApproved)
       return NextResponse.json({ error: "Synopsis and characters are already confirmed" }, { status: 409 });
+    if (isSeasonPlotV2Locked(project))
+      return NextResponse.json({ error: SEASON_PLOT_V2_LOCKED_ERROR, locked: true }, { status: 409 });
 
     const synopsis = (synopsisRaw ?? "").trim() || (project.synopsis ?? "").trim();
     if (!synopsis) return NextResponse.json({ error: "Synopsis is required" }, { status: 400 });
