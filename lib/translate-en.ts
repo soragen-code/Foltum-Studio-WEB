@@ -70,6 +70,23 @@ export async function translateSynopsisRefines(input: {
   return { refine: refine || undefined, synopsisTurns };
 }
 
+/** Пары «правка → сюжет сезона» (история правок шага 3 v2). */
+export type PlotTurn = { refine: string; plot: string };
+
+/** Правки сюжета сезона v2 → английский (синопсис-источник НЕ переводится — уходит как есть). */
+export async function translatePlotRefines(input: {
+  refine?: string | null;
+  refineEn?: string | null;
+  plotTurns?: PlotTurn[] | null;
+}): Promise<{ refine: string | undefined; plotTurns: PlotTurn[] | null | undefined }> {
+  const raw = (input.refine ?? "").trim();
+  const refine = raw ? (input.refineEn ?? "").trim() || (await translateToEnglish(raw)) : "";
+  const plotTurns = input.plotTurns
+    ? await Promise.all(input.plotTurns.map(async (t) => ({ ...t, refine: await translateToEnglish(t.refine) })))
+    : input.plotTurns;
+  return { refine: refine || undefined, plotTurns };
+}
+
 /**
  * Переводит только НЕ-английские строки текста (английские — как есть). Для ручной правки крайнего user
  * в модалке промпта: обёртка инструкции английская, пользователь мог дописать правку по-русски.

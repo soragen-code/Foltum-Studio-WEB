@@ -470,3 +470,135 @@ export function buildLoglineV2Parts(input: SynopsisV2Input): {
     messages,
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Шаг 3 потока v2: «Сюжет сезона по сериям» — посерийный пересказ утверждённого синопсиса.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Project.stage после генерации сюжета сезона v2 (конечная стадия v2 до перехода в structure). */
+export const SEASON_PLOT_V2_STAGE = "season_plot_v2";
+
+/** Правила (system) сюжета сезона v2. `<N>` — количество эпизодов, `<Language>` — язык синопсиса. Текст — дословно по ТЗ. */
+export const SEASON_PLOT_V2_RULES = `You are a development executive breaking an approved season synopsis into an episode-by-episode season plot for a vertical micro-series (60–100 second episodes, cliffhanger-driven). This season has exactly <N> episodes.
+
+INPUT HANDLING
+The user message contains the approved season synopsis; later messages may contain change requests. Keep the synopsis's protagonist, world, goal, antagonistic force, main hook and ending exactly as established — invent only the connective tissue between them. Apply the newest change request while keeping everything that already works and without reverting earlier changes.
+
+SEASON STRUCTURE RULES
+- Exactly <N> episodes, numbered 1 to <N>, in order. No episode skipped, merged or added.
+- Each episode is a compact retelling of 2–4 sentences, present tense — not a detailed treatment. Keep it brief.
+- Every episode ENDS on an intriguing moment: a cliffhanger, reveal, reversal or unanswered question that forces the viewer into the next episode. The last sentence of each episode IS that moment.
+- Every episode advances the plot; no filler, no recaps.
+- Escalate across the season: stakes rise, the antagonistic force tightens, the main hook of the synopsis pays off near the END of the season, the ending/twist lands in the final episode(s).
+- Use the character names from the synopsis. Any new character gets an English first name + surname in Latin letters (A-Z). No real people, brands, landmarks or existing franchises.
+
+OUTPUT FORMAT
+Plain text only. For each episode: a line containing only "#<n>" (e.g. "#1"), then the episode summary on the following line(s). One blank line between episodes. No titles, no headings, no preamble, no commentary, no markdown other than the "#<n>" markers.
+OUTPUT LANGUAGE: write the plot in <Language>.`;
+
+export interface SeasonPlotV2Input {
+  /** Утверждённый синопсис — первый user как есть, на своём языке (без перевода). */
+  synopsis?: string | null;
+  /** Количество эпизодов (10–100) → <N>. */
+  episodesCount?: number | null;
+  /** Язык синопсиса (английское название) → <Language>. */
+  synopsisLanguage?: string | null;
+  /** Текущий сюжет (для fallback-правки без транскрипта). */
+  plot?: string | null;
+  /** Правка (уже на английском). */
+  refine?: string | null;
+  /** Базовый сюжет P0 (без правок) и применённые пары «правка → сюжет». */
+  plotBase?: string | null;
+  plotTurns?: { refine: string; plot: string }[] | null;
+}
+
+/** System-промпт сюжета сезона v2 с подставленными <N> и <Language>. */
+export function seasonPlotV2SystemPrompt(input: SeasonPlotV2Input): string {
+  const n = normalizeEpisodesCount(input.episodesCount);
+  const lang = normalizeSynopsisLanguage(input.synopsisLanguage);
+  return SEASON_PLOT_V2_RULES.replace(/<N>/g, String(n)).replace(/<Language>/g, lang);
+}
+
+/** Первый user сюжета — синопсис как есть. */
+export function seasonPlotV2Source(input: SeasonPlotV2Input): string {
+  return (input.synopsis ?? "").trim();
+}
+
+/** User-промпт (legacy-вид): синопсис; fallback-правка без транскрипта — синопсис + текущий сюжет + правка. */
+export function seasonPlotV2UserPrompt(input: SeasonPlotV2Input): string {
+  const source = seasonPlotV2Source(input);
+  const refine = (input.refine ?? "").trim();
+  const prev = (input.plot ?? "").trim();
+  if (refine && prev) return `${source}\n\nCurrent plot: "${prev}"\n\n${refine}`;
+  return source;
+}
+
+export const SEASON_PLOT_V2_CONTEXT_NOTE =
+  "Контекст проекта не передаётся — сюжет сезона строится только из утверждённого синопсиса.";
+
+/**
+ * Собрать system / user и реальную цепочку messages сюжета сезона v2 (единый источник для превью и воркера):
+ * system → user (синопсис) → assistant (P0) → user (правка 1) → assistant (сюжет 1) → … → крайний user (правка).
+ */
+export function buildSeasonPlotV2Parts(input: SeasonPlotV2Input): {
+  system: string;
+  user: string;
+  assistant: string;
+  model: string;
+  contextIncluded: boolean;
+  contextNote: string;
+  messages: V2Msg[];
+} {
+  const system = seasonPlotV2SystemPrompt(input);
+  const user = seasonPlotV2UserPrompt(input);
+  const refine = (input.refine ?? "").trim();
+  const base = (input.plotBase ?? "").trim() || (input.plot ?? "").trim();
+  const turns = (input.plotTurns ?? []).filter((t) => t && (t.refine ?? "").trim() && (t.plot ?? "").trim());
+
+  let messages: V2Msg[];
+  if (refine && base) {
+    messages = [
+      { role: "system", content: system },
+      { role: "user", content: seasonPlotV2Source(input) },
+      { role: "assistant", content: base },
+    ];
+    for (const t of turns) {
+      messages.push({ role: "user", content: (t.refine ?? "").trim() });
+      messages.push({ role: "assistant", content: (t.plot ?? "").trim() });
+    }
+    messages.push({ role: "user", content: refine });
+  } else {
+    messages = legacyPartsToMessages(system, user, "");
+  }
+  return { system, user, assistant: "", messages, model: FABLE_MODEL_LABEL, contextIncluded: false, contextNote: SEASON_PLOT_V2_CONTEXT_NOTE };
+}
+
+export type SeasonPlotEpisode = { n: number; text: string };
+
+/**
+ * Разбор сюжета сезона по маркерам "#<n>" (строка, содержащая только маркер; допускаются "# 3", "#3.", "#3:").
+ * Возвращает null, если маркеров нет (клиент показывает сырой текст).
+ */
+export function parseSeasonPlotV2(text: string | null | undefined): SeasonPlotEpisode[] | null {
+  const lines = (text ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const out: SeasonPlotEpisode[] = [];
+  let cur: SeasonPlotEpisode | null = null;
+  for (const raw of lines) {
+    const m = /^\s*#\s*(\d{1,3})\s*[.:)]?\s*$/.exec(raw);
+    if (m) {
+      if (cur) out.push(cur);
+      cur = { n: Number(m[1]), text: "" };
+      continue;
+    }
+    if (cur) cur.text += (cur.text ? "\n" : "") + raw;
+  }
+  if (cur) out.push(cur);
+  if (!out.length) return null;
+  return out.map((e) => ({ n: e.n, text: e.text.trim() }));
+}
+
+/** Язык синопсиса по коду Project.language ("ru" → "Russian"); неизвестный код → дефолт (Russian). */
+export function synopsisLanguageFromCode(code: string | null | undefined): SynopsisLanguage {
+  const found = SYNOPSIS_LANGUAGES.find((name) => SYNOPSIS_LANGUAGE_CODES[name] === code);
+  return normalizeSynopsisLanguage(found);
+}

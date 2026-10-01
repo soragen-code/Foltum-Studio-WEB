@@ -168,6 +168,8 @@ async function runSynopsisV2JobImpl(jobId: string, projectId: string, params: Sy
         // Логлайн из меты — для совместимости с этапами/экранами, читающими Project.logline (шаг логлайна в v2 убран).
         ...(metaLogline ? { logline: metaLogline } : {}),
         synopsisApproved: false,
+        // Новый синопсис → прежний посерийный сюжет сезона (шаг 3) недействителен.
+        seasonPlotV2: null,
         stage: SYNOPSIS_V2_STAGE,
         name: resolveProjectName(title, idea && idea.trim() ? idea : synopsis),
       },

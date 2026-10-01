@@ -36,7 +36,7 @@ export async function POST(request: Request) {
 
     await prisma.project.update({
       where: { id: projectId },
-      data: { logline: null, loglineApproved: false, synopsis: null, synopsisApproved: false, stage: "idea" },
+      data: { logline: null, loglineApproved: false, synopsis: null, synopsisApproved: false, seasonPlotV2: null, stage: "idea" },
     });
     return NextResponse.json({ ok: true });
   } catch (err: any) {

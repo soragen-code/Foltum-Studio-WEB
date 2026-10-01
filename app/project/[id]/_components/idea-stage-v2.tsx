@@ -1,15 +1,17 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, Wand2, Sparkles, Lightbulb, Eye, Pencil, ArrowLeft, ArrowRight, Tags, Info, BookOpen, RotateCcw, Copy, Check, X, ChevronDown, ChevronRight } from 'lucide-react'
+import { Loader2, Wand2, Sparkles, Lightbulb, Eye, Pencil, ArrowLeft, ArrowRight, Tags, Info, BookOpen, RotateCcw, Copy, Check, X, ChevronDown, ChevronRight, ListOrdered } from 'lucide-react'
 import { GENRES } from '@/lib/idea'
-import { FABLE_MODEL_LABEL, SYNOPSIS_V2_STAGE, SYNOPSIS_LANGUAGES, SYNOPSIS_LANGUAGE_CODES, DEFAULT_SYNOPSIS_LANGUAGE, normalizeSynopsisLanguage, normalizeEpisodesCount, DEFAULT_EPISODES_COUNT, MIN_EPISODES_COUNT, MAX_EPISODES_COUNT, type SynopsisLanguage } from '@/lib/idea-v2'
+import { FABLE_MODEL_LABEL, SYNOPSIS_V2_STAGE, SEASON_PLOT_V2_STAGE, parseSeasonPlotV2, SYNOPSIS_LANGUAGES, SYNOPSIS_LANGUAGE_CODES, DEFAULT_SYNOPSIS_LANGUAGE, normalizeSynopsisLanguage, normalizeEpisodesCount, DEFAULT_EPISODES_COUNT, MIN_EPISODES_COUNT, MAX_EPISODES_COUNT, type SynopsisLanguage } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from './cancel-button'
 import { useJobPolling, SmoothProgress } from './use-job-polling'
 
 /** Примерная длительность генерации синопсиса v2 — управляет плавным прогресс-баром. */
 const SYNOPSIS_V2_EXPECTED_SEC = 50
+/** Примерная длительность генерации сюжета сезона (до 100 серий). */
+const SEASON_PLOT_V2_EXPECTED_SEC = 120
 
 /** Единый стиль текста синопсиса — стрим и готовый вид. Без ограничений по высоте и внутреннего скролла. */
 const SYNOPSIS_TEXT_CLS = 'whitespace-pre-wrap break-words rounded-lg border border-border bg-background px-4 py-3 text-sm leading-relaxed text-foreground'
@@ -26,7 +28,7 @@ function GrowingStream({ text, active, className, testId }: { text: string; acti
 
 type Screen = 'choose' | 'input'
 /** Единственный генерируемый шаг v2 — синопсис (шаг логлайна из потока v2 убран; его бэкенд оставлен для v1/старых проектов). */
-type Kind = 'synopsis'
+type Kind = 'synopsis' | 'plot'
 type StepKey = 'idea' | Kind
 /** Сообщение диалога с моделью (то, что уходит в API как messages). system — всегда первым (правила), затем user/assistant. */
 type Msg = { role: 'system' | 'user' | 'assistant'; content: string }
@@ -95,6 +97,23 @@ const storeDialog = (projectId: string, base: string, turns: SynopsisDialog['tur
   } catch { /* localStorage недоступен */ }
 }
 
+/** Диалог правок сюжета сезона (P0 + пары «правка → сюжет») — тот же подход, что у синопсиса; ключ отдельный. */
+type PlotDialog = { base: string; turns: { refine: string; plot: string }[] }
+const plotDialogKey = (projectId: string) => `foltum:v2:plot-dialog:${projectId}`
+const loadPlotDialog = (projectId: string): PlotDialog | null => {
+  try {
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem(plotDialogKey(projectId)) : null
+    const d = raw ? JSON.parse(raw) : null
+    return d && typeof d.base === 'string' && Array.isArray(d.turns) ? d : null
+  } catch { return null }
+}
+const storePlotDialog = (projectId: string, base: string, turns: PlotDialog['turns']) => {
+  try {
+    if (!base) window.localStorage.removeItem(plotDialogKey(projectId))
+    else window.localStorage.setItem(plotDialogKey(projectId), JSON.stringify({ base, turns } satisfies PlotDialog))
+  } catch { /* localStorage недоступен */ }
+}
+
 /**
  * Язык синопсиса — выбор пользователя на шаге 1. Хранится в localStorage по projectId (fallback — старый ключ языка
  * логлайна); уходит параметром synopsisLanguage, бэкенд пишет ISO-код в Project.language.
@@ -134,8 +153,9 @@ const storeEpisodes = (projectId: string, n: number) => {
 
 const API: Record<Kind, { generate: string; preview: string }> = {
   synopsis: { generate: '/api/ai/v2/synopsis', preview: '/api/ai/v2/synopsis/preview' },
+  plot: { generate: '/api/ai/v2/plot', preview: '/api/ai/v2/plot/preview' },
 }
-const KIND_LABEL: Record<Kind, string> = { synopsis: 'синопсиса' }
+const KIND_LABEL: Record<Kind, string> = { synopsis: 'синопсиса', plot: 'сюжета сезона' }
 
 /**
  * Поток «Новый проект v2.0» — два шага: Идея → Синопсис (шаг логлайна убран; синопсис строится прямо из идеи/жанров).
@@ -180,8 +200,11 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   // ─── Данные проекта
   const stage = project?.stage
   const savedSynopsis = String(project?.synopsis ?? '').trim()
-  const hasSynopsis = stage === SYNOPSIS_V2_STAGE && !!savedSynopsis && !downstreamReset
-  const autoView: StepKey = hasSynopsis ? 'synopsis' : 'idea'
+  const hasSynopsis = (stage === SYNOPSIS_V2_STAGE || stage === SEASON_PLOT_V2_STAGE) && !!savedSynopsis && !downstreamReset
+  // Шаг 3: сюжет сезона по сериям (Project.seasonPlotV2) — есть только на стадии season_plot_v2 (правка синопсиса его сбрасывает).
+  const savedPlot = String(project?.seasonPlotV2 ?? '').trim()
+  const hasPlot = stage === SEASON_PLOT_V2_STAGE && hasSynopsis && !!savedPlot
+  const autoView: StepKey = hasPlot ? 'plot' : hasSynopsis ? 'synopsis' : 'idea'
   const [view, setView] = useState<StepKey | null>(null) // null → autoView
   const currentView: StepKey = view ?? autoView
 
@@ -206,6 +229,22 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id])
   useEffect(() => { storeDialog(project.id, synopsisBase, synopsisTurns) }, [project.id, synopsisBase, synopsisTurns])
+  // Правка сюжета сезона (шаг 3): поле, EN-перевод из preview, диалог P0 + ходы (localStorage по projectId).
+  const [plotRefineText, setPlotRefineText] = useState('')
+  const [plotRefineEn, setPlotRefineEn] = useState('')
+  const [plotBase, setPlotBase] = useState('')
+  const [plotTurns, setPlotTurns] = useState<{ refine: string; plot: string }[]>([])
+  const lastPlotRefineRef = useRef<string>('')
+  useEffect(() => {
+    const d = loadPlotDialog(project.id)
+    if (!d || !savedPlot) return
+    const lastKnown = d.turns.length ? d.turns[d.turns.length - 1].plot : d.base
+    if (lastKnown.trim() === savedPlot) { setPlotBase(d.base); setPlotTurns(d.turns) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id])
+  useEffect(() => { storePlotDialog(project.id, plotBase, plotTurns) }, [project.id, plotBase, plotTurns])
+  // Переход шаг 3 → structure («Продолжить» на шаге 3).
+  const [approving, setApproving] = useState(false)
 
   // Ввод менялся после последнего «Продолжить» → шаг «Синопсис» недоступен,
   // но его данные НЕ сбрасываются, пока пользователь не подтвердит сброс в модалке.
@@ -225,19 +264,19 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const [promptKind, setPromptKind] = useState<Kind>('synopsis')
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewLoading, setPreviewLoading] = useState<Kind | null>(null)
-  const [ready, setReady] = useState<Record<Kind, boolean>>({ synopsis: false })
+  const [ready, setReady] = useState<Record<Kind, boolean>>({ synopsis: false, plot: false })
   // Оригинальный диалог из preview: system (правила) → user (ввод) → assistant (S0) → user (правка) → … → крайний user.
-  const [msgs, setMsgs] = useState<Record<Kind, Msg[]>>({ synopsis: [] })
+  const [msgs, setMsgs] = useState<Record<Kind, Msg[]>>({ synopsis: [], plot: [] })
   // Редактируемый текст system (первое сообщение; «Сбросить к авто» возвращает шаблон).
-  const [sysEdit, setSysEdit] = useState<Record<Kind, string>>({ synopsis: '' })
-  const [note, setNote] = useState<Record<Kind, string>>({ synopsis: '' })
+  const [sysEdit, setSysEdit] = useState<Record<Kind, string>>({ synopsis: '', plot: '' })
+  const [note, setNote] = useState<Record<Kind, string>>({ synopsis: '', plot: '' })
   const [copied, setCopied] = useState(false)
   // Подтверждение «Сохранено» у кнопки «Сохранить» (~1.5 с), модалка остаётся открытой.
   const [saved, setSaved] = useState(false)
   // Аккордеон «История» в модалке промпта: свёрнут по умолчанию (read-only список, новые сверху).
   const [historyOpen, setHistoryOpen] = useState(false)
   // Отпечаток вводных, под который собран текущий промпт шага k (для кэша черновика).
-  const fpRef = useRef<Record<Kind, string>>({ synopsis: '' })
+  const fpRef = useRef<Record<Kind, string>>({ synopsis: '', plot: '' })
   // РУ-перевод транскрипта (только отображение; в API уходит английский оригинал).
   const [msgsRuOn, setMsgsRuOn] = useState(false)
   const [msgsRu, setMsgsRu] = useState<string[] | null>(null)
@@ -251,8 +290,14 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const draftNow = (k: Kind): PromptDraft => ({
     sysOrig: sysOrig(k), sysEdit: sysEdit[k],
     fp: fpRef.current[k] || undefined, list: msgs[k], note: note[k],
-    refineEn, wishesEn, ideaEn,
+    refineEn: k === 'plot' ? plotRefineEn : refineEn, wishesEn, ideaEn,
   })
+  /** Per-kind доступ к правке: текст поля, EN-перевод, сохранённый текст-основа и ref активной правки. */
+  const refineTextOf = (k: Kind) => (k === 'plot' ? plotRefineText : refineText)
+  const refineEnOf = (k: Kind) => (k === 'plot' ? plotRefineEn : refineEn)
+  const setRefineEnFor = (k: Kind, v: string) => (k === 'plot' ? setPlotRefineEn(v) : setRefineEn(v))
+  const savedTextOf = (k: Kind) => (k === 'plot' ? savedPlot : savedSynopsis)
+  const lastRefineRefOf = (k: Kind) => (k === 'plot' ? lastPlotRefineRef : lastRefineRef)
   const resetPrompt = (k: Kind) => setReady((p) => ({ ...p, [k]: false }))
 
   // Сброс синопсиса — вызывается ТОЛЬКО после подтверждения в модалке-предупреждении.
@@ -261,6 +306,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     setPreviewOpen(false)
     setDownstreamReset(true)
     setRefineText(''); setRefineEn(''); setSynopsisBase(''); setSynopsisTurns([]); lastRefineRef.current = ''
+    setPlotRefineText(''); setPlotRefineEn(''); setPlotBase(''); setPlotTurns([]); lastPlotRefineRef.current = ''
   }
   // Редактирование ввода лишь помечает его изменённым — ничего не сбрасывает.
   const markInputDirty = () => setInputDirty(true)
@@ -278,32 +324,44 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       // История изменилась (новый ответ модели) → кэш собранного промпта устарел: следующее открытие модалки
       // пересоберёт диалог с актуальной историей; правки system/user сохраняются (применяются при совпадении авто-текста).
       { const prev = loadDraft(project.id, k); if (prev) storeDraft(project.id, k, { ...prev, fp: undefined, list: undefined, note: undefined }) }
-      const fresh = String(res.job.result?.synopsis ?? res.job.streamedText ?? '').trim()
-      // Ход диалога: правка → результат становится парой в транскрипте; генерация с нуля → результат = база S0.
-      if (lastRefineRef.current) {
-        const applied = lastRefineRef.current; lastRefineRef.current = ''
-        if (fresh) setSynopsisTurns((t) => [...t, { refine: applied, synopsis: fresh }])
-      } else { setSynopsisBase(fresh); setSynopsisTurns([]) }
-      setInputDirty(false); setInputSaved(true); setDownstreamReset(false); setRefineText(''); setRefineEn('')
+      const fresh = String((k === 'plot' ? res.job.result?.plot : res.job.result?.synopsis) ?? res.job.streamedText ?? '').trim()
+      // Ход диалога: правка → результат становится парой в транскрипте; генерация с нуля → результат = база S0 / P0.
+      if (k === 'plot') {
+        if (lastPlotRefineRef.current) {
+          const applied = lastPlotRefineRef.current; lastPlotRefineRef.current = ''
+          if (fresh) setPlotTurns((t) => [...t, { refine: applied, plot: fresh }])
+        } else { setPlotBase(fresh); setPlotTurns([]) }
+        setPlotRefineText(''); setPlotRefineEn('')
+      } else {
+        if (lastRefineRef.current) {
+          const applied = lastRefineRef.current; lastRefineRef.current = ''
+          if (fresh) setSynopsisTurns((t) => [...t, { refine: applied, synopsis: fresh }])
+        } else { setSynopsisBase(fresh); setSynopsisTurns([]) }
+        setRefineText(''); setRefineEn('')
+        // Новый синопсис → прежний сюжет сезона недействителен (бэкенд его стирает) — чистим диалог шага 3.
+        setPlotRefineText(''); setPlotRefineEn(''); setPlotBase(''); setPlotTurns([]); lastPlotRefineRef.current = ''
+      }
+      setInputDirty(false); setInputSaved(true); setDownstreamReset(false)
       setView(k)
       onRefresh()
     } else if (res.job.status === 'canceled') {
       setCanceled(k)
     } else {
-      setError(res.job.error ?? 'Не удалось сгенерировать синопсис')
+      setError(res.job.error ?? `Не удалось сгенерировать ${KIND_LABEL[k]}`)
     }
   }
   const synopsisJob = useJobPolling({ intervalMs: 800, onFinish: finish('synopsis') })
-  const jobs: Record<Kind, typeof synopsisJob> = { synopsis: synopsisJob }
+  const plotJob = useJobPolling({ intervalMs: 800, onFinish: finish('plot') })
+  const jobs: Record<Kind, typeof synopsisJob> = { synopsis: synopsisJob, plot: plotJob }
   const isActive = (j: any) => !!j && (j.status === 'pending' || j.status === 'processing')
-  const activeKind: Kind | null = starting ?? (isActive(synopsisJob.job) ? 'synopsis' : null)
+  const activeKind: Kind | null = starting ?? (isActive(synopsisJob.job) ? 'synopsis' : isActive(plotJob.job) ? 'plot' : null)
   const generating = !!activeKind
 
   // Возобновление: подхватываем уже крутящуюся задачу синопсиса.
   useEffect(() => {
     let ignore = false
     ;(async () => {
-      for (const k of ['synopsis'] as Kind[]) {
+      for (const k of ['synopsis', 'plot'] as Kind[]) {
         try {
           const res = await fetch(`${API[k].generate}?projectId=${project.id}`, { cache: 'no-store' })
           if (!res.ok) continue
@@ -356,7 +414,11 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   }
   const canProceed = mode === 'idea' ? idea.trim().length >= 10 : genres.length > 0
   const onWishesChange = (v: string) => { setWishes(v); setWishesEn(''); markInputDirty() }
-  const inputBody = () => ({
+  const inputBody = (k: Kind = 'synopsis') => k === 'plot' ? ({
+    synopsis: savedSynopsis,
+    synopsisLanguage: synopsisLang,
+    episodesCount: episodes,
+  }) : ({
     synopsisLanguage: synopsisLang,
     episodesCount: episodes,
     ...(mode === 'idea'
@@ -365,11 +427,18 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   })
   // Аргументы уточнения синопсиса: добавляются, когда есть непустая правка и текущий синопсис.
   // noRefine — принудительно «с нуля» (шаг 1 → модалка, «Перегенерировать»), даже если поле правки заполнено.
-  const refineArgs = (_k: Kind, noRefine = false) =>
-    !noRefine && refineText.trim() && savedSynopsis
+  const refineArgs = (k: Kind, noRefine = false) => {
+    if (k === 'plot') {
+      return !noRefine && plotRefineText.trim() && savedPlot
+        ? { plot: savedPlot, refine: plotRefineText.trim(), ...(plotRefineEn ? { refineEn: plotRefineEn } : {}), ...(plotBase ? { plotBase, plotTurns } : {}) }
+        : {}
+    }
+    return !noRefine && refineText.trim() && savedSynopsis
       ? { synopsis: savedSynopsis, refine: refineText.trim(), ...(refineEn ? { refineEn } : {}), ...(synopsisBase ? { synopsisBase, synopsisTurns } : {}) }
       : {}
+  }
   const onRefineChange = (v: string) => { setRefineText(v); setRefineEn(''); resetPrompt('synopsis') }
+  const onPlotRefineChange = (v: string) => { setPlotRefineText(v); setPlotRefineEn(''); resetPrompt('plot') }
 
   const chooseMode = (m: 'idea' | 'genres') => {
     if (m !== mode) markInputDirty()
@@ -382,6 +451,13 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
    * правка (текст + текущий синопсис + база S0 + ходы).
    */
   const fingerprint = (k: Kind, noRefine = false) => {
+    if (k === 'plot') {
+      // Сюжет сезона: синопсис (как есть) + язык + число эпизодов (+ правка с текущим сюжетом, P0 и ходами).
+      const refine = !noRefine && plotRefineText.trim() && savedPlot
+        ? { refine: normFp(plotRefineText), plot: normFp(savedPlot), base: normFp(plotBase), turns: plotTurns.map((t) => [normFp(t.refine), normFp(t.plot)]) }
+        : null
+      return JSON.stringify({ k, synopsis: normFp(savedSynopsis), lang: synopsisLang, episodes, refine })
+    }
     const src = mode === 'idea'
       ? { mode, idea: normFp(idea) }
       : { mode, genres: [...genres].map((g) => normFp(g).toLowerCase()).sort(), wishes: normFp(wishes) }
@@ -405,7 +481,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       setMsgs((s) => ({ ...s, [k]: list }))
       setSysEdit((s) => ({ ...s, [k]: sysE }))
       setNote((s) => ({ ...s, [k]: cached.note ?? '' }))
-      setWishesEn(cached.wishesEn ?? ''); setIdeaEn(cached.ideaEn ?? ''); setRefineEn(refineEnNow)
+      if (k === 'synopsis') { setWishesEn(cached.wishesEn ?? ''); setIdeaEn(cached.ideaEn ?? '') }
+      setRefineEnFor(k, refineEnNow)
       setMsgsRu(null); setMsgsRuOn(false)
       setReady((s) => ({ ...s, [k]: true }))
       return { list, sysEdit: sysE, refineEn: refineEnNow }
@@ -415,14 +492,14 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       const res = await fetch(API[k].preview, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId: project.id, ...inputBody(), ...args }),
+        body: JSON.stringify({ projectId: project.id, ...inputBody(k), ...args }),
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) { setError(d?.error ?? 'Не удалось собрать промпт'); return null }
       if (typeof d.wishesEn === 'string') setWishesEn(d.wishesEn)
       if (typeof d.ideaEn === 'string') setIdeaEn(d.ideaEn)
       const refineEnNow = typeof d.refineEn === 'string' ? d.refineEn : ''
-      setRefineEn(refineEnNow)
+      setRefineEnFor(k, refineEnNow)
       let list: Msg[] = Array.isArray(d.messages)
         ? d.messages.filter((m: any) => m && (m.role === 'system' || m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string').map((m: any) => ({ role: m.role, content: m.content }))
         : []
@@ -483,7 +560,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       // и собран под текущие вводные. Правка system → уходит ВЕСЬ диалог (изменённый system + авто-история).
       const fpNow = fingerprint(k, noRefine)
       let override: Msg[] | null = ready[k] && fpRef.current[k] === fpNow && isSysEdited(k) ? sendMessages(k) : null
-      let refineEnNow = ready[k] && fpRef.current[k] === fpNow ? refineEn : ''
+      let refineEnNow = ready[k] && fpRef.current[k] === fpNow ? refineEnOf(k) : ''
       if (!override && !(ready[k] && fpRef.current[k] === fpNow) && loadDraft(project.id, k)) {
         const b = await buildPrompt(k, noRefine)
         if (b) {
@@ -493,13 +570,14 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       }
       // Активная правка → запомним её (АНГЛИЙСКИЙ вариант из preview, чтобы вся история была английской):
       // по завершении она станет ходом диалога. Иначе (генерация «с нуля») результат станет новой базой S0.
-      if (!noRefine && refineText.trim() && savedSynopsis) lastRefineRef.current = refineEnNow.trim() || refineText.trim()
-      else { lastRefineRef.current = ''; if (noRefine) setRefineText('') }
-      const body: any = { projectId: project.id, ...inputBody(), ...refineArgs(k, noRefine), ...(refineEnNow ? { refineEn: refineEnNow } : {}) }
+      const refNow = refineTextOf(k)
+      if (!noRefine && refNow.trim() && savedTextOf(k)) lastRefineRefOf(k).current = refineEnNow.trim() || refNow.trim()
+      else { lastRefineRefOf(k).current = ''; if (noRefine) (k === 'plot' ? setPlotRefineText('') : setRefineText('')) }
+      const body: any = { projectId: project.id, ...inputBody(k), ...refineArgs(k, noRefine), ...(refineEnNow ? { refineEn: refineEnNow } : {}) }
       if (override) body.overrideMessages = override
       const res = await fetch(API[k].generate, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok) { setError(d?.error ?? 'Не удалось сгенерировать синопсис'); return }
+      if (!res.ok) { setError(d?.error ?? `Не удалось сгенерировать ${KIND_LABEL[k]}`); return }
       if (d?.jobId) { activeJobIdRef.current = d.jobId; jobs[k].start(d.jobId) }
       else onRefresh()
     } catch { setError('Ошибка сети') }
@@ -525,6 +603,30 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const commitSynopsisFromIdea = () => {
     setInputDirty(false); setInputSaved(true); setView('synopsis')
     void generate('synopsis', true)
+  }
+
+  // «Продолжить» на шаге 2: синопсис принят как основа → шаг 3 + генерация сюжета сезона «с нуля»
+  // (уйдёт сохранённый в «Превью» system, если он есть). Бэкенд ставит synopsisApproved и stage=season_plot_v2.
+  const continueFromSynopsis = () => {
+    if (!hasSynopsis || inputDirty || generating) return
+    setError(''); setCanceled(null)
+    setPlotRefineText(''); setPlotRefineEn('')
+    setView('plot')
+    void generate('plot', true)
+  }
+
+  // «Продолжить» на шаге 3: утверждаем синопсис → проект переходит в стадию structure (история сезона, StoryStage).
+  const continueFromPlot = async () => {
+    if (!hasPlot || generating || approving) return
+    setError(''); setApproving(true)
+    try {
+      const res = await fetch(`/api/projects/${project.id}/approve-synopsis`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ synopsis: savedSynopsis }),
+      })
+      if (!res.ok) { const d = await res.json().catch(() => ({})); setError(d?.error ?? 'Не удалось перейти к следующему шагу'); return }
+      onRefresh()
+    } catch { setError('Ошибка сети') }
+    finally { setApproving(false) }
   }
 
   // Подтверждение в предупреждении «Изменения затронут синопсис» (после «Продолжить»):
@@ -590,6 +692,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const stepClickable: Record<StepKey, boolean> = {
     idea: !generating,
     synopsis: (hasSynopsis || inputSaved) && !inputDirty && !generating,
+    plot: hasPlot && !inputDirty && !generating,
   }
   const goStep = (key: StepKey) => {
     if (key === currentStepKey || !stepClickable[key]) return
@@ -600,6 +703,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const V2_STEPS: { key: StepKey; label: string }[] = [
     { key: 'idea', label: 'Идея' },
     { key: 'synopsis', label: 'Синопсис' },
+    { key: 'plot', label: t('ideaV2.seasonPlot') },
   ]
   const stepsBar = (() => {
     const curIdx = V2_STEPS.findIndex((s) => s.key === currentStepKey)
@@ -640,7 +744,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const btnMain = 'flex items-center gap-1.5 rounded-lg bg-secondary px-3 py-1.5 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50'
   const previewBtn = (k: Kind, noRefine: boolean, testId: string, disabled = false) => (
     <button onClick={() => openPreview(k, noRefine)} disabled={disabled || previewLoading === k || generating} className={btnMain} data-testid={testId} title="Посмотреть/отредактировать промпт перед отправкой">
-      {previewLoading === k ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Собираем промпт...</> : <><Eye className="h-3.5 w-3.5" /> Превью</>}
+      {previewLoading === k ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Собираем промпт...</> : <><Eye className="h-3.5 w-3.5" /> {t('ideaV2.preview')}</>}
     </button>
   )
 
@@ -659,7 +763,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
 
     const label = (m: Msg, i: number) => {
       const j = i - off // позиция в истории: 0 — первый user, 1 — S0, 2 — правка 1, 3 — синопсис 1, …
-      if (m.role === 'assistant') return j === 1 ? 'Assistant · ответ S0' : `Assistant · ответ ${Math.floor(j / 2)}`
+      if (m.role === 'assistant') return j === 1 ? `Assistant · ответ ${promptKind === 'plot' ? 'P0' : 'S0'}` : `Assistant · ответ ${Math.floor(j / 2)}`
       if (j === 0) return total === 1 ? 'User · задание (уходит сейчас)' : 'User · задание'
       return i === curLastIdx ? 'User · текущая правка (уходит сейчас)' : `User · правка ${Math.floor(j / 2)}`
     }
@@ -822,7 +926,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             </button>
           </div>
           <div className="px-5 py-4 text-sm text-muted-foreground">
-            Вы изменили {mode === 'idea' ? 'идею' : 'жанры или пожелания'}. Если продолжить, ранее сгенерированный синопсис будет сброшен и потребует повторной генерации.
+            Вы изменили {mode === 'idea' ? 'идею' : 'жанры или пожелания'}. Если продолжить, ранее сгенерированные синопсис и сюжет сезона будут сброшены и потребуют повторной генерации.
           </div>
           <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
             <button onClick={close} className="rounded-lg border border-border bg-background px-5 py-2.5 text-sm font-semibold text-foreground transition hover:bg-muted" data-testid="idea-v2-reset-cancel">
@@ -853,31 +957,32 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
 
   // ═══════════════════════ Генерация синопсиса: прогресс ═══════════════════════
   // (логлайн генерируется прямо на своём экране — см. ниже, стрим под кнопками)
-  if (activeKind === 'synopsis') {
-    const j = synopsisJob.job
+  if (activeKind) {
+    const gk: Kind = activeKind
+    const j = jobs[gk].job
     return (
       <div className="space-y-6" data-testid="idea-stage-v2">
         {stepsBar}
         {errorBox}
-        <div className={cardCls} style={cardStyle} data-testid="idea-v2-generating" data-kind="synopsis">
+        <div className={cardCls} style={cardStyle} data-testid="idea-v2-generating" data-kind={gk}>
           <h2 className="flex items-center gap-2 font-display text-xl font-bold">
-            <Wand2 className="h-5 w-5 text-primary" /> Генерация {KIND_LABEL.synopsis}
+            <Wand2 className="h-5 w-5 text-primary" /> Генерация {KIND_LABEL[gk]}
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
             Отправляется в: <span className="font-semibold text-foreground" data-testid="idea-v2-model">{FABLE_MODEL_LABEL}</span>.
           </p>
           <div className="mt-4 space-y-2" data-testid="idea-v2-progress">
             {j ? (
-              <SmoothProgress job={j} expectedTotalSec={SYNOPSIS_V2_EXPECTED_SEC} />
+              <SmoothProgress job={j} expectedTotalSec={gk === 'plot' ? SEASON_PLOT_V2_EXPECTED_SEC : SYNOPSIS_V2_EXPECTED_SEC} />
             ) : (
               <p className="inline-flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin text-primary" /> Запуск генерации…</p>
             )}
             {String(j?.streamedText ?? '').trim() && (
-              <GrowingStream text={String(j?.streamedText ?? '')} active={isActive(j)} className={SYNOPSIS_TEXT_CLS} testId="idea-v2-synopsis-streaming" />
+              <GrowingStream text={String(j?.streamedText ?? '')} active={isActive(j)} className={SYNOPSIS_TEXT_CLS} testId={gk === 'plot' ? 'idea-v2-plot-streaming' : 'idea-v2-synopsis-streaming'} />
             )}
             <div className="flex items-center justify-between gap-2">
               <p className="min-w-0 text-xs text-muted-foreground">
-                Пишем синопсис сезона по вашей идее/жанрам. Вкладку можно закрыть — прогресс и текст сохранятся.
+                {gk === 'plot' ? t('ideaV2.plotGenerating') : 'Пишем синопсис сезона по вашей идее/жанрам.'} Вкладку можно закрыть — прогресс и текст сохранятся.
               </p>
               <CancelButton onCancel={cancel} testId="idea-v2-cancel" className="flex-shrink-0" />
             </div>
@@ -949,7 +1054,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           <div className={`mt-4 ${SYNOPSIS_TEXT_CLS}`} data-testid="idea-v2-result-text">
             {String(project.synopsis).trim()}
           </div>
-          <p className="mt-3 text-xs text-muted-foreground">Синопсис сохранён в проекте. Следующие шаги потока v2.0 появятся позже.</p>
+          <p className="mt-3 text-xs text-muted-foreground">Синопсис сохранён в проекте. «Продолжить» — принять его и разбить сезон на серии (шаг 3).</p>
           {inputDirty && (
             <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-result-stale">Идея, жанры, язык или число эпизодов изменились — вернитесь на шаг 1 и нажмите «Продолжить», чтобы перегенерировать синопсис.</p>
           )}
@@ -985,9 +1090,124 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
         </div>
         {stepFooter(
           'idea-v2-result-footer',
-          null,
+          <div className="flex flex-wrap items-center gap-2">
+            {previewBtn('plot', true, 'idea-v2-result-plot-preview', inputDirty)}
+            <button onClick={continueFromSynopsis} disabled={generating || inputDirty} className={btnPrimary} data-testid="idea-v2-result-continue">
+              Продолжить <ArrowRight className="h-4 w-4" />
+            </button>
+          </div>,
           <button onClick={() => goStep('idea')} disabled={!stepClickable.idea} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground disabled:opacity-50" data-testid="idea-v2-result-back">
             <ArrowLeft className="h-4 w-4" /> К идее
+          </button>,
+        )}
+        {renderPromptModal()}
+      </div>
+    )
+  }
+
+  // ═══════════════════════ Шаг 3: сюжет сезона — до генерации ═══════════════════════
+  if (currentView === 'plot' && !hasPlot) {
+    return (
+      <div className="space-y-6" data-testid="idea-stage-v2">
+        {stepsBar}
+        <div className={cardCls} style={cardStyle} data-testid="idea-v2-plot-pregen">
+          <h2 className="flex items-center gap-2 font-display text-xl font-bold">
+            <ListOrdered className="h-5 w-5 text-primary" /> Шаг 3: {t('ideaV2.seasonPlotStep').toLowerCase()}
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Модель: <span className="font-semibold text-foreground" data-testid="idea-v2-model">{FABLE_MODEL_LABEL}</span> · {episodes} эп.
+          </p>
+          <div className="mt-4 rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground" data-testid="idea-v2-plot-empty">
+            {t('ideaV2.plotEmpty')}
+          </div>
+          {error && <div className="mt-4">{errorBox}</div>}
+          {canceled === 'plot' && <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">Генерация сюжета сезона отменена.</p>}
+        </div>
+        {stepFooter(
+          'idea-v2-plot-footer',
+          <div className="flex flex-wrap items-center gap-2">
+            {previewBtn('plot', true, 'idea-v2-plot-generate-preview')}
+            <button onClick={() => generate('plot', true)} disabled={generating || !hasSynopsis} className={btnPrimary} data-testid="idea-v2-plot-generate">
+              <Wand2 className="h-4 w-4" /> Сгенерировать
+            </button>
+          </div>,
+          <button onClick={() => goStep('synopsis')} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground" data-testid="idea-v2-plot-back">
+            <ArrowLeft className="h-4 w-4" /> {t('ideaV2.toSynopsis')}
+          </button>,
+        )}
+        {renderPromptModal()}
+      </div>
+    )
+  }
+
+  // ═══════════════════════ Шаг 3: сюжет сезона готов ═══════════════════════
+  if (currentView === 'plot' && hasPlot) {
+    const episodesList = parseSeasonPlotV2(savedPlot)
+    return (
+      <div className="space-y-6" data-testid="idea-stage-v2">
+        {stepsBar}
+        <div className={cardCls} style={cardStyle} data-testid="idea-v2-plot-result">
+          <h2 className="flex items-center gap-2 font-display text-xl font-bold">
+            <ListOrdered className="h-5 w-5 text-primary" /> Шаг 3: {t('ideaV2.seasonPlotStep').toLowerCase()}
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Модель: <span className="font-semibold text-foreground" data-testid="idea-v2-result-model">{FABLE_MODEL_LABEL}</span>
+            {episodesList && <> · {t('ideaV2.plotParsedCount', { n: episodesList.length, total: episodes })}</>}
+          </p>
+
+          {episodesList ? (
+            <ol className="mt-4 space-y-3" data-testid="idea-v2-plot-episodes">
+              {episodesList.map((ep, i) => (
+                <li key={`${ep.n}-${i}`} className="rounded-lg border border-border bg-background px-4 py-3" data-testid="idea-v2-plot-episode" data-n={ep.n}>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-primary">{t('ideaV2.episode')} {ep.n}</div>
+                  <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground">{ep.text}</p>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <div className={`mt-4 ${SYNOPSIS_TEXT_CLS}`} data-testid="idea-v2-plot-raw">{savedPlot}</div>
+          )}
+
+          {inputDirty && (
+            <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-plot-stale">Идея, жанры, язык или число эпизодов изменились — вернитесь на шаг 1 и нажмите «Продолжить», чтобы перегенерировать синопсис и сюжет.</p>
+          )}
+          {!inputDirty && (
+            <div className="mt-5 rounded-lg border border-border/70 bg-muted/30 px-4 py-3" data-testid="idea-v2-plot-refine">
+              <label htmlFor="idea-v2-plot-refine-input" className="text-xs font-semibold text-foreground">Что изменить в сюжете сезона?</label>
+              <textarea
+                id="idea-v2-plot-refine-input"
+                value={plotRefineText}
+                onChange={(e) => onPlotRefineChange(e.target.value)}
+                placeholder={t('ideaV2.plotRefinePlaceholder')}
+                rows={2}
+                disabled={generating}
+                className="mt-2 w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
+                data-testid="idea-v2-plot-refine-input"
+              />
+              <p className="mt-1.5 text-[11px] text-muted-foreground">Правка уйдёт диалогом: модель видит прежний сюжет и все ранние правки. «{t('ideaV2.preview')}» — посмотреть/сохранить промпт, «{t('ideaV2.change')}» — отправить.</p>
+              <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+                {previewBtn('plot', false, 'idea-v2-plot-refine-preview', !plotRefineText.trim())}
+                <button
+                  onClick={() => generate('plot')}
+                  disabled={generating || !plotRefineText.trim()}
+                  className={`${btnMain} flex-shrink-0`}
+                  data-testid="idea-v2-plot-refine-edit"
+                >
+                  <Pencil className="h-3.5 w-3.5" /> {t('ideaV2.change')}
+                </button>
+              </div>
+            </div>
+          )}
+          {error && <div className="mt-4">{errorBox}</div>}
+          {canceled === 'plot' && <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">Генерация отменена.</p>}
+        </div>
+        {stepFooter(
+          'idea-v2-plot-result-footer',
+          <button onClick={() => void continueFromPlot()} disabled={generating || approving || inputDirty} className={btnPrimary} data-testid="idea-v2-plot-continue">
+            {approving ? <Loader2 className="h-4 w-4 animate-spin" /> : null} Продолжить <ArrowRight className="h-4 w-4" />
+          </button>,
+          <button onClick={() => goStep('synopsis')} disabled={!stepClickable.synopsis} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground disabled:opacity-50" data-testid="idea-v2-plot-result-back">
+            <ArrowLeft className="h-4 w-4" /> {t('ideaV2.toSynopsis')}
           </button>,
         )}
         {renderPromptModal()}

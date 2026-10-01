@@ -702,3 +702,6 @@ ALTER TABLE "GenerationJob" ADD COLUMN IF NOT EXISTS "streamedText" TEXT;
 
 -- ─── SIMPLIFIED PIPELINE: shot-list beat metadata per Scene row (one Scene = one 5-second beat) ────
 ALTER TABLE "Scene" ADD COLUMN IF NOT EXISTS "beatMeta" JSONB;
+
+-- ─── v2 flow step 3: episode-by-episode season plot (plain text with "#<n>" markers). Additive & idempotent. ───
+ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "seasonPlotV2" TEXT;

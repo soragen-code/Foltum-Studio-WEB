@@ -98,6 +98,8 @@ model Project {
   loglineApproved Boolean @default(false)
   synopsis    String?  @db.Text
   synopsisApproved Boolean @default(false)
+  // v2 flow, step 3: episode-by-episode season plot (plain text, "#<n>" markers). Nullable, additive (patch.sql).
+  seasonPlotV2 String? @db.Text
   // Stage 46A: approved SHORT synopsis (JSON {premise, episodes[{number, logline}]}) — mandatory outline for the season structure.
   shortSynopsis String? @db.Text
   // Stage 1 (dramaBible): the structured story bible (theme, tropes, protagonist/antagonist arcs, escalation
