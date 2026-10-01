@@ -733,8 +733,10 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
 
   // ─── Кнопки действий результата (правый верхний угол блока, над текстом)
   const btnMain = 'flex items-center gap-1.5 rounded-lg bg-secondary px-3 py-1.5 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50'
+  // Прозрачная (outline) кнопка для второстепенных действий «Превью» и «Открыть».
+  const btnGhost = 'inline-flex items-center gap-1.5 rounded-lg border border-border bg-transparent px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-muted/60 hover:border-foreground/30 disabled:opacity-50'
   const previewBtn = (k: Kind, noRefine: boolean, testId: string, disabled = false) => (
-    <button onClick={() => openPreview(k, noRefine)} disabled={disabled || previewLoading === k || generating} className={btnMain} data-testid={testId} title="Посмотреть/отредактировать промпт перед отправкой">
+    <button onClick={() => openPreview(k, noRefine)} disabled={disabled || previewLoading === k || generating} className={btnGhost} data-testid={testId} title="Посмотреть/отредактировать промпт перед отправкой">
       {previewLoading === k ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Собираем промпт...</> : <><Eye className="h-3.5 w-3.5" /> {t('ideaV2.preview')}</>}
     </button>
   )
@@ -1031,7 +1033,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                 <li key={`${ep.n}-${i}`} className="rounded-lg border border-border bg-background px-4 py-3" data-testid="idea-v2-plot-episode" data-n={ep.n}>
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-xs font-semibold uppercase tracking-wide text-primary">{t('ideaV2.episode')} {ep.n}</div>
-                    <Link href={`/project/${project.id}/v2/episode/${ep.n}`} className={btnMain} data-testid="idea-v2-plot-episode-open">
+                    <Link href={`/project/${project.id}/v2/episode/${ep.n}`} className={btnGhost} data-testid="idea-v2-plot-episode-open">
                       {t('ideaV2.open')} <ArrowRight className="h-3.5 w-3.5" />
                     </Link>
                   </div>

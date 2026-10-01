@@ -266,8 +266,10 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
   const cardStyle = { boxShadow: 'var(--shadow-md)' }
   const btnMain = 'flex items-center gap-1.5 rounded-lg bg-secondary px-3 py-1.5 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50'
   const btnPrimary = 'flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50'
+  // Прозрачная (outline) кнопка для второстепенного действия «Превью».
+  const btnGhost = 'inline-flex items-center gap-1.5 rounded-lg border border-border bg-transparent px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-muted/60 hover:border-foreground/30 disabled:opacity-50'
   const previewBtn = (noRefine: boolean, testId: string, disabled = false) => (
-    <button onClick={() => openPreview(noRefine)} disabled={disabled || previewLoading || generating} className={btnMain} data-testid={testId} title="Посмотреть/отредактировать промпт перед отправкой">
+    <button onClick={() => openPreview(noRefine)} disabled={disabled || previewLoading || generating} className={btnGhost} data-testid={testId} title="Посмотреть/отредактировать промпт перед отправкой">
       {previewLoading ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Собираем промпт...</> : <><Eye className="h-3.5 w-3.5" /> {t('ideaV2.preview')}</>}
     </button>
   )
