@@ -260,7 +260,7 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs, ownFace =
               <div className="mt-3 flex overflow-hidden rounded-md border border-border">
                 <button onClick={() => setPromptId(r.id)} className={btnFlat} data-testid="episode-v2-ref-view-prompt">
                   <Eye className="h-3.5 w-3.5" /> {t('ideaV2.refsViewPrompt')}
-                  {r.promptDirty && <span className="absolute -right-0.5 -top-0.5 rounded-sm bg-primary px-1 text-[9px] font-bold uppercase leading-tight text-primary-foreground" data-testid="episode-v2-ref-prompt-new">new</span>}
+                  {r.promptDirty && <span className="absolute right-1 top-1 rounded-sm bg-primary px-1 text-[9px] font-bold uppercase leading-tight text-primary-foreground" data-testid="episode-v2-ref-prompt-new">new</span>}
                 </button>
                 <button onClick={() => void runImages([r.id])} disabled={busy || !r.prompt.trim()} className={`${btnFlat} border-l border-border`} data-testid="episode-v2-ref-regenerate">
                   {genBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} {r.imageUrl ? t('ideaV2.refsRegenerate') : t('ideaV2.refsGenerateOne')}
