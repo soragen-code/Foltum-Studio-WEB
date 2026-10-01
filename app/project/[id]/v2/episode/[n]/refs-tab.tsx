@@ -34,6 +34,12 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [lightbox])
+  useEffect(() => {
+    if (!lightbox && !promptId) return
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = prev }
+  }, [lightbox, promptId])
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [starting, setStarting] = useState<'' | 'extract' | 'images'>('')
@@ -137,6 +143,10 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
   const btnMain = 'flex items-center gap-1.5 rounded-lg bg-secondary px-3 py-1.5 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50'
   const btnPrimary = 'flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50'
   const btnGhost = 'inline-flex items-center gap-1.5 rounded-lg border border-border bg-transparent px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-muted/60 hover:border-foreground/30 disabled:opacity-50'
+  // Верхние кнопки тулбара — прямоугольные, одного размера, на одном уровне.
+  const btnBar = 'inline-flex items-center justify-center gap-2 rounded-none border border-border bg-muted px-4 py-2 text-sm font-semibold transition hover:bg-muted/80 disabled:opacity-50'
+  // Кнопки блока рефа — прямоугольные, соприкасаются (общий бордюр у обёртки).
+  const btnFlat = 'relative flex flex-1 items-center justify-center gap-1 rounded-none bg-muted px-3 py-2 text-xs transition hover:bg-muted/80 disabled:opacity-50'
   const kindBadge: Record<string, string> = {
     character: 'bg-sky-500/15 text-sky-500',
     location: 'bg-emerald-500/15 text-emerald-500',
@@ -155,15 +165,15 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
     <div data-testid="episode-v2-refs">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted-foreground">{t('ideaV2.refsIntro')} <span className="font-semibold text-foreground">{FABLE_MODEL_LABEL}</span></p>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-stretch gap-2">
           {hasScript && (
-            <button onClick={() => void runExtract()} disabled={busy} className={items.length ? btnGhost : btnPrimary} data-testid="episode-v2-refs-extract">
+            <button onClick={() => void runExtract()} disabled={busy} className={`${btnBar} min-w-[180px]`} data-testid="episode-v2-refs-extract">
               {extracting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
               {items.length ? t('ideaV2.refsReextract') : t('ideaV2.refsExtract')}
             </button>
           )}
           {items.length > 0 && (
-            <button onClick={() => void runImages()} disabled={busy} className={btnPrimary} data-testid="episode-v2-refs-generate-all">
+            <button onClick={() => void runImages()} disabled={busy} className={`${btnBar} min-w-[180px]`} data-testid="episode-v2-refs-generate-all">
               {generatingImages ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} {t('ideaV2.refsGenerateAll')}
             </button>
           )}
@@ -204,15 +214,7 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
           const genBusy = r.imageStatus === 'generating' && generatingImages
           return (
             <div key={r.id} className="flex flex-col rounded-lg border border-border/70 bg-muted/20 p-3 sm:p-4" data-testid={`episode-v2-ref-${r.id}`}>
-              <div data-testid="episode-v2-ref-header">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${kindBadge[r.kind] ?? 'bg-muted text-muted-foreground'}`}>{t(`ideaV2.refsKind.${r.kind}`)}</span>
-                  <span className="min-w-0 break-words text-sm font-semibold text-foreground" data-testid="episode-v2-ref-label">{stripRefKindPrefixV2(r.label)}</span>
-                  {r.edited && <span className="text-[10px] text-muted-foreground">· {t('ideaV2.refsEdited')}</span>}
-                </div>
-                {r.role?.trim() && <div className="mt-0.5 text-xs text-muted-foreground" data-testid="episode-v2-ref-role">{r.role.trim()}</div>}
-              </div>
-              <div className="mx-auto mt-3 flex w-full max-w-[220px] items-center justify-center overflow-hidden rounded-lg border border-border bg-background" style={{ aspectRatio: '9 / 16' }} data-testid="episode-v2-ref-thumb">
+              <div className="mx-auto flex w-full max-w-[220px] items-center justify-center overflow-hidden rounded-lg border border-border bg-background" style={{ aspectRatio: '9 / 16' }} data-testid="episode-v2-ref-thumb">
                 {genBusy ? <Loader2 className="h-5 w-5 animate-spin text-primary" /> : r.imageUrl ? (
                   <button type="button" onClick={() => setLightbox({ url: r.imageUrl!, alt: stripRefKindPrefixV2(r.label) })} className="block h-full w-full cursor-zoom-in" title={t('ideaV2.refsOpenFull')} data-testid="episode-v2-ref-open">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -220,11 +222,20 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
                   </button>
                 ) : <ImageIcon className="h-5 w-5 text-muted-foreground/50" />}
               </div>
-              <div className="mt-3 grid grid-cols-2 gap-2">
-                <button onClick={() => setPromptId(r.id)} className={`${btnV1} w-full justify-center`} data-testid="episode-v2-ref-view-prompt">
+              <div className="mt-3" data-testid="episode-v2-ref-header">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${kindBadge[r.kind] ?? 'bg-muted text-muted-foreground'}`}>{t(`ideaV2.refsKind.${r.kind}`)}</span>
+                  <span className="min-w-0 break-words text-sm font-semibold text-foreground" data-testid="episode-v2-ref-label">{stripRefKindPrefixV2(r.label)}</span>
+                  {r.edited && <span className="text-[10px] text-muted-foreground">· {t('ideaV2.refsEdited')}</span>}
+                </div>
+                {r.role?.trim() && <div className="mt-0.5 text-xs text-muted-foreground" data-testid="episode-v2-ref-role">{r.role.trim()}</div>}
+              </div>
+              <div className="mt-3 flex overflow-hidden rounded-md border border-border">
+                <button onClick={() => setPromptId(r.id)} className={btnFlat} data-testid="episode-v2-ref-view-prompt">
                   <Eye className="h-3.5 w-3.5" /> {t('ideaV2.refsViewPrompt')}
+                  {r.promptDirty && <span className="absolute -right-0.5 -top-0.5 rounded-sm bg-primary px-1 text-[9px] font-bold uppercase leading-tight text-primary-foreground" data-testid="episode-v2-ref-prompt-new">new</span>}
                 </button>
-                <button onClick={() => void runImages([r.id])} disabled={busy || !r.prompt.trim()} className={`${btnV1} w-full justify-center`} data-testid="episode-v2-ref-regenerate">
+                <button onClick={() => void runImages([r.id])} disabled={busy || !r.prompt.trim()} className={`${btnFlat} border-l border-border`} data-testid="episode-v2-ref-regenerate">
                   {genBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} {r.imageUrl ? t('ideaV2.refsRegenerate') : t('ideaV2.refsGenerateOne')}
                 </button>
               </div>
@@ -241,7 +252,7 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
             projectId={projectId}
             n={n}
             refItem={pr}
-            onSaved={(prompt) => setItems((list) => list.map((x) => (x.id === pr.id ? { ...x, prompt, edited: true } : x)))}
+            onSaved={(prompt) => setItems((list) => list.map((x) => (x.id === pr.id ? { ...x, prompt, edited: true, promptDirty: true } : x)))}
             onClose={() => setPromptId('')}
           />
         ) : null

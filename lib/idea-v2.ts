@@ -721,6 +721,8 @@ export interface EpisodeRefV2 {
   role?: string | null;
   /** Промпт правился вручную — повторное извлечение его не перезатирает. */
   edited?: boolean;
+  /** Промпт изменён, но изображение ещё не перегенерировано (бейдж «new» на кнопке промпта). */
+  promptDirty?: boolean;
   imageUrl?: string | null;
   imageStatus?: EpisodeRefImageStatusV2 | null;
   imageError?: string | null;

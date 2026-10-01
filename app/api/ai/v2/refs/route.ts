@@ -80,7 +80,7 @@ export async function PATCH(request: Request) {
     const { projectId, episode, id, prompt } = parsed.data;
     const project = await ownedProject(session.user.email, projectId);
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
-    const updated = await patchEpisodeRefV2(projectId, episode, id, { prompt, edited: true });
+    const updated = await patchEpisodeRefV2(projectId, episode, id, { prompt, edited: true, promptDirty: true });
     if (!updated) return NextResponse.json({ error: "Reference not found" }, { status: 404 });
     return NextResponse.json({ ok: true });
   } catch (err: any) {

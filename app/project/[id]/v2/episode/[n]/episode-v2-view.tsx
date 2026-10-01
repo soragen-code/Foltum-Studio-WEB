@@ -357,10 +357,6 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
         </div>
         <div className={cardCls} style={cardStyle}>
           <h1 className="font-display text-2xl font-bold tracking-tight" data-testid="episode-v2-title">{t('ideaV2.episodeTitle', { n })}</h1>
-          <div className="mt-3 rounded-lg border border-border/70 bg-muted/30 px-4 py-3">
-            <div className="text-xs font-semibold uppercase tracking-wide text-primary">{t('ideaV2.episodeSummary')}</div>
-            <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed text-foreground" data-testid="episode-v2-summary">{summary}</p>
-          </div>
           <div className="mt-5 flex gap-1 border-b border-border" role="tablist" data-testid="episode-v2-tabs">
             {TABS.map((x) => (
               <button
