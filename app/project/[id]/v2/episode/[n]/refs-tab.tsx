@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, Wand2, Eye, RefreshCw, ImageIcon, Sparkles } from 'lucide-react'
+import { Loader2, Wand2, Eye, RefreshCw, ImageIcon, Sparkles, X } from 'lucide-react'
 import { FABLE_MODEL_LABEL, stripRefKindPrefixV2, type EpisodeRefV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from '../../../_components/cancel-button'
@@ -27,6 +27,13 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
   const { t } = useTranslation()
   const [items, setItems] = useState<EpisodeRefV2[]>(initialRefs)
   const [promptId, setPromptId] = useState('')
+  const [lightbox, setLightbox] = useState<{ url: string; alt: string } | null>(null)
+  useEffect(() => {
+    if (!lightbox) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setLightbox(null) }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [lightbox])
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [starting, setStarting] = useState<'' | 'extract' | 'images'>('')
@@ -125,6 +132,8 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
     try { await fetch(`/api/ai/jobs/${id}/cancel`, { method: 'POST' }) } catch { /* поллинг повторит */ }
   }
 
+  // Кнопки блока рефа — как кнопки генерации в v1 (references-stage.tsx): фон bg-muted.
+  const btnV1 = 'flex items-center gap-1 rounded-lg bg-muted px-3 py-1.5 text-xs transition hover:bg-muted/80 disabled:opacity-50'
   const btnMain = 'flex items-center gap-1.5 rounded-lg bg-secondary px-3 py-1.5 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50'
   const btnPrimary = 'flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50'
   const btnGhost = 'inline-flex items-center gap-1.5 rounded-lg border border-border bg-transparent px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-muted/60 hover:border-foreground/30 disabled:opacity-50'
@@ -190,37 +199,34 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
 
       {!items.length && hasScript && !extracting && <p className="mt-4 text-sm text-muted-foreground">{t('ideaV2.refsEmpty')}</p>}
 
-      <div className="mt-4 space-y-3">
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {items.map((r) => {
           const genBusy = r.imageStatus === 'generating' && generatingImages
           return (
-            <div key={r.id} className="rounded-lg border border-border/70 bg-muted/20 p-3 sm:p-4" data-testid={`episode-v2-ref-${r.id}`}>
-              <div className="flex flex-col gap-3 sm:flex-row">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${kindBadge[r.kind] ?? 'bg-muted text-muted-foreground'}`}>{t(`ideaV2.refsKind.${r.kind}`)}</span>
-                    <span className="text-sm font-semibold text-foreground" data-testid="episode-v2-ref-label">{stripRefKindPrefixV2(r.label)}</span>
-                    {r.edited && <span className="text-[10px] text-muted-foreground">· {t('ideaV2.refsEdited')}</span>}
-                  </div>
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <button onClick={() => setPromptId(r.id)} className={btnGhost} data-testid="episode-v2-ref-view-prompt">
-                      <Eye className="h-3.5 w-3.5" /> {t('ideaV2.refsViewPrompt')}
-                    </button>
-                    <button onClick={() => void runImages([r.id])} disabled={busy || !r.prompt.trim()} className={btnMain} data-testid="episode-v2-ref-regenerate">
-                      <RefreshCw className="h-3.5 w-3.5" /> {r.imageUrl ? t('ideaV2.refsRegenerate') : t('ideaV2.refsGenerateOne')}
-                    </button>
-                  </div>
-                  {r.imageStatus === 'failed' && r.imageError && <p className="mt-2 text-xs text-destructive">{t('ideaV2.refsImageFailed')}: {r.imageError}</p>}
-                </div>
-                <div className="flex w-full flex-shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-background sm:w-[120px]" style={{ aspectRatio: '9 / 16' }} data-testid="episode-v2-ref-thumb">
-                  {genBusy ? <Loader2 className="h-5 w-5 animate-spin text-primary" /> : r.imageUrl ? (
-                    <a href={r.imageUrl} target="_blank" rel="noreferrer" className="block h-full w-full">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={r.imageUrl} alt={stripRefKindPrefixV2(r.label)} className="h-full w-full object-cover" loading="lazy" />
-                    </a>
-                  ) : <ImageIcon className="h-5 w-5 text-muted-foreground/50" />}
-                </div>
+            <div key={r.id} className="flex flex-col rounded-lg border border-border/70 bg-muted/20 p-3 sm:p-4" data-testid={`episode-v2-ref-${r.id}`}>
+              <div className="flex flex-wrap items-center gap-2" data-testid="episode-v2-ref-header">
+                <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${kindBadge[r.kind] ?? 'bg-muted text-muted-foreground'}`}>{t(`ideaV2.refsKind.${r.kind}`)}</span>
+                <span className="min-w-0 break-words text-sm font-semibold text-foreground" data-testid="episode-v2-ref-label">{stripRefKindPrefixV2(r.label)}</span>
+                {r.role?.trim() && <span className="text-xs text-muted-foreground" data-testid="episode-v2-ref-role">· {r.role.trim()}</span>}
+                {r.edited && <span className="text-[10px] text-muted-foreground">· {t('ideaV2.refsEdited')}</span>}
               </div>
+              <div className="mt-3 flex w-full max-w-[220px] items-center justify-center overflow-hidden rounded-lg border border-border bg-background" style={{ aspectRatio: '9 / 16' }} data-testid="episode-v2-ref-thumb">
+                {genBusy ? <Loader2 className="h-5 w-5 animate-spin text-primary" /> : r.imageUrl ? (
+                  <button type="button" onClick={() => setLightbox({ url: r.imageUrl!, alt: stripRefKindPrefixV2(r.label) })} className="block h-full w-full cursor-zoom-in" title={t('ideaV2.refsOpenFull')} data-testid="episode-v2-ref-open">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={r.imageUrl} alt={stripRefKindPrefixV2(r.label)} className="h-full w-full object-cover" loading="lazy" />
+                  </button>
+                ) : <ImageIcon className="h-5 w-5 text-muted-foreground/50" />}
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button onClick={() => setPromptId(r.id)} className={btnV1} data-testid="episode-v2-ref-view-prompt">
+                  <Eye className="h-3.5 w-3.5" /> {t('ideaV2.refsViewPrompt')}
+                </button>
+                <button onClick={() => void runImages([r.id])} disabled={busy || !r.prompt.trim()} className={btnV1} data-testid="episode-v2-ref-regenerate">
+                  {genBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} {r.imageUrl ? t('ideaV2.refsRegenerate') : t('ideaV2.refsGenerateOne')}
+                </button>
+              </div>
+              {r.imageStatus === 'failed' && r.imageError && <p className="mt-2 text-xs text-destructive">{t('ideaV2.refsImageFailed')}: {r.imageError}</p>}
             </div>
           )
         })}
@@ -238,6 +244,15 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
           />
         ) : null
       })()}
+      {lightbox && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4" onClick={() => setLightbox(null)} role="dialog" aria-modal="true" data-testid="episode-v2-ref-lightbox">
+          <button type="button" onClick={() => setLightbox(null)} className="absolute right-4 top-4 rounded-full bg-black/50 p-2 text-white transition hover:bg-black/70" aria-label={t('common.close')} data-testid="episode-v2-ref-lightbox-close">
+            <X className="h-6 w-6" />
+          </button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={lightbox.url} alt={lightbox.alt} className="max-h-full max-w-full object-contain" onClick={(e) => e.stopPropagation()} />
+        </div>
+      )}
     </div>
   )
 }

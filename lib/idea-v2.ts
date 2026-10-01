@@ -717,6 +717,8 @@ export interface EpisodeRefV2 {
   prompt: string;
   /** Для локаций: признак INT./EXT. из слаглайна. */
   setting?: "INT" | "EXT" | null;
+  /** Роль/функция в истории (для персонажей: «Протагонист», «Антагонист», …) на языке синопсиса; для локаций/реквизита null. */
+  role?: string | null;
   /** Промпт правился вручную — повторное извлечение его не перезатирает. */
   edited?: boolean;
   imageUrl?: string | null;
@@ -746,6 +748,7 @@ FOR EACH ENTRY
 - "key": short stable English identifier in snake_case (e.g. "anna", "police_station_night", "bloody_knife"). The same thing must always get the same key.
 - "label": short human label in <Language> containing ONLY the designation itself — the character's name, the location name with its slugline, or the prop name. NEVER prefix it with the type word (no "Персонаж:", "Локация:", "Реквизит:", "Character:", "Location:", "Prop:" or similar) — the type is shown separately from "kind". E.g. for Russian "Анна", "INT. Полицейский участок — ночь", "Окровавленный нож"; for English "Anna", "INT. Police station — night", "Bloody knife". Keep "INT."/"EXT." untranslated in location labels (they are part of the location name, not a type prefix).
 - "setting": "INT" or "EXT" for locations, null otherwise.
+- "role": for kind "character" — the character's short role/function in the story in <Language>, inferred from the script (e.g. for Russian "Протагонист", "Антагонист", "Наставник", "Союзник", "Второстепенный"; for English "Protagonist", "Antagonist", "Mentor", "Ally", "Supporting"), 1–3 words, no name; for "location" and "prop" — null.
 - "prompt": a detailed ENGLISH prompt for a photorealistic image model that produces a consistent reference image:
   - character: gender, apparent age, ethnicity/skin tone, build, face, hair (colour, length, style), distinctive features, the exact wardrobe worn in this episode (garments, colours, materials), full-length standing figure on a plain neutral background. Infer plausible details from the script; never leave appearance vague.
   - location: INT. or EXT., type of place, architecture and materials, key furniture and objects the scenes use, time of day, lighting (sources, colour temperature), weather and atmosphere, wide establishing view with no people.
@@ -754,7 +757,7 @@ FOR EACH ENTRY
 
 OUTPUT
 Return ONLY a JSON object, no markdown fences, no commentary:
-{"refs":[{"kind":"character","key":"...","label":"...","setting":null,"prompt":"..."}]}
+{"refs":[{"kind":"character","key":"...","label":"...","setting":null,"role":"...","prompt":"..."},{"kind":"location","key":"...","label":"...","setting":"INT","role":null,"prompt":"..."}]}
 Order: characters first, then locations, then props.`;
 
 export function episodeRefsV2SystemPrompt(language: SynopsisLanguage | string): string {
@@ -779,7 +782,9 @@ export function parseEpisodeRefsV2(data: unknown): EpisodeRefV2[] {
     seen.add(id);
     const st = String(r?.setting ?? "").toUpperCase();
     const setting = kind === "location" ? (st === "INT" || st === "EXT" ? st : /\bEXT\./i.test(label) ? "EXT" : /\bINT\./i.test(label) ? "INT" : null) : null;
-    out.push({ id, kind, label: label.slice(0, 200), prompt: prompt.slice(0, 4000), setting });
+    const roleRaw = kind === "character" && typeof r?.role === "string" ? r.role.trim() : "";
+    const role = roleRaw ? roleRaw.slice(0, 80) : null;
+    out.push({ id, kind, label: label.slice(0, 200), prompt: prompt.slice(0, 4000), setting, role });
   }
   return out;
 }
