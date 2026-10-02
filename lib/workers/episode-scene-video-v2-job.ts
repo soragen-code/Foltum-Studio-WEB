@@ -15,7 +15,7 @@ import { runWithPromptContext } from "@/lib/prompt-log";
 import {
   cancelVideoPrediction, getVideoPredictionState, startVideoPrediction, SEEDANCE_I2V_MAX_DURATION, SEEDANCE_I2V_MIN_DURATION,
 } from "@/lib/wavespeed";
-import { episodeRefsV2From, episodeScenesV2From, sceneVideoV2Prompt, selectStoryboardV2Refs } from "@/lib/idea-v2";
+import { episodeRefsV2From, episodeScenesV2From, sceneVideoV2Prompt, selectSceneVideoV2Refs } from "@/lib/idea-v2";
 import { translateToEnglish } from "@/lib/translate-en";
 import { patchEpisodeSceneV2 } from "@/lib/episode-scenes-v2-store";
 import { runPool } from "@/lib/workers/episode-scene-frames-v2-job";
@@ -54,8 +54,8 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSce
   try {
     const row = await prisma.project.findUnique({ where: { id: projectId }, select: { episodeScenesV2: true, episodeRefsV2: true } });
     const all = episodeScenesV2From(row?.episodeScenesV2, episode);
-    // Канонические референсы персонажей/локаций серии — общие для всех сцен (первый кадр добавляется per-scene).
-    const refUrls = selectStoryboardV2Refs(episodeRefsV2From(row?.episodeRefsV2, episode), MAX_SCENE_REF_IMAGES - 1)
+    // В видео сцены подаём ТОЛЬКО первый кадр + референсы ПЕРСОНАЖЕЙ (без сториборда и локаций) — общие для всех сцен.
+    const refUrls = selectSceneVideoV2Refs(episodeRefsV2From(row?.episodeRefsV2, episode), MAX_SCENE_REF_IMAGES - 1)
       .map((r) => r.imageUrl)
       .filter((u): u is string => typeof u === "string" && !!u);
 

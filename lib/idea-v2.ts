@@ -963,6 +963,13 @@ export function selectStoryboardV2Refs(refs: EpisodeRefV2[], cap: number): Episo
     .slice(0, Math.max(0, cap));
 }
 
+/** Референсы для ВИДЕО сцены: только персонажи (первый кадр сцены добавляется per-scene). Без сториборда, локаций и реквизита. */
+export function selectSceneVideoV2Refs(refs: EpisodeRefV2[], cap: number): EpisodeRefV2[] {
+  return refs
+    .filter((r) => r && r.kind === "character" && typeof r.imageUrl === "string" && r.imageUrl)
+    .slice(0, Math.max(0, cap));
+}
+
 export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRefV2[]): string {
   const panels = shots
     .map((s) => `Panel ${s.index}: ${s.action.replace(/\s+/g, " ").trim()}`)

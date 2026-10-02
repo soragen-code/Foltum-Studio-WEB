@@ -76,17 +76,31 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSce
     let scenes: EpisodeSceneV2[];
     if (!meta?.prepared) {
       await updateJob(jobId, { status: "processing", progress: 5, message: `Preparing ${shots.length} scene(s)...` });
-      // Ручные промпты прежних сцен сохраняются, если сцена соответствует тому же шоту.
+      // Обновление/переаппрув сториборда НЕ сбрасывает уже готовые сцены: для сцены того же шота сохраняем
+      // первый кадр, видео, финальный кадр, ручной промпт и их статусы. Перенарезаем только недостающие кадры.
       const prev = new Map(episodeScenesV2From(row?.episodeScenesV2, episode).map((s) => [s.id, s]));
       const actionsEn = await Promise.all(shots.map((s) => translateToEnglish(s.action)));
-      const endFramesEn = await describeEndFrames(actionsEn);
+      // Финальный кадр генерим LLM только когда у соответствующей сцены его ещё нет (экономим вызовы + сохраняем прежние).
+      const needEnd = shots.some((s) => { const p = prev.get(`scene-${s.index}`); return !(p && p.shotId === s.id && p.endFrame); });
+      const endFramesEn = needEnd ? await describeEndFrames(actionsEn) : shots.map(() => "");
       scenes = shots.map((s, i) => {
         const id = `scene-${s.index}`;
         const p = prev.get(id);
+        if (p && p.shotId === s.id) {
+          // Сцена того же шота уже есть — переносим её целиком (первый кадр, видео, статусы, taskId).
+          return {
+            ...p,
+            index: s.index, shotId: s.id, action: actionsEn[i] || s.action, durationSec: s.durationSec,
+            endFrame: p.endFrame ?? (endFramesEn[i] || undefined),
+            promptOverride: p.promptOverride ?? null,
+            // Готовый кадр сохраняем; незавершённый (idle/running/error/нет) — ставим в очередь на нарезку.
+            firstFrameStatus: p.firstFrameStatus === "done" ? "done" : "pending",
+          };
+        }
         return {
           id, index: s.index, shotId: s.id, action: actionsEn[i] || s.action, endFrame: endFramesEn[i] || undefined, durationSec: s.durationSec,
           firstFrameStatus: "pending", videoStatus: "idle",
-          promptOverride: p && p.shotId === s.id ? p.promptOverride ?? null : null,
+          promptOverride: null,
         };
       });
       await setEpisodeScenesV2(projectId, episode, scenes);
