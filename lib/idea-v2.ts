@@ -896,3 +896,54 @@ export function episodeShotsV2From(map: unknown, n: number): EpisodeShotV2[] {
     ? (v.items as EpisodeShotV2[]).filter((s) => s && typeof s.id === "string" && typeof s.action === "string")
     : [];
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v2 · уровень эпизода: вкладка «Сториборд» (все кадры шот-листа одним листом)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Сториборд серии (Project.episodeStoryboardV2["<n>"]): один сводный лист всех кадров шот-листа. */
+export interface EpisodeStoryboardV2 {
+  /** URL готового листа-сториборда (S3). */
+  imageUrl?: string;
+  /** Промпт, которым лист был собран (для справки/отладки). */
+  prompt?: string;
+  /** Состояние генерации. */
+  status?: "generating" | "done" | "failed" | null;
+  /** Текст ошибки, если генерация упала. */
+  error?: string | null;
+  updatedAt?: string;
+}
+
+/** Сториборд серии n из Project.episodeStoryboardV2 ({ "<n>": { imageUrl?, ... } }). */
+export function episodeStoryboardV2From(map: unknown, n: number): EpisodeStoryboardV2 | null {
+  const v = map && typeof map === "object" ? (map as Record<string, any>)[String(n)] : null;
+  if (!v || typeof v !== "object") return null;
+  return {
+    imageUrl: typeof v.imageUrl === "string" ? v.imageUrl : undefined,
+    prompt: typeof v.prompt === "string" ? v.prompt : undefined,
+    status: v.status === "generating" || v.status === "done" || v.status === "failed" ? v.status : null,
+    error: typeof v.error === "string" ? v.error : null,
+    updatedAt: typeof v.updatedAt === "string" ? v.updatedAt : undefined,
+  };
+}
+
+/**
+ * Тело промпта сборки единого листа-сториборда по всему шот-листу серии (без строки [VISUAL STYLE] —
+ * её добавляет воркер, где доступен VISUAL_STYLE). Модель рисует ВСЕ кадры шот-листа как пронумерованные
+ * панели и раскладывает их в один контактный лист (grid), в порядке кадров. action'ы кадров — на языке
+ * синопсиса; инструкции композиции — на английском (как во всех image-промптах).
+ */
+export function buildStoryboardV2Prompt(shots: EpisodeShotV2[]): string {
+  const panels = shots
+    .map((s) => `Panel ${s.index}: ${s.action.replace(/\s+/g, " ").trim()}`)
+    .join("\n");
+  return (
+    `Create ONE single storyboard sheet (a contact-sheet / comic-style grid) that contains EVERY shot of this episode drawn as a separate panel. ` +
+    `There are ${shots.length} shots in total — draw ALL ${shots.length} panels, one per shot, none skipped and none merged. ` +
+    `Lay the panels out in a neat regular grid, left-to-right then top-to-bottom, in shot order (panel 1 first). ` +
+    `Give every panel a thin frame and a small clearly legible number badge in its top-left corner matching the shot number. ` +
+    `Each panel is a photorealistic cinematic still depicting exactly what its shot describes — consistent characters, wardrobe and environment across panels. ` +
+    `Only the small panel number labels may contain text; no captions, no other writing. Vertical 9:16 sheet.\n\n` +
+    `SHOTS:\n${panels}`
+  );
+}

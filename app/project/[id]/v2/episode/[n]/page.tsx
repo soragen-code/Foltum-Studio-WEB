@@ -1,7 +1,7 @@
 import { auth } from '@/auth'
 import { redirect } from 'next/navigation'
 import { prisma } from '@/lib/db'
-import { seasonPlotEpisodeSummary, episodeScriptV2From, episodeRefsV2From, episodeShotsV2From } from '@/lib/idea-v2'
+import { seasonPlotEpisodeSummary, episodeScriptV2From, episodeRefsV2From, episodeShotsV2From, episodeStoryboardV2From } from '@/lib/idea-v2'
 import { canUse } from '@/lib/entitlements'
 import { EpisodeV2View } from './episode-v2-view'
 
@@ -22,7 +22,7 @@ export default async function EpisodeV2Page({ params }: { params: Promise<{ id: 
   const ownFace = canUse(user, 'own_face')
   const project = await prisma.project.findFirst({
     where: { id, userId: user.id },
-    select: { id: true, name: true, seasonPlotV2: true, episodeScriptsV2: true, episodeRefsV2: true, episodeShotsV2: true },
+    select: { id: true, name: true, seasonPlotV2: true, episodeScriptsV2: true, episodeRefsV2: true, episodeShotsV2: true, episodeStoryboardV2: true },
   })
   if (!project) redirect('/dashboard')
 
@@ -40,6 +40,7 @@ export default async function EpisodeV2Page({ params }: { params: Promise<{ id: 
       initialScript={episodeScriptV2From(project.episodeScriptsV2, n)}
       initialRefs={episodeRefsV2From(project.episodeRefsV2, n)}
       initialShots={episodeShotsV2From(project.episodeShotsV2, n)}
+      initialStoryboard={episodeStoryboardV2From(project.episodeStoryboardV2, n)}
       backHref={back}
       ownFace={ownFace}
     />
