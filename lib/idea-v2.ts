@@ -1008,6 +1008,10 @@ export interface EpisodeSceneV2 {
   videoUrl?: string;
   videoStatus?: EpisodeSceneStatusV2;
   videoError?: string;
+  /** id задачи Seedance (WaveSpeed) запущенного видео — чтобы возобновлённый воркер опрашивал её, а не запускал новую. */
+  videoTaskId?: string;
+  /** ISO-время запуска задачи видео (таймаут считается через возобновления). */
+  videoStartedAt?: string;
   /** Ручной промпт сцены (приоритетнее авто-промпта первого кадра и видео). */
   promptOverride?: string | null;
 }
@@ -1035,6 +1039,8 @@ export function episodeScenesV2From(map: unknown, n: number): EpisodeSceneV2[] {
       videoUrl: optStr(s.videoUrl),
       videoStatus: sceneStatus(s.videoStatus),
       videoError: optStr(s.videoError),
+      videoTaskId: optStr(s.videoTaskId),
+      videoStartedAt: optStr(s.videoStartedAt),
       promptOverride: typeof s.promptOverride === "string" && s.promptOverride.trim() ? s.promptOverride : null,
     }))
     .sort((a, b) => a.index - b.index);

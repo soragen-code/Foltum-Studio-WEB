@@ -7,6 +7,7 @@ import { authorizeCron, failStaleJobs, runInBackground, JOB_MAX_DURATION, STALE_
 import { resumeVideoJob } from "@/lib/workers/video-job";
 import { resumeManualJob, MANUAL_VIDEO_JOB_TYPE, MANUAL_PHOTO_JOB_TYPE } from "@/lib/workers/manual-job";
 import { reconcileEpisodeAssets } from "@/lib/asset-gathering";
+import { resumeEpisodeScenesV2Jobs } from "@/lib/workers/episode-scenes-v2-resume";
 import { runStoryboardBoardsJob, STORYBOARD_BOARDS_JOB_TYPE, runBoardImageJob, BOARD_IMAGE_JOB_TYPE } from "@/lib/workers/storyboard-job";
 
 const isHttpUrl = (u: unknown): u is string => typeof u === "string" && /^https?:\/\//i.test(u);
@@ -37,7 +38,7 @@ void JOB_MAX_DURATION;
 export async function GET(request: Request) {
   if (!authorizeCron(request)) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const summary = { staleFailed: 0, resumed: 0, resumedFrames: 0, resumedManual: 0, boardGatesReleased: 0 };
+  const summary = { staleFailed: 0, resumed: 0, resumedFrames: 0, resumedManual: 0, boardGatesReleased: 0, v2Scenes: { resumed: 0, gaveUp: 0, canceled: 0 } };
   try {
     // Resume interrupted board keyframe (image) jobs BEFORE failStaleJobs reaps them. A frame POST already
     // enqueues a background job (after()-hosted) rather than rendering synchronously, but nothing used to
@@ -73,6 +74,14 @@ export async function GET(request: Request) {
       } catch (err) {
         console.error("[cron/advance-chains] frame resume failed:", err);
       }
+    }
+
+    // v2 «Сцены» (кадры / видео / склейка): переподхват замолчавших job без открытой вкладки. Воркеры
+    // возобновляемые; failStaleJobs эти типы не реапит (CRON_RESUMED_JOB_TYPES) — сдаётся здесь же по лимиту.
+    try {
+      summary.v2Scenes = await resumeEpisodeScenesV2Jobs();
+    } catch (err) {
+      console.error("[cron/advance-chains] v2 scenes resume failed:", err);
     }
 
     // Clean up dead, non-recoverable jobs first. Video/season jobs that hold a live provider handle are

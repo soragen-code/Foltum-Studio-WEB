@@ -3,7 +3,8 @@
  * Геометрический кроп листа ненадёжен, поэтому каждый кадр ГЕНЕРИРУЕТСЯ отдельно как standalone 9:16
  * (GPT Image 2.5 flare, image-to-image): image_input = [лист-сториборд, ...референсы серии], промпт —
  * buildSceneFrameV2Prompt (или promptOverride сцены). По сцене на кадр шот-листа; action переводится на EN.
- * Ошибка одной сцены не валит остальные.
+ * Ошибка одной сцены не валит остальные. Возобновляемый: при нехватке бюджета инвокации уступает, оставляя
+ * сцены в pending, — cron (resumeEpisodeScenesV2Jobs) перезапускает воркер, и он продолжает без повторной подготовки.
  */
 import { prisma } from "@/lib/db";
 import { chatJSON } from "@/lib/ai";
@@ -18,6 +19,7 @@ import {
   type EpisodeSceneV2,
 } from "@/lib/idea-v2";
 import { patchEpisodeSceneV2, setEpisodeScenesV2 } from "@/lib/episode-scenes-v2-store";
+import { patchV2JobMeta, readV2JobMeta, v2Budget } from "@/lib/workers/v2-job-budget";
 
 export const EPISODE_SCENE_FRAMES_V2_JOB_TYPE = "episode_scene_frames_v2";
 export const EPISODE_SCENE_FRAMES_V2_EXPECTED_SEC = 120;
@@ -59,6 +61,7 @@ export async function runPool<T>(items: T[], limit: number, fn: (item: T) => Pro
 
 async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSceneFramesV2JobParams): Promise<void> {
   const canceled = () => isCancelRequested(jobId);
+  const budget = v2Budget();
   const hb = setInterval(() => void heartbeatJob(jobId), 30_000);
   try {
     const row = await prisma.project.findUnique({ where: { id: projectId }, select: { episodeShotsV2: true, episodeRefsV2: true, episodeStoryboardV2: true, episodeScenesV2: true } });
@@ -67,21 +70,32 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSce
     if (!shots.length) { await failJob(jobId, "No shots to cut scenes from"); return; }
     if (!sheet) { await failJob(jobId, "No storyboard sheet"); return; }
 
-    await updateJob(jobId, { status: "processing", progress: 5, message: `Preparing ${shots.length} scene(s)...` });
-    // Ручные промпты прежних сцен сохраняются, если сцена соответствует тому же шоту.
-    const prev = new Map(episodeScenesV2From(row?.episodeScenesV2, episode).map((s) => [s.id, s]));
-    const actionsEn = await Promise.all(shots.map((s) => translateToEnglish(s.action)));
-    const endFramesEn = await describeEndFrames(actionsEn);
-    const scenes: EpisodeSceneV2[] = shots.map((s, i) => {
-      const id = `scene-${s.index}`;
-      const p = prev.get(id);
-      return {
-        id, index: s.index, shotId: s.id, action: actionsEn[i] || s.action, endFrame: endFramesEn[i] || undefined, durationSec: s.durationSec,
-        firstFrameStatus: "pending", videoStatus: "idle",
-        promptOverride: p && p.shotId === s.id ? p.promptOverride ?? null : null,
-      };
-    });
-    await setEpisodeScenesV2(projectId, episode, scenes);
+    // Подготовка (список сцен + EN-перевод + финальные кадры) — только при первом запуске job.
+    // Возобновлённый cron'ом воркер её пропускает и продолжает со сцен в pending/running.
+    const meta = await readV2JobMeta(jobId);
+    let scenes: EpisodeSceneV2[];
+    if (!meta?.prepared) {
+      await updateJob(jobId, { status: "processing", progress: 5, message: `Preparing ${shots.length} scene(s)...` });
+      // Ручные промпты прежних сцен сохраняются, если сцена соответствует тому же шоту.
+      const prev = new Map(episodeScenesV2From(row?.episodeScenesV2, episode).map((s) => [s.id, s]));
+      const actionsEn = await Promise.all(shots.map((s) => translateToEnglish(s.action)));
+      const endFramesEn = await describeEndFrames(actionsEn);
+      scenes = shots.map((s, i) => {
+        const id = `scene-${s.index}`;
+        const p = prev.get(id);
+        return {
+          id, index: s.index, shotId: s.id, action: actionsEn[i] || s.action, endFrame: endFramesEn[i] || undefined, durationSec: s.durationSec,
+          firstFrameStatus: "pending", videoStatus: "idle",
+          promptOverride: p && p.shotId === s.id ? p.promptOverride ?? null : null,
+        };
+      });
+      await setEpisodeScenesV2(projectId, episode, scenes);
+      await patchV2JobMeta(jobId, { episode, prepared: true });
+    } else {
+      scenes = episodeScenesV2From(row?.episodeScenesV2, episode);
+      await updateJob(jobId, { status: "processing", message: "Resuming first frames..." });
+    }
+    const todo = scenes.filter((s) => s.firstFrameStatus === "pending" || s.firstFrameStatus === "running");
 
     // Лист-сториборд + референсы ≤ лимита image_input провайдера. Метки референсов переводятся на English
     // (в промпт — только English), image_input берётся по тем же imageUrl.
@@ -89,11 +103,13 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSce
     const imageInput = [sheet, ...refs.map((r) => r.imageUrl!)];
 
     const total = scenes.length;
-    let done = 0;
-    let failed = 0;
-    await updateJob(jobId, { progress: 10, message: `Cutting ${total} first frame(s)...` });
-    await runPool(scenes, CONCURRENCY, async (sc) => {
+    let done = total - todo.length;
+    let yielded = 0;
+    await updateJob(jobId, { progress: 10 + Math.round((done / Math.max(1, total)) * 90), message: `Cutting ${todo.length} first frame(s)...` });
+    await runPool(todo, CONCURRENCY, async (sc) => {
       if (await canceled()) { await patchEpisodeSceneV2(projectId, episode, sc.id, { firstFrameStatus: "idle" }); return; }
+      // Бюджет инвокации на исходе — сцену оставляем pending, её доделает возобновлённый воркер.
+      if (budget.soft()) { yielded += 1; await patchEpisodeSceneV2(projectId, episode, sc.id, { firstFrameStatus: "pending" }); return; }
       await patchEpisodeSceneV2(projectId, episode, sc.id, { firstFrameStatus: "running" });
       try {
         const prompt = sc.promptOverride?.trim()
@@ -101,13 +117,18 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSce
           : buildSceneFrameV2Prompt(sc, refs, VISUAL_STYLE);
         const remote = await generateImage(
           { prompt, aspect_ratio: REFERENCE_ASPECT_RATIO, modelSlug: WAVESPEED_GPT_IMAGE_25_FLARE_T2I, resolution: "4k", image_input: imageInput },
-          { jobId, shouldCancel: canceled, timeoutMs: 600_000 },
+          // shouldCancel срабатывает и по жёсткому бюджету — тогда это «уступить», а не отмена пользователем.
+          { jobId, shouldCancel: async () => budget.hard() || (await canceled()), timeoutMs: 600_000 },
         );
         const url = await uploadRemoteToS3(remote, `media/public/v2-scenes/${projectId}/${episode}/${sc.id}-${Date.now()}.png`, "image/png");
         await patchEpisodeSceneV2(projectId, episode, sc.id, { firstFrameUrl: url, firstFrameStatus: "done", firstFrameError: "" });
       } catch (e: any) {
-        if (e instanceof GenerationCanceledError) { await patchEpisodeSceneV2(projectId, episode, sc.id, { firstFrameStatus: "idle" }); return; }
-        failed += 1;
+        if (e instanceof GenerationCanceledError) {
+          if (await canceled()) { await patchEpisodeSceneV2(projectId, episode, sc.id, { firstFrameStatus: "idle" }); return; }
+          yielded += 1;
+          await patchEpisodeSceneV2(projectId, episode, sc.id, { firstFrameStatus: "pending" });
+          return;
+        }
         const msg = String(e?.message ?? e).slice(0, 300);
         console.error(`[episode-scene-frames-v2] ${sc.id} failed:`, msg);
         await patchEpisodeSceneV2(projectId, episode, sc.id, { firstFrameStatus: "error", firstFrameError: msg });
@@ -117,7 +138,14 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSce
     });
 
     if (await canceled()) { await markCanceled(jobId, `Canceled — done ${done} of ${total}`); return; }
-    await completeJob(jobId, { episode, total, failed }, failed ? `Done — ${failed} of ${total} failed` : "First frames are ready");
+    if (yielded) {
+      // job остаётся processing; cron /api/cron/advance-chains подхватит её, когда она замолчит.
+      await updateJob(jobId, { message: `First frames ${done}/${total} — continuing in background...` });
+      return;
+    }
+    const final = episodeScenesV2From((await prisma.project.findUnique({ where: { id: projectId }, select: { episodeScenesV2: true } }))?.episodeScenesV2, episode);
+    const failed = final.filter((s) => s.firstFrameStatus === "error").length;
+    await completeJob(jobId, { episode, prepared: true, total, failed }, failed ? `Done — ${failed} of ${total} failed` : "First frames are ready");
   } catch (err: any) {
     console.error("[episode-scene-frames-v2] failed:", err);
     await failJob(jobId, err?.message ?? "First frame cutting failed");

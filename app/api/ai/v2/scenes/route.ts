@@ -23,6 +23,10 @@ import { translateRefLabelsToEnglish, translateToEnglish } from "@/lib/translate
  * POST  { projectId, episode, action: "launch-all" } → job "episode_scene_video_v2" (Seedance i2v по всем сценам с первым кадром).
  * POST  { projectId, episode, action: "assemble" }   → job "episode_assemble_v2" (ffmpeg-склейка всех видео сцен по index → финальный mp4 в S3).
  * PATCH { projectId, episode, sceneId, prompt }      → promptOverride сцены (пустая строка → сброс к авто).
+ * Исполнение — полностью на сервере: POST только создаёт GenerationJob и запускает воркер в after() этой инвокации
+ * (ответ возвращается сразу, закрытие вкладки работу не прерывает). Воркеры возобновляемые: если инвокация упёрлась
+ * в maxDuration или упала, cron /api/cron/advance-chains (resumeEpisodeScenesV2Jobs) перезапускает их раз в минуту.
+ * GET лишь ЧИТАЕТ состояние (сцены + последние job) — поллинг вкладки ничего не двигает.
  * GET   ?projectId&episode → { scenes (+autoPrompt/videoPrompt), refs, approved, framesJob, videoJob }.
  */
 const postSchema = z.object({ projectId: z.string().min(1), episode: z.coerce.number().int().min(1).max(999), action: z.enum(["approve", "launch-all", "assemble"]) });

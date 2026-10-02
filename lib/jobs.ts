@@ -64,6 +64,14 @@ export function runInBackground(fn: () => Promise<void>): void {
   }
 }
 
+/**
+ * v2 «Сцены»: job, которые по возрасту НЕ реапятся failStaleJobs. Их воркеры возобновляемые (состояние per-scene
+ * в Project.episodeScenesV2/episodeFinalV2), а замолчавшую job (инвокацию убил maxDuration или воркер сам уступил
+ * по бюджету времени) переподхватывает cron /api/cron/advance-chains → resumeEpisodeScenesV2Jobs, который же и
+ * сдаётся (failJob) после лимита возобновлений/возраста.
+ */
+export const CRON_RESUMED_JOB_TYPES = ["episode_scene_frames_v2", "episode_scene_video_v2", "episode_assemble_v2"];
+
 /** Jobs that haven't been touched for this long are considered dead (function killed). */
 export const STALE_JOB_MS = 3 * 60 * 1000;
 
@@ -100,6 +108,7 @@ export async function failStaleJobs(where: { projectId?: string; sceneId?: strin
             ],
           },
         ],
+        NOT: { type: { in: CRON_RESUMED_JOB_TYPES } },
         status: { in: ["pending", "processing"] },
         updatedAt: { lt: new Date(Date.now() - STALE_JOB_MS) },
       },
