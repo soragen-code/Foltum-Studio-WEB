@@ -10,12 +10,11 @@ import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runEpisodeSceneFramesV2Job, EPISODE_SCENE_FRAMES_V2_JOB_TYPE } from "@/lib/workers/episode-scene-frames-v2-job";
 import { runEpisodeSceneVideoV2Job, EPISODE_SCENE_VIDEO_V2_JOB_TYPE } from "@/lib/workers/episode-scene-video-v2-job";
 import { runEpisodeAssembleV2Job, EPISODE_ASSEMBLE_V2_JOB_TYPE } from "@/lib/workers/episode-assemble-v2-job";
-import { allSceneVideosReady, buildSceneFrameV2Prompt, episodeFinalV2From, episodeRefsV2From, episodeScenesV2From, episodeShotsV2From, episodeStoryboardV2From, sceneVideoV2Prompt, selectStoryboardV2Refs } from "@/lib/idea-v2";
+import { allSceneVideosReady, episodeFinalV2From, episodeRefsV2From, episodeScenesV2From, episodeShotsV2From, episodeStoryboardV2From, sceneVideoV2Prompt, selectStoryboardV2Refs } from "@/lib/idea-v2";
 import { activeEpisodeJob, latestEpisodeJob, patchEpisodeSceneV2, setEpisodeFinalV2 } from "@/lib/episode-scenes-v2-store";
 import { setEpisodeStoryboardV2 } from "@/lib/episode-storyboard-v2-store";
 import { WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
-import { VISUAL_STYLE } from "@/lib/visual-style";
-import { translateRefLabelsToEnglish, translateToEnglish } from "@/lib/translate-en";
+import { translateToEnglish } from "@/lib/translate-en";
 
 /**
  * Поток v2 · вкладка «Сцены» серии n.
@@ -131,14 +130,15 @@ export async function GET(request: Request) {
   // Те же референсы, что уходят в нарезку (лист-сториборд занимает один слот image_input).
   // Метки референсов переводятся на English один раз (превью промпта = только English, как в воркере).
   const refs = selectStoryboardV2Refs(episodeRefsV2From(project.episodeRefsV2, episode), WAVESPEED_IMAGE_MAX_REFS - 1);
-  const refsEn = await translateRefLabelsToEnglish(refs);
   const storyboard = episodeStoryboardV2From(project.episodeStoryboardV2, episode);
   // Авто-промпты — только English: action хранится уже переведённым, но страхуемся (translateToEnglish —
   // локальная детекция языка, no-op для English, так что поллинг не гоняет LLM).
+  // Промпт сцены = только T2V-промпт видео (промпт первого кадра сюда НЕ подмешивается). autoPrompt —
+  // авто-версия без ручного override (базовая для сравнения в модалке); videoPrompt — итоговый (с override).
   const rawScenes = episodeScenesV2From(project.episodeScenesV2, episode);
   const scenes = await Promise.all(rawScenes.map(async (s) => {
     const en = { ...s, action: (await translateToEnglish(s.action)) || s.action };
-    return { ...s, autoPrompt: buildSceneFrameV2Prompt(en, refsEn, VISUAL_STYLE), videoPrompt: sceneVideoV2Prompt(en) };
+    return { ...s, autoPrompt: sceneVideoV2Prompt({ action: en.action, endFrame: en.endFrame, promptOverride: null }), videoPrompt: sceneVideoV2Prompt(en) };
   }));
   // Если job склейки упала/устарела, а в episodeFinalV2 застрял pending/running — показываем ошибку.
   let final = episodeFinalV2From(project.episodeFinalV2, episode);

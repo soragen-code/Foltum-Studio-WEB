@@ -126,9 +126,9 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSce
       if (budget.soft()) { yielded += 1; await patchEpisodeSceneV2(projectId, episode, sc.id, { firstFrameStatus: "pending" }); return; }
       await patchEpisodeSceneV2(projectId, episode, sc.id, { firstFrameStatus: "running" });
       try {
-        const prompt = sc.promptOverride?.trim()
-          ? (await translateToEnglish(sc.promptOverride)) || sc.promptOverride
-          : buildSceneFrameV2Prompt(sc, refs, VISUAL_STYLE);
+        // Первый кадр генерится ТОЛЬКО по авто-промпту кадра. Ручной промпт сцены (promptOverride) —
+        // это T2V-промпт видео и в генерацию кадра НЕ подмешивается.
+        const prompt = buildSceneFrameV2Prompt(sc, refs, VISUAL_STYLE);
         const remote = await generateImage(
           { prompt, aspect_ratio: REFERENCE_ASPECT_RATIO, modelSlug: WAVESPEED_GPT_IMAGE_25_FLARE_T2I, resolution: "4k", image_input: imageInput },
           // shouldCancel срабатывает и по жёсткому бюджету — тогда это «уступить», а не отмена пользователем.

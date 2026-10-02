@@ -28,7 +28,6 @@ export function ScenePromptModal({ projectId, n, scene, refs, storyboardUrl, onS
   const [ruText, setRuText] = useState<{ src: string; text: string } | null>(null)
   const edited = draft.trim() !== scene.autoPrompt.trim()
   const dirty = draft !== initial
-  const videoPrompt = edited && draft.trim() ? draft.trim() : scene.action
 
   const btnBase = 'inline-flex items-center justify-center gap-1 rounded-md border px-1.5 py-1 text-xs font-medium transition'
   const btnIdle = 'border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground'
@@ -80,7 +79,7 @@ export function ScenePromptModal({ projectId, n, scene, refs, storyboardUrl, onS
         <div className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
           <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              {t('ideaV2.scenesFramePromptLabel')}{edited && <span className="ml-2 normal-case text-amber-500">· {t('ideaV2.refsEdited')}</span>}
+              {t('ideaV2.scenesVideoPromptLabel')}{edited && <span className="ml-2 normal-case text-amber-500">· {t('ideaV2.refsEdited')}</span>}
             </span>
             <div className="flex items-center gap-1">
               <button type="button" onClick={() => void toggleRu()} className={`${btnBase} ${ruOn ? btnActive : btnIdle}`} title={t('ideaV2.refsRuHint')} aria-pressed={ruOn} data-testid="episode-v2-scene-ru-toggle">
@@ -105,11 +104,6 @@ export function ScenePromptModal({ projectId, n, scene, refs, storyboardUrl, onS
           <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
             <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" /> {ruOn ? t('ideaV2.refsRuNote') : t('ideaV2.scenesPromptNote')}
           </p>
-
-          <div className="rounded-lg border border-border px-3 py-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('ideaV2.scenesVideoPromptLabel')}</p>
-            <p className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-foreground/90" data-testid="episode-v2-scene-video-prompt">{videoPrompt}</p>
-          </div>
 
           {scene.endFrame?.trim() && (
             <div className="rounded-lg border border-border px-3 py-2">
