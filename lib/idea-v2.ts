@@ -844,12 +844,22 @@ RULES
   - Each shot MUST last between 4 and 6 seconds (integer seconds). Prefer 5s. Never below 4 or above 6.
   - Pick the OPTIMAL number of shots the script naturally needs — do NOT pad or compress. Cover the ENTIRE script from first to last beat, in reading order, with no gaps and no overlaps.
   - One continuous action, line of dialogue, or reaction = one shot. Split long beats into multiple shots; merge trivial adjacent micro-beats only when they read as a single clip.
-  - "action" describes ONLY what is visible/audible on screen in that clip: subject, blocking, key motion, framing hint if obvious. Keep it concrete and filmable, 1–2 sentences. No camera brand names, no shot-size jargon unless natural, no meta commentary.
-  - Write every "action" value in <Language>.
+  - "action" MUST carry BOTH the story and the craft, so an artist or an image model can draw the frame without guessing and the shots stay consistent in style and editing logic. Write it in two parts:
+      PART 1 — 1–2 short sentences of what is visible/audible in the clip: subject, key motion, and any spoken line as a brief cue.
+      PART 2 — then a NEW LINE ("\n") with a craft tag line: exactly these five fields, in THIS order, separated by " · " (middle dot with spaces), values only (no field names):
+        1. Shot size — one of: общий / средний / крупный / деталь. Vary the size between adjacent shots; never leave it implicit.
+        2. Camera angle & height — e.g. с уровня глаз / снизу / сверху / через плечо / POV <character name>.
+        3. Camera movement — one of: статика / наезд / отъезд / панорама / проезд / ручная.
+        4. Mise-en-scène — where each character stands RELATIVE to the set pieces and WHERE they look; keep screen direction consistent across the scene (respect the 180° line).
+        5. Light — the key source, its colour/quality, and what is or is not visible outside it.
+      Example PART 2: "средний · сбоку, низкая точка · статика · Грейс слева, колонна справа, смотрит на счётчик · фонарь — единственный источник, пыль в луче, за лучом темно".
+  - Keep screen direction and lighting continuous between consecutive shots of the same scene unless the script motivates a change (new location, cut to another character's POV, lights turned on/off).
+  - No camera brand names, no lens millimetres, no meta commentary.
+  - Write every "action" value — BOTH the narrative part and the craft line — in <Language>.
 
 OUTPUT
-Return ONLY a JSON object, no markdown fences, no commentary:
-{"shots":[{"index":1,"durationSec":5,"action":"..."},{"index":2,"durationSec":4,"action":"..."}]}
+Return ONLY a JSON object, no markdown fences, no commentary. Put the craft line after a literal "\n" inside the action string:
+{"shots":[{"index":1,"durationSec":5,"action":"<narrative>\n<craft line>"},{"index":2,"durationSec":4,"action":"<narrative>\n<craft line>"}]}
 Order shots strictly by their appearance in the script, index starting at 1.`;
 
 export function episodeShotsV2SystemPrompt(language: SynopsisLanguage | string): string {
