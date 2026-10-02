@@ -2,14 +2,15 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, Eye, Pencil, ArrowLeft, Wand2, FileText, Images } from 'lucide-react'
+import { Loader2, Eye, Pencil, ArrowLeft, Wand2, FileText, Images, Clapperboard } from 'lucide-react'
 import { Header } from '@/components/header'
-import { FABLE_MODEL_LABEL, type EpisodeRefV2 } from '@/lib/idea-v2'
+import { FABLE_MODEL_LABEL, type EpisodeRefV2, type EpisodeShotV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from '../../../_components/cancel-button'
 import { useJobPolling, SmoothProgress } from '../../../_components/use-job-polling'
 import { PromptModal, type PromptMsg } from '../../../_components/v2-prompt-modal'
 import { EpisodeRefsTab } from './refs-tab'
+import { ShotlistTab } from './shotlist-tab'
 
 /**
  * Поток v2 · страница эпизода. Вкладки расширяемы (TABS): «Сценарий», «Референсы» (refs-tab.tsx).
@@ -17,7 +18,7 @@ import { EpisodeRefsTab } from './refs-tab'
  * есть сценарий → текст + поле правки + «Изменить» (диалог scriptBase/scriptTurns в localStorage per-episode).
  */
 type Msg = PromptMsg
-type TabKey = 'script' | 'refs'
+type TabKey = 'script' | 'refs' | 'shots'
 const SCRIPT_EXPECTED_SEC = 60
 const API = { generate: '/api/ai/v2/script', preview: '/api/ai/v2/script/preview' }
 
@@ -62,13 +63,14 @@ const storeDialog = (pid: string, n: number, base: string, turns: ScriptTurn[]) 
   } catch { /* localStorage недоступен */ }
 }
 
-export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScript, initialRefs = [], backHref, ownFace = false }: {
-  projectId: string; projectTitle: string; n: number; summary: string; initialScript: string; initialRefs?: EpisodeRefV2[]; backHref: string; ownFace?: boolean
+export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScript, initialRefs = [], initialShots = [], backHref, ownFace = false }: {
+  projectId: string; projectTitle: string; n: number; summary: string; initialScript: string; initialRefs?: EpisodeRefV2[]; initialShots?: EpisodeShotV2[]; backHref: string; ownFace?: boolean
 }) {
   const { t, locale } = useTranslation()
   const TABS: { key: TabKey; label: string; icon: typeof FileText }[] = [
     { key: 'script', label: t('ideaV2.scriptTab'), icon: FileText },
     { key: 'refs', label: t('ideaV2.refsTab'), icon: Images },
+    { key: 'shots', label: t('ideaV2.shotsTab'), icon: Clapperboard },
   ]
   const [tab, setTab] = useState<TabKey>('script')
 
@@ -374,6 +376,7 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
           <div className="mt-4" role="tabpanel">
             {tab === 'script' && renderScriptTab()}
             {tab === 'refs' && <EpisodeRefsTab projectId={projectId} n={n} hasScript={!!script && !generating} initialRefs={initialRefs} ownFace={ownFace} />}
+            {tab === 'shots' && <ShotlistTab projectId={projectId} n={n} hasScript={!!script && !generating} scriptText={script} initialShots={initialShots} />}
           </div>
           {error && tab === 'script' && <div className="mt-4">{errorBox}</div>}
         </div>

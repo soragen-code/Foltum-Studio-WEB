@@ -816,3 +816,83 @@ export function episodeRefsV2From(map: unknown, n: number): EpisodeRefV2[] {
   const v = map && typeof map === "object" ? (map as Record<string, any>)[String(n)] : null;
   return Array.isArray(v?.items) ? (v.items as EpisodeRefV2[]).filter((r) => r && typeof r.id === "string" && typeof r.prompt === "string") : [];
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v2 · уровень эпизода: вкладка «Шот-лист» (разбивка сценария серии на кадры/клипы)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Элемент шот-листа серии (Project.episodeShotsV2["<n>"].items[]). action — на языке синопсиса. */
+export interface EpisodeShotV2 {
+  id: string;
+  /** Порядковый номер кадра (с 1). */
+  index: number;
+  /** Длительность клипа, сек (4–6). */
+  durationSec: number;
+  /** Описание кадра/действия (что происходит в клипе) на языке синопсиса. */
+  action: string;
+  /** Правился вручную — повторная разбивка его не перезатирает. */
+  edited?: boolean;
+}
+
+/** Правила (system) разбивки сценария серии на кадры. `<Language>` — язык синопсиса (для action). */
+export const EPISODE_SHOTS_V2_RULES = `You are a first assistant director breaking ONE episode of a photorealistic live-action vertical micro-series into a SHOT LIST. The user message is the episode's shooting script (sluglines INT./EXT., action, dialogue).
+
+GOAL
+Split the whole script into an ordered list of shots. Each shot = ONE camera setup = ONE generated video clip.
+
+RULES
+  - Each shot MUST last between 4 and 6 seconds (integer seconds). Prefer 5s. Never below 4 or above 6.
+  - Pick the OPTIMAL number of shots the script naturally needs — do NOT pad or compress. Cover the ENTIRE script from first to last beat, in reading order, with no gaps and no overlaps.
+  - One continuous action, line of dialogue, or reaction = one shot. Split long beats into multiple shots; merge trivial adjacent micro-beats only when they read as a single clip.
+  - "action" describes ONLY what is visible/audible on screen in that clip: subject, blocking, key motion, framing hint if obvious. Keep it concrete and filmable, 1–2 sentences. No camera brand names, no shot-size jargon unless natural, no meta commentary.
+  - Write every "action" value in <Language>.
+
+OUTPUT
+Return ONLY a JSON object, no markdown fences, no commentary:
+{"shots":[{"index":1,"durationSec":5,"action":"..."},{"index":2,"durationSec":4,"action":"..."}]}
+Order shots strictly by their appearance in the script, index starting at 1.`;
+
+export function episodeShotsV2SystemPrompt(language: SynopsisLanguage | string): string {
+  return EPISODE_SHOTS_V2_RULES.replace(/<Language>/g, String(language || DEFAULT_SYNOPSIS_LANGUAGE));
+}
+
+/** Привести длительность кадра к целым 4–6 сек. */
+const clampShotDuration = (v: unknown): number => {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return 5;
+  return Math.min(6, Math.max(4, n));
+};
+
+/** Разбор ответа модели в список шотов со стабильными id `shot-<index>` (перенумерация с 1). */
+export function parseEpisodeShotsV2(data: unknown): EpisodeShotV2[] {
+  const list: any[] = Array.isArray((data as any)?.shots) ? (data as any).shots : Array.isArray(data) ? (data as any[]) : [];
+  const out: EpisodeShotV2[] = [];
+  for (const s of list) {
+    const action = String(s?.action ?? "").trim();
+    if (!action) continue;
+    const index = out.length + 1;
+    out.push({ id: `shot-${index}`, index, durationSec: clampShotDuration(s?.durationSec), action: action.slice(0, 2000) });
+  }
+  return out;
+}
+
+/**
+ * Повторная разбивка: новый список из сценария, но для совпавших id сохраняются вручную
+ * отредактированные кадры (edited: длительность и описание).
+ */
+export function mergeEpisodeShotsV2(prev: EpisodeShotV2[], fresh: EpisodeShotV2[]): EpisodeShotV2[] {
+  const byId = new Map(prev.map((s) => [s.id, s]));
+  return fresh.map((f) => {
+    const p = byId.get(f.id);
+    if (!p || !p.edited) return f;
+    return { ...f, durationSec: p.durationSec, action: p.action, edited: true };
+  });
+}
+
+/** Шот-лист серии n из Project.episodeShotsV2 ({ "<n>": { items, updatedAt } }). */
+export function episodeShotsV2From(map: unknown, n: number): EpisodeShotV2[] {
+  const v = map && typeof map === "object" ? (map as Record<string, any>)[String(n)] : null;
+  return Array.isArray(v?.items)
+    ? (v.items as EpisodeShotV2[]).filter((s) => s && typeof s.id === "string" && typeof s.action === "string")
+    : [];
+}

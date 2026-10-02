@@ -711,3 +711,6 @@ ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "episodeScriptsV2" JSONB;
 
 -- v2: референсы серий (вкладка «Референсы» страницы эпизода)
 ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "episodeRefsV2" JSONB;
+
+-- v2: шот-лист серий (вкладка «Шот-лист» страницы эпизода)
+ALTER TABLE "Project" ADD COLUMN IF NOT EXISTS "episodeShotsV2" JSONB;
