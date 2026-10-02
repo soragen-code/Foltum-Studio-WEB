@@ -21,6 +21,8 @@ const nextConfig = {
     '/api/ai/generate-episode-videos': ['./node_modules/ffmpeg-static/ffmpeg'],
     '/api/ai/episodes/[id]/generate-all': ['./node_modules/ffmpeg-static/ffmpeg'],
     '/api/jobs/[id]': ['./node_modules/ffmpeg-static/ffmpeg'],
+    // v2 «Сцены»: склейка видео всех сцен в финальный ролик серии (job крутится в этой инвокации).
+    '/api/ai/v2/scenes': ['./node_modules/ffmpeg-static/ffmpeg'],
   },
   // Next 16 BLOCKS unlisted origins on /_next/* and /__nextjs* in dev — including the /_next/hmr
   // WEBSOCKET upgrade, and Turbopack gates client module wiring on that socket, so a blocked origin

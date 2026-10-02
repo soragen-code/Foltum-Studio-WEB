@@ -3,7 +3,7 @@
  * Все записи — одним UPDATE на строку проекта, чтобы параллельные сцены/серии не затирали друг друга.
  */
 import { prisma } from "@/lib/db";
-import type { EpisodeSceneV2 } from "@/lib/idea-v2";
+import type { EpisodeFinalV2, EpisodeSceneV2 } from "@/lib/idea-v2";
 
 export { episodeOfJob, activeEpisodeJob, latestEpisodeJob } from "@/lib/episode-refs-v2-store";
 
@@ -22,4 +22,11 @@ export async function patchEpisodeSceneV2(projectId: string, n: number, sceneId:
       (SELECT COALESCE(jsonb_agg(CASE WHEN e->>'id' = ${sceneId} THEN e || ${p}::jsonb ELSE e END ORDER BY ord), '[]'::jsonb)
          FROM jsonb_array_elements("episodeScenesV2"->${key}::text->'items') WITH ORDINALITY AS t(e, ord)))
     WHERE "id" = ${projectId} AND jsonb_typeof("episodeScenesV2"->${key}::text->'items') = 'array'`;
+}
+
+/** Слить patch в финальный ролик серии n (Project.episodeFinalV2["<n>"]); прочие серии не трогаются. */
+export async function setEpisodeFinalV2(projectId: string, n: number, patch: Partial<EpisodeFinalV2>): Promise<void> {
+  const key = String(n);
+  const p = JSON.stringify({ ...patch, updatedAt: new Date().toISOString() });
+  await prisma.$executeRaw`UPDATE "Project" SET "episodeFinalV2" = COALESCE("episodeFinalV2", '{}'::jsonb) || jsonb_build_object(${key}::text, COALESCE("episodeFinalV2"->${key}::text, '{}'::jsonb) || ${p}::jsonb) WHERE "id" = ${projectId}`;
 }

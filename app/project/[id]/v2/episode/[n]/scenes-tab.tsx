@@ -1,8 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Loader2, Eye, Play, AlertTriangle } from 'lucide-react'
-import type { EpisodeSceneV2 } from '@/lib/idea-v2'
+import { Loader2, Eye, Play, AlertTriangle, Film, Download, RotateCcw } from 'lucide-react'
+import type { EpisodeFinalV2, EpisodeSceneV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { ScenePromptModal, type ScenePromptRef, type ScenePromptScene } from './scene-prompt-modal'
 
@@ -16,7 +16,7 @@ const POLL_MS = 3000
 
 type SceneRow = EpisodeSceneV2 & { autoPrompt?: string; videoPrompt?: string }
 type JobLite = { id: string; status: string; error?: string | null } | null
-type ScenesData = { scenes: SceneRow[]; refs: ScenePromptRef[]; storyboardUrl: string | null; approved: boolean; framesJob: JobLite; videoJob: JobLite }
+type ScenesData = { scenes: SceneRow[]; refs: ScenePromptRef[]; storyboardUrl: string | null; approved: boolean; framesJob: JobLite; videoJob: JobLite; assembleJob: JobLite; final: EpisodeFinalV2 | null; allVideosReady: boolean }
 
 const jobActive = (j: JobLite) => !!j && (j.status === 'pending' || j.status === 'processing')
 const busy = (s?: string) => s === 'pending' || s === 'running'
@@ -25,9 +25,10 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
   projectId: string; n: number; initialScenes?: EpisodeSceneV2[]; initialApproved?: boolean
 }) {
   const { t } = useTranslation()
-  const [data, setData] = useState<ScenesData>({ scenes: initialScenes, refs: [], storyboardUrl: null, approved: initialApproved, framesJob: null, videoJob: null })
+  const [data, setData] = useState<ScenesData>({ scenes: initialScenes, refs: [], storyboardUrl: null, approved: initialApproved, framesJob: null, videoJob: null, assembleJob: null, final: null, allVideosReady: false })
   const [loaded, setLoaded] = useState(false)
   const [launching, setLaunching] = useState(false)
+  const [assembleBusy, setAssembleBusy] = useState(false)
   const [error, setError] = useState('')
   const [promptFor, setPromptFor] = useState<string | null>(null)
 
@@ -40,6 +41,7 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
       setData({
         scenes: d.scenes, refs: Array.isArray(d.refs) ? d.refs : [], storyboardUrl: d.storyboardUrl ?? null,
         approved: !!d.approved, framesJob: d.framesJob ?? null, videoJob: d.videoJob ?? null,
+        assembleJob: d.assembleJob ?? null, final: d.final ?? null, allVideosReady: !!d.allVideosReady,
       })
     } catch { /* транзиентно, следующий тик повторит */ }
     finally { setLoaded(true) }
@@ -47,10 +49,11 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
 
   useEffect(() => { void load() }, [load])
 
-  const { scenes, framesJob, videoJob } = data
+  const { scenes, framesJob, videoJob, assembleJob, final } = data
   const cutting = jobActive(framesJob) || scenes.some((s) => busy(s.firstFrameStatus))
   const videoRunning = jobActive(videoJob) || scenes.some((s) => busy(s.videoStatus))
-  const polling = cutting || videoRunning || launching
+  const assembling = jobActive(assembleJob) || busy(final?.status)
+  const polling = cutting || videoRunning || launching || assembling || assembleBusy
 
   useEffect(() => {
     if (!polling) return
@@ -71,6 +74,19 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
     } catch { setError(t('ideaV2.shotsNetworkError')) }
     finally { setLaunching(false) }
   }
+
+  const assemble = async () => {
+    setAssembleBusy(true); setError('')
+    try {
+      const res = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId, episode: n, action: 'assemble' }) })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) setError(d?.error ?? t('ideaV2.scenesError'))
+      await load()
+    } catch { setError(t('ideaV2.shotsNetworkError')) }
+    finally { setAssembleBusy(false) }
+  }
+  const canAssemble = data.allVideosReady && !videoRunning && !cutting
+  const finalReady = !!final?.videoUrl && final.status === 'done'
 
   const btnPrimary = 'flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50'
   const btnV1 = 'flex items-center gap-1 rounded-lg bg-muted px-3 py-1.5 text-xs transition hover:bg-muted/80 disabled:opacity-50'
@@ -107,6 +123,43 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
           {launching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {t('ideaV2.launchAllScenes')}
         </button>
       </div>
+
+      {scenes.length > 0 && (
+        <div className="mt-4 rounded-lg border border-border bg-muted/30 p-3" data-testid="episode-v2-assemble">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="min-w-0 text-xs text-muted-foreground">
+              {assembling ? (
+                <p className="inline-flex items-center gap-2" data-testid="episode-v2-assembling"><Loader2 className="h-3 w-3 animate-spin text-primary" /> {t('ideaV2.assembling')}</p>
+              ) : finalReady ? (
+                <p className="font-semibold text-foreground">{t('ideaV2.finalReady')}</p>
+              ) : !canAssemble ? (
+                <p>{t('ideaV2.assembleNeedAllVideos')}</p>
+              ) : null}
+              {!assembling && final?.status === 'error' && final.error && <p className="mt-1 text-destructive" title={final.error}>{final.error}</p>}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {finalReady && !assembling && (
+                <a href={final!.videoUrl} download target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 rounded-lg bg-muted px-4 py-2.5 text-sm transition hover:bg-muted/80" data-testid="episode-v2-final-download">
+                  <Download className="h-4 w-4" /> {t('ideaV2.download')}
+                </a>
+              )}
+              <button
+                onClick={() => void assemble()}
+                disabled={!canAssemble || assembling || assembleBusy}
+                title={!canAssemble ? t('ideaV2.assembleNeedAllVideos') : undefined}
+                className={btnPrimary}
+                data-testid="episode-v2-assemble-btn"
+              >
+                {assembling || assembleBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : finalReady ? <RotateCcw className="h-4 w-4" /> : <Film className="h-4 w-4" />}
+                {finalReady ? t('ideaV2.reassemble') : t('ideaV2.assembleEpisode')}
+              </button>
+            </div>
+          </div>
+          {finalReady && !assembling && (
+            <video key={final!.videoUrl} src={final!.videoUrl} controls playsInline className="mx-auto mt-3 aspect-[9/16] max-h-[70vh] rounded-lg bg-black" data-testid="episode-v2-final-video" />
+          )}
+        </div>
+      )}
       {error && <div className="mt-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="episode-v2-scenes-error">{error}</div>}
       {framesJob?.status === 'failed' && framesJob.error && <p className="mt-3 text-xs text-destructive">{framesJob.error}</p>}
 

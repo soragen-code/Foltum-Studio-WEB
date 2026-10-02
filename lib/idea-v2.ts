@@ -1063,3 +1063,22 @@ export function sceneVideoV2Prompt(scene: Pick<EpisodeSceneV2, "action" | "promp
   const ov = typeof scene.promptOverride === "string" ? scene.promptOverride.trim() : "";
   return ov || scene.action.trim();
 }
+
+/** Финальный ролик серии (Project.episodeFinalV2["<n>"]): склейка видео всех сцен по index. */
+export interface EpisodeFinalV2 {
+  videoUrl?: string;
+  status?: EpisodeSceneStatusV2;
+  error?: string;
+  updatedAt?: string;
+}
+
+export function episodeFinalV2From(map: unknown, n: number): EpisodeFinalV2 | null {
+  const v = map && typeof map === "object" ? (map as Record<string, any>)[String(n)] : null;
+  if (!v || typeof v !== "object") return null;
+  return { videoUrl: optStr(v.videoUrl), status: sceneStatus(v.status), error: optStr(v.error), updatedAt: optStr(v.updatedAt) };
+}
+
+/** Все сцены серии готовы к склейке: есть хотя бы одна, и у каждой videoStatus=done + videoUrl. */
+export function allSceneVideosReady(scenes: Pick<EpisodeSceneV2, "videoStatus" | "videoUrl">[]): boolean {
+  return scenes.length > 0 && scenes.every((s) => s.videoStatus === "done" && !!s.videoUrl);
+}
