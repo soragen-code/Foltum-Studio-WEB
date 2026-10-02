@@ -923,6 +923,8 @@ export interface EpisodeStoryboardV2 {
   status?: "generating" | "done" | "failed" | null;
   /** Текст ошибки, если генерация упала. */
   error?: string | null;
+  /** Пользователь утвердил лист → нарезка первых кадров сцен (вкладка «Сцены»). */
+  approved?: boolean;
   updatedAt?: string;
 }
 
@@ -936,6 +938,7 @@ export function episodeStoryboardV2From(map: unknown, n: number): EpisodeStorybo
     promptOverride: typeof v.promptOverride === "string" ? v.promptOverride : null,
     status: v.status === "generating" || v.status === "done" || v.status === "failed" ? v.status : null,
     error: typeof v.error === "string" ? v.error : null,
+    approved: v.approved === true,
     updatedAt: typeof v.updatedAt === "string" ? v.updatedAt : undefined,
   };
 }
@@ -980,4 +983,83 @@ export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRe
         .join("\n")
     : "";
   return `${base}\n\nSHOTS:\n${panels}${refsBlock}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v2 · уровень эпизода: вкладка «Сцены» (по сцене на кадр шот-листа; первый кадр 9:16 → видео Seedance i2v)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type EpisodeSceneStatusV2 = "idle" | "pending" | "running" | "done" | "error";
+
+/** Сцена серии (Project.episodeScenesV2["<n>"].items[]): одна на кадр шот-листа. */
+export interface EpisodeSceneV2 {
+  id: string;
+  index: number;
+  shotId: string;
+  /** Описание кадра на English (переведено при нарезке). */
+  action: string;
+  /** Длительность видео сцены (из шота). */
+  durationSec?: number;
+  firstFrameUrl?: string;
+  firstFrameStatus?: EpisodeSceneStatusV2;
+  firstFrameError?: string;
+  videoUrl?: string;
+  videoStatus?: EpisodeSceneStatusV2;
+  videoError?: string;
+  /** Ручной промпт сцены (приоритетнее авто-промпта первого кадра и видео). */
+  promptOverride?: string | null;
+}
+
+const SCENE_STATUSES: EpisodeSceneStatusV2[] = ["idle", "pending", "running", "done", "error"];
+const sceneStatus = (v: unknown): EpisodeSceneStatusV2 | undefined => (SCENE_STATUSES.includes(v as EpisodeSceneStatusV2) ? (v as EpisodeSceneStatusV2) : undefined);
+const optStr = (v: unknown): string | undefined => (typeof v === "string" && v ? v : undefined);
+
+/** Сцены серии n из Project.episodeScenesV2 ({ "<n>": { items, updatedAt } }). */
+export function episodeScenesV2From(map: unknown, n: number): EpisodeSceneV2[] {
+  const v = map && typeof map === "object" ? (map as Record<string, any>)[String(n)] : null;
+  if (!Array.isArray(v?.items)) return [];
+  return (v.items as any[])
+    .filter((s) => s && typeof s.id === "string" && typeof s.action === "string")
+    .map((s) => ({
+      id: s.id,
+      index: Number(s.index) || 0,
+      shotId: String(s.shotId ?? ""),
+      action: s.action,
+      durationSec: Number.isFinite(Number(s.durationSec)) ? Number(s.durationSec) : undefined,
+      firstFrameUrl: optStr(s.firstFrameUrl),
+      firstFrameStatus: sceneStatus(s.firstFrameStatus),
+      firstFrameError: optStr(s.firstFrameError),
+      videoUrl: optStr(s.videoUrl),
+      videoStatus: sceneStatus(s.videoStatus),
+      videoError: optStr(s.videoError),
+      promptOverride: typeof s.promptOverride === "string" && s.promptOverride.trim() ? s.promptOverride : null,
+    }))
+    .sort((a, b) => a.index - b.index);
+}
+
+/**
+ * Авто-промпт первого кадра сцены: standalone 9:16 кадр, воссозданный по панели #index листа-сториборда
+ * (лист — первое изображение в image_input), плюс описание референсов (идут следом). style — VISUAL_STYLE.
+ */
+export function buildSceneFrameV2Prompt(scene: Pick<EpisodeSceneV2, "index" | "action">, refs: EpisodeRefV2[], style: string): string {
+  const refList = refs.filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
+  const head =
+    `[VISUAL STYLE]: ${style}\n` +
+    `Standalone vertical 9:16 cinematic frame. Recreate panel #${scene.index} from the provided storyboard sheet as a full standalone shot.\n` +
+    `ACTION: ${scene.action.replace(/\s+/g, " ").trim()}\n` +
+    `Image 1 is the storyboard sheet — use ONLY panel #${scene.index} as the composition guide (framing, blocking, camera angle). ` +
+    `Output ONE full-bleed photorealistic frame: no grid, no panel borders, no number badges, no captions or any text.`;
+  const refsBlock = refList.length
+    ? `\n\nREFERENCES: the next ${refList.length} attached image(s) are the canonical look of the recurring characters, locations and props — keep them identical:\n` +
+      refList
+        .map((r, i) => `Image ${i + 2}: ${r.kind === "character" ? "character" : r.kind === "location" ? "location" : "prop"} — ${r.label.replace(/\s+/g, " ").trim()}`)
+        .join("\n")
+    : "";
+  return `${head}${refsBlock}`;
+}
+
+/** Промпт видео сцены (Seedance i2v): ручной промпт, иначе action (EN). */
+export function sceneVideoV2Prompt(scene: Pick<EpisodeSceneV2, "action" | "promptOverride">): string {
+  const ov = typeof scene.promptOverride === "string" ? scene.promptOverride.trim() : "";
+  return ov || scene.action.trim();
 }

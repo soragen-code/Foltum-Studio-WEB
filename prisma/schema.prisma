@@ -105,6 +105,7 @@ model Project {
   episodeRefsV2     Json?  // v2: рефы серий { "<n>": { items: [{ id, kind, label, prompt, imageUrl?, imageStatus? }], updatedAt } }
   episodeShotsV2    Json?  // v2: шот-лист серий { "<n>": { items: [{ id, index, durationSec, action, edited? }], updatedAt } }
   episodeStoryboardV2 Json?  // v2: сториборд серий { "<n>": { imageUrl?, prompt?, status?, error?, updatedAt } }
+  episodeScenesV2   Json?  // v2: сцены серий { "<n>": { items: [{ id, index, shotId, action, firstFrameUrl?, firstFrameStatus?, videoUrl?, videoStatus?, promptOverride? }], updatedAt } }
   // Stage 46A: approved SHORT synopsis (JSON {premise, episodes[{number, logline}]}) — mandatory outline for the season structure.
   shortSynopsis String? @db.Text
   // Stage 1 (dramaBible): the structured story bible (theme, tropes, protagonist/antagonist arcs, escalation

@@ -2,9 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, Eye, Pencil, ArrowLeft, Wand2, FileText, Images, Clapperboard, LayoutGrid } from 'lucide-react'
+import { Loader2, Eye, Pencil, ArrowLeft, Wand2, FileText, Images, Clapperboard, LayoutGrid, Film } from 'lucide-react'
 import { Header } from '@/components/header'
-import { FABLE_MODEL_LABEL, type EpisodeRefV2, type EpisodeShotV2, type EpisodeStoryboardV2 } from '@/lib/idea-v2'
+import { FABLE_MODEL_LABEL, type EpisodeRefV2, type EpisodeShotV2, type EpisodeStoryboardV2, type EpisodeSceneV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from '../../../_components/cancel-button'
 import { useJobPolling, SmoothProgress } from '../../../_components/use-job-polling'
@@ -12,6 +12,7 @@ import { PromptModal, type PromptMsg } from '../../../_components/v2-prompt-moda
 import { EpisodeRefsTab } from './refs-tab'
 import { ShotlistTab } from './shotlist-tab'
 import { StoryboardTab } from './storyboard-tab'
+import { ScenesTab } from './scenes-tab'
 
 /**
  * Поток v2 · страница эпизода. Вкладки расширяемы (TABS): «Сценарий», «Референсы» (refs-tab.tsx).
@@ -19,7 +20,7 @@ import { StoryboardTab } from './storyboard-tab'
  * есть сценарий → текст + поле правки + «Изменить» (диалог scriptBase/scriptTurns в localStorage per-episode).
  */
 type Msg = PromptMsg
-type TabKey = 'script' | 'refs' | 'shots' | 'storyboard'
+type TabKey = 'script' | 'refs' | 'shots' | 'storyboard' | 'scenes'
 const SCRIPT_EXPECTED_SEC = 60
 const API = { generate: '/api/ai/v2/script', preview: '/api/ai/v2/script/preview' }
 
@@ -64,8 +65,8 @@ const storeDialog = (pid: string, n: number, base: string, turns: ScriptTurn[]) 
   } catch { /* localStorage недоступен */ }
 }
 
-export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScript, initialRefs = [], initialShots = [], initialStoryboard = null, backHref, ownFace = false }: {
-  projectId: string; projectTitle: string; n: number; summary: string; initialScript: string; initialRefs?: EpisodeRefV2[]; initialShots?: EpisodeShotV2[]; initialStoryboard?: EpisodeStoryboardV2 | null; backHref: string; ownFace?: boolean
+export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScript, initialRefs = [], initialShots = [], initialStoryboard = null, initialScenes = [], backHref, ownFace = false }: {
+  projectId: string; projectTitle: string; n: number; summary: string; initialScript: string; initialRefs?: EpisodeRefV2[]; initialShots?: EpisodeShotV2[]; initialStoryboard?: EpisodeStoryboardV2 | null; initialScenes?: EpisodeSceneV2[]; backHref: string; ownFace?: boolean
 }) {
   const { t, locale } = useTranslation()
   const TABS: { key: TabKey; label: string; icon: typeof FileText }[] = [
@@ -73,6 +74,7 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
     { key: 'refs', label: t('ideaV2.refsTab'), icon: Images },
     { key: 'shots', label: t('ideaV2.shotsTab'), icon: Clapperboard },
     { key: 'storyboard', label: t('ideaV2.storyboardTab'), icon: LayoutGrid },
+    { key: 'scenes', label: t('ideaV2.scenesTab'), icon: Film },
   ]
   const [tab, setTab] = useState<TabKey>('script')
 
@@ -379,7 +381,8 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
             {tab === 'script' && renderScriptTab()}
             {tab === 'refs' && <EpisodeRefsTab projectId={projectId} n={n} hasScript={!!script && !generating} initialRefs={initialRefs} ownFace={ownFace} />}
             {tab === 'shots' && <ShotlistTab projectId={projectId} n={n} hasScript={!!script && !generating} scriptText={script} initialShots={initialShots} />}
-            {tab === 'storyboard' && <StoryboardTab projectId={projectId} n={n} hasShots={initialShots.length > 0} initialStoryboard={initialStoryboard} />}
+            {tab === 'storyboard' && <StoryboardTab projectId={projectId} n={n} hasShots={initialShots.length > 0} initialStoryboard={initialStoryboard} onOpenScenes={() => setTab('scenes')} />}
+            {tab === 'scenes' && <ScenesTab projectId={projectId} n={n} initialScenes={initialScenes} initialApproved={!!initialStoryboard?.approved} />}
           </div>
           {error && tab === 'script' && <div className="mt-4">{errorBox}</div>}
         </div>

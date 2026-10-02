@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, LayoutGrid, RefreshCw, X, Eye } from 'lucide-react'
+import { Loader2, LayoutGrid, RefreshCw, X, Eye, CheckCircle2, Film } from 'lucide-react'
 import type { EpisodeStoryboardV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from '../../../_components/cancel-button'
@@ -21,8 +21,10 @@ const API = '/api/ai/v2/storyboard'
 const EXPECTED_SEC = 90
 const isActive = (j: any) => !!j && (j.status === 'pending' || j.status === 'processing')
 
-export function StoryboardTab({ projectId, n, hasShots, initialStoryboard }: {
-  projectId: string; n: number; hasShots: boolean; initialStoryboard: EpisodeStoryboardV2 | null
+const SCENES_API = '/api/ai/v2/scenes'
+
+export function StoryboardTab({ projectId, n, hasShots, initialStoryboard, onOpenScenes }: {
+  projectId: string; n: number; hasShots: boolean; initialStoryboard: EpisodeStoryboardV2 | null; onOpenScenes?: () => void
 }) {
   const { t } = useTranslation()
   const [storyboard, setStoryboard] = useState<EpisodeStoryboardV2 | null>(initialStoryboard)
@@ -35,6 +37,9 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard }: {
   const [promptDraft, setPromptDraft] = useState('')
   const [refs, setRefs] = useState<StoryboardPromptRef[]>([])
   const jobIdRef = useRef<string | null>(null)
+  // Аппрув → нарезка первых кадров сцен (job episode_scene_frames_v2, статус через общий поллинг задач).
+  const [approving, setApproving] = useState(false)
+  const [cutState, setCutState] = useState<'idle' | 'done' | 'error'>('idle')
 
   // Черновик промпта из localStorage (per-episode).
   useEffect(() => {
@@ -87,6 +92,28 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard }: {
   })
   const building = starting || isActive(poll.job)
 
+  const cutPoll = useJobPolling({
+    intervalMs: 2000,
+    onFinish: (res: any) => {
+      if (res.job.status === 'completed') setCutState('done')
+      else if (res.job.status === 'canceled') setCutState('idle')
+      else { setCutState('error'); setError(res.job.error ?? t('ideaV2.scenesError')) }
+    },
+  })
+  const cutting = approving || isActive(cutPoll.job)
+
+  const approve = async () => {
+    setError(''); setNotice(''); cutPoll.clear(); setCutState('idle'); setApproving(true)
+    try {
+      const res = await fetch(SCENES_API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId, episode: n, action: 'approve' }) })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) { setError(d?.error ?? t('ideaV2.scenesError')); return }
+      setStoryboard((s) => (s ? { ...s, approved: true } : s))
+      if (d?.jobId) cutPoll.start(d.jobId)
+    } catch { setError(t('ideaV2.shotsNetworkError')) }
+    finally { setApproving(false) }
+  }
+
   // Возобновление идущей задачи при открытии страницы.
   useEffect(() => {
     let ignore = false
@@ -98,6 +125,9 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard }: {
         if (typeof d.autoPrompt === 'string') setAutoPrompt(d.autoPrompt)
         if (Array.isArray(d.refs)) setRefs(d.refs)
         if (isActive(d.job)) { jobIdRef.current = d.job.id; poll.start(d.job.id) }
+        // Идущая нарезка первых кадров (после аппрува) — продолжить показ статуса.
+        const sc = await fetch(`${SCENES_API}?projectId=${projectId}&episode=${n}`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+        if (!ignore && sc && isActive(sc.framesJob)) cutPoll.start(sc.framesJob.id)
       } catch { /* транзиентно */ }
     })()
     return () => { ignore = true }
@@ -194,6 +224,32 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard }: {
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={img} alt={t('ideaV2.storyboardTab')} className="block w-full" />
           </button>
+          {!building && (
+            <div className="mt-3 flex max-w-md flex-col gap-2" data-testid="episode-v2-storyboard-approve-box">
+              <div className="flex flex-wrap items-center gap-2">
+                <button onClick={() => void approve()} disabled={cutting} className={btnBar} data-testid="episode-v2-storyboard-approve">
+                  {cutting ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />} {t('ideaV2.approveStoryboard')}
+                </button>
+                {storyboard?.approved && !cutting && (
+                  <span className="inline-flex items-center gap-1 text-xs text-emerald-500" data-testid="episode-v2-storyboard-approved"><CheckCircle2 className="h-3.5 w-3.5" /> {t('ideaV2.storyboardApproved')}</span>
+                )}
+              </div>
+              {cutting && (
+                <div className="space-y-1" data-testid="episode-v2-storyboard-cutting">
+                  {cutPoll.job && <SmoothProgress job={cutPoll.job} expectedTotalSec={120} />}
+                  <p className="inline-flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin text-primary" /> {t('ideaV2.scenesCutting')} {t('ideaV2.storyboardCanClose')}</p>
+                </div>
+              )}
+              {(cutting || cutState === 'done' || storyboard?.approved) && onOpenScenes && (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  {cutState === 'done' && <span data-testid="episode-v2-storyboard-cut-done">{t('ideaV2.scenesCutDone')}</span>}
+                  <button onClick={onOpenScenes} className="inline-flex items-center gap-1 font-semibold text-primary hover:underline" data-testid="episode-v2-storyboard-open-scenes">
+                    <Film className="h-3.5 w-3.5" /> {t('ideaV2.scenesOpenTab')}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
