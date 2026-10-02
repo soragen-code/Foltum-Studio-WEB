@@ -11,7 +11,7 @@ import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { completeJob, failJob, heartbeatJob, isCancelRequested, markCanceled, updateJob } from "@/lib/jobs";
 import { REFERENCE_ASPECT_RATIO, VISUAL_STYLE } from "@/lib/visual-style";
 import { runWithPromptContext } from "@/lib/prompt-log";
-import { translateToEnglish } from "@/lib/translate-en";
+import { translateRefLabelsToEnglish, translateToEnglish } from "@/lib/translate-en";
 import {
   buildSceneFrameV2Prompt, episodeRefsV2From, episodeScenesV2From, episodeShotsV2From, episodeStoryboardV2From, selectStoryboardV2Refs,
   type EpisodeSceneV2,
@@ -56,8 +56,9 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSce
     });
     await setEpisodeScenesV2(projectId, episode, scenes);
 
-    // Лист-сториборд + референсы ≤ лимита image_input провайдера.
-    const refs = selectStoryboardV2Refs(episodeRefsV2From(row?.episodeRefsV2, episode), WAVESPEED_IMAGE_MAX_REFS - 1);
+    // Лист-сториборд + референсы ≤ лимита image_input провайдера. Метки референсов переводятся на English
+    // (в промпт — только English), image_input берётся по тем же imageUrl.
+    const refs = await translateRefLabelsToEnglish(selectStoryboardV2Refs(episodeRefsV2From(row?.episodeRefsV2, episode), WAVESPEED_IMAGE_MAX_REFS - 1));
     const imageInput = [sheet, ...refs.map((r) => r.imageUrl!)];
 
     const total = scenes.length;
@@ -68,7 +69,9 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSce
       if (await canceled()) { await patchEpisodeSceneV2(projectId, episode, sc.id, { firstFrameStatus: "idle" }); return; }
       await patchEpisodeSceneV2(projectId, episode, sc.id, { firstFrameStatus: "running" });
       try {
-        const prompt = sc.promptOverride?.trim() ? sc.promptOverride : buildSceneFrameV2Prompt(sc, refs, VISUAL_STYLE);
+        const prompt = sc.promptOverride?.trim()
+          ? (await translateToEnglish(sc.promptOverride)) || sc.promptOverride
+          : buildSceneFrameV2Prompt(sc, refs, VISUAL_STYLE);
         const remote = await generateImage(
           { prompt, aspect_ratio: REFERENCE_ASPECT_RATIO, modelSlug: WAVESPEED_GPT_IMAGE_25_FLARE_T2I, resolution: "4k", image_input: imageInput },
           { jobId, shouldCancel: canceled, timeoutMs: 600_000 },

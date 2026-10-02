@@ -14,6 +14,7 @@ import { activeEpisodeJob, latestEpisodeJob, patchEpisodeSceneV2 } from "@/lib/e
 import { setEpisodeStoryboardV2 } from "@/lib/episode-storyboard-v2-store";
 import { WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
 import { VISUAL_STYLE } from "@/lib/visual-style";
+import { translateRefLabelsToEnglish } from "@/lib/translate-en";
 
 /**
  * Поток v2 · вкладка «Сцены» серии n.
@@ -110,11 +111,13 @@ export async function GET(request: Request) {
   ]);
 
   // Те же референсы, что уходят в нарезку (лист-сториборд занимает один слот image_input).
+  // Метки референсов переводятся на English один раз (превью промпта = только English, как в воркере).
   const refs = selectStoryboardV2Refs(episodeRefsV2From(project.episodeRefsV2, episode), WAVESPEED_IMAGE_MAX_REFS - 1);
+  const refsEn = await translateRefLabelsToEnglish(refs);
   const storyboard = episodeStoryboardV2From(project.episodeStoryboardV2, episode);
   const scenes = episodeScenesV2From(project.episodeScenesV2, episode).map((s) => ({
     ...s,
-    autoPrompt: buildSceneFrameV2Prompt(s, refs, VISUAL_STYLE),
+    autoPrompt: buildSceneFrameV2Prompt(s, refsEn, VISUAL_STYLE),
     videoPrompt: sceneVideoV2Prompt(s),
   }));
 

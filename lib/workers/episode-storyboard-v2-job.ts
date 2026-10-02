@@ -12,7 +12,7 @@ import { REFERENCE_ASPECT_RATIO, VISUAL_STYLE } from "@/lib/visual-style";
 import { runWithPromptContext } from "@/lib/prompt-log";
 import { buildStoryboardV2Prompt, episodeRefsV2From, episodeShotsV2From, episodeStoryboardV2From, selectStoryboardV2Refs } from "@/lib/idea-v2";
 import { setEpisodeStoryboardV2 } from "@/lib/episode-storyboard-v2-store";
-import { translateToEnglish } from "@/lib/translate-en";
+import { translateRefLabelsToEnglish, translateToEnglish } from "@/lib/translate-en";
 
 export const EPISODE_STORYBOARD_V2_JOB_TYPE = "episode_storyboard_v2";
 export const EPISODE_STORYBOARD_V2_EXPECTED_SEC = 90;
@@ -36,9 +36,11 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSto
     // Авто-промпт (с описанием референсов) + возможная ручная правка пользователя.
     // Промпт — только English: action шотов (могут быть введены по-русски) переводятся до сборки.
     const shotsEn = await Promise.all(shots.map(async (sh) => ({ ...sh, action: (await translateToEnglish(sh.action)) || sh.action })));
-    const autoPrompt = `[VISUAL STYLE]: ${VISUAL_STYLE}\n${buildStoryboardV2Prompt(shotsEn, refs)}`;
+    const refsEn = await translateRefLabelsToEnglish(refs);
+    const autoPrompt = `[VISUAL STYLE]: ${VISUAL_STYLE}\n${buildStoryboardV2Prompt(shotsEn, refsEn)}`;
     const override = episodeStoryboardV2From(row?.episodeStoryboardV2, episode)?.promptOverride;
-    const prompt = typeof override === "string" && override.trim() ? override : autoPrompt;
+    const overrideEn = typeof override === "string" && override.trim() ? (await translateToEnglish(override)) || override : "";
+    const prompt = overrideEn || autoPrompt;
     await setEpisodeStoryboardV2(projectId, episode, { status: "generating", error: null, prompt, approved: false });
     await updateJob(jobId, { status: "processing", progress: 10, message: `Building a storyboard sheet from ${shots.length} shot(s)${imageInput.length ? ` with ${imageInput.length} reference(s)` : ""}...` });
 

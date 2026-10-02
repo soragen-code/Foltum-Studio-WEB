@@ -30,6 +30,17 @@ export async function translateToEnglish(text: string | null | undefined): Promi
   }
 }
 
+/**
+ * Переводит метки (label) референсов серии на английский — чтобы в image-промпты (сториборд, кадры сцен)
+ * уходил только English. Возвращает НОВЫЙ массив тех же объектов с переведённым label (остальные поля,
+ * включая imageUrl, сохраняются). Английские/пустые метки возвращаются как есть.
+ */
+export async function translateRefLabelsToEnglish<T extends { label?: string }>(refs: T[]): Promise<T[]> {
+  return Promise.all(
+    refs.map(async (r) => ({ ...r, label: (await translateToEnglish(r.label ?? "")) || (r.label ?? "") })),
+  );
+}
+
 /** Пары «правка → логлайн» (история диалога правок логлайна v2). */
 export type LoglineTurn = { refine: string; logline: string };
 
