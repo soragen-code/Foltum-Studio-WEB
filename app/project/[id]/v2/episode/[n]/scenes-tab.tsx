@@ -101,7 +101,7 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
 
   const promptScene = promptFor ? scenes.find((s) => s.id === promptFor) : null
   const modalScene: ScenePromptScene | null = promptScene ? {
-    id: promptScene.id, index: promptScene.index, action: promptScene.action, promptOverride: promptScene.promptOverride,
+    id: promptScene.id, index: promptScene.index, action: promptScene.action, endFrame: promptScene.endFrame, promptOverride: promptScene.promptOverride,
     autoPrompt: promptScene.autoPrompt ?? '', videoPrompt: promptScene.videoPrompt ?? promptScene.action,
   } : null
 
@@ -185,6 +185,7 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
             <div className="flex flex-1 flex-col gap-1.5 p-2">
               <p className="text-xs font-semibold text-foreground">{t('ideaV2.scenesScene', { n: s.index })}</p>
               <p className="line-clamp-3 text-[11px] text-muted-foreground" title={s.action}>{s.action}</p>
+              {s.endFrame && <p className="line-clamp-2 text-[11px] text-muted-foreground/70" title={s.endFrame}>→ {s.endFrame}</p>}
               {s.firstFrameStatus === 'error' && s.firstFrameError && <p className="line-clamp-2 text-[11px] text-destructive" title={s.firstFrameError}>{s.firstFrameError}</p>}
               {s.videoStatus === 'error' && <p className="line-clamp-2 text-[11px] text-destructive" title={s.videoError}>{t('ideaV2.scenesVideoError')}{s.videoError ? `: ${s.videoError}` : ''}</p>}
               <div className="mt-auto pt-1">

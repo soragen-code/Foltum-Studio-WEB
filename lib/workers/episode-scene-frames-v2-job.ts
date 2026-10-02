@@ -6,6 +6,7 @@
  * Ошибка одной сцены не валит остальные.
  */
 import { prisma } from "@/lib/db";
+import { chatJSON } from "@/lib/ai";
 import { generateImage, GenerationCanceledError, WAVESPEED_GPT_IMAGE_25_FLARE_T2I, WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { completeJob, failJob, heartbeatJob, isCancelRequested, markCanceled, updateJob } from "@/lib/jobs";
@@ -23,6 +24,31 @@ export const EPISODE_SCENE_FRAMES_V2_EXPECTED_SEC = 120;
 const CONCURRENCY = 4;
 
 export interface EpisodeSceneFramesV2JobParams { episode: number }
+
+/**
+ * Для каждого action-описания кадра генерирует ОДНО English-предложение финального кадра сцены —
+ * к чему приходит движение в последний момент (поза/позиция/выражение/композиция). Порядок сохраняется.
+ * При ошибке LLM возвращает массив пустых строк (endFrame опционален).
+ */
+async function describeEndFrames(actions: string[]): Promise<string[]> {
+  if (!actions.length) return [];
+  try {
+    const system =
+      "You are a cinematographer. For each shot action, write ONE concise English sentence describing the FINAL FRAME — " +
+      "the exact visual state the shot resolves to at its last moment (final pose, position, expression, composition). " +
+      "Present tense, visual only, no camera jargon. Return strict JSON.";
+    const user =
+      `Shot actions (${actions.length}), in order:\n` +
+      actions.map((a, i) => `${i + 1}. ${a}`).join("\n") +
+      `\n\nReturn JSON: {"endFrames": [...]} with EXACTLY ${actions.length} strings, one per action, in the same order.`;
+    const res = await chatJSON<{ endFrames?: string[] }>(system, user, { maxTokens: 1500, temperature: 0.7 });
+    const arr = Array.isArray(res?.endFrames) ? res.endFrames : [];
+    return actions.map((_, i) => (typeof arr[i] === "string" ? arr[i].trim() : ""));
+  } catch (e: any) {
+    console.error("[episode-scene-frames-v2] describeEndFrames failed:", String(e?.message ?? e).slice(0, 200));
+    return actions.map(() => "");
+  }
+}
 
 /** Простой пул: не более limit задач одновременно. */
 export async function runPool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
@@ -45,11 +71,12 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSce
     // Ручные промпты прежних сцен сохраняются, если сцена соответствует тому же шоту.
     const prev = new Map(episodeScenesV2From(row?.episodeScenesV2, episode).map((s) => [s.id, s]));
     const actionsEn = await Promise.all(shots.map((s) => translateToEnglish(s.action)));
+    const endFramesEn = await describeEndFrames(actionsEn);
     const scenes: EpisodeSceneV2[] = shots.map((s, i) => {
       const id = `scene-${s.index}`;
       const p = prev.get(id);
       return {
-        id, index: s.index, shotId: s.id, action: actionsEn[i] || s.action, durationSec: s.durationSec,
+        id, index: s.index, shotId: s.id, action: actionsEn[i] || s.action, endFrame: endFramesEn[i] || undefined, durationSec: s.durationSec,
         firstFrameStatus: "pending", videoStatus: "idle",
         promptOverride: p && p.shotId === s.id ? p.promptOverride ?? null : null,
       };

@@ -10,7 +10,7 @@ import { useTranslation } from '@/lib/i18n/context'
  * «РУ» — перевод только для просмотра (/api/ai/translate). Ниже — промпт видео и референсы (read-only).
  */
 export type ScenePromptRef = { id: string; label: string; kind: 'character' | 'location' | 'prop'; imageUrl?: string | null }
-export type ScenePromptScene = { id: string; index: number; action: string; promptOverride?: string | null; autoPrompt: string; videoPrompt: string }
+export type ScenePromptScene = { id: string; index: number; action: string; endFrame?: string; promptOverride?: string | null; autoPrompt: string; videoPrompt: string }
 
 export function ScenePromptModal({ projectId, n, scene, refs, storyboardUrl, onSaved, onClose }: {
   projectId: string; n: number; scene: ScenePromptScene; refs: ScenePromptRef[]; storyboardUrl?: string | null
@@ -110,6 +110,13 @@ export function ScenePromptModal({ projectId, n, scene, refs, storyboardUrl, onS
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('ideaV2.scenesVideoPromptLabel')}</p>
             <p className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-foreground/90" data-testid="episode-v2-scene-video-prompt">{videoPrompt}</p>
           </div>
+
+          {scene.endFrame?.trim() && (
+            <div className="rounded-lg border border-border px-3 py-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('ideaV2.scenesEndFrame')}</p>
+              <p className="mt-1 whitespace-pre-wrap break-words font-mono text-xs text-foreground/90" data-testid="episode-v2-scene-end-frame">{scene.endFrame}</p>
+            </div>
+          )}
 
           <div className="rounded-lg border border-border">
             <div className="flex items-center justify-between gap-2 px-3 py-2">

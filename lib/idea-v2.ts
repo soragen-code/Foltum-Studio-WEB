@@ -998,6 +998,8 @@ export interface EpisodeSceneV2 {
   shotId: string;
   /** Описание кадра на English (переведено при нарезке). */
   action: string;
+  /** Описание финального кадра сцены на English — к чему приходит движение (генерируется при нарезке). */
+  endFrame?: string;
   /** Длительность видео сцены (из шота). */
   durationSec?: number;
   firstFrameUrl?: string;
@@ -1025,6 +1027,7 @@ export function episodeScenesV2From(map: unknown, n: number): EpisodeSceneV2[] {
       index: Number(s.index) || 0,
       shotId: String(s.shotId ?? ""),
       action: s.action,
+      endFrame: optStr(s.endFrame),
       durationSec: Number.isFinite(Number(s.durationSec)) ? Number(s.durationSec) : undefined,
       firstFrameUrl: optStr(s.firstFrameUrl),
       firstFrameStatus: sceneStatus(s.firstFrameStatus),
@@ -1058,10 +1061,19 @@ export function buildSceneFrameV2Prompt(scene: Pick<EpisodeSceneV2, "index" | "a
   return `${head}${refsBlock}`;
 }
 
-/** Промпт видео сцены (Seedance i2v): ручной промпт, иначе action (EN). */
-export function sceneVideoV2Prompt(scene: Pick<EpisodeSceneV2, "action" | "promptOverride">): string {
+/**
+ * Промпт видео сцены (Seedance 2.5 text-to-video с референсами). Ручной промпт заменяет всё.
+ * Иначе: action (старт/движение) + финальный кадр (к чему приходит сцена) + заметка о консистентности
+ * по приложенным референс-изображениям (персонажи/локация/реквизит). Всё — English.
+ */
+export function sceneVideoV2Prompt(scene: Pick<EpisodeSceneV2, "action" | "promptOverride" | "endFrame">): string {
   const ov = typeof scene.promptOverride === "string" ? scene.promptOverride.trim() : "";
-  return ov || scene.action.trim();
+  if (ov) return ov;
+  const end = typeof scene.endFrame === "string" ? scene.endFrame.trim() : "";
+  const parts = [scene.action.trim()];
+  if (end) parts.push(`Ending — the shot resolves to: ${end}`);
+  parts.push("Keep every character's identity, wardrobe, the location and props consistent with the attached reference images.");
+  return parts.join("\n\n");
 }
 
 /** Финальный ролик серии (Project.episodeFinalV2["<n>"]): склейка видео всех сцен по index. */
