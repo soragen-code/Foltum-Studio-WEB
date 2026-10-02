@@ -5,12 +5,12 @@
  * Результат — одно изображение: грузится в S3 и сохраняется в Project.episodeStoryboardV2["<n>"].imageUrl.
  */
 import { prisma } from "@/lib/db";
-import { generateImage, GenerationCanceledError, WAVESPEED_GPT_IMAGE_25_FLARE_T2I } from "@/lib/providers/image-provider";
+import { generateImage, GenerationCanceledError, WAVESPEED_GPT_IMAGE_25_FLARE_T2I, WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { completeJob, failJob, isCancelRequested, markCanceled, updateJob } from "@/lib/jobs";
 import { REFERENCE_ASPECT_RATIO, VISUAL_STYLE } from "@/lib/visual-style";
 import { runWithPromptContext } from "@/lib/prompt-log";
-import { buildStoryboardV2Prompt, episodeShotsV2From } from "@/lib/idea-v2";
+import { buildStoryboardV2Prompt, episodeRefsV2From, episodeShotsV2From, episodeStoryboardV2From, selectStoryboardV2Refs } from "@/lib/idea-v2";
 import { setEpisodeStoryboardV2 } from "@/lib/episode-storyboard-v2-store";
 
 export const EPISODE_STORYBOARD_V2_JOB_TYPE = "episode_storyboard_v2";
@@ -22,18 +22,27 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSto
   const canceled = () => isCancelRequested(jobId);
   const CANCEL_MSG = "Generation canceled by the user";
   try {
-    const row = await prisma.project.findUnique({ where: { id: projectId }, select: { episodeShotsV2: true } });
+    const row = await prisma.project.findUnique({ where: { id: projectId }, select: { episodeShotsV2: true, episodeRefsV2: true, episodeStoryboardV2: true } });
     const shots = episodeShotsV2From(row?.episodeShotsV2, episode);
     if (!shots.length) { await failJob(jobId, "No shots to build a storyboard from"); return; }
 
-    const prompt = `[VISUAL STYLE]: ${VISUAL_STYLE}\n${buildStoryboardV2Prompt(shots)}`;
+    // Референсы серии (персонажи → локации → реквизит) с готовыми изображениями — подаются в генерацию
+    // как image_input, чтобы персонажи/локации на листе были консистентны. image_input авто-переключает
+    // провайдера на edit-слаг той же модели; промпт явно требует СКОМПОНОВАТЬ новый лист, а не править реф.
+    const refs = selectStoryboardV2Refs(episodeRefsV2From(row?.episodeRefsV2, episode), WAVESPEED_IMAGE_MAX_REFS);
+    const imageInput = refs.map((r) => r.imageUrl!).filter(Boolean);
+
+    // Авто-промпт (с описанием референсов) + возможная ручная правка пользователя.
+    const autoPrompt = `[VISUAL STYLE]: ${VISUAL_STYLE}\n${buildStoryboardV2Prompt(shots, refs)}`;
+    const override = episodeStoryboardV2From(row?.episodeStoryboardV2, episode)?.promptOverride;
+    const prompt = typeof override === "string" && override.trim() ? override : autoPrompt;
     await setEpisodeStoryboardV2(projectId, episode, { status: "generating", error: null, prompt });
-    await updateJob(jobId, { status: "processing", progress: 10, message: `Building a storyboard sheet from ${shots.length} shot(s)...` });
+    await updateJob(jobId, { status: "processing", progress: 10, message: `Building a storyboard sheet from ${shots.length} shot(s)${imageInput.length ? ` with ${imageInput.length} reference(s)` : ""}...` });
 
     if (await canceled()) { await markCanceled(jobId, CANCEL_MSG); await setEpisodeStoryboardV2(projectId, episode, { status: null }); return; }
 
     const remote = await generateImage(
-      { prompt, aspect_ratio: REFERENCE_ASPECT_RATIO, modelSlug: WAVESPEED_GPT_IMAGE_25_FLARE_T2I, resolution: "4k" },
+      { prompt, aspect_ratio: REFERENCE_ASPECT_RATIO, modelSlug: WAVESPEED_GPT_IMAGE_25_FLARE_T2I, resolution: "4k", ...(imageInput.length ? { image_input: imageInput } : {}) },
       { jobId, shouldCancel: canceled, timeoutMs: 600_000 },
     );
     if (await canceled()) { await markCanceled(jobId, CANCEL_MSG); await setEpisodeStoryboardV2(projectId, episode, { status: null }); return; }

@@ -917,6 +917,8 @@ export interface EpisodeStoryboardV2 {
   imageUrl?: string;
   /** Промпт, которым лист был собран (для справки/отладки). */
   prompt?: string;
+  /** Правка промпта пользователем (переопределяет авто-промпт при сборке). */
+  promptOverride?: string | null;
   /** Состояние генерации. */
   status?: "generating" | "done" | "failed" | null;
   /** Текст ошибки, если генерация упала. */
@@ -931,6 +933,7 @@ export function episodeStoryboardV2From(map: unknown, n: number): EpisodeStorybo
   return {
     imageUrl: typeof v.imageUrl === "string" ? v.imageUrl : undefined,
     prompt: typeof v.prompt === "string" ? v.prompt : undefined,
+    promptOverride: typeof v.promptOverride === "string" ? v.promptOverride : null,
     status: v.status === "generating" || v.status === "done" || v.status === "failed" ? v.status : null,
     error: typeof v.error === "string" ? v.error : null,
     updatedAt: typeof v.updatedAt === "string" ? v.updatedAt : undefined,
@@ -943,17 +946,38 @@ export function episodeStoryboardV2From(map: unknown, n: number): EpisodeStorybo
  * панели и раскладывает их в один контактный лист (grid), в порядке кадров. action'ы кадров — на языке
  * синопсиса; инструкции композиции — на английском (как во всех image-промптах).
  */
-export function buildStoryboardV2Prompt(shots: EpisodeShotV2[]): string {
+/**
+ * Референсы серии для сборки сториборда: только те, у кого есть готовое изображение (imageUrl),
+ * упорядоченные персонажи → локации → реквизит, обрезанные до cap (лимит image_input провайдера).
+ * Один источник истины для воркера (image_input) и роута (превью + описание в промпте).
+ */
+export function selectStoryboardV2Refs(refs: EpisodeRefV2[], cap: number): EpisodeRefV2[] {
+  const withImg = refs.filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
+  const order: Record<EpisodeRefKindV2, number> = { character: 0, location: 1, prop: 2 };
+  return withImg
+    .slice()
+    .sort((a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9))
+    .slice(0, Math.max(0, cap));
+}
+
+export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRefV2[]): string {
   const panels = shots
     .map((s) => `Panel ${s.index}: ${s.action.replace(/\s+/g, " ").trim()}`)
     .join("\n");
-  return (
+  const base =
     `Create ONE single storyboard sheet (a contact-sheet / comic-style grid) that contains EVERY shot of this episode drawn as a separate panel. ` +
     `There are ${shots.length} shots in total — draw ALL ${shots.length} panels, one per shot, none skipped and none merged. ` +
     `Lay the panels out in a neat regular grid, left-to-right then top-to-bottom, in shot order (panel 1 first). ` +
     `Give every panel a thin frame and a small clearly legible number badge in its top-left corner matching the shot number. ` +
     `Each panel is a photorealistic cinematic still depicting exactly what its shot describes — consistent characters, wardrobe and environment across panels. ` +
-    `Only the small panel number labels may contain text; no captions, no other writing. Vertical 9:16 sheet.\n\n` +
-    `SHOTS:\n${panels}`
-  );
+    `Only the small panel number labels may contain text; no captions, no other writing. Vertical 9:16 sheet.`;
+  const refList = (refs ?? []).filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
+  const refsBlock = refList.length
+    ? `\n\nREFERENCES: ${refList.length} reference image(s) are attached. COMPOSE a brand-new storyboard sheet — do NOT edit or return any single reference image. ` +
+      `Use the attached images ONLY as the canonical look of the recurring characters and locations, so they stay consistent across every panel. The attached images, in order, are:\n` +
+      refList
+        .map((r, i) => `Reference ${i + 1}: ${r.kind === "character" ? "character" : r.kind === "location" ? "location" : "prop"} — ${r.label.replace(/\s+/g, " ").trim()}`)
+        .join("\n")
+    : "";
+  return `${base}\n\nSHOTS:\n${panels}${refsBlock}`;
 }

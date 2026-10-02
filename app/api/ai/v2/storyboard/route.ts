@@ -8,20 +8,22 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runEpisodeStoryboardV2Job, EPISODE_STORYBOARD_V2_JOB_TYPE } from "@/lib/workers/episode-storyboard-v2-job";
-import { episodeShotsV2From, episodeStoryboardV2From } from "@/lib/idea-v2";
-import { activeEpisodeJob, latestEpisodeJob } from "@/lib/episode-storyboard-v2-store";
+import { buildStoryboardV2Prompt, episodeRefsV2From, episodeShotsV2From, episodeStoryboardV2From, selectStoryboardV2Refs } from "@/lib/idea-v2";
+import { activeEpisodeJob, latestEpisodeJob, setEpisodeStoryboardV2 } from "@/lib/episode-storyboard-v2-store";
+import { WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
+import { VISUAL_STYLE } from "@/lib/visual-style";
 
 /**
  * Поток v2 · вкладка «Сториборд» серии n.
  * POST  { projectId, episode } → собрать один сводный лист-сториборд по всему шот-листу серии (GenerationJob "episode_storyboard_v2"; идемпотентно по серии).
  * GET   ?projectId&episode     → { job, storyboard }.
  */
-const postSchema = z.object({ projectId: z.string().min(1), episode: z.coerce.number().int().min(1).max(999) });
+const postSchema = z.object({ projectId: z.string().min(1), episode: z.coerce.number().int().min(1).max(999), prompt: z.string().max(200000).optional() });
 
 async function ownedProject(email: string, projectId: string) {
   const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
   if (!user) return null;
-  return prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, episodeShotsV2: true, episodeStoryboardV2: true } });
+  return prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, episodeShotsV2: true, episodeRefsV2: true, episodeStoryboardV2: true } });
 }
 
 export async function POST(request: Request) {
@@ -38,6 +40,12 @@ export async function POST(request: Request) {
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
     const shots = episodeShotsV2From(project.episodeShotsV2, episode);
     if (!shots.length) return NextResponse.json({ error: "Сначала разбейте сценарий на кадры" }, { status: 400 });
+
+    // Ручная правка промпта: пустая строка → сброс к авто (null); непустая → переопределение.
+    if (typeof parsed.data.prompt === "string") {
+      const ov = parsed.data.prompt.trim() ? parsed.data.prompt : null;
+      await setEpisodeStoryboardV2(projectId, episode, { promptOverride: ov });
+    }
 
     await failStaleJobs({ projectId, type: EPISODE_STORYBOARD_V2_JOB_TYPE });
     const active = await activeEpisodeJob(projectId, EPISODE_STORYBOARD_V2_JOB_TYPE, episode);
@@ -66,8 +74,17 @@ export async function GET(request: Request) {
 
   await failStaleJobs({ projectId, type: EPISODE_STORYBOARD_V2_JOB_TYPE });
   const job = await latestEpisodeJob(projectId, EPISODE_STORYBOARD_V2_JOB_TYPE, episode);
+
+  // Превью: собранный авто-промпт (с описанием референсов) + сами референсы, которые уйдут в генерацию.
+  const shots = episodeShotsV2From(project.episodeShotsV2, episode);
+  const refs = selectStoryboardV2Refs(episodeRefsV2From(project.episodeRefsV2, episode), WAVESPEED_IMAGE_MAX_REFS);
+  const autoPrompt = shots.length ? `[VISUAL STYLE]: ${VISUAL_STYLE}\n${buildStoryboardV2Prompt(shots, refs)}` : "";
+  const refsPreview = refs.map((r) => ({ id: r.id, label: r.label, kind: r.kind, imageUrl: r.imageUrl }));
+
   return NextResponse.json({
     job,
     storyboard: episodeStoryboardV2From(project.episodeStoryboardV2, episode),
+    autoPrompt,
+    refs: refsPreview,
   }, { headers: { "Cache-Control": "no-store" } });
 }

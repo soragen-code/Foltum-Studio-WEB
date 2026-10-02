@@ -361,14 +361,14 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
         </div>
         <div className={cardCls} style={cardStyle}>
           <h1 className="font-display text-2xl font-bold tracking-tight" data-testid="episode-v2-title">{t('ideaV2.episodeTitle', { n })}</h1>
-          <div className="mt-5 flex gap-1 border-b border-border" role="tablist" data-testid="episode-v2-tabs">
+          <div className="mt-5 flex gap-1 overflow-x-auto border-b border-border [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" data-testid="episode-v2-tabs">
             {TABS.map((x) => (
               <button
                 key={x.key}
                 role="tab"
                 aria-selected={tab === x.key}
                 onClick={() => setTab(x.key)}
-                className={`-mb-px inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-semibold transition ${tab === x.key ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+                className={`-mb-px inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-semibold transition ${tab === x.key ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
                 data-testid={`episode-v2-tab-${x.key}`}
               >
                 <x.icon className="h-4 w-4" /> {x.label}

@@ -1,11 +1,14 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, LayoutGrid, RefreshCw, X } from 'lucide-react'
+import { Loader2, LayoutGrid, RefreshCw, X, Eye } from 'lucide-react'
 import type { EpisodeStoryboardV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from '../../../_components/cancel-button'
 import { useJobPolling, SmoothProgress } from '../../../_components/use-job-polling'
+import { StoryboardPromptModal, type StoryboardPromptRef } from './storyboard-prompt-modal'
+
+const draftKey = (pid: string, n: number) => `foltum:v2:storyboard-prompt:${pid}:${n}`
 
 /**
  * Поток v2 · вкладка «Сториборд» серии n.
@@ -27,11 +30,20 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard }: {
   const [notice, setNotice] = useState('')
   const [starting, setStarting] = useState(false)
   const [photoOpen, setPhotoOpen] = useState(false)
+  const [promptOpen, setPromptOpen] = useState(false)
+  const [autoPrompt, setAutoPrompt] = useState('')
+  const [promptDraft, setPromptDraft] = useState('')
+  const [refs, setRefs] = useState<StoryboardPromptRef[]>([])
   const jobIdRef = useRef<string | null>(null)
 
-  // Блокировка вертикального скролла при открытом полноэкранном фото.
+  // Черновик промпта из localStorage (per-episode).
   useEffect(() => {
-    if (!photoOpen) return
+    try { const v = localStorage.getItem(draftKey(projectId, n)); if (v) setPromptDraft(v) } catch { /* недоступно */ }
+  }, [projectId, n])
+
+  // Блокировка вертикального скролла при открытом полноэкранном фото или модалке промпта.
+  useEffect(() => {
+    if (!photoOpen && !promptOpen) return
     const body = document.body
     const scrollY = window.scrollY
     const prev = { position: body.style.position, top: body.style.top, left: body.style.left, right: body.style.right, width: body.style.width, overflow: body.style.overflow }
@@ -50,14 +62,17 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard }: {
       body.style.overflow = prev.overflow
       window.scrollTo(0, scrollY)
     }
-  }, [photoOpen])
+  }, [photoOpen, promptOpen])
 
   const refresh = async () => {
     try {
       const res = await fetch(`${API}?projectId=${projectId}&episode=${n}`, { cache: 'no-store' })
       if (!res.ok) return
       const d = await res.json().catch(() => null)
-      if (d && 'storyboard' in d) setStoryboard(d.storyboard ?? null)
+      if (!d) return
+      if ('storyboard' in d) setStoryboard(d.storyboard ?? null)
+      if (typeof d.autoPrompt === 'string') setAutoPrompt(d.autoPrompt)
+      if (Array.isArray(d.refs)) setRefs(d.refs)
     } catch { /* транзиентно */ }
   }
 
@@ -80,6 +95,8 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard }: {
         const d = await fetch(`${API}?projectId=${projectId}&episode=${n}`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null)
         if (ignore || !d) return
         if ('storyboard' in d) setStoryboard(d.storyboard ?? null)
+        if (typeof d.autoPrompt === 'string') setAutoPrompt(d.autoPrompt)
+        if (Array.isArray(d.refs)) setRefs(d.refs)
         if (isActive(d.job)) { jobIdRef.current = d.job.id; poll.start(d.job.id) }
       } catch { /* транзиентно */ }
     })()
@@ -89,11 +106,13 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard }: {
 
   const build = async () => {
     setError(''); setNotice(''); poll.clear(); setStarting(true)
+    // Правка промпта (если отличается от авто) уходит как override; иначе пустая строка сбрасывает к авто.
+    const edited = promptDraft.trim() && autoPrompt && promptDraft.trim() !== autoPrompt.trim()
     try {
       const res = await fetch(API, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId, episode: n }),
+        body: JSON.stringify({ projectId, episode: n, prompt: edited ? promptDraft : '' }),
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) { setError(d?.error ?? t('ideaV2.storyboardError')); return }
@@ -107,6 +126,17 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard }: {
     if (!id) return
     try { await fetch(`/api/ai/jobs/${id}/cancel`, { method: 'POST' }) } catch { /* поллинг повторит */ }
   }
+
+  // Сохранение черновика промпта: если отличается от авто — в localStorage; иначе снимаем override.
+  const savePromptDraft = (prompt: string) => {
+    setPromptDraft(prompt)
+    try {
+      if (prompt.trim() && autoPrompt && prompt.trim() !== autoPrompt.trim()) localStorage.setItem(draftKey(projectId, n), prompt)
+      else localStorage.removeItem(draftKey(projectId, n))
+    } catch { /* недоступно */ }
+  }
+
+  const promptEdited = !!(promptDraft.trim() && autoPrompt && promptDraft.trim() !== autoPrompt.trim())
 
   const btnBar = 'inline-flex items-center justify-center gap-2 rounded-none border border-border bg-muted px-4 py-2 text-sm font-semibold transition hover:bg-muted/80 disabled:opacity-50'
 
@@ -122,10 +152,18 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard }: {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted-foreground">{t('ideaV2.storyboardIntro')}</p>
         {hasShots && (
-          <button onClick={() => void build()} disabled={building} className={`${btnBar} min-w-[180px]`} data-testid="episode-v2-storyboard-build">
-            {building ? <Loader2 className="h-4 w-4 animate-spin" /> : img ? <RefreshCw className="h-4 w-4" /> : <LayoutGrid className="h-4 w-4" />}
-            {img ? t('ideaV2.storyboardRebuild') : t('ideaV2.storyboardBuild')}
-          </button>
+          <div className="flex flex-wrap items-stretch gap-2">
+            <button onClick={() => setPromptOpen(true)} disabled={building} className={btnBar} data-testid="episode-v2-storyboard-view-prompt">
+              <Eye className="h-4 w-4" /> {t('ideaV2.shotsViewPrompt')}
+              {promptEdited && (
+                <span className="rounded-sm bg-primary px-1 text-[9px] font-bold uppercase leading-tight text-primary-foreground">{t('ideaV2.refsEdited')}</span>
+              )}
+            </button>
+            <button onClick={() => void build()} disabled={building} className={`${btnBar} min-w-[180px]`} data-testid="episode-v2-storyboard-build">
+              {building ? <Loader2 className="h-4 w-4 animate-spin" /> : img ? <RefreshCw className="h-4 w-4" /> : <LayoutGrid className="h-4 w-4" />}
+              {img ? t('ideaV2.storyboardRebuild') : t('ideaV2.storyboardBuild')}
+            </button>
+          </div>
         )}
       </div>
       {!hasShots && <p className="mt-2 text-xs text-amber-500">{t('ideaV2.storyboardNeedShots')}</p>}
@@ -176,6 +214,16 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard }: {
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={img} alt={t('ideaV2.storyboardTab')} className="max-h-full max-w-full object-contain" onClick={(e) => e.stopPropagation()} />
         </div>
+      )}
+
+      {promptOpen && (
+        <StoryboardPromptModal
+          autoPrompt={autoPrompt}
+          promptDraft={promptDraft}
+          refs={refs}
+          onSave={savePromptDraft}
+          onClose={() => setPromptOpen(false)}
+        />
       )}
     </div>
   )
