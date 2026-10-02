@@ -151,6 +151,68 @@ function RefSlots({
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
+/*  Appearance-change control: rewrites the photo prompt via a separate request */
+/* ────────────────────────────────────────────────────────────────────────── */
+function AppearanceRow({ prompt, disabled, onApplied }: {
+  prompt: string
+  disabled: boolean
+  onApplied: (prompt: string) => void
+}) {
+  const { t } = useTranslation()
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const apply = async () => {
+    const instruction = text.trim()
+    if (!instruction || busy || disabled) return
+    if (!prompt.trim()) { setError(t('manual.appearanceNeedPrompt')); return }
+    setError(''); setBusy(true)
+    try {
+      const res = await fetch('/api/manual/appearance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: prompt.trim(), instruction }),
+      })
+      const d = await res.json().catch(() => null)
+      if (!res.ok || !d?.prompt) { setError(d?.error || t('manual.appearanceError')); return }
+      onApplied(d.prompt as string)
+      setText('')
+    } catch { setError(t('manual.appearanceError')) }
+    finally { setBusy(false) }
+  }
+
+  return (
+    <div className="mb-3" data-testid="manual-photo-appearance">
+      <label className="mb-1 block text-xs font-medium">{t('manual.appearanceLabel')}</label>
+      <div className="flex items-stretch gap-2">
+        <input
+          type="text"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void apply() } }}
+          disabled={busy || disabled}
+          placeholder={t('manual.appearancePlaceholder')}
+          className="min-w-0 flex-1 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs text-foreground outline-none transition focus:border-primary disabled:opacity-50"
+          data-testid="manual-photo-appearance-input"
+        />
+        <button
+          type="button"
+          onClick={() => void apply()}
+          disabled={busy || disabled || !text.trim()}
+          className="flex basis-1/5 flex-shrink-0 items-center justify-center gap-1 rounded-md bg-amber-400 px-2 py-1.5 text-xs font-semibold text-black transition hover:bg-amber-300 disabled:opacity-50"
+          data-testid="manual-photo-appearance-apply"
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t('manual.appearanceApply')}
+        </button>
+      </div>
+      <p className="mt-1 text-[11px] text-muted-foreground">{t('manual.appearanceHint')}</p>
+      {error && <p className="mt-1.5 text-[10px] text-destructive" data-testid="manual-photo-appearance-error">{error}</p>}
+    </div>
+  )
+}
+
+/* ────────────────────────────────────────────────────────────────────────── */
 /*  Page                                                                       */
 /* ────────────────────────────────────────────────────────────────────────── */
 export function ManualClient() {
@@ -427,6 +489,7 @@ export function ManualClient() {
             </div>
             <label className="mb-1 block text-xs font-medium">{t('manual.promptEn')}</label>
             <textarea value={photoPrompt} onChange={(e) => setPhotoPrompt(e.target.value)} rows={4} disabled={photoBusy} placeholder={t('manual.photoPlaceholder')} className={`${textareaCls} mb-3`} data-testid="manual-photo-prompt" />
+            <AppearanceRow prompt={photoPrompt} disabled={photoBusy} onApplied={setPhotoPrompt} />
             {photoError && <p className="mb-2 flex items-center gap-1 text-xs text-destructive"><AlertCircle className="h-3.5 w-3.5" /> {photoError}</p>}
             <button type="button" onClick={generatePhoto} disabled={photoBusy || !photoPrompt.trim()} className={`${primaryBtn} w-full`} data-testid="manual-photo-generate">
               {photoBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Camera className="h-4 w-4" />}
