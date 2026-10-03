@@ -316,6 +316,7 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard, onOpe
           loading={promptLoading}
           loadError={promptError}
           onRetry={() => void openPrompt(true)}
+          onRebuild={() => { savePromptDraft(''); void openPrompt(true) }}
           onSave={savePromptDraft}
           onClose={() => setPromptOpen(false)}
         />

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, Eye, Copy, Check, X, Info, RotateCcw, Maximize2 } from 'lucide-react'
+import { Loader2, Eye, Copy, Check, X, Info, RotateCcw, Maximize2, RefreshCw } from 'lucide-react'
 import { useTranslation } from '@/lib/i18n/context'
 
 /**
@@ -12,23 +12,29 @@ import { useTranslation } from '@/lib/i18n/context'
  */
 export type StoryboardPromptRef = { id: string; label: string; kind: 'character' | 'location' | 'prop'; imageUrl?: string | null }
 
-export function StoryboardPromptModal({ autoPrompt, promptDraft, refs, loading = false, loadError = '', onRetry, onSave, onClose }: {
+export function StoryboardPromptModal({ autoPrompt, promptDraft, refs, loading = false, loadError = '', onRetry, onRebuild, onSave, onClose }: {
   autoPrompt: string; promptDraft: string; refs: StoryboardPromptRef[]
   /** Авто-промпт ещё строится на сервере (перевод фреймов/меток) — вместо поля показывается лоадер. */
   loading?: boolean
   loadError?: string
   onRetry?: () => void
+  /** «Пересобрать» — принудительно построить авто-промпт заново (актуальные шоты/рефы), сбросив правки. */
+  onRebuild?: () => void
   onSave: (prompt: string) => void; onClose: () => void
 }) {
   const { t } = useTranslation()
   const [draft, setDraft] = useState(promptDraft || autoPrompt)
   // Авто-промпт обновился с сервера (рефы/шоты изменились), а пользователь его не правил → подменяем на лету.
   const prevAutoRef = useRef(autoPrompt)
+  const rebuiltRef = useRef(false)
   useEffect(() => {
     const prev = prevAutoRef.current
     prevAutoRef.current = autoPrompt
-    if (autoPrompt && autoPrompt !== prev) setDraft((d) => (!d.trim() || d.trim() === prev.trim() ? autoPrompt : d))
+    if (autoPrompt && autoPrompt !== prev) setDraft((d) => (rebuiltRef.current || !d.trim() || d.trim() === prev.trim() ? autoPrompt : d))
+    rebuiltRef.current = false
   }, [autoPrompt])
+  // Сразу сбрасываем правки к текущему авто (если сервер вернёт тот же текст — поле уже актуально), затем — свежий авто.
+  const rebuild = () => { if (!onRebuild || loading) return; rebuiltRef.current = true; setRuOn(false); setDraft(autoPrompt); onRebuild() }
   // Полноэкранный просмотр референса (клик по карточке; Esc / клик по фону — закрыть).
   const [lightbox, setLightbox] = useState<{ url: string; alt: string } | null>(null)
   useEffect(() => {
@@ -100,6 +106,11 @@ export function StoryboardPromptModal({ autoPrompt, promptDraft, refs, loading =
               <button type="button" onClick={resetAuto} disabled={!edited || ruOn} className={`${btnBase} ${btnIdle} disabled:opacity-40`} title={t('ideaV2.shotsPromptResetHint')} data-testid="episode-v2-storyboard-reset">
                 <RotateCcw className="h-3.5 w-3.5" /> {t('ideaV2.shotsPromptReset')}
               </button>
+              {onRebuild && (
+                <button type="button" onClick={rebuild} disabled={loading} className={`${btnBase} ${btnIdle} disabled:opacity-40`} title={t('ideaV2.storyboardPromptRebuildHint')} data-testid="episode-v2-storyboard-prompt-rebuild">
+                  {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} {t('ideaV2.storyboardPromptRebuild')}
+                </button>
+              )}
             </div>
           </div>
           {loading || (!autoPrompt && !draft) ? (
