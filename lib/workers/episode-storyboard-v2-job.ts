@@ -37,7 +37,7 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSto
     // Промпт — только English: «Фрейм» шотов (RU) переводится слово в слово до сборки; в панели идёт ТОЛЬКО фрейм.
     const shotsEn = await Promise.all(shots.map(async (sh) => { const fr = shotFrameText(sh) || sh.action; return { ...sh, frame: (await translateToEnglish(fr)) || fr }; }));
     const refsEn = await translateRefLabelsToEnglish(refs);
-    const autoPrompt = `[VISUAL STYLE]: ${VISUAL_STYLE}\n${buildStoryboardV2Prompt(shotsEn, refsEn)}`;
+    const autoPrompt = buildStoryboardV2Prompt(shotsEn, refsEn, { visualStyle: VISUAL_STYLE });
     const override = episodeStoryboardV2From(row?.episodeStoryboardV2, episode)?.promptOverride;
     const overrideEn = typeof override === "string" && override.trim() ? (await translateToEnglish(override)) || override : "";
     const prompt = overrideEn || autoPrompt;

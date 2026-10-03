@@ -82,7 +82,7 @@ export async function GET(request: Request) {
   // Как в воркере: «Фрейм» шотов переводится на English (no-op для уже английских), чтобы превью совпадало с отправкой.
   const shotsEn = await Promise.all(shots.map(async (sh) => { const fr = shotFrameText(sh) || sh.action; return { ...sh, frame: (await translateToEnglish(fr)) || fr }; }));
   const refsEn = await translateRefLabelsToEnglish(refs);
-  const autoPrompt = shots.length ? `[VISUAL STYLE]: ${VISUAL_STYLE}\n${buildStoryboardV2Prompt(shotsEn, refsEn)}` : "";
+  const autoPrompt = shots.length ? buildStoryboardV2Prompt(shotsEn, refsEn, { visualStyle: VISUAL_STYLE }) : "";
   const refsPreview = refs.map((r) => ({ id: r.id, label: r.label, kind: r.kind, imageUrl: r.imageUrl }));
 
   return NextResponse.json({

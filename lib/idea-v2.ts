@@ -1074,14 +1074,27 @@ export function selectSceneVideoV2Refs(refs: EpisodeRefV2[], cap: number): Episo
 
 /**
  * Промпт листа-сториборда. Структура (по ТЗ):
- *  1) ШАПКА — формат листа: сетка 5×5 (5 колонок, строки по числу кадров), вертикальный 9:16, номера панелей, без текста;
- *  2) СПИСОК РЕФЕРЕНСОВ — персонажи → локации → реквизит, в порядке прикреплённых картинок (bind по номеру/позиции);
- *  3) ПАНЕЛИ — «Panel N:» + описание «Фрейм» из шот-листа СЛОВО В СЛОВО (на English — перевод делает вызывающий код).
+ *  1) СПИСОК РЕФЕРЕНСОВ — САМЫМ ПЕРВЫМ блоком: «References:» + «Image N - <имя/название>» (N = позиция
+ *     прикреплённой картинки в image_input; метки — English, без префикса типа; перевод делает вызывающий код);
+ *  2) [VISUAL STYLE] (если передан) + ШАПКА — формат листа: сетка 5×5 (строки по числу кадров), вертикальный 9:16, номера панелей, без текста;
+ *  3) ПАНЕЛИ — «Panel N:» + описание «Фрейм» из шот-листа СЛОВО В СЛОВО (English — перевод делает вызывающий код).
  */
-export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRefV2[]): string {
+export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRefV2[], opts?: { visualStyle?: string }): string {
   const n = shots.length;
   const cols = 5;
   const rows = Math.max(5, Math.ceil(n / cols));
+
+  const refList = (refs ?? []).filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
+  const refsBlock = refList.length
+    ? `References:\n` +
+      refList.map((r, i) => `Image ${i + 1} - ${stripRefKindPrefixV2(r.label).replace(/\s+/g, " ").trim()}`).join("\n") +
+      `\n(${refList.length} reference image(s) are attached in this exact order: the 1st attached image is Image 1, the 2nd is Image 2, etc. — bind BY POSITION, never by name. ` +
+      `COMPOSE a brand-new storyboard sheet — do NOT edit or return any reference image; use them ONLY as the canonical look of the characters, locations and props so they stay consistent in every panel.)\n\n`
+    : "";
+
+  const style = (opts?.visualStyle ?? "").trim();
+  const styleLine = style ? `[VISUAL STYLE]: ${style}\n` : "";
+
   const header =
     `STORYBOARD SHEET FORMAT\n` +
     `Create ONE single storyboard sheet: a ${cols}x${rows} grid (${cols} columns x ${rows} rows = ${cols * rows} cells) on a vertical 9:16 sheet. ` +
@@ -1092,14 +1105,6 @@ export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRe
     `Each panel is a photorealistic cinematic still depicting exactly the described static frame — same characters, wardrobe, props and environments across all panels. ` +
     `Only the small panel number labels may contain text; no captions, no other writing on the sheet.`;
 
-  const refList = (refs ?? []).filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
-  const kindLabel = (k: EpisodeRefKindV2) => (k === "character" ? "character" : k === "location" ? "location" : "prop");
-  const refsBlock = refList.length
-    ? `\n\nREFERENCES (${refList.length} reference image(s) attached, in the SAME order as this list — bind BY POSITION: 1st attached image = Reference 1, 2nd = Reference 2, etc.; never match by name). ` +
-      `COMPOSE a brand-new storyboard sheet — do NOT edit or return any reference image. Use them ONLY as the canonical look of the characters, locations and props so they stay consistent in every panel:\n` +
-      refList.map((r, i) => `Reference ${(r as any).ord ?? i + 1} (${kindLabel(r.kind)}): ${r.label.replace(/\s+/g, " ").trim()}`).join("\n")
-    : "";
-
   const panels = shots
     .map((s) => {
       const frame = (shotFrameText(s) || s.action || "").replace(/\s+/g, " ").trim();
@@ -1107,7 +1112,7 @@ export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRe
     })
     .join("\n");
 
-  return `${header}${refsBlock}\n\nPANELS:\n${panels}`;
+  return `${refsBlock}${styleLine}${header}\n\nPANELS:\n${panels}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

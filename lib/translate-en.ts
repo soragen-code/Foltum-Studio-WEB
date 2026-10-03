@@ -8,6 +8,7 @@
  */
 import { chat } from "@/lib/ai";
 import { detectLanguage } from "@/lib/idea";
+import { stripRefKindPrefixV2 } from "@/lib/idea-v2";
 
 const TRANSLATOR_SYSTEM =
   "You are a professional translator. The user will provide text between <<<TEXT>>> and <<<END>>> markers. " +
@@ -32,13 +33,41 @@ export async function translateToEnglish(text: string | null | undefined): Promi
 
 /**
  * Переводит метки (label) референсов серии на английский — чтобы в image-промпты (сториборд, кадры сцен)
- * уходил только English. Возвращает НОВЫЙ массив тех же объектов с переведённым label (остальные поля,
- * включая imageUrl, сохраняются). Английские/пустые метки возвращаются как есть.
+ * уходил только English. Префикс типа («Персонаж:», «Локация:» …) срезается — тип передаётся отдельно.
+ * Все не-английские метки переводятся ОДНИМ запросом (нумерованный список) — надёжнее десятка параллельных
+ * вызовов (лимиты API → молчаливый откат на русский). При рассинхроне строк — откат на поштучный перевод.
+ * Возвращает НОВЫЙ массив тех же объектов с переведённым label (остальные поля, включая imageUrl, сохраняются).
  */
 export async function translateRefLabelsToEnglish<T extends { label?: string }>(refs: T[]): Promise<T[]> {
-  return Promise.all(
-    refs.map(async (r) => ({ ...r, label: (await translateToEnglish(r.label ?? "")) || (r.label ?? "") })),
-  );
+  const labels = refs.map((r) => stripRefKindPrefixV2(r.label ?? "").replace(/\s+/g, " ").trim());
+  const todo = labels.map((l, i) => ({ l, i })).filter(({ l }) => l && detectLanguage(l) !== "en");
+  const out = labels.slice();
+  if (todo.length) {
+    let batched = false;
+    try {
+      const list = todo.map(({ l }, k) => `${k + 1}. ${l}`).join("\n");
+      const res = await chat(
+        TRANSLATOR_SYSTEM + " The text is a numbered list: translate each line separately and keep the SAME numbering and the SAME number of lines, one item per line.",
+        `<<<TEXT>>>\n${list}\n<<<END>>>`,
+        { temperature: 0.1, maxTokens: 2000 },
+      );
+      const map = new Map<number, string>();
+      for (const line of (res ?? "").replace(/<<<(TEXT|END)>>>/g, "").split(/\r?\n/)) {
+        const m = line.match(/^\s*(\d+)\s*[.)]\s*(.+?)\s*$/);
+        if (m) map.set(Number(m[1]), m[2]);
+      }
+      if (map.size === todo.length && todo.every((_, k) => map.has(k + 1))) {
+        todo.forEach(({ i }, k) => { out[i] = map.get(k + 1)!; });
+        batched = true;
+      }
+    } catch (err) {
+      console.error("translateRefLabelsToEnglish batch failed, falling back to per-item:", err);
+    }
+    if (!batched) {
+      await Promise.all(todo.map(async ({ l, i }) => { out[i] = (await translateToEnglish(l)) || l; }));
+    }
+  }
+  return refs.map((r, i) => ({ ...r, label: out[i] || (r.label ?? "") }));
 }
 
 /** Пары «правка → логлайн» (история диалога правок логлайна v2). */
