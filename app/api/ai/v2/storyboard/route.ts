@@ -8,7 +8,7 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runEpisodeStoryboardV2Job, EPISODE_STORYBOARD_V2_JOB_TYPE } from "@/lib/workers/episode-storyboard-v2-job";
-import { buildStoryboardV2Prompt, episodeRefsV2From, episodeShotsV2From, episodeStoryboardV2From, selectStoryboardV2Refs } from "@/lib/idea-v2";
+import { buildStoryboardV2Prompt, episodeRefsV2From, episodeShotsV2From, episodeStoryboardV2From, selectStoryboardV2Refs, shotVisualText } from "@/lib/idea-v2";
 import { activeEpisodeJob, latestEpisodeJob, setEpisodeStoryboardV2 } from "@/lib/episode-storyboard-v2-store";
 import { WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
 import { VISUAL_STYLE } from "@/lib/visual-style";
@@ -80,7 +80,7 @@ export async function GET(request: Request) {
   const shots = episodeShotsV2From(project.episodeShotsV2, episode);
   const refs = selectStoryboardV2Refs(episodeRefsV2From(project.episodeRefsV2, episode), WAVESPEED_IMAGE_MAX_REFS);
   // Как в воркере: action шотов переводятся на English (no-op для уже английских), чтобы превью совпадало с отправкой.
-  const shotsEn = await Promise.all(shots.map(async (sh) => ({ ...sh, action: (await translateToEnglish(sh.action)) || sh.action })));
+  const shotsEn = await Promise.all(shots.map(async (sh) => ({ ...sh, action: (await translateToEnglish(shotVisualText(sh))) || shotVisualText(sh) })));
   const refsEn = await translateRefLabelsToEnglish(refs);
   const autoPrompt = shots.length ? `[VISUAL STYLE]: ${VISUAL_STYLE}\n${buildStoryboardV2Prompt(shotsEn, refsEn)}` : "";
   const refsPreview = refs.map((r) => ({ id: r.id, label: r.label, kind: r.kind, imageUrl: r.imageUrl }));

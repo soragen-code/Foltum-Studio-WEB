@@ -213,39 +213,74 @@ export function ShotlistTab({ projectId, n, hasScript, scriptText, initialShots 
   )
 }
 
+/** Поля кадра для отображения/правки в карточке (порядок как в шот-листе). action — обязательное. */
+const SHOT_FIELDS: Array<{ key: keyof EpisodeShotV2; labelKey: string; multiline: boolean }> = [
+  { key: 'sceneHeading', labelKey: 'ideaV2.shotField.scene', multiline: false },
+  { key: 'shotType', labelKey: 'ideaV2.shotField.shot', multiline: false },
+  { key: 'camera', labelKey: 'ideaV2.shotField.camera', multiline: false },
+  { key: 'inFrame', labelKey: 'ideaV2.shotField.inFrame', multiline: true },
+  { key: 'action', labelKey: 'ideaV2.shotField.action', multiline: true },
+  { key: 'dialogue', labelKey: 'ideaV2.shotField.dialogue', multiline: true },
+  { key: 'emotion', labelKey: 'ideaV2.shotField.emotion', multiline: false },
+  { key: 'light', labelKey: 'ideaV2.shotField.light', multiline: true },
+  { key: 'sound', labelKey: 'ideaV2.shotField.sound', multiline: false },
+  { key: 'transition', labelKey: 'ideaV2.shotField.transition', multiline: false },
+  { key: 'notes', labelKey: 'ideaV2.shotField.notes', multiline: true },
+]
+
+type ShotPatch = Partial<Pick<EpisodeShotV2, 'action' | 'durationSec' | 'sceneHeading' | 'shotType' | 'camera' | 'inFrame' | 'dialogue' | 'emotion' | 'light' | 'sound' | 'transition' | 'notes'>>
+
 /**
- * Карточка одного кадра: № · длительность · описание. Правка вручную (описание + длительность 4–6 сек) → PATCH
- * /api/ai/v2/shots (edited=true). Повторная разбивка такие кадры сохраняет.
+ * Карточка одного кадра: № · длительность · структурные поля (Сцена/План/Камера/В кадре/Действие/Реплика/Эмоция/
+ * Свет/Звук/Переход/Заметки). Правка вручную по полям + длительность 4–6 сек → PATCH /api/ai/v2/shots (edited=true).
+ * Повторная разбивка такие кадры сохраняет. Для старых кадров без структурных полей показывает только «Действие».
  */
 function ShotCard({ projectId, n, shot, disabled, onSaved }: {
-  projectId: string; n: number; shot: EpisodeShotV2; disabled: boolean; onSaved: (patch: { action: string; durationSec: number }) => void
+  projectId: string; n: number; shot: EpisodeShotV2; disabled: boolean; onSaved: (patch: ShotPatch) => void
 }) {
   const { t } = useTranslation()
   const [editing, setEditing] = useState(false)
-  const [action, setAction] = useState(shot.action)
+  const [form, setForm] = useState<Record<string, string>>({})
   const [dur, setDur] = useState(shot.durationSec)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
-  const startEdit = () => { setAction(shot.action); setDur(shot.durationSec); setError(''); setEditing(true) }
+  const startEdit = () => {
+    const f: Record<string, string> = {}
+    for (const { key } of SHOT_FIELDS) f[key] = String((shot as any)[key] ?? '')
+    setForm(f); setDur(shot.durationSec); setError(''); setEditing(true)
+  }
   const cancel = () => setEditing(false)
+  const setField = (key: string, v: string) => setForm((p) => ({ ...p, [key]: v }))
+
   const save = async () => {
-    const a = action.trim()
+    const a = (form.action ?? '').trim()
     const d = Math.min(6, Math.max(4, Math.round(Number(dur) || 5)))
     if (!a) { setError(t('ideaV2.shotsActionRequired')); return }
+    const patch: ShotPatch = { action: a, durationSec: d }
+    for (const { key } of SHOT_FIELDS) {
+      if (key === 'action') continue
+      ;(patch as any)[key] = (form[key] ?? '').trim()
+    }
     setSaving(true); setError('')
     try {
       const res = await fetch(API, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId, episode: n, id: shot.id, action: a, durationSec: d }),
+        body: JSON.stringify({ projectId, episode: n, id: shot.id, ...patch }),
       })
       if (!res.ok) { const j = await res.json().catch(() => ({})); setError(j?.error ?? t('ideaV2.shotsSaveFailed')); return }
-      onSaved({ action: a, durationSec: d })
+      // Пустые строки на клиенте показываем как «нет значения».
+      const applied: ShotPatch = { action: a, durationSec: d }
+      for (const { key } of SHOT_FIELDS) { if (key === 'action') continue; (applied as any)[key] = (form[key] ?? '').trim() || undefined }
+      onSaved(applied)
       setEditing(false)
     } catch { setError(t('ideaV2.shotsNetworkError')) }
     finally { setSaving(false) }
   }
+
+  const present = SHOT_FIELDS.filter(({ key }) => String((shot as any)[key] ?? '').trim())
+  const hasStructured = present.some(({ key }) => key !== 'action')
 
   return (
     <div className="flex gap-3 rounded-lg border border-border/70 bg-muted/20 p-3 sm:p-4" data-testid={`episode-v2-shot-${shot.id}`}>
@@ -256,14 +291,29 @@ function ShotCard({ projectId, n, shot, disabled, onSaved }: {
       <div className="min-w-0 flex-1">
         {editing ? (
           <div className="space-y-2">
-            <textarea
-              value={action}
-              onChange={(e) => setAction(e.target.value)}
-              rows={Math.min(8, Math.max(2, action.split('\n').length + 1))}
-              className="w-full resize-y rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
-              data-testid="episode-v2-shot-action-input"
-            />
-            <div className="flex flex-wrap items-center gap-2">
+            {SHOT_FIELDS.map(({ key, labelKey, multiline }) => (
+              <label key={key} className="block">
+                <span className="mb-0.5 block text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t(labelKey)}{key === 'action' ? ' *' : ''}</span>
+                {multiline ? (
+                  <textarea
+                    value={form[key] ?? ''}
+                    onChange={(e) => setField(key, e.target.value)}
+                    rows={Math.min(6, Math.max(2, (form[key] ?? '').split('\n').length + 1))}
+                    className="w-full resize-y rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
+                    data-testid={`episode-v2-shot-field-${key}`}
+                  />
+                ) : (
+                  <input
+                    type="text"
+                    value={form[key] ?? ''}
+                    onChange={(e) => setField(key, e.target.value)}
+                    className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
+                    data-testid={`episode-v2-shot-field-${key}`}
+                  />
+                )}
+              </label>
+            ))}
+            <div className="flex flex-wrap items-center gap-2 pt-1">
               <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 {t('ideaV2.shotsDurationLabel')}
                 <input
@@ -277,7 +327,7 @@ function ShotCard({ projectId, n, shot, disabled, onSaved }: {
                 <button onClick={cancel} disabled={saving} className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs font-semibold transition hover:bg-muted disabled:opacity-50" data-testid="episode-v2-shot-cancel">
                   <X className="h-3.5 w-3.5" /> {t('common.cancel')}
                 </button>
-                <button onClick={() => void save()} disabled={saving || !action.trim()} className="inline-flex items-center gap-1 rounded-md bg-secondary px-2.5 py-1.5 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50" data-testid="episode-v2-shot-save">
+                <button onClick={() => void save()} disabled={saving || !(form.action ?? '').trim()} className="inline-flex items-center gap-1 rounded-md bg-secondary px-2.5 py-1.5 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50" data-testid="episode-v2-shot-save">
                   {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />} {t('common.save')}
                 </button>
               </div>
@@ -286,10 +336,21 @@ function ShotCard({ projectId, n, shot, disabled, onSaved }: {
           </div>
         ) : (
           <div className="flex items-start gap-2">
-            <p className="min-w-0 flex-1 whitespace-pre-wrap text-sm leading-relaxed text-foreground" data-testid="episode-v2-shot-action">
-              {shot.action}
-              {shot.edited && <span className="ml-2 text-[10px] text-muted-foreground">· {t('ideaV2.refsEdited')}</span>}
-            </p>
+            <div className="min-w-0 flex-1" data-testid="episode-v2-shot-action">
+              {hasStructured ? (
+                <dl className="space-y-1 text-sm leading-relaxed">
+                  {present.map(({ key, labelKey }) => (
+                    <div key={key} className="flex flex-col gap-0.5 sm:flex-row sm:gap-2">
+                      <dt className="flex-shrink-0 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground sm:w-24 sm:pt-0.5">{t(labelKey)}</dt>
+                      <dd className="min-w-0 flex-1 whitespace-pre-wrap text-foreground">{String((shot as any)[key])}</dd>
+                    </div>
+                  ))}
+                </dl>
+              ) : (
+                <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground">{shot.action}</p>
+              )}
+              {shot.edited && <span className="mt-1 inline-block text-[10px] text-muted-foreground">· {t('ideaV2.refsEdited')}</span>}
+            </div>
             <button onClick={startEdit} disabled={disabled} className="flex-shrink-0 rounded-md border border-border bg-transparent p-1.5 text-muted-foreground transition hover:bg-muted/60 hover:text-foreground disabled:opacity-50" title={t('common.edit')} data-testid="episode-v2-shot-edit">
               <Pencil className="h-3.5 w-3.5" />
             </button>

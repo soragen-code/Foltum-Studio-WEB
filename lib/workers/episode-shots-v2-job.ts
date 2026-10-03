@@ -29,7 +29,7 @@ async function runImpl(jobId: string, projectId: string, { episode, script, syno
     for (let attempt = 0; attempt < 2 && !items.length; attempt++) {
       if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
       try {
-        const raw = await chat(system, script, { model: FABLE_MODEL, temperature: 0.3, maxTokens: 8000 });
+        const raw = await chat(system, script, { model: FABLE_MODEL, temperature: 0.3, maxTokens: 16000 });
         items = parseEpisodeShotsV2(safeJsonParse(raw));
         if (!items.length) throw new Error("no shots in model output");
       } catch (e: any) {

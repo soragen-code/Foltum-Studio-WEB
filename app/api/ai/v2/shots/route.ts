@@ -24,7 +24,20 @@ const patchSchema = z.object({
   id: z.string().min(1).max(200),
   action: z.string().max(2000).optional(),
   durationSec: z.coerce.number().int().min(4).max(6).optional(),
+  sceneHeading: z.string().max(300).optional(),
+  shotType: z.string().max(600).optional(),
+  camera: z.string().max(400).optional(),
+  inFrame: z.string().max(800).optional(),
+  dialogue: z.string().max(1000).optional(),
+  emotion: z.string().max(400).optional(),
+  light: z.string().max(600).optional(),
+  sound: z.string().max(400).optional(),
+  transition: z.string().max(400).optional(),
+  notes: z.string().max(600).optional(),
 });
+
+/** Необязательные строковые поля кадра, которые можно править вручную (кроме action/durationSec). */
+const SHOT_PATCH_STR_FIELDS = ["sceneHeading", "shotType", "camera", "inFrame", "dialogue", "emotion", "light", "sound", "transition", "notes"] as const;
 
 async function ownedProject(email: string, projectId: string) {
   const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
@@ -89,12 +102,17 @@ export async function PATCH(request: Request) {
     const parsed = patchSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
     const { projectId, episode, id, action, durationSec } = parsed.data;
-    if (action === undefined && durationSec === undefined) return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
+    const hasStr = SHOT_PATCH_STR_FIELDS.some((k) => (parsed.data as any)[k] !== undefined);
+    if (action === undefined && durationSec === undefined && !hasStr) return NextResponse.json({ error: "Nothing to update" }, { status: 400 });
     const project = await ownedProject(session.user.email, projectId);
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
     const patch: Record<string, unknown> = { edited: true };
     if (action !== undefined) patch.action = action;
     if (durationSec !== undefined) patch.durationSec = durationSec;
+    for (const k of SHOT_PATCH_STR_FIELDS) {
+      const v = (parsed.data as any)[k];
+      if (v !== undefined) patch[k] = v.trim() || undefined;
+    }
     const updated = await patchEpisodeShotV2(projectId, episode, id, patch);
     if (!updated) return NextResponse.json({ error: "Shot not found" }, { status: 404 });
     return NextResponse.json({ ok: true });

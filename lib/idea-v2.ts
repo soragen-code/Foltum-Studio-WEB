@@ -821,45 +821,81 @@ export function episodeRefsV2From(map: unknown, n: number): EpisodeRefV2[] {
 // v2 · уровень эпизода: вкладка «Шот-лист» (разбивка сценария серии на кадры/клипы)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Элемент шот-листа серии (Project.episodeShotsV2["<n>"].items[]). action — на языке синопсиса. */
+/** Элемент шот-листа серии (Project.episodeShotsV2["<n>"].items[]). Все текстовые поля — на языке синопсиса. */
 export interface EpisodeShotV2 {
   id: string;
   /** Порядковый номер кадра (с 1). */
   index: number;
   /** Длительность клипа, сек (4–6). */
   durationSec: number;
-  /** Описание кадра/действия (что происходит в клипе) на языке синопсиса. */
+  /** Действие — что происходит в кадре. Обязательное; источник для сцен/видео (downstream). */
   action: string;
+  /** Сцена — локация + время суток (напр. «Кабинет директора, ночь»). */
+  sceneHeading?: string;
+  /** План — крупность, кадрирование, ракурс (напр. «крупный, лицо Алины, чуть снизу»). */
+  shotType?: string;
+  /** Камера — движение (статика/наезд/отъезд/панорама/проезд/ручная). */
+  camera?: string;
+  /** В кадре — персонажи (с рефами по slug) и что на фоне. */
+  inFrame?: string;
+  /** Реплика — текст и подача (может быть пусто). */
+  dialogue?: string;
+  /** Эмоция — эмоциональная краска кадра. */
+  emotion?: string;
+  /** Свет — ключевой источник, цвет/качество, что видно/не видно. */
+  light?: string;
+  /** Звук — диегетический/фоновый (справочно, в видео-промпт не идёт). */
+  sound?: string;
+  /** Переход — монтажная стыковка со следующим кадром (справочно, в видео-промпт не идёт). */
+  transition?: string;
+  /** Заметки — режиссёрские/монтажные пометки (справочно, в видео-промпт не идёт). */
+  notes?: string;
   /** Правился вручную — повторная разбивка его не перезатирает. */
   edited?: boolean;
+}
+
+/** Поля кадра, которые уходят в image/video-промпты (визуал). Монтажная мета (реплика/звук/переход/заметки) — нет. */
+const SHOT_VISUAL_FIELDS: Array<keyof EpisodeShotV2> = ["sceneHeading", "shotType", "camera", "inFrame", "action", "emotion", "light"];
+
+/**
+ * Визуальное описание кадра для downstream (сториборд, первый кадр сцены, видео): склейка только визуальных полей
+ * через « · ». Монтажная мета (реплика, звук, переход, заметки, длительность) исключается, чтобы не засорять T2V-промпт.
+ * Для старых кадров без структурных полей возвращает исходный action.
+ */
+export function shotVisualText(shot: Partial<EpisodeShotV2>): string {
+  const segs = SHOT_VISUAL_FIELDS.map((k) => String((shot as any)[k] ?? "").replace(/\s+/g, " ").trim()).filter(Boolean);
+  return segs.join(" · ") || String(shot.action ?? "").replace(/\s+/g, " ").trim();
 }
 
 /** Правила (system) разбивки сценария серии на кадры. `<Language>` — язык синопсиса (для action). */
 export const EPISODE_SHOTS_V2_RULES = `You are a first assistant director breaking ONE episode of a photorealistic live-action vertical micro-series into a SHOT LIST. The user message is the episode's shooting script (sluglines INT./EXT., action, dialogue).
 
 GOAL
-Split the whole script into an ordered list of shots. Each shot = ONE camera setup = ONE generated video clip.
+Split the whole script into an ordered list of shots. Each shot = ONE camera setup = ONE generated video clip. Describe every shot as a detailed, field-by-field breakdown an artist or image/video model can execute without guessing.
 
 RULES
   - Each shot MUST last between 4 and 6 seconds (integer seconds). Prefer 5s. Never below 4 or above 6.
   - Pick the OPTIMAL number of shots the script naturally needs — do NOT pad or compress. Cover the ENTIRE script from first to last beat, in reading order, with no gaps and no overlaps.
   - One continuous action, line of dialogue, or reaction = one shot. Split long beats into multiple shots; merge trivial adjacent micro-beats only when they read as a single clip.
-  - "action" MUST carry BOTH the story and the craft, so an artist or an image model can draw the frame without guessing and the shots stay consistent in style and editing logic. Write it in two parts:
-      PART 1 — 1–2 short sentences of what is visible/audible in the clip: subject, key motion, and any spoken line as a brief cue.
-      PART 2 — then a NEW LINE ("\n") with a craft tag line: exactly these five fields, in THIS order, separated by " · " (middle dot with spaces), values only (no field names):
-        1. Shot size — one of: общий / средний / крупный / деталь. Vary the size between adjacent shots; never leave it implicit.
-        2. Camera angle & height — e.g. с уровня глаз / снизу / сверху / через плечо / POV <character name>.
-        3. Camera movement — one of: статика / наезд / отъезд / панорама / проезд / ручная.
-        4. Mise-en-scène — where each character stands RELATIVE to the set pieces and WHERE they look; keep screen direction consistent across the scene (respect the 180° line).
-        5. Light — the key source, its colour/quality, and what is or is not visible outside it.
-      Example PART 2: "средний · сбоку, низкая точка · статика · Грейс слева, колонна справа, смотрит на счётчик · фонарь — единственный источник, пыль в луче, за лучом темно".
-  - Keep screen direction and lighting continuous between consecutive shots of the same scene unless the script motivates a change (new location, cut to another character's POV, lights turned on/off).
-  - No camera brand names, no lens millimetres, no meta commentary.
-  - Write every "action" value — BOTH the narrative part and the craft line — in <Language>.
+  - Describe each shot with these fields (string values; leave "" when a field truly does not apply to that shot):
+      • sceneHeading — the location + time of day of this shot (e.g. "Кабинет директора, ночь"). Carry it from the script's slugline.
+      • shotType — shot size + framing + angle/height together: one size of общий / средний / крупный / деталь, plus what is framed and the camera height (e.g. "крупный, лицо Алины, чуть снизу"). Vary the size between adjacent shots; never leave it implicit.
+      • camera — camera movement: one of статика / наезд (push-in) / отъезд / панорама / проезд / ручная (add a short qualifier if useful, e.g. "медленный наезд").
+      • inFrame — who is in frame and where, naming characters and, when a character has a reference, its slug in parentheses "(реф: <slug>)"; include what is on the background (e.g. "Алина (реф: alina_v2), на фоне размытый силуэт Марка у окна").
+      • action — 1–2 short sentences of the visible motion/beat of the clip (what the subject does). This is the core; never leave it empty.
+      • dialogue — the spoken line for this shot with speaker and delivery, if any (e.g. "Алина (тихо, сдерживая злость): «Ты подписал это без меня?»"). "" if the shot is silent.
+      • emotion — the emotional colour of the moment (e.g. "шок, переходящий в гнев").
+      • light — the key source, its colour/quality, and what is or is not visible outside it (e.g. "холодный, от монитора слева, тёплый контровой от окна").
+      • sound — diegetic/background sound of the shot (e.g. "тиканье часов, гул города за окном"). "" if none.
+      • transition — how this shot cuts to the next (e.g. "жёсткая склейка на шот 08 (реакция Марка)"). "" if a plain cut.
+      • notes — short directing/editing note for this shot (e.g. "кадр-хук, в монтаже держать паузу перед репликой"). "" if none.
+  - Keep screen direction and lighting continuous between consecutive shots of the same scene unless the script motivates a change (new location, cut to another character's POV, lights turned on/off). Respect the 180° line.
+  - No camera brand names, no lens millimetres, no meta commentary inside the field values.
+  - Write EVERY field value in <Language>.
 
 OUTPUT
-Return ONLY a JSON object, no markdown fences, no commentary. Put the craft line after a literal "\n" inside the action string:
-{"shots":[{"index":1,"durationSec":5,"action":"<narrative>\n<craft line>"},{"index":2,"durationSec":4,"action":"<narrative>\n<craft line>"}]}
+Return ONLY a JSON object, no markdown fences, no commentary:
+{"shots":[{"index":1,"durationSec":5,"sceneHeading":"...","shotType":"...","camera":"...","inFrame":"...","action":"...","dialogue":"...","emotion":"...","light":"...","sound":"...","transition":"...","notes":"..."}]}
 Order shots strictly by their appearance in the script, index starting at 1.`;
 
 export function episodeShotsV2SystemPrompt(language: SynopsisLanguage | string): string {
@@ -873,6 +909,12 @@ const clampShotDuration = (v: unknown): number => {
   return Math.min(6, Math.max(4, n));
 };
 
+/** Необязательное текстовое поле кадра: обрезка пробелов + лимит длины; пусто → undefined. */
+const optField = (v: unknown, cap = 1000): string | undefined => {
+  const s = String(v ?? "").trim().slice(0, cap);
+  return s || undefined;
+};
+
 /** Разбор ответа модели в список шотов со стабильными id `shot-<index>` (перенумерация с 1). */
 export function parseEpisodeShotsV2(data: unknown): EpisodeShotV2[] {
   const list: any[] = Array.isArray((data as any)?.shots) ? (data as any).shots : Array.isArray(data) ? (data as any[]) : [];
@@ -881,10 +923,30 @@ export function parseEpisodeShotsV2(data: unknown): EpisodeShotV2[] {
     const action = String(s?.action ?? "").trim();
     if (!action) continue;
     const index = out.length + 1;
-    out.push({ id: `shot-${index}`, index, durationSec: clampShotDuration(s?.durationSec), action: action.slice(0, 2000) });
+    out.push({
+      id: `shot-${index}`,
+      index,
+      durationSec: clampShotDuration(s?.durationSec),
+      action: action.slice(0, 2000),
+      sceneHeading: optField(s?.sceneHeading, 300),
+      shotType: optField(s?.shotType, 600),
+      camera: optField(s?.camera, 400),
+      inFrame: optField(s?.inFrame, 800),
+      dialogue: optField(s?.dialogue, 1000),
+      emotion: optField(s?.emotion, 400),
+      light: optField(s?.light, 600),
+      sound: optField(s?.sound, 400),
+      transition: optField(s?.transition, 400),
+      notes: optField(s?.notes, 600),
+    });
   }
   return out;
 }
+
+/** Поля-содержимое кадра (кроме id/index/edited) — переносятся при сохранении ручной правки. */
+const SHOT_CONTENT_KEYS: Array<keyof EpisodeShotV2> = [
+  "durationSec", "action", "sceneHeading", "shotType", "camera", "inFrame", "dialogue", "emotion", "light", "sound", "transition", "notes",
+];
 
 /**
  * Повторная разбивка: новый список из сценария, но для совпавших id сохраняются вручную
@@ -895,7 +957,9 @@ export function mergeEpisodeShotsV2(prev: EpisodeShotV2[], fresh: EpisodeShotV2[
   return fresh.map((f) => {
     const p = byId.get(f.id);
     if (!p || !p.edited) return f;
-    return { ...f, durationSec: p.durationSec, action: p.action, edited: true };
+    const kept: Partial<EpisodeShotV2> = {};
+    for (const k of SHOT_CONTENT_KEYS) (kept as any)[k] = (p as any)[k];
+    return { ...f, ...kept, edited: true };
   });
 }
 

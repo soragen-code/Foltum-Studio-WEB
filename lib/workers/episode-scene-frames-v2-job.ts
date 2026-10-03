@@ -15,7 +15,7 @@ import { REFERENCE_ASPECT_RATIO, VISUAL_STYLE } from "@/lib/visual-style";
 import { runWithPromptContext } from "@/lib/prompt-log";
 import { translateRefLabelsToEnglish, translateToEnglish } from "@/lib/translate-en";
 import {
-  buildSceneFrameV2Prompt, episodeRefsV2From, episodeScenesV2From, episodeShotsV2From, episodeStoryboardV2From, selectStoryboardV2Refs,
+  buildSceneFrameV2Prompt, episodeRefsV2From, episodeScenesV2From, episodeShotsV2From, episodeStoryboardV2From, selectStoryboardV2Refs, shotVisualText,
   type EpisodeSceneV2,
 } from "@/lib/idea-v2";
 import { patchEpisodeSceneV2, setEpisodeScenesV2 } from "@/lib/episode-scenes-v2-store";
@@ -79,7 +79,7 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSce
       // Обновление/переаппрув сториборда НЕ сбрасывает уже готовые сцены: для сцены того же шота сохраняем
       // первый кадр, видео, финальный кадр, ручной промпт и их статусы. Перенарезаем только недостающие кадры.
       const prev = new Map(episodeScenesV2From(row?.episodeScenesV2, episode).map((s) => [s.id, s]));
-      const actionsEn = await Promise.all(shots.map((s) => translateToEnglish(s.action)));
+      const actionsEn = await Promise.all(shots.map((s) => translateToEnglish(shotVisualText(s))));
       // Финальный кадр генерим LLM только когда у соответствующей сцены его ещё нет (экономим вызовы + сохраняем прежние).
       const needEnd = shots.some((s) => { const p = prev.get(`scene-${s.index}`); return !(p && p.shotId === s.id && p.endFrame); });
       const endFramesEn = needEnd ? await describeEndFrames(actionsEn) : shots.map(() => "");

@@ -10,7 +10,7 @@ import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { completeJob, failJob, isCancelRequested, markCanceled, updateJob } from "@/lib/jobs";
 import { REFERENCE_ASPECT_RATIO, VISUAL_STYLE } from "@/lib/visual-style";
 import { runWithPromptContext } from "@/lib/prompt-log";
-import { buildStoryboardV2Prompt, episodeRefsV2From, episodeShotsV2From, episodeStoryboardV2From, selectStoryboardV2Refs } from "@/lib/idea-v2";
+import { buildStoryboardV2Prompt, episodeRefsV2From, episodeShotsV2From, episodeStoryboardV2From, selectStoryboardV2Refs, shotVisualText } from "@/lib/idea-v2";
 import { setEpisodeStoryboardV2 } from "@/lib/episode-storyboard-v2-store";
 import { translateRefLabelsToEnglish, translateToEnglish } from "@/lib/translate-en";
 
@@ -35,7 +35,7 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSto
 
     // Авто-промпт (с описанием референсов) + возможная ручная правка пользователя.
     // Промпт — только English: action шотов (могут быть введены по-русски) переводятся до сборки.
-    const shotsEn = await Promise.all(shots.map(async (sh) => ({ ...sh, action: (await translateToEnglish(sh.action)) || sh.action })));
+    const shotsEn = await Promise.all(shots.map(async (sh) => ({ ...sh, action: (await translateToEnglish(shotVisualText(sh))) || shotVisualText(sh) })));
     const refsEn = await translateRefLabelsToEnglish(refs);
     const autoPrompt = `[VISUAL STYLE]: ${VISUAL_STYLE}\n${buildStoryboardV2Prompt(shotsEn, refsEn)}`;
     const override = episodeStoryboardV2From(row?.episodeStoryboardV2, episode)?.promptOverride;
