@@ -52,7 +52,7 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSto
     await updateJob(jobId, { progress: 85, message: "Uploading storyboard..." });
     const url = await uploadRemoteToS3(remote, `media/public/v2-storyboard/${projectId}/${episode}/${Date.now()}.png`, "image/png");
     await setEpisodeStoryboardV2(projectId, episode, { imageUrl: url, status: "done", error: null });
-    await completeJob(jobId, { episode }, "Storyboard ready");
+    await completeJob(jobId, { episode, imageUrl: url }, "Storyboard ready");
   } catch (err: any) {
     if (err instanceof GenerationCanceledError) {
       await markCanceled(jobId, CANCEL_MSG);

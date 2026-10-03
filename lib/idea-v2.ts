@@ -1091,7 +1091,7 @@ export function selectSceneVideoV2Refs(refs: EpisodeRefV2[], cap: number): Episo
 export function storyboardV2PromptKey(shots: EpisodeShotV2[], refs?: EpisodeRefV2[], visualStyle?: string): string {
   const refList = (refs ?? []).filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
   const src = JSON.stringify([
-    "v1",
+    "v2",
     visualStyle ?? "",
     shots.map((s) => [s.index, shotFrameText(s) || s.action || ""]),
     refList.map((r) => [r.id, r.kind, r.label, r.imageUrl]),
@@ -1108,7 +1108,8 @@ export function storyboardV2PromptKey(shots: EpisodeShotV2[], refs?: EpisodeRefV
 /**
  * Промпт листа-сториборда. Структура (по ТЗ):
  *  1) СПИСОК РЕФЕРЕНСОВ — САМЫМ ПЕРВЫМ блоком: «References:» + «Image N - <имя/название>» (N = позиция
- *     прикреплённой картинки в image_input; метки — English, без префикса типа; перевод делает вызывающий код);
+ *     прикреплённой картинки в image_input; метки — English, без префикса типа; перевод делает вызывающий код).
+ *     Без пояснительной сноски (по ТЗ) — привязка «Image N = N-я картинка» упомянута одной фразой в шапке;
  *  2) [VISUAL STYLE] (если передан) + ШАПКА — формат листа: сетка 5×5 (строки по числу кадров), вертикальный 9:16, номера панелей, без текста;
  *  3) ПАНЕЛИ — «Panel N:» + описание «Фрейм» из шот-листа СЛОВО В СЛОВО (English — перевод делает вызывающий код).
  */
@@ -1121,8 +1122,7 @@ export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRe
   const refsBlock = refList.length
     ? `References:\n` +
       refList.map((r, i) => `Image ${i + 1} - ${stripRefKindPrefixV2(r.label).replace(/\s+/g, " ").trim()}`).join("\n") +
-      `\n(${refList.length} reference image(s) are attached in this exact order: the 1st attached image is Image 1, the 2nd is Image 2, etc. — bind BY POSITION, never by name. ` +
-      `COMPOSE a brand-new storyboard sheet — do NOT edit or return any reference image; use them ONLY as the canonical look of the characters, locations and props so they stay consistent in every panel.)\n\n`
+      `\n\n`
     : "";
 
   const style = (opts?.visualStyle ?? "").trim();
@@ -1135,7 +1135,8 @@ export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRe
     (n < cols * rows ? `Cells after panel ${n} stay empty (plain dark background). ` : "") +
     `No shot skipped, none merged, none repeated. ` +
     `Every panel has a thin frame and a small clearly legible number badge in its top-left corner matching the shot number. ` +
-    `Each panel is a photorealistic cinematic still depicting exactly the described static frame — same characters, wardrobe, props and environments across all panels. ` +
+    `Each panel is a photorealistic cinematic still depicting exactly the described static frame — same characters, wardrobe, props and environments across all panels` +
+    (refList.length ? `, matching the attached reference images (Image N = the N-th attached image). ` : `. `) +
     `Only the small panel number labels may contain text; no captions, no other writing on the sheet.`;
 
   const panels = shots

@@ -71,23 +71,36 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard, onOpe
     }
   }, [photoOpen, promptOpen])
 
-  const refresh = async () => {
-    try {
-      const res = await fetch(`${API}?projectId=${projectId}&episode=${n}`, { cache: 'no-store' })
-      if (!res.ok) return
-      const d = await res.json().catch(() => null)
-      if (!d) return
-      if ('storyboard' in d) setStoryboard(d.storyboard ?? null)
-      if (typeof d.autoPrompt === 'string') setAutoPrompt(d.autoPrompt)
-      if (Array.isArray(d.refs)) setRefs(d.refs)
-    } catch { /* транзиентно */ }
+  // Подтянуть состояние листа с сервера. attempts > 1 — повтор при сетевой/транзиентной ошибке (после
+  // завершения задачи лист ОБЯЗАН появиться без перезагрузки страницы).
+  const refresh = async (attempts = 1): Promise<boolean> => {
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const res = await fetch(`${API}?projectId=${projectId}&episode=${n}`, { cache: 'no-store' })
+        const d = res.ok ? await res.json().catch(() => null) : null
+        if (d) {
+          if ('storyboard' in d) setStoryboard(d.storyboard ?? null)
+          if (typeof d.autoPrompt === 'string') setAutoPrompt(d.autoPrompt)
+          if (Array.isArray(d.refs)) setRefs(d.refs)
+          return true
+        }
+      } catch { /* транзиентно */ }
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, 1500 * (i + 1)))
+    }
+    return false
   }
 
   const poll = useJobPolling({
     intervalMs: 1000,
     onFinish: (res: any) => {
       jobIdRef.current = null
-      if (res.job.status === 'completed') { setError(''); void refresh() }
+      if (res.job.status === 'completed') {
+        setError('')
+        // Готовый лист — сразу из результата задачи (не ждём GET), затем сверка с сервером с повторами.
+        const url = typeof res.job.result?.imageUrl === 'string' ? res.job.result.imageUrl : ''
+        if (url) setStoryboard((s) => ({ ...(s ?? {}), imageUrl: url, status: 'done', error: null, approved: false }))
+        void refresh(3)
+      }
       else if (res.job.status === 'canceled') { setNotice(t('ideaV2.storyboardCanceled')); void refresh() }
       else { setError(res.job.error ?? t('ideaV2.storyboardError')); void refresh() }
     },
