@@ -837,6 +837,8 @@ export interface EpisodeShotV2 {
   frame?: string;
   /** Действие — что делают персонажи (видимое движение/бит клипа). Обязательное. */
   action: string;
+  /** Концовка — чем заканчивается кадр/сцена (финальный бит, итоговое состояние на последнем кадре клипа). */
+  ending?: string;
   /** @deprecated legacy: локация + время суток. */
   sceneHeading?: string;
   /** @deprecated legacy: крупность/кадрирование/ракурс. */
@@ -883,37 +885,43 @@ export function shotFrameText(shot: Partial<EpisodeShotV2>): string {
 }
 
 /**
- * Визуальное описание кадра для downstream (сториборд, первый кадр сцены, видео): «Frame: <frame> | Action: <action>».
- * Старые шоты без frame — frame синтезируется из legacy-полей. Нет ни frame, ни legacy-полей → только action.
+ * Визуальное описание кадра для downstream (сториборд, первый кадр сцены, видео):
+ * «Frame: <frame> | Action: <action> | Ending: <ending>» (пустые части опускаются).
+ * Старые шоты без frame — frame синтезируется из legacy-полей. Нет ни frame, ни legacy-полей → action (+ending).
  */
 export function shotVisualText(shot: Partial<EpisodeShotV2>): string {
   const frame = shotFrameText(shot);
   const action = oneLine(shot.action);
-  if (!frame) return action;
-  return action ? `Frame: ${frame} | Action: ${action}` : `Frame: ${frame}`;
+  const ending = oneLine(shot.ending);
+  const parts: string[] = [];
+  if (frame) parts.push(`Frame: ${frame}`);
+  if (action) parts.push(`Action: ${action}`);
+  if (ending) parts.push(`Ending: ${ending}`);
+  return parts.join(" | ");
 }
 
 /** Правила (system) разбивки сценария серии на кадры. `<Language>` — язык синопсиса (для frame/action). */
 export const EPISODE_SHOTS_V2_RULES = `You are a first assistant director breaking ONE episode of a photorealistic live-action vertical micro-series into a SHOT LIST. The user message is the episode's shooting script (sluglines INT./EXT., action, dialogue).
 
 GOAL
-Split the whole script into an ordered list of shots. Each shot = ONE camera setup = ONE generated video clip. Every shot is described by exactly TWO paragraphs — "frame" and "action" — detailed enough that an artist or image/video model can execute it without guessing.
+Split the whole script into an ordered list of shots. Each shot = ONE camera setup = ONE generated video clip. Every shot is described by exactly THREE paragraphs — "frame", "action" and "ending" — detailed enough that an artist or image/video model can execute it without guessing.
 
 RULES
   - Each shot MUST last between 4 and 6 seconds (integer seconds). Prefer 5s. Never below 4 or above 6.
   - Pick the OPTIMAL number of shots the script naturally needs — do NOT pad or compress. Cover the ENTIRE script from first to last beat, in reading order, with no gaps and no overlaps.
   - One continuous action, line of dialogue, or reaction = one shot. Split long beats into multiple shots; merge trivial adjacent micro-beats only when they read as a single clip.
-  - Each shot has exactly two text fields:
-      • frame — ONE coherent paragraph: the complete STATIC visual description of the frame. Cover all of: who is in frame and where each person stands; who holds what; wardrobe and props; composition; shot size (общий / средний / крупный / деталь) and framing; camera angle and height; camera movement (статика / наезд / отъезд / панорама / проезд / ручная); light (key source, its colour and quality, what is and is not visible outside it); location + time of day (carry it from the script's slugline). Vary the shot size between adjacent shots.
-      • action — ONE paragraph: what exactly the characters do in this clip — the visible motion/beat (if someone speaks, say who speaks and how, without quoting long dialogue). Never leave it empty.
-  - In "frame" (and "action") name characters by their ordinary names only. NEVER add reference numbers or brackets like "(реф 1)", never invent text slugs or IDs for characters.
+  - Each shot has exactly three text fields:
+      • frame — ONE coherent paragraph: the complete STATIC visual description of the frame at the START of the clip. Cover all of: who is in frame and where each person stands; who holds what; wardrobe and props; composition; shot size (общий / средний / крупный / деталь) and framing; camera angle and height; camera movement (статика / наезд / отъезд / панорама / проезд / ручная); light (key source, its colour and quality, what is and is not visible outside it); location + time of day (carry it from the script's slugline). Vary the shot size between adjacent shots.
+      • action — ONE paragraph: what exactly the characters do during this clip — the visible motion/beat (if someone speaks, say who speaks and how, without quoting long dialogue). Never leave it empty.
+      • ending — ONE paragraph: how the clip ENDS — the final beat and the resulting state on the last frame (final pose/position of the characters, where attention/gaze lands, what has changed from the frame). Never leave it empty.
+  - In "frame", "action" and "ending" name characters by their ordinary names only. NEVER add reference numbers or brackets like "(реф 1)", never invent text slugs or IDs for characters.
   - Keep screen direction and lighting continuous between consecutive shots of the same scene unless the script motivates a change (new location, cut to another character's POV, lights turned on/off). Respect the 180° line.
   - No camera brand names, no lens millimetres, no meta commentary inside the field values. Do NOT output any other fields.
-  - Write both field values in <Language>.
+  - Write all three field values in <Language>.
 
 OUTPUT
 Return ONLY a JSON object, no markdown fences, no commentary:
-{"shots":[{"index":1,"durationSec":5,"frame":"...","action":"..."}]}
+{"shots":[{"index":1,"durationSec":5,"frame":"...","action":"...","ending":"..."}]}
 Order shots strictly by their appearance in the script, index starting at 1.`;
 
 export function episodeShotsV2SystemPrompt(language: SynopsisLanguage | string): string {
@@ -949,6 +957,7 @@ export function parseEpisodeShotsV2(data: unknown): EpisodeShotV2[] {
       durationSec: clampShotDuration(s?.durationSec),
       frame,
       action: action.slice(0, 2000),
+      ending: optField(s?.ending, 2000),
     });
   }
   return out;
@@ -956,7 +965,7 @@ export function parseEpisodeShotsV2(data: unknown): EpisodeShotV2[] {
 
 /** Поля-содержимое кадра (кроме id/index/edited) — переносятся при сохранении ручной правки. */
 const SHOT_CONTENT_KEYS: Array<keyof EpisodeShotV2> = [
-  "durationSec", "frame", "action",
+  "durationSec", "frame", "action", "ending",
   // legacy — чтобы правки старых шотов не терялись при повторной разбивке
   "sceneHeading", "shotType", "camera", "inFrame", "dialogue", "emotion", "light", "sound", "transition", "notes",
 ];

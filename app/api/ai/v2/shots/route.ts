@@ -15,7 +15,7 @@ import { activeEpisodeJob, latestEpisodeJob, patchEpisodeShotV2 } from "@/lib/ep
  * Поток v2 · вкладка «Шот-лист» серии n.
  * POST  { projectId, episode, system? }                 → разбить сценарий на кадры (GenerationJob "episode_shots_v2"; идемпотентно по серии). system — переопределённый системный промпт.
  * GET   ?projectId&episode                              → { job, items, scriptText, autoSystem }.
- * PATCH { projectId, episode, id, frame?, action?, durationSec? } → сохранить правку кадра (edited=true — не перезатирается при повторной разбивке).
+ * PATCH { projectId, episode, id, frame?, action?, ending?, durationSec? } → сохранить правку кадра (edited=true — не перезатирается при повторной разбивке).
  */
 const postSchema = z.object({ projectId: z.string().min(1), episode: z.coerce.number().int().min(1).max(999), system: z.string().max(200000).optional() });
 const patchSchema = z.object({
@@ -25,10 +25,11 @@ const patchSchema = z.object({
   action: z.string().max(2000).optional(),
   durationSec: z.coerce.number().int().min(4).max(6).optional(),
   frame: z.string().max(2000).optional(),
+  ending: z.string().max(2000).optional(),
 });
 
 /** Необязательные строковые поля кадра, которые можно править вручную (кроме action/durationSec). */
-const SHOT_PATCH_STR_FIELDS = ["frame"] as const;
+const SHOT_PATCH_STR_FIELDS = ["frame", "ending"] as const;
 
 async function ownedProject(email: string, projectId: string) {
   const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });

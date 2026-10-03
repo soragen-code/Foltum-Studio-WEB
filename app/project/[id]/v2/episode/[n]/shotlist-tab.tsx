@@ -213,20 +213,24 @@ export function ShotlistTab({ projectId, n, hasScript, scriptText, initialShots 
   )
 }
 
-/** Два абзаца кадра для отображения/правки: «Фрейм» (статичное описание кадра) и «Действие» (обязательное). */
-const SHOT_FIELDS: Array<{ key: 'frame' | 'action'; labelKey: string; multiline: boolean }> = [
+/** Три абзаца кадра для отображения/правки: «Фрейм» (статичное описание), «Действие» (обязательное), «Концовка». */
+type ShotFieldKey = 'frame' | 'action' | 'ending'
+
+const SHOT_FIELDS: Array<{ key: ShotFieldKey; labelKey: string; multiline: boolean }> = [
   { key: 'frame', labelKey: 'ideaV2.shotField.frame', multiline: true },
   { key: 'action', labelKey: 'ideaV2.shotField.action', multiline: true },
+  { key: 'ending', labelKey: 'ideaV2.shotField.ending', multiline: true },
 ]
 
-type ShotPatch = Partial<Pick<EpisodeShotV2, 'frame' | 'action' | 'durationSec'>>
+type ShotPatch = Partial<Pick<EpisodeShotV2, 'frame' | 'action' | 'ending' | 'durationSec'>>
 
 /** Текст поля кадра: для старых шотов без frame — синтез из legacy-полей. */
-const shotFieldValue = (shot: EpisodeShotV2, key: 'frame' | 'action'): string => (key === 'frame' ? shotFrameText(shot) : String(shot.action ?? ''))
+const shotFieldValue = (shot: EpisodeShotV2, key: ShotFieldKey): string =>
+  key === 'frame' ? shotFrameText(shot) : String((shot as any)[key] ?? '')
 
 /**
- * Карточка одного кадра: № · длительность · два абзаца (Фрейм / Действие). Правка вручную + длительность 4–6 сек
- * → PATCH /api/ai/v2/shots (edited=true). Повторная разбивка такие кадры сохраняет.
+ * Карточка одного кадра: № · длительность · три абзаца (Фрейм / Действие / Концовка). Правка вручную + длительность
+ * 4–6 сек → PATCH /api/ai/v2/shots (edited=true). Повторная разбивка такие кадры сохраняет.
  */
 function ShotCard({ projectId, n, shot, disabled, onSaved }: {
   projectId: string; n: number; shot: EpisodeShotV2; disabled: boolean; onSaved: (patch: ShotPatch) => void
@@ -251,7 +255,8 @@ function ShotCard({ projectId, n, shot, disabled, onSaved }: {
     const d = Math.min(6, Math.max(4, Math.round(Number(dur) || 5)))
     if (!a) { setError(t('ideaV2.shotsActionRequired')); return }
     const fr = (form.frame ?? '').trim()
-    const patch: ShotPatch = { frame: fr, action: a, durationSec: d }
+    const en = (form.ending ?? '').trim()
+    const patch: ShotPatch = { frame: fr, action: a, ending: en, durationSec: d }
     setSaving(true); setError('')
     try {
       const res = await fetch(API, {
@@ -261,7 +266,7 @@ function ShotCard({ projectId, n, shot, disabled, onSaved }: {
       })
       if (!res.ok) { const j = await res.json().catch(() => ({})); setError(j?.error ?? t('ideaV2.shotsSaveFailed')); return }
       // Пустые строки на клиенте показываем как «нет значения».
-      onSaved({ frame: fr, action: a, durationSec: d })
+      onSaved({ frame: fr, action: a, ending: en, durationSec: d })
       setEditing(false)
     } catch { setError(t('ideaV2.shotsNetworkError')) }
     finally { setSaving(false) }
