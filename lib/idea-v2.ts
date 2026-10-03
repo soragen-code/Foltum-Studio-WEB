@@ -1231,19 +1231,31 @@ export function buildSceneFrameV2Prompt(scene: Pick<EpisodeSceneV2, "index" | "a
   return `${head}${refsBlock}`;
 }
 
+/** Сколько референсов персонажей (кроме первого кадра) уходит в видео сцены; общий cap image_input = 4. */
+export const MAX_SCENE_VIDEO_REF_IMAGES = 4;
+
 /**
- * Промпт видео сцены (Seedance 2.5 text-to-video с референсами). Ручной промпт заменяет всё.
- * Иначе: action (старт/движение) + финальный кадр (к чему приходит сцена) + заметка о консистентности
- * по приложенным референс-изображениям (персонажи/локация/реквизит). Всё — English.
+ * Промпт видео сцены (Seedance I2V/T2V с референсами). Ручной промпт заменяет всё. Иначе фиксированная
+ * English-структура без негативов:
+ *   REFERENCES: image 1 — первый кадр сцены (единственный источник пространства/раскладки), image 2..N — персонажи
+ *   (только внешность, по порядку приложенных картинок — тот же порядок, что selectSceneVideoV2Refs);
+ *   ACTIONS: движение сцены; END: к чему приходит кадр.
+ * `characters` — метки персонажей-референсов в том порядке, в каком их картинки приложены после первого кадра.
  */
-export function sceneVideoV2Prompt(scene: Pick<EpisodeSceneV2, "action" | "promptOverride" | "endFrame">): string {
+export function sceneVideoV2Prompt(
+  scene: Pick<EpisodeSceneV2, "action" | "promptOverride" | "endFrame">,
+  characters: string[] = [],
+): string {
   const ov = typeof scene.promptOverride === "string" ? scene.promptOverride.trim() : "";
   if (ov) return ov;
   const end = typeof scene.endFrame === "string" ? scene.endFrame.trim() : "";
-  const parts = [scene.action.trim()];
-  if (end) parts.push(`Ending — the shot resolves to: ${end}`);
-  parts.push("Keep every character's identity, wardrobe, the location and props consistent with the attached reference images.");
-  return parts.join("\n\n");
+  const refLines = [
+    "image 1 — the first frame of this shot: the space, the characters' positions in it, their poses, the action they are in the middle of, the shot size and camera angle. This is the only source of the layout — do not add, remove or move anything in the space. Do not take appearance or wardrobe from it.",
+    ...characters.map((name, i) => `image ${i + 2} — ${String(name).replace(/\s+/g, " ").trim()} (appearance only).`),
+  ];
+  const blocks = [`REFERENCES:\n${refLines.join("\n")}`, `ACTIONS:\n${scene.action.trim()}`];
+  if (end) blocks.push(`END:\n${end}`);
+  return blocks.join("\n\n");
 }
 
 /** Финальный ролик серии (Project.episodeFinalV2["<n>"]): склейка видео всех сцен по index. */
