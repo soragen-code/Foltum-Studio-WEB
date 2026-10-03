@@ -1072,26 +1072,42 @@ export function selectSceneVideoV2Refs(refs: EpisodeRefV2[], cap: number): Episo
     .slice(0, Math.max(0, cap));
 }
 
+/**
+ * Промпт листа-сториборда. Структура (по ТЗ):
+ *  1) ШАПКА — формат листа: сетка 5×5 (5 колонок, строки по числу кадров), вертикальный 9:16, номера панелей, без текста;
+ *  2) СПИСОК РЕФЕРЕНСОВ — персонажи → локации → реквизит, в порядке прикреплённых картинок (bind по номеру/позиции);
+ *  3) ПАНЕЛИ — «Panel N:» + описание «Фрейм» из шот-листа СЛОВО В СЛОВО (на English — перевод делает вызывающий код).
+ */
 export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRefV2[]): string {
-  const panels = shots
-    .map((s) => `Panel ${s.index}: ${s.action.replace(/\s+/g, " ").trim()}`)
-    .join("\n");
-  const base =
-    `Create ONE single storyboard sheet (a contact-sheet / comic-style grid) that contains EVERY shot of this episode drawn as a separate panel. ` +
-    `There are ${shots.length} shots in total — draw ALL ${shots.length} panels, one per shot, none skipped and none merged. ` +
-    `Lay the panels out in a neat regular grid, left-to-right then top-to-bottom, in shot order (panel 1 first). ` +
-    `Give every panel a thin frame and a small clearly legible number badge in its top-left corner matching the shot number. ` +
-    `Each panel is a photorealistic cinematic still depicting exactly what its shot describes — consistent characters, wardrobe and environment across panels. ` +
-    `Only the small panel number labels may contain text; no captions, no other writing. Vertical 9:16 sheet.`;
+  const n = shots.length;
+  const cols = 5;
+  const rows = Math.max(5, Math.ceil(n / cols));
+  const header =
+    `STORYBOARD SHEET FORMAT\n` +
+    `Create ONE single storyboard sheet: a ${cols}x${rows} grid (${cols} columns x ${rows} rows = ${cols * rows} cells) on a vertical 9:16 sheet. ` +
+    `Draw ALL ${n} shots of this episode, one shot per panel, in shot order: panels fill the grid left-to-right, then top-to-bottom (panel 1 is the top-left cell). ` +
+    (n < cols * rows ? `Cells after panel ${n} stay empty (plain dark background). ` : "") +
+    `No shot skipped, none merged, none repeated. ` +
+    `Every panel has a thin frame and a small clearly legible number badge in its top-left corner matching the shot number. ` +
+    `Each panel is a photorealistic cinematic still depicting exactly the described static frame — same characters, wardrobe, props and environments across all panels. ` +
+    `Only the small panel number labels may contain text; no captions, no other writing on the sheet.`;
+
   const refList = (refs ?? []).filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
+  const kindLabel = (k: EpisodeRefKindV2) => (k === "character" ? "character" : k === "location" ? "location" : "prop");
   const refsBlock = refList.length
-    ? `\n\nREFERENCES: ${refList.length} reference image(s) are attached, in the SAME order as the numbered list below. COMPOSE a brand-new storyboard sheet — do NOT edit or return any single reference image. ` +
-      `Each reference has a fixed number; bind it BY POSITION — the 1st attached image is the 1st list item, the 2nd attached image is the 2nd list item, and so on. The panels cite these numbers as "(реф N)"; match a panel's "(реф N)" to the reference with that same number — never match by name. Use the attached images ONLY as the canonical look of the recurring characters and locations, so they stay consistent across every panel. The attached images, in order, are:\n` +
-      refList
-        .map((r, i) => `Reference ${(r as any).ord ?? i + 1} (${r.kind === "character" ? "character" : r.kind === "location" ? "location" : "prop"}): ${r.label.replace(/\s+/g, " ").trim()}`)
-        .join("\n")
+    ? `\n\nREFERENCES (${refList.length} reference image(s) attached, in the SAME order as this list — bind BY POSITION: 1st attached image = Reference 1, 2nd = Reference 2, etc.; never match by name). ` +
+      `COMPOSE a brand-new storyboard sheet — do NOT edit or return any reference image. Use them ONLY as the canonical look of the characters, locations and props so they stay consistent in every panel:\n` +
+      refList.map((r, i) => `Reference ${(r as any).ord ?? i + 1} (${kindLabel(r.kind)}): ${r.label.replace(/\s+/g, " ").trim()}`).join("\n")
     : "";
-  return `${base}\n\nSHOTS:\n${panels}${refsBlock}`;
+
+  const panels = shots
+    .map((s) => {
+      const frame = (shotFrameText(s) || s.action || "").replace(/\s+/g, " ").trim();
+      return `Panel ${s.index}: ${frame}`;
+    })
+    .join("\n");
+
+  return `${header}${refsBlock}\n\nPANELS:\n${panels}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
