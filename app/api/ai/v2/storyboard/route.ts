@@ -8,16 +8,15 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runEpisodeStoryboardV2Job, EPISODE_STORYBOARD_V2_JOB_TYPE } from "@/lib/workers/episode-storyboard-v2-job";
-import { buildStoryboardV2Prompt, episodeRefsV2From, episodeShotsV2From, episodeStoryboardV2From, selectStoryboardV2Refs, shotFrameText } from "@/lib/idea-v2";
+import { episodeShotsV2From, episodeStoryboardV2From } from "@/lib/idea-v2";
+import { peekStoryboardV2AutoPrompt, storyboardV2PromptInputs } from "@/lib/storyboard-v2-prompt";
 import { activeEpisodeJob, latestEpisodeJob, setEpisodeStoryboardV2 } from "@/lib/episode-storyboard-v2-store";
-import { WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
-import { VISUAL_STYLE } from "@/lib/visual-style";
-import { translateRefLabelsToEnglish, translateToEnglish } from "@/lib/translate-en";
 
 /**
  * Поток v2 · вкладка «Сториборд» серии n.
  * POST  { projectId, episode } → собрать один сводный лист-сториборд по всему шот-листу серии (GenerationJob "episode_storyboard_v2"; идемпотентно по серии).
- * GET   ?projectId&episode     → { job, storyboard }.
+ * GET   ?projectId&episode     → { job, storyboard, autoPrompt (кэш или ""), refs }.
+ * Сборка/выдача авто-промпта по кнопке «Промпт» — ./prompt/route.ts.
  */
 const postSchema = z.object({ projectId: z.string().min(1), episode: z.coerce.number().int().min(1).max(999), prompt: z.string().max(200000).optional() });
 
@@ -76,13 +75,11 @@ export async function GET(request: Request) {
   await failStaleJobs({ projectId, type: EPISODE_STORYBOARD_V2_JOB_TYPE });
   const job = await latestEpisodeJob(projectId, EPISODE_STORYBOARD_V2_JOB_TYPE, episode);
 
-  // Превью: собранный авто-промпт (с описанием референсов) + сами референсы, которые уйдут в генерацию.
-  const shots = episodeShotsV2From(project.episodeShotsV2, episode);
-  const refs = selectStoryboardV2Refs(episodeRefsV2From(project.episodeRefsV2, episode), WAVESPEED_IMAGE_MAX_REFS);
-  // Как в воркере: «Фрейм» шотов переводится на English (no-op для уже английских), чтобы превью совпадало с отправкой.
-  const shotsEn = await Promise.all(shots.map(async (sh) => { const fr = shotFrameText(sh) || sh.action; return { ...sh, frame: (await translateToEnglish(fr)) || fr }; }));
-  const refsEn = await translateRefLabelsToEnglish(refs);
-  const autoPrompt = shots.length ? buildStoryboardV2Prompt(shotsEn, refsEn, { visualStyle: VISUAL_STYLE }) : "";
+  // Превью: ТОЛЬКО кэш авто-промпта (без LLM) — пустая строка, если он ещё не построен или устарел
+  // (клиент тогда строит его по кнопке «Промпт» через POST /api/ai/v2/storyboard/prompt); плюс референсы для генерации.
+  const inputs = storyboardV2PromptInputs(project, episode);
+  const refs = inputs.refs;
+  const autoPrompt = peekStoryboardV2AutoPrompt(project, episode, inputs);
   const refsPreview = refs.map((r) => ({ id: r.id, label: r.label, kind: r.kind, imageUrl: r.imageUrl }));
 
   return NextResponse.json({

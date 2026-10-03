@@ -1010,6 +1010,10 @@ export interface EpisodeStoryboardV2 {
   prompt?: string;
   /** Правка промпта пользователем (переопределяет авто-промпт при сборке). */
   promptOverride?: string | null;
+  /** Кэш собранного авто-промпта (EN, с переводом фреймов/меток) — строится по кнопке «Промпт» или при сборке листа. */
+  autoPrompt?: string | null;
+  /** Ключ кэша авто-промпта (отпечаток шотов + рефов + стиля): не совпал → промпт устарел и строится заново. */
+  autoPromptKey?: string | null;
   /** Состояние генерации. */
   status?: "generating" | "done" | "failed" | null;
   /** Текст ошибки, если генерация упала. */
@@ -1027,6 +1031,8 @@ export function episodeStoryboardV2From(map: unknown, n: number): EpisodeStorybo
     imageUrl: typeof v.imageUrl === "string" ? v.imageUrl : undefined,
     prompt: typeof v.prompt === "string" ? v.prompt : undefined,
     promptOverride: typeof v.promptOverride === "string" ? v.promptOverride : null,
+    autoPrompt: typeof v.autoPrompt === "string" ? v.autoPrompt : null,
+    autoPromptKey: typeof v.autoPromptKey === "string" ? v.autoPromptKey : null,
     status: v.status === "generating" || v.status === "done" || v.status === "failed" ? v.status : null,
     error: typeof v.error === "string" ? v.error : null,
     approved: v.approved === true,
@@ -1075,6 +1081,28 @@ export function selectSceneVideoV2Refs(refs: EpisodeRefV2[], cap: number): Episo
   return refs
     .filter((r) => r && r.kind === "character" && typeof r.imageUrl === "string" && r.imageUrl)
     .slice(0, Math.max(0, cap));
+}
+
+/**
+ * Отпечаток входов авто-промпта сториборда (шоты: index+фрейм/действие; рефы с картинками: id+label+imageUrl; стиль).
+ * Используется как ключ кэша EpisodeStoryboardV2.autoPromptKey: совпал → показываем сохранённый промпт сразу,
+ * не совпал (шот-лист или рефы изменились) → промпт строится заново. Без node:crypto — модуль импортируется клиентом.
+ */
+export function storyboardV2PromptKey(shots: EpisodeShotV2[], refs?: EpisodeRefV2[], visualStyle?: string): string {
+  const refList = (refs ?? []).filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
+  const src = JSON.stringify([
+    "v1",
+    visualStyle ?? "",
+    shots.map((s) => [s.index, shotFrameText(s) || s.action || ""]),
+    refList.map((r) => [r.id, r.kind, r.label, r.imageUrl]),
+  ]);
+  let h1 = 0x811c9dc5, h2 = 0x1000193;
+  for (let i = 0; i < src.length; i++) {
+    const c = src.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193);
+    h2 = Math.imul(h2 + c, 0x9e3779b1) ^ (h2 >>> 13);
+  }
+  return `${(h1 >>> 0).toString(16)}${(h2 >>> 0).toString(16)}:${src.length}`;
 }
 
 /**

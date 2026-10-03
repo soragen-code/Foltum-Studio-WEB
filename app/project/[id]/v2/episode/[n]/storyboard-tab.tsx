@@ -36,6 +36,8 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard, onOpe
   const [autoPrompt, setAutoPrompt] = useState('')
   const [promptDraft, setPromptDraft] = useState('')
   const [refs, setRefs] = useState<StoryboardPromptRef[]>([])
+  const [promptLoading, setPromptLoading] = useState(false)
+  const [promptError, setPromptError] = useState('')
   const jobIdRef = useRef<string | null>(null)
   // Аппрув → нарезка первых кадров сцен (job episode_scene_frames_v2, статус через общий поллинг задач).
   const [approving, setApproving] = useState(false)
@@ -151,6 +153,22 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard, onOpe
     finally { setStarting(false) }
   }
 
+  // Кнопка «Промпт»: модалка открывается сразу; промпт уже построен (кэш на сервере актуален) → показывается
+  // мгновенно, иначе строится по запросу (перевод фреймов/меток) и подставляется, пока в модалке крутится лоадер.
+  const openPrompt = async (force = false) => {
+    setPromptOpen(true)
+    if (autoPrompt && !force) return
+    setPromptLoading(true); setPromptError('')
+    try {
+      const res = await fetch(`${API}/prompt`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId, episode: n, force }) })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok || typeof d?.autoPrompt !== 'string') { setPromptError(d?.error ?? t('ideaV2.storyboardError')); return }
+      setAutoPrompt(d.autoPrompt)
+      if (Array.isArray(d.refs)) setRefs(d.refs)
+    } catch { setPromptError(t('ideaV2.shotsNetworkError')) }
+    finally { setPromptLoading(false) }
+  }
+
   const cancelJob = async () => {
     const id = jobIdRef.current
     if (!id) return
@@ -183,7 +201,7 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard, onOpe
         <p className="text-sm text-muted-foreground">{t('ideaV2.storyboardIntro')}</p>
         {hasShots && (
           <div className="flex flex-wrap items-stretch gap-2">
-            <button onClick={() => setPromptOpen(true)} disabled={building} className={btnBar} data-testid="episode-v2-storyboard-view-prompt">
+            <button onClick={() => void openPrompt()} disabled={building} className={btnBar} data-testid="episode-v2-storyboard-view-prompt">
               <Eye className="h-4 w-4" /> {t('ideaV2.shotsViewPrompt')}
               {promptEdited && (
                 <span className="rounded-sm bg-primary px-1 text-[9px] font-bold uppercase leading-tight text-primary-foreground">{t('ideaV2.refsEdited')}</span>
@@ -274,9 +292,13 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard, onOpe
 
       {promptOpen && (
         <StoryboardPromptModal
+          key={autoPrompt ? 'ready' : 'pending'}
           autoPrompt={autoPrompt}
           promptDraft={promptDraft}
           refs={refs}
+          loading={promptLoading}
+          loadError={promptError}
+          onRetry={() => void openPrompt(true)}
           onSave={savePromptDraft}
           onClose={() => setPromptOpen(false)}
         />

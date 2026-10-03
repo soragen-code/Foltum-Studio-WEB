@@ -5,14 +5,15 @@
  * Результат — одно изображение: грузится в S3 и сохраняется в Project.episodeStoryboardV2["<n>"].imageUrl.
  */
 import { prisma } from "@/lib/db";
-import { generateImage, GenerationCanceledError, WAVESPEED_GPT_IMAGE_25_FLARE_T2I, WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
+import { generateImage, GenerationCanceledError, WAVESPEED_GPT_IMAGE_25_FLARE_T2I } from "@/lib/providers/image-provider";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { completeJob, failJob, isCancelRequested, markCanceled, updateJob } from "@/lib/jobs";
-import { REFERENCE_ASPECT_RATIO, VISUAL_STYLE } from "@/lib/visual-style";
+import { REFERENCE_ASPECT_RATIO } from "@/lib/visual-style";
 import { runWithPromptContext } from "@/lib/prompt-log";
-import { buildStoryboardV2Prompt, episodeRefsV2From, episodeShotsV2From, episodeStoryboardV2From, selectStoryboardV2Refs, shotFrameText } from "@/lib/idea-v2";
+import { episodeShotsV2From, episodeStoryboardV2From } from "@/lib/idea-v2";
+import { ensureStoryboardV2AutoPrompt } from "@/lib/storyboard-v2-prompt";
 import { setEpisodeStoryboardV2 } from "@/lib/episode-storyboard-v2-store";
-import { translateRefLabelsToEnglish, translateToEnglish } from "@/lib/translate-en";
+import { translateToEnglish } from "@/lib/translate-en";
 
 export const EPISODE_STORYBOARD_V2_JOB_TYPE = "episode_storyboard_v2";
 export const EPISODE_STORYBOARD_V2_EXPECTED_SEC = 90;
@@ -27,17 +28,13 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSto
     const shots = episodeShotsV2From(row?.episodeShotsV2, episode);
     if (!shots.length) { await failJob(jobId, "No shots to build a storyboard from"); return; }
 
-    // Референсы серии (персонажи → локации → реквизит) с готовыми изображениями — подаются в генерацию
-    // как image_input, чтобы персонажи/локации на листе были консистентны. image_input авто-переключает
-    // провайдера на edit-слаг той же модели; промпт явно требует СКОМПОНОВАТЬ новый лист, а не править реф.
-    const refs = selectStoryboardV2Refs(episodeRefsV2From(row?.episodeRefsV2, episode), WAVESPEED_IMAGE_MAX_REFS);
+    // Авто-промпт с кэшем (общий хелпер с кнопкой «Промпт»): уже построен и актуален → без повторного перевода.
+    // Референсы серии (персонажи → локации → реквизит) с картинками подаются как image_input в том же порядке,
+    // что и блок «References: Image N - …» промпта; промпт явно требует СКОМПОНОВАТЬ новый лист, а не править реф.
+    const built = await ensureStoryboardV2AutoPrompt(projectId, episode, row!);
+    const refs = built.inputs.refs;
     const imageInput = refs.map((r) => r.imageUrl!).filter(Boolean);
-
-    // Авто-промпт (с описанием референсов) + возможная ручная правка пользователя.
-    // Промпт — только English: «Фрейм» шотов (RU) переводится слово в слово до сборки; в панели идёт ТОЛЬКО фрейм.
-    const shotsEn = await Promise.all(shots.map(async (sh) => { const fr = shotFrameText(sh) || sh.action; return { ...sh, frame: (await translateToEnglish(fr)) || fr }; }));
-    const refsEn = await translateRefLabelsToEnglish(refs);
-    const autoPrompt = buildStoryboardV2Prompt(shotsEn, refsEn, { visualStyle: VISUAL_STYLE });
+    const autoPrompt = built.autoPrompt;
     const override = episodeStoryboardV2From(row?.episodeStoryboardV2, episode)?.promptOverride;
     const overrideEn = typeof override === "string" && override.trim() ? (await translateToEnglish(override)) || override : "";
     const prompt = overrideEn || autoPrompt;

@@ -12,8 +12,12 @@ import { useTranslation } from '@/lib/i18n/context'
  */
 export type StoryboardPromptRef = { id: string; label: string; kind: 'character' | 'location' | 'prop'; imageUrl?: string | null }
 
-export function StoryboardPromptModal({ autoPrompt, promptDraft, refs, onSave, onClose }: {
+export function StoryboardPromptModal({ autoPrompt, promptDraft, refs, loading = false, loadError = '', onRetry, onSave, onClose }: {
   autoPrompt: string; promptDraft: string; refs: StoryboardPromptRef[]
+  /** Авто-промпт ещё строится на сервере (перевод фреймов/меток) — вместо поля показывается лоадер. */
+  loading?: boolean
+  loadError?: string
+  onRetry?: () => void
   onSave: (prompt: string) => void; onClose: () => void
 }) {
   const { t } = useTranslation()
@@ -83,6 +87,18 @@ export function StoryboardPromptModal({ autoPrompt, promptDraft, refs, onSave, o
               </button>
             </div>
           </div>
+          {loading || (!autoPrompt && !draft) ? (
+            <div className="flex min-h-[220px] flex-col items-center justify-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-6 text-center text-xs text-muted-foreground" data-testid="episode-v2-storyboard-prompt-loading">
+              {loading ? (
+                <><Loader2 className="h-5 w-5 animate-spin text-primary" /> {t('ideaV2.storyboardPromptBuilding')}</>
+              ) : (
+                <>
+                  <span className="text-destructive">{loadError || t('ideaV2.storyboardError')}</span>
+                  {onRetry && <button type="button" onClick={onRetry} className={`${btnBase} ${btnIdle}`} data-testid="episode-v2-storyboard-prompt-retry"><RotateCcw className="h-3.5 w-3.5" /> {t('common.retry')}</button>}
+                </>
+              )}
+            </div>
+          ) : (
           <textarea
             value={ruOn ? (ruLoading ? '' : ruText?.text ?? draft) : draft}
             onChange={(e) => { if (!ruOn) setDraft(e.target.value) }}
@@ -92,6 +108,7 @@ export function StoryboardPromptModal({ autoPrompt, promptDraft, refs, onSave, o
             className={`w-full resize-y rounded-lg border px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-primary ${ruOn ? 'border-border bg-muted/40 text-foreground/90' : 'border-input bg-background'}`}
             data-testid="episode-v2-storyboard-prompt-text"
           />
+          )}
           <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground">
             <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" /> {ruOn ? t('ideaV2.refsRuNote') : t('ideaV2.storyboardPromptNote')}
           </p>
