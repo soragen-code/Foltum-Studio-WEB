@@ -70,8 +70,8 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
 }) {
   const { t, locale } = useTranslation()
   const TABS: { key: TabKey; label: string; icon: typeof FileText }[] = [
-    { key: 'refs', label: t('ideaV2.refsTab'), icon: Images },
     { key: 'script', label: t('ideaV2.scriptTab'), icon: FileText },
+    { key: 'refs', label: t('ideaV2.refsTab'), icon: Images },
     { key: 'shots', label: t('ideaV2.shotsTab'), icon: Clapperboard },
     { key: 'storyboard', label: t('ideaV2.storyboardTab'), icon: LayoutGrid },
     { key: 'scenes', label: t('ideaV2.scenesTab'), icon: Film },
