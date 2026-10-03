@@ -8,14 +8,14 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runEpisodeShotsV2Job, EPISODE_SHOTS_V2_JOB_TYPE } from "@/lib/workers/episode-shots-v2-job";
-import { episodeScriptV2From, episodeShotsV2From, episodeShotsV2SystemPrompt, synopsisLanguageFromCode, episodeRefsV2From, episodeRefsIndexForShotsV2 } from "@/lib/idea-v2";
+import { episodeScriptV2From, episodeShotsV2From, episodeShotsV2SystemPrompt, synopsisLanguageFromCode } from "@/lib/idea-v2";
 import { activeEpisodeJob, latestEpisodeJob, patchEpisodeShotV2 } from "@/lib/episode-shots-v2-store";
 
 /**
  * Поток v2 · вкладка «Шот-лист» серии n.
  * POST  { projectId, episode, system? }                 → разбить сценарий на кадры (GenerationJob "episode_shots_v2"; идемпотентно по серии). system — переопределённый системный промпт.
  * GET   ?projectId&episode                              → { job, items, scriptText, autoSystem }.
- * PATCH { projectId, episode, id, action?, durationSec? } → сохранить правку кадра (edited=true — не перезатирается при повторной разбивке).
+ * PATCH { projectId, episode, id, frame?, action?, durationSec? } → сохранить правку кадра (edited=true — не перезатирается при повторной разбивке).
  */
 const postSchema = z.object({ projectId: z.string().min(1), episode: z.coerce.number().int().min(1).max(999), system: z.string().max(200000).optional() });
 const patchSchema = z.object({
@@ -24,25 +24,16 @@ const patchSchema = z.object({
   id: z.string().min(1).max(200),
   action: z.string().max(2000).optional(),
   durationSec: z.coerce.number().int().min(4).max(6).optional(),
-  sceneHeading: z.string().max(300).optional(),
-  shotType: z.string().max(600).optional(),
-  camera: z.string().max(400).optional(),
-  inFrame: z.string().max(800).optional(),
-  dialogue: z.string().max(1000).optional(),
-  emotion: z.string().max(400).optional(),
-  light: z.string().max(600).optional(),
-  sound: z.string().max(400).optional(),
-  transition: z.string().max(400).optional(),
-  notes: z.string().max(600).optional(),
+  frame: z.string().max(2000).optional(),
 });
 
 /** Необязательные строковые поля кадра, которые можно править вручную (кроме action/durationSec). */
-const SHOT_PATCH_STR_FIELDS = ["sceneHeading", "shotType", "camera", "inFrame", "dialogue", "emotion", "light", "sound", "transition", "notes"] as const;
+const SHOT_PATCH_STR_FIELDS = ["frame"] as const;
 
 async function ownedProject(email: string, projectId: string) {
   const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
   if (!user) return null;
-  return prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, language: true, episodeScriptsV2: true, episodeShotsV2: true, episodeRefsV2: true } });
+  return prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, language: true, episodeScriptsV2: true, episodeShotsV2: true } });
 }
 
 export async function POST(request: Request) {
@@ -67,8 +58,7 @@ export async function POST(request: Request) {
     const job = await prisma.generationJob.create({
       data: { type: EPISODE_SHOTS_V2_JOB_TYPE, status: "pending", progress: 0, message: "Starting...", projectId, resultData: JSON.stringify({ episode }) },
     });
-    const refsIndex = episodeRefsIndexForShotsV2(episodeRefsV2From(project.episodeRefsV2, episode));
-    runInBackground(() => runEpisodeShotsV2Job(job.id, projectId, { episode, script, synopsisLanguage: synopsisLanguageFromCode(project.language), systemOverride: system, refsIndex }));
+    runInBackground(() => runEpisodeShotsV2Job(job.id, projectId, { episode, script, synopsisLanguage: synopsisLanguageFromCode(project.language), systemOverride: system }));
     return NextResponse.json({ jobId: job.id, resumed: false });
   } catch (err: any) {
     console.error("Episode shots v2 split error:", err);
@@ -112,7 +102,7 @@ export async function PATCH(request: Request) {
     if (durationSec !== undefined) patch.durationSec = durationSec;
     for (const k of SHOT_PATCH_STR_FIELDS) {
       const v = (parsed.data as any)[k];
-      if (v !== undefined) patch[k] = v.trim() || undefined;
+      if (v !== undefined) patch[k] = v.trim(); // "" = явно очищено (не подменяется legacy-синтезом)
     }
     const updated = await patchEpisodeShotV2(projectId, episode, id, patch);
     if (!updated) return NextResponse.json({ error: "Shot not found" }, { status: 404 });

@@ -821,93 +821,99 @@ export function episodeRefsV2From(map: unknown, n: number): EpisodeRefV2[] {
 // v2 · уровень эпизода: вкладка «Шот-лист» (разбивка сценария серии на кадры/клипы)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Элемент шот-листа серии (Project.episodeShotsV2["<n>"].items[]). Все текстовые поля — на языке синопсиса. */
+/**
+ * Элемент шот-листа серии (Project.episodeShotsV2["<n>"].items[]). Шот = ДВА абзаца на языке синопсиса:
+ * frame («Фрейм» — статичное визуальное описание кадра) + action («Действие» — что делают персонажи).
+ * Остальные текстовые поля — legacy (старые сохранённые шоты): больше не генерируются и не показываются,
+ * но читаются для обратной совместимости (из них синтезируется frame, см. legacyShotFrame).
+ */
 export interface EpisodeShotV2 {
   id: string;
   /** Порядковый номер кадра (с 1). */
   index: number;
   /** Длительность клипа, сек (4–6). */
   durationSec: number;
-  /** Действие — что происходит в кадре. Обязательное; источник для сцен/видео (downstream). */
+  /** Фрейм — полное статичное описание кадра одним абзацем (кто/где, реквизит, композиция, план, ракурс, камера, свет, локация+время). */
+  frame?: string;
+  /** Действие — что делают персонажи (видимое движение/бит клипа). Обязательное. */
   action: string;
-  /** Сцена — локация + время суток (напр. «Кабинет директора, ночь»). */
+  /** @deprecated legacy: локация + время суток. */
   sceneHeading?: string;
-  /** План — крупность, кадрирование, ракурс (напр. «крупный, лицо Алины, чуть снизу»). */
+  /** @deprecated legacy: крупность/кадрирование/ракурс. */
   shotType?: string;
-  /** Камера — движение (статика/наезд/отъезд/панорама/проезд/ручная). */
+  /** @deprecated legacy: движение камеры. */
   camera?: string;
-  /** В кадре — персонажи (с рефами по slug) и что на фоне. */
+  /** @deprecated legacy: кто в кадре. */
   inFrame?: string;
-  /** Реплика — текст и подача (может быть пусто). */
+  /** @deprecated legacy: реплика. */
   dialogue?: string;
-  /** Эмоция — эмоциональная краска кадра. */
+  /** @deprecated legacy: эмоция. */
   emotion?: string;
-  /** Свет — ключевой источник, цвет/качество, что видно/не видно. */
+  /** @deprecated legacy: свет. */
   light?: string;
-  /** Звук — диегетический/фоновый (справочно, в видео-промпт не идёт). */
+  /** @deprecated legacy: звук. */
   sound?: string;
-  /** Переход — монтажная стыковка со следующим кадром (справочно, в видео-промпт не идёт). */
+  /** @deprecated legacy: переход. */
   transition?: string;
-  /** Заметки — режиссёрские/монтажные пометки (справочно, в видео-промпт не идёт). */
+  /** @deprecated legacy: заметки. */
   notes?: string;
   /** Правился вручную — повторная разбивка его не перезатирает. */
   edited?: boolean;
 }
 
-/** Поля кадра, которые уходят в image/video-промпты (визуал), с англ. ярлыком. Монтажная мета (реплика/звук/переход/заметки) — нет. */
-const SHOT_VISUAL_FIELDS: Array<[keyof EpisodeShotV2, string]> = [
-  ["sceneHeading", "Scene"],
-  ["shotType", "Shot"],
-  ["camera", "Camera"],
-  ["inFrame", "In frame"],
-  ["action", "Action"],
-  ["emotion", "Emotion"],
-  ["light", "Light"],
-];
+/** Legacy-визуальные поля старых шотов, из которых синтезируется frame (в порядке чтения). */
+const LEGACY_FRAME_FIELDS: Array<keyof EpisodeShotV2> = ["sceneHeading", "shotType", "camera", "inFrame", "light", "emotion"];
+
+const oneLine = (v: unknown): string => String(v ?? "").replace(/\s+/g, " ").trim();
 
 /**
- * Визуальное описание кадра для downstream (сториборд, первый кадр сцены, видео): помеченная склейка только визуальных
- * полей в формате «Label: value» через « | », чтобы модель получала поля с ярлыками (как в шот-листе), а не одной мешаниной.
- * Монтажная мета (реплика, звук, переход, заметки, длительность) исключается, чтобы не засорять T2V-промпт.
- * Для старых кадров без структурных полей возвращает исходный action.
+ * Фрейм старого шота без поля frame: склейка legacy-визуальных полей одним абзацем (скобки «(реф N)» вырезаются).
+ * Пусто, если legacy-полей нет.
  */
-export function shotVisualText(shot: Partial<EpisodeShotV2>): string {
-  const segs = SHOT_VISUAL_FIELDS
-    .map(([k, label]) => [label, String((shot as any)[k] ?? "").replace(/\s+/g, " ").trim()] as const)
-    .filter(([, v]) => v)
-    .map(([label, v]) => `${label}: ${v}`);
-  return segs.join(" | ") || String(shot.action ?? "").replace(/\s+/g, " ").trim();
+export function legacyShotFrame(shot: Partial<EpisodeShotV2>): string {
+  return LEGACY_FRAME_FIELDS
+    .map((k) => oneLine((shot as any)[k]).replace(/\s*\(\s*реф\s*\d+\s*\)/gi, "").replace(/[.;,\s]+$/, ""))
+    .filter(Boolean)
+    .join(". ");
 }
 
-/** Правила (system) разбивки сценария серии на кадры. `<Language>` — язык синопсиса (для action). */
+/** Фрейм шота для показа/правки: frame (если поле задано, даже пустое — явная правка), иначе синтез из legacy-полей. */
+export function shotFrameText(shot: Partial<EpisodeShotV2>): string {
+  return typeof shot.frame === "string" ? oneLine(shot.frame) : legacyShotFrame(shot);
+}
+
+/**
+ * Визуальное описание кадра для downstream (сториборд, первый кадр сцены, видео): «Frame: <frame> | Action: <action>».
+ * Старые шоты без frame — frame синтезируется из legacy-полей. Нет ни frame, ни legacy-полей → только action.
+ */
+export function shotVisualText(shot: Partial<EpisodeShotV2>): string {
+  const frame = shotFrameText(shot);
+  const action = oneLine(shot.action);
+  if (!frame) return action;
+  return action ? `Frame: ${frame} | Action: ${action}` : `Frame: ${frame}`;
+}
+
+/** Правила (system) разбивки сценария серии на кадры. `<Language>` — язык синопсиса (для frame/action). */
 export const EPISODE_SHOTS_V2_RULES = `You are a first assistant director breaking ONE episode of a photorealistic live-action vertical micro-series into a SHOT LIST. The user message is the episode's shooting script (sluglines INT./EXT., action, dialogue).
 
 GOAL
-Split the whole script into an ordered list of shots. Each shot = ONE camera setup = ONE generated video clip. Describe every shot as a detailed, field-by-field breakdown an artist or image/video model can execute without guessing.
+Split the whole script into an ordered list of shots. Each shot = ONE camera setup = ONE generated video clip. Every shot is described by exactly TWO paragraphs — "frame" and "action" — detailed enough that an artist or image/video model can execute it without guessing.
 
 RULES
   - Each shot MUST last between 4 and 6 seconds (integer seconds). Prefer 5s. Never below 4 or above 6.
   - Pick the OPTIMAL number of shots the script naturally needs — do NOT pad or compress. Cover the ENTIRE script from first to last beat, in reading order, with no gaps and no overlaps.
   - One continuous action, line of dialogue, or reaction = one shot. Split long beats into multiple shots; merge trivial adjacent micro-beats only when they read as a single clip.
-  - Describe each shot with these fields (string values; leave "" when a field truly does not apply to that shot):
-      • sceneHeading — the location + time of day of this shot (e.g. "Кабинет директора, ночь"). Carry it from the script's slugline.
-      • shotType — shot size + framing + angle/height together: one size of общий / средний / крупный / деталь, plus what is framed and the camera height (e.g. "крупный, лицо Алины, чуть снизу"). Vary the size between adjacent shots; never leave it implicit.
-      • camera — camera movement: one of статика / наезд (push-in) / отъезд / панорама / проезд / ручная (add a short qualifier if useful, e.g. "медленный наезд").
-      • inFrame — who is in frame and where, naming characters and, when a character is present in the REFERENCE INDEX supplied in the user message, its reference NUMBER in parentheses "(реф N)" — bind by that number (order), NOT by name, and never invent a text slug; include what is on the background (e.g. "Алина (реф 1), на фоне размытый силуэт Марка (реф 2) у окна"). If there is no REFERENCE INDEX, just name the characters without a number.
-      • action — 1–2 short sentences of the visible motion/beat of the clip (what the subject does). This is the core; never leave it empty.
-      • dialogue — the spoken line for this shot with speaker and delivery, if any (e.g. "Алина (тихо, сдерживая злость): «Ты подписал это без меня?»"). "" if the shot is silent.
-      • emotion — the emotional colour of the moment (e.g. "шок, переходящий в гнев").
-      • light — the key source, its colour/quality, and what is or is not visible outside it (e.g. "холодный, от монитора слева, тёплый контровой от окна").
-      • sound — diegetic/background sound of the shot (e.g. "тиканье часов, гул города за окном"). "" if none.
-      • transition — how this shot cuts to the next (e.g. "жёсткая склейка на шот 08 (реакция Марка)"). "" if a plain cut.
-      • notes — short directing/editing note for this shot (e.g. "кадр-хук, в монтаже держать паузу перед репликой"). "" if none.
+  - Each shot has exactly two text fields:
+      • frame — ONE coherent paragraph: the complete STATIC visual description of the frame. Cover all of: who is in frame and where each person stands; who holds what; wardrobe and props; composition; shot size (общий / средний / крупный / деталь) and framing; camera angle and height; camera movement (статика / наезд / отъезд / панорама / проезд / ручная); light (key source, its colour and quality, what is and is not visible outside it); location + time of day (carry it from the script's slugline). Vary the shot size between adjacent shots.
+      • action — ONE paragraph: what exactly the characters do in this clip — the visible motion/beat (if someone speaks, say who speaks and how, without quoting long dialogue). Never leave it empty.
+  - In "frame" (and "action") name characters by their ordinary names only. NEVER add reference numbers or brackets like "(реф 1)", never invent text slugs or IDs for characters.
   - Keep screen direction and lighting continuous between consecutive shots of the same scene unless the script motivates a change (new location, cut to another character's POV, lights turned on/off). Respect the 180° line.
-  - No camera brand names, no lens millimetres, no meta commentary inside the field values.
-  - Write EVERY field value in <Language>.
+  - No camera brand names, no lens millimetres, no meta commentary inside the field values. Do NOT output any other fields.
+  - Write both field values in <Language>.
 
 OUTPUT
 Return ONLY a JSON object, no markdown fences, no commentary:
-{"shots":[{"index":1,"durationSec":5,"sceneHeading":"...","shotType":"...","camera":"...","inFrame":"...","action":"...","dialogue":"...","emotion":"...","light":"...","sound":"...","transition":"...","notes":"..."}]}
+{"shots":[{"index":1,"durationSec":5,"frame":"...","action":"..."}]}
 Order shots strictly by their appearance in the script, index starting at 1.`;
 
 export function episodeShotsV2SystemPrompt(language: SynopsisLanguage | string): string {
@@ -935,21 +941,14 @@ export function parseEpisodeShotsV2(data: unknown): EpisodeShotV2[] {
     const action = String(s?.action ?? "").trim();
     if (!action) continue;
     const index = out.length + 1;
+    // Обратная совместимость: нет frame, но пришли старые визуальные поля → синтезируем frame из них.
+    const frame = optField(s?.frame, 2000) ?? optField(legacyShotFrame(s ?? {}), 2000);
     out.push({
       id: `shot-${index}`,
       index,
       durationSec: clampShotDuration(s?.durationSec),
+      frame,
       action: action.slice(0, 2000),
-      sceneHeading: optField(s?.sceneHeading, 300),
-      shotType: optField(s?.shotType, 600),
-      camera: optField(s?.camera, 400),
-      inFrame: optField(s?.inFrame, 800),
-      dialogue: optField(s?.dialogue, 1000),
-      emotion: optField(s?.emotion, 400),
-      light: optField(s?.light, 600),
-      sound: optField(s?.sound, 400),
-      transition: optField(s?.transition, 400),
-      notes: optField(s?.notes, 600),
     });
   }
   return out;
@@ -957,7 +956,9 @@ export function parseEpisodeShotsV2(data: unknown): EpisodeShotV2[] {
 
 /** Поля-содержимое кадра (кроме id/index/edited) — переносятся при сохранении ручной правки. */
 const SHOT_CONTENT_KEYS: Array<keyof EpisodeShotV2> = [
-  "durationSec", "action", "sceneHeading", "shotType", "camera", "inFrame", "dialogue", "emotion", "light", "sound", "transition", "notes",
+  "durationSec", "frame", "action",
+  // legacy — чтобы правки старых шотов не терялись при повторной разбивке
+  "sceneHeading", "shotType", "camera", "inFrame", "dialogue", "emotion", "light", "sound", "transition", "notes",
 ];
 
 /**
@@ -1046,19 +1047,6 @@ export function orderEpisodeRefsV2(refs: EpisodeRefV2[]): EpisodeRefV2Ordered[] 
     .slice()
     .sort((a, b) => (REF_KIND_ORDER[a.kind] ?? 9) - (REF_KIND_ORDER[b.kind] ?? 9))
     .map((r, i) => ({ ...r, ord: i + 1 }));
-}
-
-/**
- * Справочник референсов для генерации шот-листа: нумерованный список, который кладётся в user-сообщение,
- * чтобы модель в поле inFrame ссылалась на персонажа по НОМЕРУ «(реф N)», а не по имени/выдуманному слагу.
- * Метки — на языке синопсиса (как и inFrame). Пусто, если рефов нет.
- */
-export function episodeRefsIndexForShotsV2(refs: EpisodeRefV2[]): string {
-  const ordered = orderEpisodeRefsV2(refs);
-  if (!ordered.length) return "";
-  const kindRu = (k: EpisodeRefKindV2) => (k === "character" ? "персонаж" : k === "location" ? "локация" : "реквизит");
-  const lines = ordered.map((r) => `${r.ord}. [${kindRu(r.kind)}] ${r.label.replace(/\s+/g, " ").trim()}`);
-  return `REFERENCE INDEX (bind references in the "inFrame" field BY NUMBER "(реф N)" using this list, never by name or an invented slug):\n${lines.join("\n")}`;
 }
 
 export function selectStoryboardV2Refs(refs: EpisodeRefV2[], cap: number): EpisodeRefV2Ordered[] {
