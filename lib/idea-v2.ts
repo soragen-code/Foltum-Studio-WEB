@@ -1166,7 +1166,8 @@ export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRe
       const frame = (shotFrameText(s) || s.action || "").replace(/\s+/g, " ").trim();
       return `Panel ${s.index}: ${frame}`;
     })
-    .join("\n");
+    // Панели разделены пустой строкой (по ТЗ) — читаемее и для человека, и для модели.
+    .join("\n\n");
 
   return `${refsBlock}${styleLine}${header}\n\nPANELS:\n${panels}`;
 }
