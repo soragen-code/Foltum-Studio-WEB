@@ -854,17 +854,29 @@ export interface EpisodeShotV2 {
   edited?: boolean;
 }
 
-/** Поля кадра, которые уходят в image/video-промпты (визуал). Монтажная мета (реплика/звук/переход/заметки) — нет. */
-const SHOT_VISUAL_FIELDS: Array<keyof EpisodeShotV2> = ["sceneHeading", "shotType", "camera", "inFrame", "action", "emotion", "light"];
+/** Поля кадра, которые уходят в image/video-промпты (визуал), с англ. ярлыком. Монтажная мета (реплика/звук/переход/заметки) — нет. */
+const SHOT_VISUAL_FIELDS: Array<[keyof EpisodeShotV2, string]> = [
+  ["sceneHeading", "Scene"],
+  ["shotType", "Shot"],
+  ["camera", "Camera"],
+  ["inFrame", "In frame"],
+  ["action", "Action"],
+  ["emotion", "Emotion"],
+  ["light", "Light"],
+];
 
 /**
- * Визуальное описание кадра для downstream (сториборд, первый кадр сцены, видео): склейка только визуальных полей
- * через « · ». Монтажная мета (реплика, звук, переход, заметки, длительность) исключается, чтобы не засорять T2V-промпт.
+ * Визуальное описание кадра для downstream (сториборд, первый кадр сцены, видео): помеченная склейка только визуальных
+ * полей в формате «Label: value» через « | », чтобы модель получала поля с ярлыками (как в шот-листе), а не одной мешаниной.
+ * Монтажная мета (реплика, звук, переход, заметки, длительность) исключается, чтобы не засорять T2V-промпт.
  * Для старых кадров без структурных полей возвращает исходный action.
  */
 export function shotVisualText(shot: Partial<EpisodeShotV2>): string {
-  const segs = SHOT_VISUAL_FIELDS.map((k) => String((shot as any)[k] ?? "").replace(/\s+/g, " ").trim()).filter(Boolean);
-  return segs.join(" · ") || String(shot.action ?? "").replace(/\s+/g, " ").trim();
+  const segs = SHOT_VISUAL_FIELDS
+    .map(([k, label]) => [label, String((shot as any)[k] ?? "").replace(/\s+/g, " ").trim()] as const)
+    .filter(([, v]) => v)
+    .map(([label, v]) => `${label}: ${v}`);
+  return segs.join(" | ") || String(shot.action ?? "").replace(/\s+/g, " ").trim();
 }
 
 /** Правила (system) разбивки сценария серии на кадры. `<Language>` — язык синопсиса (для action). */
