@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { Loader2, Eye, Copy, Check, X, Info, RotateCcw } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Loader2, Eye, Copy, Check, X, Info, RotateCcw, Maximize2 } from 'lucide-react'
 import { useTranslation } from '@/lib/i18n/context'
 
 /**
@@ -22,6 +22,21 @@ export function StoryboardPromptModal({ autoPrompt, promptDraft, refs, loading =
 }) {
   const { t } = useTranslation()
   const [draft, setDraft] = useState(promptDraft || autoPrompt)
+  // Авто-промпт обновился с сервера (рефы/шоты изменились), а пользователь его не правил → подменяем на лету.
+  const prevAutoRef = useRef(autoPrompt)
+  useEffect(() => {
+    const prev = prevAutoRef.current
+    prevAutoRef.current = autoPrompt
+    if (autoPrompt && autoPrompt !== prev) setDraft((d) => (!d.trim() || d.trim() === prev.trim() ? autoPrompt : d))
+  }, [autoPrompt])
+  // Полноэкранный просмотр референса (клик по карточке; Esc / клик по фону — закрыть).
+  const [lightbox, setLightbox] = useState<{ url: string; alt: string } | null>(null)
+  useEffect(() => {
+    if (!lightbox) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setLightbox(null) } }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [lightbox])
   const [copied, setCopied] = useState(false)
   const [saved, setSaved] = useState(false)
   // «РУ» — перевод текущего EN-промпта только для просмотра (/api/ai/translate); кэш по исходному тексту.
@@ -125,11 +140,14 @@ export function StoryboardPromptModal({ autoPrompt, promptDraft, refs, loading =
               <div className="grid grid-cols-3 gap-2 border-t border-border p-3 sm:grid-cols-4" data-testid="episode-v2-storyboard-refs">
                 {refs.map((r) => (
                   <div key={r.id} className="overflow-hidden rounded-md border border-border bg-muted/20">
-                    <div className="aspect-square w-full bg-muted/30">
-                      {r.imageUrl
-                        /* eslint-disable-next-line @next/next/no-img-element */
-                        ? <img src={r.imageUrl} alt={r.label} className="h-full w-full object-cover" />
-                        : <div className="flex h-full w-full items-center justify-center"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>}
+                    <div className="group relative aspect-square w-full bg-muted/30">
+                      {r.imageUrl ? (
+                        <button type="button" onClick={() => setLightbox({ url: r.imageUrl!, alt: r.label })} className="block h-full w-full cursor-zoom-in" aria-label={r.label} data-testid="episode-v2-storyboard-ref-open">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={r.imageUrl} alt={r.label} className="h-full w-full object-cover" />
+                          <span className="pointer-events-none absolute right-1 top-1 rounded bg-black/50 p-1 text-white opacity-0 transition group-hover:opacity-100"><Maximize2 className="h-3 w-3" /></span>
+                        </button>
+                      ) : <div className="flex h-full w-full items-center justify-center"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>}
                     </div>
                     <p className="truncate px-1.5 py-1 text-[10px] text-muted-foreground" title={r.label}>{r.label}</p>
                   </div>
@@ -147,6 +165,16 @@ export function StoryboardPromptModal({ autoPrompt, promptDraft, refs, loading =
           </button>
         </div>
       </div>
+      {lightbox && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-4" onClick={(e) => { e.stopPropagation(); setLightbox(null) }} data-testid="episode-v2-storyboard-ref-lightbox">
+          <button type="button" onClick={(e) => { e.stopPropagation(); setLightbox(null) }} className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white transition hover:bg-white/20" aria-label={t('common.close')} data-testid="episode-v2-storyboard-ref-lightbox-close">
+            <X className="h-5 w-5" />
+          </button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={lightbox.url} alt={lightbox.alt} className="max-h-full max-w-full object-contain" onClick={(e) => e.stopPropagation()} />
+          <p className="pointer-events-none absolute bottom-4 left-1/2 max-w-[90vw] -translate-x-1/2 truncate rounded bg-black/50 px-3 py-1 text-xs text-white">{lightbox.alt}</p>
+        </div>
+      )}
     </div>
   )
 }

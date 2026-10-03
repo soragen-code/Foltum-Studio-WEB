@@ -168,18 +168,22 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard, onOpe
 
   // Кнопка «Промпт»: модалка открывается сразу; промпт уже построен (кэш на сервере актуален) → показывается
   // мгновенно, иначе строится по запросу (перевод фреймов/меток) и подставляется, пока в модалке крутится лоадер.
+  // Рефы/промпт ВСЕГДА сверяются с сервером при открытии (актуальные картинки со вкладки «Референсы»):
+  // уже показанный промпт остаётся на экране без лоадера, а если сервер вернул обновлённый (рефы или шоты
+  // изменились — ключ кэша не совпал) — он подменяется на лету.
   const openPrompt = async (force = false) => {
     setPromptOpen(true)
-    if (autoPrompt && !force) return
-    setPromptLoading(true); setPromptError('')
+    const silent = !!autoPrompt && !force
+    if (!silent) setPromptLoading(true)
+    setPromptError('')
     try {
       const res = await fetch(`${API}/prompt`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId, episode: n, force }) })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok || typeof d?.autoPrompt !== 'string') { setPromptError(d?.error ?? t('ideaV2.storyboardError')); return }
+      if (!res.ok || typeof d?.autoPrompt !== 'string') { if (!silent) setPromptError(d?.error ?? t('ideaV2.storyboardError')); return }
       setAutoPrompt(d.autoPrompt)
       if (Array.isArray(d.refs)) setRefs(d.refs)
-    } catch { setPromptError(t('ideaV2.shotsNetworkError')) }
-    finally { setPromptLoading(false) }
+    } catch { if (!silent) setPromptError(t('ideaV2.shotsNetworkError')) }
+    finally { if (!silent) setPromptLoading(false) }
   }
 
   const cancelJob = async () => {
