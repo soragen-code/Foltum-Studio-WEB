@@ -15,21 +15,22 @@ import { setEpisodeShotsV2 } from "@/lib/episode-shots-v2-store";
 export const EPISODE_SHOTS_V2_JOB_TYPE = "episode_shots_v2";
 export const EPISODE_SHOTS_V2_EXPECTED_SEC = 45;
 
-export interface EpisodeShotsV2JobParams { episode: number; script: string; synopsisLanguage?: string | null; systemOverride?: string | null }
+export interface EpisodeShotsV2JobParams { episode: number; script: string; synopsisLanguage?: string | null; systemOverride?: string | null; refsIndex?: string | null }
 
-async function runImpl(jobId: string, projectId: string, { episode, script, synopsisLanguage, systemOverride }: EpisodeShotsV2JobParams): Promise<void> {
+async function runImpl(jobId: string, projectId: string, { episode, script, synopsisLanguage, systemOverride, refsIndex }: EpisodeShotsV2JobParams): Promise<void> {
   let hb: ReturnType<typeof setInterval> | null = null;
   try {
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
     await updateJob(jobId, { status: "processing", progress: 10, message: "Breaking the script into shots..." });
     hb = setInterval(() => { heartbeatJob(jobId).catch(() => {}); }, 60_000);
     const system = systemOverride?.trim() || episodeShotsV2SystemPrompt(normalizeSynopsisLanguage(synopsisLanguage));
+    const userMsg = refsIndex?.trim() ? `${script}\n\n${refsIndex}` : script;
     let items: EpisodeShotV2[] = [];
     let lastError = "";
     for (let attempt = 0; attempt < 2 && !items.length; attempt++) {
       if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
       try {
-        const raw = await chat(system, script, { model: FABLE_MODEL, temperature: 0.3, maxTokens: 16000 });
+        const raw = await chat(system, userMsg, { model: FABLE_MODEL, temperature: 0.3, maxTokens: 16000 });
         items = parseEpisodeShotsV2(safeJsonParse(raw));
         if (!items.length) throw new Error("no shots in model output");
       } catch (e: any) {

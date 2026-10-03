@@ -8,7 +8,7 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { runEpisodeShotsV2Job, EPISODE_SHOTS_V2_JOB_TYPE } from "@/lib/workers/episode-shots-v2-job";
-import { episodeScriptV2From, episodeShotsV2From, episodeShotsV2SystemPrompt, synopsisLanguageFromCode } from "@/lib/idea-v2";
+import { episodeScriptV2From, episodeShotsV2From, episodeShotsV2SystemPrompt, synopsisLanguageFromCode, episodeRefsV2From, episodeRefsIndexForShotsV2 } from "@/lib/idea-v2";
 import { activeEpisodeJob, latestEpisodeJob, patchEpisodeShotV2 } from "@/lib/episode-shots-v2-store";
 
 /**
@@ -42,7 +42,7 @@ const SHOT_PATCH_STR_FIELDS = ["sceneHeading", "shotType", "camera", "inFrame", 
 async function ownedProject(email: string, projectId: string) {
   const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
   if (!user) return null;
-  return prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, language: true, episodeScriptsV2: true, episodeShotsV2: true } });
+  return prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, language: true, episodeScriptsV2: true, episodeShotsV2: true, episodeRefsV2: true } });
 }
 
 export async function POST(request: Request) {
@@ -67,7 +67,8 @@ export async function POST(request: Request) {
     const job = await prisma.generationJob.create({
       data: { type: EPISODE_SHOTS_V2_JOB_TYPE, status: "pending", progress: 0, message: "Starting...", projectId, resultData: JSON.stringify({ episode }) },
     });
-    runInBackground(() => runEpisodeShotsV2Job(job.id, projectId, { episode, script, synopsisLanguage: synopsisLanguageFromCode(project.language), systemOverride: system }));
+    const refsIndex = episodeRefsIndexForShotsV2(episodeRefsV2From(project.episodeRefsV2, episode));
+    runInBackground(() => runEpisodeShotsV2Job(job.id, projectId, { episode, script, synopsisLanguage: synopsisLanguageFromCode(project.language), systemOverride: system, refsIndex }));
     return NextResponse.json({ jobId: job.id, resumed: false });
   } catch (err: any) {
     console.error("Episode shots v2 split error:", err);

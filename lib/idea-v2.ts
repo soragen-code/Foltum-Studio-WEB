@@ -881,7 +881,7 @@ RULES
       • sceneHeading — the location + time of day of this shot (e.g. "Кабинет директора, ночь"). Carry it from the script's slugline.
       • shotType — shot size + framing + angle/height together: one size of общий / средний / крупный / деталь, plus what is framed and the camera height (e.g. "крупный, лицо Алины, чуть снизу"). Vary the size between adjacent shots; never leave it implicit.
       • camera — camera movement: one of статика / наезд (push-in) / отъезд / панорама / проезд / ручная (add a short qualifier if useful, e.g. "медленный наезд").
-      • inFrame — who is in frame and where, naming characters and, when a character has a reference, its slug in parentheses "(реф: <slug>)"; include what is on the background (e.g. "Алина (реф: alina_v2), на фоне размытый силуэт Марка у окна").
+      • inFrame — who is in frame and where, naming characters and, when a character is present in the REFERENCE INDEX supplied in the user message, its reference NUMBER in parentheses "(реф N)" — bind by that number (order), NOT by name, and never invent a text slug; include what is on the background (e.g. "Алина (реф 1), на фоне размытый силуэт Марка (реф 2) у окна"). If there is no REFERENCE INDEX, just name the characters without a number.
       • action — 1–2 short sentences of the visible motion/beat of the clip (what the subject does). This is the core; never leave it empty.
       • dialogue — the spoken line for this shot with speaker and delivery, if any (e.g. "Алина (тихо, сдерживая злость): «Ты подписал это без меня?»"). "" if the shot is silent.
       • emotion — the emotional colour of the moment (e.g. "шок, переходящий в гнев").
@@ -1018,12 +1018,41 @@ export function episodeStoryboardV2From(map: unknown, n: number): EpisodeStorybo
  * упорядоченные персонажи → локации → реквизит, обрезанные до cap (лимит image_input провайдера).
  * Один источник истины для воркера (image_input) и роута (превью + описание в промпте).
  */
-export function selectStoryboardV2Refs(refs: EpisodeRefV2[], cap: number): EpisodeRefV2[] {
-  const withImg = refs.filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
-  const order: Record<EpisodeRefKindV2, number> = { character: 0, location: 1, prop: 2 };
-  return withImg
+const REF_KIND_ORDER: Record<EpisodeRefKindV2, number> = { character: 0, location: 1, prop: 2 };
+
+/** Реф серии с присвоенным стабильным порядковым номером «(реф N)» (нумерация по порядку, не по имени). */
+export type EpisodeRefV2Ordered = EpisodeRefV2 & { ord: number };
+
+/**
+ * Канонический порядок рефов серии (персонажи → локации → реквизит) со стабильным 1-based номером.
+ * ЕДИНАЯ база нумерации «(реф N)» для шот-листа, листа-сториборда и кадров сцен — так референсы
+ * привязываются ПО ПОРЯДКУ (номеру), а не по названию. Нумерация считается по ПОЛНОМУ списку рефов
+ * (включая те, у кого ещё нет картинки), чтобы номер персонажа совпадал в шотах и в генерации.
+ */
+export function orderEpisodeRefsV2(refs: EpisodeRefV2[]): EpisodeRefV2Ordered[] {
+  return (refs ?? [])
     .slice()
-    .sort((a, b) => (order[a.kind] ?? 9) - (order[b.kind] ?? 9))
+    .sort((a, b) => (REF_KIND_ORDER[a.kind] ?? 9) - (REF_KIND_ORDER[b.kind] ?? 9))
+    .map((r, i) => ({ ...r, ord: i + 1 }));
+}
+
+/**
+ * Справочник референсов для генерации шот-листа: нумерованный список, который кладётся в user-сообщение,
+ * чтобы модель в поле inFrame ссылалась на персонажа по НОМЕРУ «(реф N)», а не по имени/выдуманному слагу.
+ * Метки — на языке синопсиса (как и inFrame). Пусто, если рефов нет.
+ */
+export function episodeRefsIndexForShotsV2(refs: EpisodeRefV2[]): string {
+  const ordered = orderEpisodeRefsV2(refs);
+  if (!ordered.length) return "";
+  const kindRu = (k: EpisodeRefKindV2) => (k === "character" ? "персонаж" : k === "location" ? "локация" : "реквизит");
+  const lines = ordered.map((r) => `${r.ord}. [${kindRu(r.kind)}] ${r.label.replace(/\s+/g, " ").trim()}`);
+  return `REFERENCE INDEX (bind references in the "inFrame" field BY NUMBER "(реф N)" using this list, never by name or an invented slug):\n${lines.join("\n")}`;
+}
+
+export function selectStoryboardV2Refs(refs: EpisodeRefV2[], cap: number): EpisodeRefV2Ordered[] {
+  const ordered = orderEpisodeRefsV2(refs); // стабильный номер по полному списку
+  return ordered
+    .filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl)
     .slice(0, Math.max(0, cap));
 }
 
@@ -1047,10 +1076,10 @@ export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRe
     `Only the small panel number labels may contain text; no captions, no other writing. Vertical 9:16 sheet.`;
   const refList = (refs ?? []).filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
   const refsBlock = refList.length
-    ? `\n\nREFERENCES: ${refList.length} reference image(s) are attached. COMPOSE a brand-new storyboard sheet — do NOT edit or return any single reference image. ` +
-      `Use the attached images ONLY as the canonical look of the recurring characters and locations, so they stay consistent across every panel. The attached images, in order, are:\n` +
+    ? `\n\nREFERENCES: ${refList.length} reference image(s) are attached, in the SAME order as the numbered list below. COMPOSE a brand-new storyboard sheet — do NOT edit or return any single reference image. ` +
+      `Each reference has a fixed number; bind it BY POSITION — the 1st attached image is the 1st list item, the 2nd attached image is the 2nd list item, and so on. The panels cite these numbers as "(реф N)"; match a panel's "(реф N)" to the reference with that same number — never match by name. Use the attached images ONLY as the canonical look of the recurring characters and locations, so they stay consistent across every panel. The attached images, in order, are:\n` +
       refList
-        .map((r, i) => `Reference ${i + 1}: ${r.kind === "character" ? "character" : r.kind === "location" ? "location" : "prop"} — ${r.label.replace(/\s+/g, " ").trim()}`)
+        .map((r, i) => `Reference ${(r as any).ord ?? i + 1} (${r.kind === "character" ? "character" : r.kind === "location" ? "location" : "prop"}): ${r.label.replace(/\s+/g, " ").trim()}`)
         .join("\n")
     : "";
   return `${base}\n\nSHOTS:\n${panels}${refsBlock}`;
@@ -1130,9 +1159,9 @@ export function buildSceneFrameV2Prompt(scene: Pick<EpisodeSceneV2, "index" | "a
     `Image 1 is the storyboard sheet — use ONLY panel #${scene.index} as the composition guide (framing, blocking, camera angle). ` +
     `Output ONE full-bleed photorealistic frame: no grid, no panel borders, no number badges, no captions or any text.`;
   const refsBlock = refList.length
-    ? `\n\nREFERENCES: the next ${refList.length} attached image(s) are the canonical look of the recurring characters, locations and props — keep them identical:\n` +
+    ? `\n\nREFERENCES: the next ${refList.length} attached image(s) are the canonical look of the recurring characters, locations and props — keep them identical. Bind each one BY POSITION (the Nth attached image = the Nth list item), never by name. The shot cites references as "(реф N)"; match that number to the "(реф N)" marker below:\n` +
       refList
-        .map((r, i) => `Image ${i + 2}: ${r.kind === "character" ? "character" : r.kind === "location" ? "location" : "prop"} — ${r.label.replace(/\s+/g, " ").trim()}`)
+        .map((r, i) => `Image ${i + 2} = реф ${(r as any).ord ?? i + 1} (${r.kind === "character" ? "character" : r.kind === "location" ? "location" : "prop"}): ${r.label.replace(/\s+/g, " ").trim()}`)
         .join("\n")
     : "";
   return `${head}${refsBlock}`;
