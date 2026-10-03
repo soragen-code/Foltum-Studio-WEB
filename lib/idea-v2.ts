@@ -1113,6 +1113,28 @@ export function storyboardV2PromptKey(shots: EpisodeShotV2[], refs?: EpisodeRefV
  *  2) [VISUAL STYLE] (если передан) + ШАПКА — формат листа: сетка 5×5 (строки по числу кадров), вертикальный 9:16, номера панелей, без текста;
  *  3) ПАНЕЛИ — «Panel N:» + описание «Фрейм» из шот-листа СЛОВО В СЛОВО (English — перевод делает вызывающий код).
  */
+/** Ведущий блок «References:\nImage N - ...\n\n» промпта листа (или ""). */
+const STORYBOARD_V2_REFS_BLOCK_RE = /^\s*References:\n(?:Image \d+ - [^\n]*\n)*\n*/;
+export function storyboardV2RefsBlock(prompt: string): string {
+  const m = String(prompt ?? "").match(STORYBOARD_V2_REFS_BLOCK_RE);
+  return m ? m[0] : "";
+}
+
+/**
+ * Подменить в промпте (в т.ч. отредактированном вручную / сохранённом ранее) блок «References:» на актуальный
+ * из свежего авто-промпта: референсы ВСЕГДА берутся актуальные со страницы «Референсы», даже если текст правили.
+ * Остальной текст не трогается. Без блока в авто-промпте (рефов с картинками нет) — старый блок удаляется.
+ */
+export function syncStoryboardV2RefsBlock(prompt: string, autoPrompt: string): string {
+  const src = String(prompt ?? "");
+  if (!src.trim()) return src;
+  const fresh = storyboardV2RefsBlock(autoPrompt);
+  const cur = storyboardV2RefsBlock(src);
+  if (!fresh && !cur) return src;
+  if (fresh === cur) return src;
+  return fresh + src.slice(cur.length).replace(/^\n+/, "");
+}
+
 export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRefV2[], opts?: { visualStyle?: string }): string {
   const n = shots.length;
   const cols = 5;

@@ -7,6 +7,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { ensureStoryboardV2AutoPrompt } from "@/lib/storyboard-v2-prompt";
+import { setEpisodeStoryboardV2 } from "@/lib/episode-storyboard-v2-store";
 
 /**
  * Поток v2 · кнопка «Промпт» на вкладке «Сториборд».
@@ -32,6 +33,8 @@ export async function POST(request: Request) {
       : null;
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
+    // «Пересобрать» (force): авто-промпт строится заново по актуальным шотам/рефам из БД, ручной override сбрасывается.
+    if (force) await setEpisodeStoryboardV2(projectId, episode, { promptOverride: null });
     const built = await ensureStoryboardV2AutoPrompt(projectId, episode, project, { force });
     if (!built.autoPrompt) return NextResponse.json({ error: "Сначала разбейте сценарий на кадры" }, { status: 400 });
     const refs = built.inputs.refs.map((r) => ({ id: r.id, label: r.label, kind: r.kind, imageUrl: r.imageUrl }));

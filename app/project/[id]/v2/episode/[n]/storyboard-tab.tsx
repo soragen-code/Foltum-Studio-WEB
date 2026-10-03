@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, LayoutGrid, RefreshCw, X, Eye, CheckCircle2, Film } from 'lucide-react'
-import type { EpisodeStoryboardV2 } from '@/lib/idea-v2'
+import { syncStoryboardV2RefsBlock, type EpisodeStoryboardV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from '../../../_components/cancel-button'
 import { useJobPolling, SmoothProgress } from '../../../_components/use-job-polling'
@@ -152,12 +152,14 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard, onOpe
   const build = async () => {
     setError(''); setNotice(''); poll.clear(); setStarting(true)
     // Правка промпта (если отличается от авто) уходит как override; иначе пустая строка сбрасывает к авто.
-    const edited = promptDraft.trim() && autoPrompt && promptDraft.trim() !== autoPrompt.trim()
+    // Блок «References:» в правке всегда синхронизируется с актуальным авто-промптом (актуальные рефы).
+    const synced = autoPrompt ? syncStoryboardV2RefsBlock(promptDraft, autoPrompt) : promptDraft
+    const edited = synced.trim() && autoPrompt && synced.trim() !== autoPrompt.trim()
     try {
       const res = await fetch(API, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectId, episode: n, prompt: edited ? promptDraft : '' }),
+        body: JSON.stringify({ projectId, episode: n, prompt: edited ? synced : '' }),
       })
       const d = await res.json().catch(() => ({}))
       if (!res.ok) { setError(d?.error ?? t('ideaV2.storyboardError')); return }
@@ -201,7 +203,7 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard, onOpe
     } catch { /* недоступно */ }
   }
 
-  const promptEdited = !!(promptDraft.trim() && autoPrompt && promptDraft.trim() !== autoPrompt.trim())
+  const promptEdited = !!(promptDraft.trim() && autoPrompt && syncStoryboardV2RefsBlock(promptDraft, autoPrompt).trim() !== autoPrompt.trim())
 
   const btnBar = 'inline-flex items-center justify-center gap-2 rounded-none border border-border bg-muted px-4 py-2 text-sm font-semibold transition hover:bg-muted/80 disabled:opacity-50'
 

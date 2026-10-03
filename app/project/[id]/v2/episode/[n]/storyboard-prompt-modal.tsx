@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Loader2, Eye, Copy, Check, X, Info, RotateCcw, Maximize2, RefreshCw } from 'lucide-react'
 import { useTranslation } from '@/lib/i18n/context'
+import { syncStoryboardV2RefsBlock } from '@/lib/idea-v2'
 
 /**
  * Поток v2 · модалка промпта сборки листа-сториборда (по образцу shot-prompt-modal.tsx).
@@ -23,14 +24,15 @@ export function StoryboardPromptModal({ autoPrompt, promptDraft, refs, loading =
   onSave: (prompt: string) => void; onClose: () => void
 }) {
   const { t } = useTranslation()
-  const [draft, setDraft] = useState(promptDraft || autoPrompt)
+  // Сохранённая правка показывается с АКТУАЛЬНЫМ блоком «References:» (рефы со страницы «Референсы»).
+  const [draft, setDraft] = useState(promptDraft ? syncStoryboardV2RefsBlock(promptDraft, autoPrompt) : autoPrompt)
   // Авто-промпт обновился с сервера (рефы/шоты изменились), а пользователь его не правил → подменяем на лету.
   const prevAutoRef = useRef(autoPrompt)
   const rebuiltRef = useRef(false)
   useEffect(() => {
     const prev = prevAutoRef.current
     prevAutoRef.current = autoPrompt
-    if (autoPrompt && autoPrompt !== prev) setDraft((d) => (rebuiltRef.current || !d.trim() || d.trim() === prev.trim() ? autoPrompt : d))
+    if (autoPrompt && autoPrompt !== prev) setDraft((d) => (rebuiltRef.current || !d.trim() || d.trim() === prev.trim() ? autoPrompt : syncStoryboardV2RefsBlock(d, autoPrompt)))
     rebuiltRef.current = false
   }, [autoPrompt])
   // Сразу сбрасываем правки к текущему авто (если сервер вернёт тот же текст — поле уже актуально), затем — свежий авто.

@@ -10,7 +10,7 @@ import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { completeJob, failJob, isCancelRequested, markCanceled, updateJob } from "@/lib/jobs";
 import { REFERENCE_ASPECT_RATIO } from "@/lib/visual-style";
 import { runWithPromptContext } from "@/lib/prompt-log";
-import { episodeShotsV2From, episodeStoryboardV2From } from "@/lib/idea-v2";
+import { episodeShotsV2From, episodeStoryboardV2From, syncStoryboardV2RefsBlock } from "@/lib/idea-v2";
 import { ensureStoryboardV2AutoPrompt } from "@/lib/storyboard-v2-prompt";
 import { setEpisodeStoryboardV2 } from "@/lib/episode-storyboard-v2-store";
 import { translateToEnglish } from "@/lib/translate-en";
@@ -37,7 +37,8 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSto
     const autoPrompt = built.autoPrompt;
     const override = episodeStoryboardV2From(row?.episodeStoryboardV2, episode)?.promptOverride;
     const overrideEn = typeof override === "string" && override.trim() ? (await translateToEnglish(override)) || override : "";
-    const prompt = overrideEn || autoPrompt;
+    // Ручная правка промпта сохраняется, но блок «References:» в ней — всегда актуальный (= image_input этой сборки).
+    const prompt = overrideEn ? syncStoryboardV2RefsBlock(overrideEn, autoPrompt) : autoPrompt;
     await setEpisodeStoryboardV2(projectId, episode, { status: "generating", error: null, prompt, approved: false });
     await updateJob(jobId, { status: "processing", progress: 10, message: `Building a storyboard sheet from ${shots.length} shot(s)${imageInput.length ? ` with ${imageInput.length} reference(s)` : ""}...` });
 
