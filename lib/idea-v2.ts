@@ -1163,7 +1163,7 @@ export function matchSceneRefsByText(shot: Partial<EpisodeShotV2>, refs: Episode
 export function storyboardV2PromptKey(shots: EpisodeShotV2[], refs?: EpisodeRefV2[], visualStyle?: string): string {
   const refList = (refs ?? []).filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
   const src = JSON.stringify([
-    "v2",
+    "v3", // bump: REFERENCE LOCK block added to the storyboard prompt
     visualStyle ?? "",
     shots.map((s) => [s.index, shotFrameText(s) || s.action || ""]),
     refList.map((r) => [r.id, r.kind, r.label, r.imageUrl]),
@@ -1186,7 +1186,7 @@ export function storyboardV2PromptKey(shots: EpisodeShotV2[], refs?: EpisodeRefV
  *  3) ПАНЕЛИ — «Panel N:» + описание «Фрейм» из шот-листа СЛОВО В СЛОВО (English — перевод делает вызывающий код).
  */
 /** Ведущий блок «References:\nImage N - ...\n\n» промпта листа (или ""). */
-const STORYBOARD_V2_REFS_BLOCK_RE = /^\s*References:\n(?:Image \d+ - [^\n]*\n)*\n*/;
+const STORYBOARD_V2_REFS_BLOCK_RE = /^\s*References:\n(?:Image \d+ - [^\n]*\n)*(?:\nREFERENCE LOCK[^\n]*\n(?:- [^\n]*\n)*)?\n*/;
 export function storyboardV2RefsBlock(prompt: string): string {
   const m = String(prompt ?? "").match(STORYBOARD_V2_REFS_BLOCK_RE);
   return m ? m[0] : "";
@@ -1213,10 +1213,33 @@ export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRe
   const rows = Math.max(5, Math.ceil(n / cols));
 
   const refList = (refs ?? []).filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
+  const refLabel = (r: EpisodeRefV2) => stripRefKindPrefixV2(r.label).replace(/\s+/g, " ").trim();
+  const chars = refList.map((r, i) => [r, i + 1] as const).filter(([r]) => r.kind === "character");
+  const locs = refList.map((r, i) => [r, i + 1] as const).filter(([r]) => r.kind === "location");
+  const props = refList.map((r, i) => [r, i + 1] as const).filter(([r]) => r.kind === "prop");
+  // Жёсткая привязка: внешность персонажей и вид локаций — ТОЛЬКО из референсов, текст панелей их не переопределяет.
+  const lockBlock = refList.length
+    ? `\nREFERENCE LOCK (mandatory, overrides any panel text):\n` +
+      (chars.length
+        ? `- Character appearance comes ONLY from the reference images: ${chars.map(([r, n]) => `${refLabel(r)} = Image ${n}`).join("; ")}. ` +
+          `Reproduce each character's face, facial features, skin tone, hair color/length/style, age, body type and build EXACTLY as in their reference image in every panel they appear in — the same recognizable person each time. ` +
+          `Do not invent, replace, age, restyle or "cast" a different person. Keep their reference wardrobe unless the panel text explicitly names a garment or gear item (helmet, mask, gloves, uniform); such items are worn ON TOP of the same person without changing the face or hair. ` +
+          `Never cover the face unless the panel text explicitly says so.\n`
+        : "") +
+      (locs.length
+        ? `- Locations come ONLY from the reference images: ${locs.map(([r, n]) => `${refLabel(r)} = Image ${n}`).join("; ")}. ` +
+          `Every panel set in a location must match its reference image exactly — same architecture, layout, materials, colors, fixtures, props placement and lighting mood; the panel text only chooses the camera angle and what happens inside that same place. ` +
+          `Do not redesign, redecorate or substitute the location.\n`
+        : "") +
+      (props.length
+        ? `- Props come ONLY from the reference images: ${props.map(([r, n]) => `${refLabel(r)} = Image ${n}`).join("; ")}. Same shape, size, material, color and markings in every panel.\n`
+        : "")
+    : "";
   const refsBlock = refList.length
     ? `References:\n` +
-      refList.map((r, i) => `Image ${i + 1} - ${stripRefKindPrefixV2(r.label).replace(/\s+/g, " ").trim()}`).join("\n") +
-      `\n\n`
+      refList.map((r, i) => `Image ${i + 1} - ${refLabel(r)}`).join("\n") +
+      `\n` + lockBlock +
+      `\n`
     : "";
 
   const style = (opts?.visualStyle ?? "").trim();
