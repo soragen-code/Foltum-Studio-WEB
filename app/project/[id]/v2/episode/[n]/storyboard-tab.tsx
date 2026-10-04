@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type MouseEvent } from 'react'
 import { Loader2, LayoutGrid, RefreshCw, X, Eye, CheckCircle2, Film } from 'lucide-react'
 import { syncStoryboardV2RefsBlock, type EpisodeStoryboardV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
@@ -32,6 +32,32 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard, onOpe
   const [notice, setNotice] = useState('')
   const [starting, setStarting] = useState(false)
   const [photoOpen, setPhotoOpen] = useState(false)
+  // Полноэкранный просмотр: зум по клику. null — лист вписан в экран; иначе — ширина увеличенного листа (px)
+  // и точка клика (доли 0..1), к которой центрируется прокрутка после увеличения.
+  const [zoom, setZoom] = useState<{ width: number; fx: number; fy: number } | null>(null)
+  const zoomBoxRef = useRef<HTMLDivElement>(null)
+  const LIGHTBOX_ZOOM = 2.5
+  const closePhoto = () => { setPhotoOpen(false); setZoom(null) }
+  const onPhotoClick = (e: MouseEvent<HTMLImageElement>) => {
+    e.stopPropagation()
+    if (zoom) { setZoom(null); return }
+    const r = e.currentTarget.getBoundingClientRect()
+    setZoom({ width: r.width * LIGHTBOX_ZOOM, fx: (e.clientX - r.left) / r.width, fy: (e.clientY - r.top) / r.height })
+  }
+  // После увеличения прокручиваем контейнер так, чтобы точка клика оказалась в центре экрана.
+  useEffect(() => {
+    if (!zoom) return
+    const box = zoomBoxRef.current
+    const el = box?.querySelector('img')
+    if (!box || !el) return
+    const place = () => {
+      box.scrollLeft = zoom.fx * el.clientWidth - box.clientWidth / 2
+      box.scrollTop = zoom.fy * el.clientHeight - box.clientHeight / 2
+    }
+    place()
+    const raf = requestAnimationFrame(place)
+    return () => cancelAnimationFrame(raf)
+  }, [zoom])
   const [promptOpen, setPromptOpen] = useState(false)
   const [autoPrompt, setAutoPrompt] = useState('')
   const [promptDraft, setPromptDraft] = useState('')
@@ -292,20 +318,32 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard, onOpe
 
       {photoOpen && img && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
-          onClick={() => setPhotoOpen(false)}
+          ref={zoomBoxRef}
+          className={zoom
+            ? 'fixed inset-0 z-50 overflow-auto bg-black/90 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
+            : 'fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4'}
+          onClick={closePhoto}
           data-testid="episode-v2-storyboard-lightbox"
+          data-zoomed={zoom ? '1' : '0'}
         >
           <button
-            onClick={() => setPhotoOpen(false)}
-            className="absolute right-4 top-4 rounded-full bg-white/10 p-2 text-white transition hover:bg-white/20"
+            onClick={(e) => { e.stopPropagation(); closePhoto() }}
+            className="fixed right-4 top-4 z-10 rounded-full bg-white/10 p-2 text-white transition hover:bg-white/20"
             aria-label={t('common.close')}
             data-testid="episode-v2-storyboard-lightbox-close"
           >
             <X className="h-5 w-5" />
           </button>
+          {/* Клик по листу: вписан → увеличить ×2.5 в точку клика; увеличен → снова вписать. Клик по фону — закрыть. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={img} alt={t('ideaV2.storyboardTab')} className="max-h-full max-w-full object-contain" onClick={(e) => e.stopPropagation()} />
+          <img
+            src={img}
+            alt={t('ideaV2.storyboardTab')}
+            className={zoom ? 'block h-auto max-w-none cursor-zoom-out select-none' : 'max-h-full max-w-full cursor-zoom-in select-none object-contain'}
+            style={zoom ? { width: zoom.width } : undefined}
+            draggable={false}
+            onClick={onPhotoClick}
+          />
         </div>
       )}
 
