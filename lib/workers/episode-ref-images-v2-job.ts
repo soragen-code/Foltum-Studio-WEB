@@ -27,7 +27,7 @@ const FACE_REF_LINE =
 export function episodeRefImagePromptV2(ref: Pick<EpisodeRefV2, "kind" | "prompt" | "setting" | "userRefUrl">): string {
   const framing =
     ref.kind === "character"
-      ? `Character reference sheet image: ONE fictional adult (or child if stated) shown full-length head to toe, standing upright in a neutral pose, facing the camera. ${NEUTRAL_BACKGROUND_LINE}`
+      ? `Character reference sheet image: ONE fictional adult (or child if stated) shown full-length head to toe, standing upright in a neutral pose, facing the camera, wearing the exact everyday wardrobe this character wears in the episode as described below. Face fully visible and head uncovered: any helmet, mask, respirator, goggles or gloves are NOT worn — held in a hand or hanging on the belt if mentioned. ${NEUTRAL_BACKGROUND_LINE}`
       : ref.kind === "location"
         ? `Location reference plate: wide establishing photograph of the place, ${ref.setting === "EXT" ? "exterior" : ref.setting === "INT" ? "interior" : "the setting"}, no people, no text.`
         : `Prop reference image: the single object isolated and fully in frame on a plain neutral-grey background, no hands, no people, no text.`;

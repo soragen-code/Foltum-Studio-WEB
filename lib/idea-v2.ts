@@ -1163,7 +1163,7 @@ export function matchSceneRefsByText(shot: Partial<EpisodeShotV2>, refs: Episode
 export function storyboardV2PromptKey(shots: EpisodeShotV2[], refs?: EpisodeRefV2[], visualStyle?: string): string {
   const refList = (refs ?? []).filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
   const src = JSON.stringify([
-    "v4", // bump: fixed 5x5 grid layout block (9:16 cells, explicit row map)
+    "v5", // bump: WARDROBE LOCK (clothing strictly from reference; text may only add gear on top)
     visualStyle ?? "",
     shots.map((s) => [s.index, shotFrameText(s) || s.action || ""]),
     refList.map((r) => [r.id, r.kind, r.label, r.imageUrl]),
@@ -1207,6 +1207,45 @@ export function syncStoryboardV2RefsBlock(prompt: string, autoPrompt: string): s
   return fresh + src.slice(cur.length).replace(/^\n+/, "");
 }
 
+/**
+ * Блок REFERENCE LOCK: внешность И ОДЕЖДА персонажей, вид локаций и реквизита — ТОЛЬКО из референсов.
+ * Текст панели/кадра может лишь ДОБАВИТЬ съёмное снаряжение поверх одежды из рефа (каска, респиратор, перчатки,
+ * сумка) и состояние (грязь, пыль, мокрая/рваная ткань); заменить или перекрасить одежду он не может — слова вроде
+ * "overalls/uniform/jacket" в тексте игнорируются в пользу рефа. Если персонаж перегенерирован в другой одежде,
+ * кадры автоматически следуют новому рефу. `first` — номер первого референса в image_input (1 — сториборд,
+ * 2 — первый кадр, где Image 1 = лист). `unit` — "panel" или "frame" (как называть текст-источник).
+ */
+export function buildReferenceLockV2(refList: EpisodeRefV2[], first: number, unit: "panel" | "frame"): string {
+  if (!refList.length) return "";
+  const refLabel = (r: EpisodeRefV2) => stripRefKindPrefixV2(r.label).replace(/\s+/g, " ").trim();
+  const numbered = refList.map((r, i) => [r, i + first] as const);
+  const chars = numbered.filter(([r]) => r.kind === "character");
+  const locs = numbered.filter(([r]) => r.kind === "location");
+  const props = numbered.filter(([r]) => r.kind === "prop");
+  const every = unit === "panel" ? "in every panel" : "in the frame";
+  const text = `the ${unit} text`;
+  return (
+    `\nREFERENCE LOCK (mandatory, overrides any ${unit} text):\n` +
+    (chars.length
+      ? `- Character appearance comes ONLY from the reference images: ${chars.map(([r, n]) => `${refLabel(r)} = Image ${n}`).join("; ")}. ` +
+        `Reproduce each character's face, facial features, skin tone, hair color/length/style, age, body type and build EXACTLY as in their reference image ${every} they appear in — the same recognizable person each time. ` +
+        `Do not invent, replace, age, restyle or "cast" a different person.\n` +
+        `- WARDROBE LOCK: each character's clothing (every garment, its cut, color, material, footwear) comes ONLY from the reference image and is reproduced EXACTLY ${every} — the same outfit as in the reference, no redesign, no recolor, no substitution. ` +
+        `${text[0].toUpperCase()}${text.slice(1)} may only ADD removable gear worn ON TOP of the reference outfit (helmet, respirator/mask, goggles, gloves, bag, belt, weapon) and surface state (dust, dirt, blood, wet or torn fabric). ` +
+        `If ${text} names a garment itself (overalls, uniform, jacket, coat, dress, suit, etc.), IGNORE that word and keep the reference wardrobe. ` +
+        `Never cover the face unless ${text} explicitly says so.\n`
+      : "") +
+    (locs.length
+      ? `- Locations come ONLY from the reference images: ${locs.map(([r, n]) => `${refLabel(r)} = Image ${n}`).join("; ")}. ` +
+        `Every ${unit} set in a location must match its reference image exactly — same architecture, layout, materials, colors, fixtures, props placement and lighting mood; ${text} only chooses the camera angle and what happens inside that same place. ` +
+        `Do not redesign, redecorate or substitute the location.\n`
+      : "") +
+    (props.length
+      ? `- Props come ONLY from the reference images: ${props.map(([r, n]) => `${refLabel(r)} = Image ${n}`).join("; ")}. Same shape, size, material, color and markings ${every}.\n`
+      : "")
+  );
+}
+
 export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRefV2[], opts?: { visualStyle?: string }): string {
   const n = shots.length;
   const cols = 5;
@@ -1214,27 +1253,7 @@ export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRe
 
   const refList = (refs ?? []).filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
   const refLabel = (r: EpisodeRefV2) => stripRefKindPrefixV2(r.label).replace(/\s+/g, " ").trim();
-  const chars = refList.map((r, i) => [r, i + 1] as const).filter(([r]) => r.kind === "character");
-  const locs = refList.map((r, i) => [r, i + 1] as const).filter(([r]) => r.kind === "location");
-  const props = refList.map((r, i) => [r, i + 1] as const).filter(([r]) => r.kind === "prop");
-  // Жёсткая привязка: внешность персонажей и вид локаций — ТОЛЬКО из референсов, текст панелей их не переопределяет.
-  const lockBlock = refList.length
-    ? `\nREFERENCE LOCK (mandatory, overrides any panel text):\n` +
-      (chars.length
-        ? `- Character appearance comes ONLY from the reference images: ${chars.map(([r, n]) => `${refLabel(r)} = Image ${n}`).join("; ")}. ` +
-          `Reproduce each character's face, facial features, skin tone, hair color/length/style, age, body type and build EXACTLY as in their reference image in every panel they appear in — the same recognizable person each time. ` +
-          `Do not invent, replace, age, restyle or "cast" a different person. Keep their reference wardrobe unless the panel text explicitly names a garment or gear item (helmet, mask, gloves, uniform); such items are worn ON TOP of the same person without changing the face or hair. ` +
-          `Never cover the face unless the panel text explicitly says so.\n`
-        : "") +
-      (locs.length
-        ? `- Locations come ONLY from the reference images: ${locs.map(([r, n]) => `${refLabel(r)} = Image ${n}`).join("; ")}. ` +
-          `Every panel set in a location must match its reference image exactly — same architecture, layout, materials, colors, fixtures, props placement and lighting mood; the panel text only chooses the camera angle and what happens inside that same place. ` +
-          `Do not redesign, redecorate or substitute the location.\n`
-        : "") +
-      (props.length
-        ? `- Props come ONLY from the reference images: ${props.map(([r, n]) => `${refLabel(r)} = Image ${n}`).join("; ")}. Same shape, size, material, color and markings in every panel.\n`
-        : "")
-    : "";
+  const lockBlock = buildReferenceLockV2(refList, 1, "panel");
   const refsBlock = refList.length
     ? `References:\n` +
       refList.map((r, i) => `Image ${i + 1} - ${refLabel(r)}`).join("\n") +
@@ -1364,7 +1383,8 @@ export function buildSceneFrameV2Prompt(scene: Pick<EpisodeSceneV2, "index" | "a
     ? `\n\nREFERENCES: the next ${refList.length} attached image(s) are the canonical look of the recurring characters, locations and props — keep them identical. Bind each one BY POSITION (the Nth attached image = the Nth list item), never by name. The shot cites references as "(реф N)"; match that number to the "(реф N)" marker below:\n` +
       refList
         .map((r, i) => `Image ${i + 2} = реф ${(r as any).ord ?? i + 1} (${r.kind === "character" ? "character" : r.kind === "location" ? "location" : "prop"}): ${r.label.replace(/\s+/g, " ").trim()}`)
-        .join("\n")
+        .join("\n") +
+      buildReferenceLockV2(refList, 2, "frame")
     : "";
   return `${head}${refsBlock}`;
 }
