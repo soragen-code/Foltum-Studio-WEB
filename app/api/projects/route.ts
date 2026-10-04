@@ -30,9 +30,9 @@ export async function GET() {
         },
       },
     })
-    // Stage 76: `coverUrl` = first episode's location image (first season); nested seasons are stripped
-    // so the payload shape stays the same as before (plus one additive field).
-    const projects = rows.map(({ seasons, ...project }) => ({ ...project, coverUrl: pickProjectCover(seasons) }))
+    // `coverUrl` = первая сгенерированная локация проекта (v2: Project.episodeRefsV2, серии по возрастанию);
+    // legacy-фолбэк — локация первой серии первого сезона. Nested seasons are stripped (additive field only).
+    const projects = rows.map(({ seasons, ...project }) => ({ ...project, coverUrl: pickProjectCover(project.episodeRefsV2, seasons) }))
     return NextResponse.json({ projects })
   } catch (err: any) {
     console.error('Projects fetch error:', err)

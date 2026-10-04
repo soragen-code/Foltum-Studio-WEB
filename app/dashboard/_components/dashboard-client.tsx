@@ -196,7 +196,7 @@ export function DashboardClient() {
                     href={`/project/${project?.id}`}
                     className="group block p-5 pb-3"
                   >
-                    {/* Stage 76: 16:9 project cover — location image of the first episode, or a muted placeholder. */}
+                    {/* Обложка проекта (16:9, центр-кроп): первая сгенерированная локация (v2 refs), иначе плейсхолдер. */}
                     <div className="mb-4 aspect-video w-full overflow-hidden rounded-lg bg-muted" data-testid="project-cover">
                       {project?.coverUrl ? (
                         <img
