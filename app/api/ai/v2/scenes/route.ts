@@ -11,14 +11,15 @@ import { runEpisodeSceneFramesV2Job, prepareScenePromptData, EPISODE_SCENE_FRAME
 import { runEpisodeSceneVideoV2Job, EPISODE_SCENE_VIDEO_V2_JOB_TYPE } from "@/lib/workers/episode-scene-video-v2-job";
 import { runEpisodeAssembleV2Job, EPISODE_ASSEMBLE_V2_JOB_TYPE } from "@/lib/workers/episode-assemble-v2-job";
 import { allSceneVideosReady, episodeFinalV2From, episodeRefsV2From, episodeScenesV2From, episodeShotsV2From, episodeStoryboardV2From, MAX_SCENE_VIDEO_REF_IMAGES, sceneVideoV2Prompt, selectSceneVideoV2Refs, selectStoryboardV2Refs } from "@/lib/idea-v2";
-import { activeEpisodeJob, latestEpisodeJob, patchEpisodeSceneV2, setEpisodeFinalV2, setEpisodeScenesV2 } from "@/lib/episode-scenes-v2-store";
+import { activeEpisodeJob, latestEpisodeJob, patchEpisodeSceneV2, resetEpisodeFinalV2, setEpisodeFinalV2, setEpisodeScenesV2 } from "@/lib/episode-scenes-v2-store";
 import { setEpisodeStoryboardV2 } from "@/lib/episode-storyboard-v2-store";
 import { WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
 import { translateToEnglish } from "@/lib/translate-en";
 
 /**
  * Поток v2 · вкладка «Сцены» серии n.
- * POST  { projectId, episode, action: "approve" }    → сториборд approved=true + job "episode_scene_frames_v2" (нарезка первых кадров 9:16).
+ * POST  { projectId, episode, action: "approve" }    → сториборд approved=true + job "episode_scene_frames_v2" (нарезка первых кадров 9:16);
+ *       сцены пересоздаются, поэтому готовый финальный ролик серии (episodeFinalV2) сбрасывается вместе с ними.
  * POST  { projectId, episode, action: "launch-all" } → job "episode_scene_video_v2" (Seedance i2v по всем сценам с первым кадром).
  * POST  { projectId, episode, action: "assemble" }   → job "episode_assemble_v2" (ffmpeg-склейка всех видео сцен по index → финальный mp4 в S3).
  * POST  { projectId, episode, action: "rebuild-prompts" } → синхронно пересобирает action/frame/endFrame/refIds существующих сцен
@@ -66,7 +67,10 @@ export async function POST(request: Request) {
     if (action === "approve") {
       if (!episodeShotsV2From(project.episodeShotsV2, episode).length) return NextResponse.json({ error: "Сначала разбейте сценарий на кадры" }, { status: 400 });
       if (!episodeStoryboardV2From(project.episodeStoryboardV2, episode)?.imageUrl) return NextResponse.json({ error: "Сначала соберите сториборд" }, { status: 400 });
+      if (await activeEpisodeJob(projectId, EPISODE_ASSEMBLE_V2_JOB_TYPE, episode)) return NextResponse.json({ error: "Дождитесь окончания сборки серии" }, { status: 409 });
       await setEpisodeStoryboardV2(projectId, episode, { approved: true });
+      // Новая нарезка = новые сцены: прежний финальный ролик больше не соответствует им — сбрасываем вместе со сценами.
+      await resetEpisodeFinalV2(projectId, episode);
       const r = await startJob(projectId, episode, EPISODE_SCENE_FRAMES_V2_JOB_TYPE, (jobId) => runEpisodeSceneFramesV2Job(jobId, projectId, { episode }));
       return NextResponse.json(r);
     }

@@ -30,3 +30,13 @@ export async function setEpisodeFinalV2(projectId: string, n: number, patch: Par
   const p = JSON.stringify({ ...patch, updatedAt: new Date().toISOString() });
   await prisma.$executeRaw`UPDATE "Project" SET "episodeFinalV2" = COALESCE("episodeFinalV2", '{}'::jsonb) || jsonb_build_object(${key}::text, COALESCE("episodeFinalV2"->${key}::text, '{}'::jsonb) || ${p}::jsonb) WHERE "id" = ${projectId}`;
 }
+
+/**
+ * Полный сброс финального ролика серии n (запись заменяется, а не сливается): videoUrl удаляется, status=idle.
+ * Вызывается при переаппруве сториборда — сцены пересоздаются, и прежняя склейка им больше не соответствует.
+ */
+export async function resetEpisodeFinalV2(projectId: string, n: number): Promise<void> {
+  const key = String(n);
+  const entry = JSON.stringify({ status: "idle", error: "", updatedAt: new Date().toISOString() });
+  await prisma.$executeRaw`UPDATE "Project" SET "episodeFinalV2" = COALESCE("episodeFinalV2", '{}'::jsonb) || jsonb_build_object(${key}::text, ${entry}::jsonb) WHERE "id" = ${projectId}`;
+}
