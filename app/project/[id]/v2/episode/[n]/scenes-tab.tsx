@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Loader2, Eye, Play, AlertTriangle, Film, Download, RotateCcw, RefreshCw } from 'lucide-react'
+import { Loader2, Eye, Play, AlertTriangle, Film, Download, RotateCcw, RefreshCw, X, ChevronLeft, ChevronRight } from 'lucide-react'
 import type { EpisodeFinalV2, EpisodeSceneV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { ScenePromptModal, type ScenePromptRef, type ScenePromptScene } from './scene-prompt-modal'
@@ -33,6 +33,9 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
   const [rebuilt, setRebuilt] = useState<{ rebuilt: number; total: number } | null>(null)
   const [error, setError] = useState('')
   const [promptFor, setPromptFor] = useState<string | null>(null)
+  // Лайтбокс-слайдшоу по первым кадрам: индекс в withFrame или null.
+  const [lightbox, setLightbox] = useState<number | null>(null)
+  const [touchX, setTouchX] = useState<number | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -64,6 +67,24 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
   }, [polling, load])
 
   const withFrame = scenes.filter((s) => s.firstFrameUrl)
+  const lbCount = withFrame.length
+  const lbScene = lightbox !== null ? withFrame[lightbox] : null
+  const lbPrev = useCallback(() => setLightbox((i) => (i === null ? null : Math.max(0, i - 1))), [])
+  const lbNext = useCallback(() => setLightbox((i) => (i === null ? null : Math.min(lbCount - 1, i + 1))), [lbCount])
+
+  useEffect(() => {
+    if (lightbox === null) return
+    if (lightbox >= lbCount) { setLightbox(lbCount ? lbCount - 1 : null); return }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setLightbox(null)
+      else if (e.key === 'ArrowLeft') lbPrev()
+      else if (e.key === 'ArrowRight') lbNext()
+    }
+    window.addEventListener('keydown', onKey)
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prevOverflow }
+  }, [lightbox, lbCount, lbPrev, lbNext])
   const videosDone = scenes.filter((s) => s.videoUrl && s.videoStatus === 'done').length
 
   const launchAll = async () => {
@@ -196,8 +217,16 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
               {s.videoUrl ? (
                 <video src={s.videoUrl} poster={s.firstFrameUrl} controls playsInline className="h-full w-full object-cover" data-testid={`episode-v2-scene-video-${s.index}`} />
               ) : s.firstFrameUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={s.firstFrameUrl} alt={t('ideaV2.scenesScene', { n: s.index })} className="h-full w-full object-cover" />
+                <button
+                  type="button"
+                  onClick={() => { const i = withFrame.findIndex((w) => w.id === s.id); if (i >= 0) setLightbox(i) }}
+                  className="block h-full w-full cursor-zoom-in"
+                  title={t('ideaV2.scenesLightboxOpen')}
+                  data-testid={`episode-v2-scene-frame-${s.index}`}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={s.firstFrameUrl} alt={t('ideaV2.scenesScene', { n: s.index })} className="h-full w-full object-cover" />
+                </button>
               ) : null}
               {(busy(s.firstFrameStatus) || (!s.videoUrl && busy(s.videoStatus))) && (
                 <div className="absolute inset-0 flex items-center justify-center bg-background/40"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>
@@ -223,6 +252,60 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
           </div>
         ))}
       </div>
+
+      {lbScene && lightbox !== null && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90"
+          onClick={() => setLightbox(null)}
+          onTouchStart={(e) => setTouchX(e.touches[0]?.clientX ?? null)}
+          onTouchEnd={(e) => {
+            const x0 = touchX; setTouchX(null)
+            const x1 = e.changedTouches[0]?.clientX
+            if (x0 === null || x1 === undefined) return
+            const dx = x1 - x0
+            if (dx > 50) lbPrev(); else if (dx < -50) lbNext()
+          }}
+          role="dialog"
+          aria-modal="true"
+          data-testid="episode-v2-scenes-lightbox"
+        >
+          <button type="button" onClick={() => setLightbox(null)} className="absolute right-3 top-3 z-10 rounded-full bg-white/10 p-2 text-white hover:bg-white/20" aria-label={t('common.close')} data-testid="episode-v2-scenes-lightbox-close">
+            <X className="h-5 w-5" />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); lbPrev() }}
+            disabled={lightbox <= 0}
+            className="absolute left-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-white/10 p-2 text-white hover:bg-white/20 disabled:opacity-20 disabled:hover:bg-white/10 sm:left-4"
+            aria-label={t('ideaV2.scenesLightboxPrev')}
+            data-testid="episode-v2-scenes-lightbox-prev"
+          >
+            <ChevronLeft className="h-7 w-7" />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); lbNext() }}
+            disabled={lightbox >= lbCount - 1}
+            className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-full bg-white/10 p-2 text-white hover:bg-white/20 disabled:opacity-20 disabled:hover:bg-white/10 sm:right-4"
+            aria-label={t('ideaV2.scenesLightboxNext')}
+            data-testid="episode-v2-scenes-lightbox-next"
+          >
+            <ChevronRight className="h-7 w-7" />
+          </button>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            key={lbScene.id}
+            src={lbScene.firstFrameUrl!}
+            alt={t('ideaV2.scenesScene', { n: lbScene.index })}
+            className="max-h-[92vh] max-w-[94vw] object-contain"
+            onClick={(e) => e.stopPropagation()}
+            draggable={false}
+          />
+          <div className="pointer-events-none absolute inset-x-0 bottom-3 text-center text-xs text-white/80" data-testid="episode-v2-scenes-lightbox-caption">
+            {t('ideaV2.scenesScene', { n: lbScene.index })} · {t('ideaV2.scenesLightboxCounter', { k: lightbox + 1, m: lbCount })}
+          </div>
+        </div>
+      )}
 
       {modalScene && (
         <ScenePromptModal
