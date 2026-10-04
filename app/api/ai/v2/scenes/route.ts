@@ -7,11 +7,11 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
-import { runEpisodeSceneFramesV2Job, EPISODE_SCENE_FRAMES_V2_JOB_TYPE } from "@/lib/workers/episode-scene-frames-v2-job";
+import { runEpisodeSceneFramesV2Job, prepareScenePromptData, EPISODE_SCENE_FRAMES_V2_JOB_TYPE } from "@/lib/workers/episode-scene-frames-v2-job";
 import { runEpisodeSceneVideoV2Job, EPISODE_SCENE_VIDEO_V2_JOB_TYPE } from "@/lib/workers/episode-scene-video-v2-job";
 import { runEpisodeAssembleV2Job, EPISODE_ASSEMBLE_V2_JOB_TYPE } from "@/lib/workers/episode-assemble-v2-job";
 import { allSceneVideosReady, episodeFinalV2From, episodeRefsV2From, episodeScenesV2From, episodeShotsV2From, episodeStoryboardV2From, MAX_SCENE_VIDEO_REF_IMAGES, sceneVideoV2Prompt, selectSceneVideoV2Refs, selectStoryboardV2Refs } from "@/lib/idea-v2";
-import { activeEpisodeJob, latestEpisodeJob, patchEpisodeSceneV2, setEpisodeFinalV2 } from "@/lib/episode-scenes-v2-store";
+import { activeEpisodeJob, latestEpisodeJob, patchEpisodeSceneV2, setEpisodeFinalV2, setEpisodeScenesV2 } from "@/lib/episode-scenes-v2-store";
 import { setEpisodeStoryboardV2 } from "@/lib/episode-storyboard-v2-store";
 import { WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
 import { translateToEnglish } from "@/lib/translate-en";
@@ -21,6 +21,8 @@ import { translateToEnglish } from "@/lib/translate-en";
  * POST  { projectId, episode, action: "approve" }    → сториборд approved=true + job "episode_scene_frames_v2" (нарезка первых кадров 9:16).
  * POST  { projectId, episode, action: "launch-all" } → job "episode_scene_video_v2" (Seedance i2v по всем сценам с первым кадром).
  * POST  { projectId, episode, action: "assemble" }   → job "episode_assemble_v2" (ffmpeg-склейка всех видео сцен по index → финальный mp4 в S3).
+ * POST  { projectId, episode, action: "rebuild-prompts" } → синхронно пересобирает action/frame/endFrame/refIds существующих сцен
+ *       по текущему шот-листу и референсам (кадры, видео, статусы и ручные промпты сохраняются; картинки не перегенерируются).
  * PATCH { projectId, episode, sceneId, prompt }      → promptOverride сцены (пустая строка → сброс к авто).
  * Исполнение — полностью на сервере: POST только создаёт GenerationJob и запускает воркер в after() этой инвокации
  * (ответ возвращается сразу, закрытие вкладки работу не прерывает). Воркеры возобновляемые: если инвокация упёрлась
@@ -28,7 +30,7 @@ import { translateToEnglish } from "@/lib/translate-en";
  * GET лишь ЧИТАЕТ состояние (сцены + последние job) — поллинг вкладки ничего не двигает.
  * GET   ?projectId&episode → { scenes (+autoPrompt/videoPrompt), refs, approved, framesJob, videoJob }.
  */
-const postSchema = z.object({ projectId: z.string().min(1), episode: z.coerce.number().int().min(1).max(999), action: z.enum(["approve", "launch-all", "assemble"]) });
+const postSchema = z.object({ projectId: z.string().min(1), episode: z.coerce.number().int().min(1).max(999), action: z.enum(["approve", "launch-all", "assemble", "rebuild-prompts"]) });
 const patchSchema = z.object({ projectId: z.string().min(1), episode: z.coerce.number().int().min(1).max(999), sceneId: z.string().min(1).max(64), prompt: z.string().max(100000) });
 
 async function ownedProject(email: string, projectId: string) {
@@ -67,6 +69,28 @@ export async function POST(request: Request) {
       await setEpisodeStoryboardV2(projectId, episode, { approved: true });
       const r = await startJob(projectId, episode, EPISODE_SCENE_FRAMES_V2_JOB_TYPE, (jobId) => runEpisodeSceneFramesV2Job(jobId, projectId, { episode }));
       return NextResponse.json(r);
+    }
+
+    if (action === "rebuild-prompts") {
+      const shots = episodeShotsV2From(project.episodeShotsV2, episode);
+      const scenes = episodeScenesV2From(project.episodeScenesV2, episode);
+      if (!shots.length) return NextResponse.json({ error: "Сначала разбейте сценарий на кадры" }, { status: 400 });
+      if (!scenes.length) return NextResponse.json({ error: "Нет сцен для пересборки" }, { status: 400 });
+      if (await activeEpisodeJob(projectId, EPISODE_SCENE_FRAMES_V2_JOB_TYPE, episode)) return NextResponse.json({ error: "Дождитесь окончания нарезки сцен" }, { status: 409 });
+      // Сцена ↔ шот: по shotId, иначе по номеру (scene-N ↔ shot #N). Сцены без шота остаются как есть.
+      const byId = new Map(shots.map((s) => [s.id, s]));
+      const byIndex = new Map(shots.map((s) => [s.index, s]));
+      const pairs = scenes.map((sc) => ({ sc, shot: byId.get(sc.shotId) ?? byIndex.get(sc.index) ?? null }));
+      const matched = pairs.filter((p): p is { sc: typeof p.sc; shot: NonNullable<typeof p.shot> } => !!p.shot);
+      if (!matched.length) return NextResponse.json({ error: "Сцены не соответствуют текущему шот-листу — подтвердите сториборд заново" }, { status: 400 });
+      const prepared = await prepareScenePromptData(matched.map((p) => p.shot), episodeRefsV2From(project.episodeRefsV2, episode));
+      const byScene = new Map(matched.map((p, i) => [p.sc.id, { shot: p.shot, data: prepared[i] }]));
+      const next = scenes.map((sc) => {
+        const m = byScene.get(sc.id);
+        return m ? { ...sc, shotId: m.shot.id, durationSec: m.shot.durationSec, ...m.data } : sc;
+      });
+      await setEpisodeScenesV2(projectId, episode, next);
+      return NextResponse.json({ ok: true, rebuilt: matched.length, total: scenes.length });
     }
 
     if (action === "assemble") {

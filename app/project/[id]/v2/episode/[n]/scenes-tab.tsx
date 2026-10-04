@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Loader2, Eye, Play, AlertTriangle, Film, Download, RotateCcw } from 'lucide-react'
+import { Loader2, Eye, Play, AlertTriangle, Film, Download, RotateCcw, RefreshCw } from 'lucide-react'
 import type { EpisodeFinalV2, EpisodeSceneV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { ScenePromptModal, type ScenePromptRef, type ScenePromptScene } from './scene-prompt-modal'
@@ -29,6 +29,8 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
   const [loaded, setLoaded] = useState(false)
   const [launching, setLaunching] = useState(false)
   const [assembleBusy, setAssembleBusy] = useState(false)
+  const [rebuilding, setRebuilding] = useState(false)
+  const [rebuilt, setRebuilt] = useState<{ rebuilt: number; total: number } | null>(null)
   const [error, setError] = useState('')
   const [promptFor, setPromptFor] = useState<string | null>(null)
 
@@ -85,6 +87,17 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
     } catch { setError(t('ideaV2.shotsNetworkError')) }
     finally { setAssembleBusy(false) }
   }
+  const rebuildPrompts = async () => {
+    setRebuilding(true); setError(''); setRebuilt(null)
+    try {
+      const res = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId, episode: n, action: 'rebuild-prompts' }) })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) setError(d?.error ?? t('ideaV2.scenesError'))
+      else setRebuilt({ rebuilt: Number(d?.rebuilt ?? 0), total: Number(d?.total ?? 0) })
+      await load()
+    } catch { setError(t('ideaV2.shotsNetworkError')) }
+    finally { setRebuilding(false) }
+  }
   const canAssemble = data.allVideosReady && !videoRunning && !cutting
   const finalReady = !!final?.videoUrl && final.status === 'done'
 
@@ -119,10 +132,22 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
           )}
           {!cutting && scenes.length > 0 && !withFrame.length && <p className="text-amber-500">{t('ideaV2.scenesNoFrames')}</p>}
         </div>
-        <button onClick={() => void launchAll()} disabled={launching || cutting || videoRunning || !withFrame.length} className={btnPrimary} data-testid="episode-v2-scenes-launch-all">
-          {launching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {t('ideaV2.launchAllScenes')}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => void rebuildPrompts()}
+            disabled={rebuilding || cutting || videoRunning || !scenes.length}
+            title={t('ideaV2.rebuildPromptsHint')}
+            className="flex items-center gap-2 rounded-lg bg-muted px-4 py-2.5 text-sm transition hover:bg-muted/80 disabled:opacity-50"
+            data-testid="episode-v2-scenes-rebuild-prompts"
+          >
+            {rebuilding ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />} {t('ideaV2.rebuildPrompts')}
+          </button>
+          <button onClick={() => void launchAll()} disabled={launching || cutting || videoRunning || !withFrame.length} className={btnPrimary} data-testid="episode-v2-scenes-launch-all">
+            {launching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />} {t('ideaV2.launchAllScenes')}
+          </button>
+        </div>
       </div>
+      {rebuilt && !rebuilding && <p className="mt-2 text-xs text-muted-foreground" data-testid="episode-v2-scenes-rebuilt">{t('ideaV2.rebuildPromptsDone', { rebuilt: rebuilt.rebuilt, total: rebuilt.total })}</p>}
 
       {scenes.length > 0 && (
         <div className="mt-4 rounded-lg border border-border bg-muted/30 p-3" data-testid="episode-v2-assemble">

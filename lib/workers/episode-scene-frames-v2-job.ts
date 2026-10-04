@@ -88,6 +88,31 @@ async function assignSceneRefs(shots: EpisodeShotV2[], refs: EpisodeRefV2[]): Pr
   }
 }
 
+/** Поля сцены, зависящие от шота и референсов: action/frame/endFrame (EN) + refIds. Порядок = порядок shots. */
+export interface ScenePromptData { action: string; frame?: string; endFrame?: string; refIds: string[] }
+
+/**
+ * Готовит промпт-данные сцен по шот-листу: три блока шота переводятся раздельно (frame → только первый кадр;
+ * action → ACTIONS; ending → END отдельным абзацем), персонажи/реквизит назначаются per-shot.
+ * Используется при нарезке и при «Пересобрать промпты» (без перегенерации кадров/видео).
+ */
+export async function prepareScenePromptData(shots: EpisodeShotV2[], allRefs: EpisodeRefV2[]): Promise<ScenePromptData[]> {
+  const [framesEn, actionsEn, endingsEn, refIdsPerShot] = await Promise.all([
+    Promise.all(shots.map((s) => translateToEnglish(shotFrameText(s)))),
+    Promise.all(shots.map((s) => translateToEnglish(s.action))),
+    Promise.all(shots.map((s) => translateToEnglish(s.ending ?? ""))),
+    assignSceneRefs(shots, allRefs),
+  ]);
+  // Шоты без ending (старый шот-лист) — финальный кадр описывает LLM по action.
+  const described = endingsEn.some((e) => !e.trim()) ? await describeEndFrames(actionsEn.map((a, i) => a || shots[i].action)) : [];
+  return shots.map((s, i) => ({
+    action: actionsEn[i] || s.action,
+    frame: framesEn[i] || undefined,
+    endFrame: endingsEn[i]?.trim() || described[i]?.trim() || undefined,
+    refIds: refIdsPerShot[i],
+  }));
+}
+
 /** Простой пул: не более limit задач одновременно. */
 export async function runPool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let next = 0;
@@ -116,21 +141,12 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSce
       // нарезаются заново). Ручные промпты прежних сцен сохраняются, если сцена соответствует тому же шоту.
       const prev = new Map(episodeScenesV2From(row?.episodeScenesV2, episode).map((s) => [s.id, s]));
       // Три блока шота переводятся раздельно: frame → только первый кадр; action → ACTIONS; ending → END (отдельный абзац).
-      const allRefs = episodeRefsV2From(row?.episodeRefsV2, episode);
-      const [framesEn, actionsEn, endingsEn, refIdsPerShot] = await Promise.all([
-        Promise.all(shots.map((s) => translateToEnglish(shotFrameText(s)))),
-        Promise.all(shots.map((s) => translateToEnglish(s.action))),
-        Promise.all(shots.map((s) => translateToEnglish(s.ending ?? ""))),
-        assignSceneRefs(shots, allRefs),
-      ]);
-      // Шоты без ending (старый шот-лист) — финальный кадр описывает LLM по action.
-      const described = endingsEn.some((e) => !e.trim()) ? await describeEndFrames(actionsEn.map((a, i) => a || shots[i].action)) : [];
+      const prepared = await prepareScenePromptData(shots, episodeRefsV2From(row?.episodeRefsV2, episode));
       scenes = shots.map((s, i) => {
         const id = `scene-${s.index}`;
         const p = prev.get(id);
-        const endFrame = endingsEn[i]?.trim() || described[i]?.trim() || undefined;
         return {
-          id, index: s.index, shotId: s.id, action: actionsEn[i] || s.action, frame: framesEn[i] || undefined, endFrame, refIds: refIdsPerShot[i], durationSec: s.durationSec,
+          id, index: s.index, shotId: s.id, ...prepared[i], durationSec: s.durationSec,
           firstFrameStatus: "pending", videoStatus: "idle",
           promptOverride: p && p.shotId === s.id ? p.promptOverride ?? null : null,
         };
