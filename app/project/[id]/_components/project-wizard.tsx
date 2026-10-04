@@ -3,8 +3,6 @@
 import { useState } from 'react'
 import { Header } from '@/components/header'
 import { IdeaStageV2 } from './idea-stage-v2'
-import { SCENE_RESOLUTION } from '@/lib/power-tier'
-import { Gauge } from 'lucide-react'
 import { motion } from 'framer-motion'
 
 /**
@@ -32,18 +30,6 @@ export function ProjectWizard({ project: initialProject }: { project: any; entit
           <h1 className="font-display text-2xl font-bold tracking-tight">
             {project?.name ?? 'Project'}
           </h1>
-          <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-            {/* Stage 46B: scenes are always 480p; the production quality is chosen when the episode is assembled. */}
-            <span
-              className="inline-flex items-center gap-1 rounded bg-muted px-2 py-0.5 uppercase"
-              title={`Scenes are rendered in ${SCENE_RESOLUTION}; episode quality is selected during assembly`}
-              data-testid="power-badge"
-            >
-              <Gauge className="h-3 w-3" />
-              {SCENE_RESOLUTION}
-            </span>
-            <span className="hidden sm:inline">scenes {SCENE_RESOLUTION} · episode quality — during assembly</span>
-          </div>
         </div>
 
         {/* Один key на весь поток: смена stage не ремонтирует IdeaStageV2 и не сбрасывает его локальный экран. */}

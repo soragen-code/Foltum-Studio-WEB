@@ -685,7 +685,7 @@ export interface AssembleOptions {
    * bridges, no visible dissolves. "crossfade" = visible 0.2s dissolves, "concat" = raw hard cut.
    */
   mode?: StitchMode;
-  /** Stage 46B: production quality of the FINAL episode file (scenes themselves are always 480p). Default "480p". */
+  /** Production quality of the FINAL episode file. Default "1080p" (best quality). */
   quality?: AssembleQuality;
   /** Stage 46B: frame rate of the final file. Default 30. */
   fps?: AssembleFps;

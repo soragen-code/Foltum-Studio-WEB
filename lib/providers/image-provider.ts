@@ -32,7 +32,7 @@ export interface FluxInput {
    * edit slug is used (see WAVESPEED_EDIT_SLUG_FOR).
    */
   modelSlug?: string;
-  /** Optional quality override; default "high" for GPT Image 2.0, "medium" for GPT Image 2.5. */
+  /** Optional quality override; default "high" for both GPT Image 2.0 and GPT Image 2.5 (best quality everywhere). */
   quality?: "low" | "medium" | "high" | "xhigh" | "max";
 }
 
@@ -94,9 +94,9 @@ export function buildWaveSpeedImageRequest(input: ImageGenerationInput): { slug:
   // NOTE: GPT Image 2.0 has NO `seed` parameter, so the caller-supplied seed is intentionally dropped
   // (extra keys are silently ignored by the API — output is provider-random).
   const resolution = input.resolution === "1k" || input.resolution === "4k" ? input.resolution : "2k";
-  // Default (no modelSlug) = GPT Image 2.0 with quality "high" — unchanged for every v1 worker.
+  // Default (no modelSlug) = GPT Image 2.0. Quality defaults to "high" for every model — all generations use the best quality.
   const t2i = input.modelSlug && WAVESPEED_EDIT_SLUG_FOR[input.modelSlug] ? input.modelSlug : WAVESPEED_GPT_IMAGE_T2I;
-  const quality = input.quality ?? (t2i === WAVESPEED_GPT_IMAGE_T2I ? "high" : "medium");
+  const quality = input.quality ?? "high";
   const body: Record<string, unknown> = { prompt: input.prompt, aspect_ratio, resolution, quality, output_format: "png", enable_sync_mode: false };
   if (refs.length) {
     body.images = refs;

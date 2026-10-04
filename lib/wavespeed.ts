@@ -36,7 +36,7 @@ export interface SeedanceInput {
   model?: string;
   /** Duration in seconds, 1-30 or -1 for auto. Default 5. */
   duration?: number;
-  /** "480p" | "720p". Default "720p". */
+  /** Only "720p" (the Seedance 2.5 maximum; 480p is no longer used). Default "720p". */
   resolution?: string;
   /** "16:9" | "9:16" | "1:1" | "4:3" | "3:4" | "21:9" | "adaptive" */
   aspect_ratio?: string;
@@ -56,7 +56,7 @@ export interface SeedanceImageToVideoInput {
   image: string;
   /** Optional last frame (next scene's keyframe). */
   last_image?: string;
-  /** "480p" | "720p". Default "720p". */
+  /** Only "720p" (the Seedance 2.5 maximum; 480p is no longer used). Default "720p". */
   resolution?: string;
   /** Duration in seconds (clamped to 4–30). Default 5. */
   duration?: number;

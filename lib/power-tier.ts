@@ -3,7 +3,7 @@
  * really controls in the video pipeline.
  *
  * Honest scope (verified against the real Seedance 2.5 schema on WaveSpeed):
- *   - resolution: only "480p" | "720p" exist for Seedance 2.5 (no 1080p)
+ *   - resolution: Seedance 2.5 tops out at "720p" (no 1080p); 480p was removed — every clip renders at 720p
  *   - baseDuration: the minimal clip length the tier pays for (seconds);
  *     actual clip length is clamped by the scene rules in the video routes
  *   - costPerScene: credits charged per scene clip at baseDuration
@@ -16,7 +16,7 @@ export type PowerTier = "LOW" | "MEDIUM" | "HIGH";
 
 export const POWER_TIERS: readonly PowerTier[] = ["LOW", "MEDIUM", "HIGH"];
 
-export type SeedanceResolution = "480p" | "720p";
+export type SeedanceResolution = "720p";
 
 /** Real Seedance 2.5 schema on WaveSpeed: duration integer 1–30 s (verified 2026-09). Same for every tier. */
 export const SEEDANCE_MAX_DURATION = 30;
@@ -41,9 +41,9 @@ export const POWER_TIER_CONFIG: Record<PowerTier, PowerTierConfig> = {
   LOW: {
     id: "LOW",
     legacyTier: "minimum",
-    label: "480p",
-    description: "Draft quality — quick tests and previews, the lowest price.",
-    resolution: "480p",
+    label: "720p",
+    description: "Standard price tier — renders at full Seedance 2.5 quality (720p) like every other tier.",
+    resolution: "720p",
     baseDuration: 5,
     // Pricing model: 10 credits = 1 second of video. baseDuration=5 and costPerScene=50
     // make sceneClipCost() charge exactly 10 × clip length in seconds (5 s clip = 50 credits,
@@ -77,13 +77,12 @@ export const POWER_TIER_CONFIG: Record<PowerTier, PowerTierConfig> = {
 export const DEFAULT_POWER_TIER: PowerTier = "MEDIUM";
 
 /**
- * Stage 46B — every scene clip is rendered at a FIXED 480p, whatever tier the project stores.
- * Quality is chosen only when the finished episode is assembled (see lib/ffmpeg.ts render options).
- * Scene pricing therefore always follows the 480p (LOW) config.
+ * Every scene clip is rendered at the model's MAXIMUM quality (720p for Seedance 2.5), whatever tier
+ * the project stores — there is no quality choice and no 480p anywhere. Pricing follows the LOW config.
  */
-export const SCENE_RESOLUTION: SeedanceResolution = "480p";
+export const SCENE_RESOLUTION: SeedanceResolution = "720p";
 
-/** Effective per-scene config (Stage 46B): the stored tier id/label are kept, the render values are 480p. */
+/** Effective per-scene config: the stored tier id/label are kept, the render resolution is always the max (720p). */
 export function sceneTierConfig(cfg: PowerTierConfig): PowerTierConfig {
   const low = POWER_TIER_CONFIG.LOW;
   return { ...cfg, resolution: SCENE_RESOLUTION, baseDuration: low.baseDuration, costPerScene: low.costPerScene };
@@ -122,7 +121,7 @@ export function resolvePowerTier(project: {
   const power = isPowerTier(project.powerTier)
     ? project.powerTier
     : legacyTierToPower(project.tier);
-  // Stage 46B: scenes are always 480p — the tier only survives as a stored id.
+  // Scenes always render at the model maximum (720p) — the tier only survives as a stored id.
   return sceneTierConfig(POWER_TIER_CONFIG[power]);
 }
 

@@ -1,12 +1,12 @@
 /**
  * Stage 46B — production options of the FINAL assembled episode (pure, client-safe: no ffmpeg/fs).
- * Scenes are always rendered at 480p; only the assembled file is scaled to `quality` and `fps`.
+ * Scenes are rendered at the model maximum (720p); the assembled file defaults to the best quality (1080p).
  */
 export type AssembleQuality = "480p" | "720p" | "1080p";
 export type AssembleFps = 30 | 60;
 export const ASSEMBLE_QUALITIES: readonly AssembleQuality[] = ["480p", "720p", "1080p"];
 export const ASSEMBLE_FPS: readonly AssembleFps[] = [30, 60];
-export const DEFAULT_ASSEMBLE_QUALITY: AssembleQuality = "480p";
+export const DEFAULT_ASSEMBLE_QUALITY: AssembleQuality = "1080p";
 export const DEFAULT_ASSEMBLE_FPS: AssembleFps = 30;
 /** 9:16 output geometry per quality. */
 export const ASSEMBLE_DIMENSIONS: Record<AssembleQuality, { width: number; height: number }> = {

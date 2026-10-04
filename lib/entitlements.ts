@@ -2,7 +2,7 @@
  * Feature entitlements — the single source of truth for which subscription tier unlocks which feature.
  *
  * Subscriptions grant FEATURE ACCESS only (they no longer grant credits — credits are pack-only).
- * A user can generate video in the base 480p quality with purchased credits WITHOUT any subscription;
+ * A user can generate video (always at the maximum model quality) with purchased credits WITHOUT any subscription;
  * a subscription unlocks the premium features below on top of that.
  *
  * Add a new capability by extending `Feature` and `FEATURE_MIN_TIER` (and `FEATURE_LABELS` for UI).
@@ -11,8 +11,7 @@
 export type Feature =
   | "own_face" // upload a real reference photo for a character's face
   | "scene_prompt_edit" // revise a scene with a natural-language instruction
-  | "manual_prompt_edit" // manually edit / regenerate the final scene prompt (whole or per-block)
-  | "premium_quality"; // assemble the final episode in 720p / 1080p (base is always 480p)
+  | "manual_prompt_edit"; // manually edit / regenerate the final scene prompt (whole or per-block)
 
 /** Subscription tiers, lowest → highest. "free" means no active subscription. */
 export type Tier = "free" | "basic" | "pro" | "studio";
@@ -25,7 +24,6 @@ export const FEATURE_MIN_TIER: Record<Feature, Exclude<Tier, "free">> = {
   own_face: "basic",
   scene_prompt_edit: "basic",
   manual_prompt_edit: "basic",
-  premium_quality: "pro",
 };
 
 /** Human-readable RU labels for UI / pricing. */
@@ -33,7 +31,6 @@ export const FEATURE_LABELS: Record<Feature, string> = {
   own_face: "Своё лицо персонажа",
   scene_prompt_edit: "Редактирование сцены промптом",
   manual_prompt_edit: "Ручная правка промпта",
-  premium_quality: "Премиум-качество (720p / 1080p)",
 };
 
 /** Minimal shape of the user needed to evaluate entitlements. */
@@ -78,7 +75,6 @@ export const FEATURES: readonly Feature[] = [
   "own_face",
   "scene_prompt_edit",
   "manual_prompt_edit",
-  "premium_quality",
 ];
 
 /** Compute the full entitlement map for a user (server-side), to hand to client components. */
@@ -87,7 +83,6 @@ export function computeEntitlements(user: EntitlementUser | null | undefined): E
     own_face: canUse(user, "own_face"),
     scene_prompt_edit: canUse(user, "scene_prompt_edit"),
     manual_prompt_edit: canUse(user, "manual_prompt_edit"),
-    premium_quality: canUse(user, "premium_quality"),
   };
 }
 

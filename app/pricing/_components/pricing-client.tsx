@@ -33,7 +33,6 @@ const plans = [
     iconColor: 'text-primary',
     features: [
       'pricing.feat.allBasic',
-      'pricing.feat.premiumQuality',
     ],
     popular: true,
   },

@@ -181,7 +181,7 @@ export const acceptSceneSchema = z.object({
 
 export const assembleEpisodeSchema = z.object({
   episodeId: cuidSchema,
-  // Stage 46B: production quality / fps of the FINAL file (defaults 480p / 30 — no re-encode).
+  // Production quality / fps of the FINAL file (defaults 1080p / 30 — best quality).
   quality: z.enum(["480p", "720p", "1080p"]).optional(),
   fps: z.union([z.literal(30), z.literal(60)]).optional(),
 });
