@@ -1118,11 +1118,40 @@ export function selectStoryboardV2Refs(refs: EpisodeRefV2[], cap: number): Episo
     .slice(0, Math.max(0, cap));
 }
 
-/** Референсы для ВИДЕО сцены: только персонажи (первый кадр сцены добавляется per-scene). Без сториборда, локаций и реквизита. */
-export function selectSceneVideoV2Refs(refs: EpisodeRefV2[], cap: number): EpisodeRefV2[] {
-  return refs
-    .filter((r) => r && r.kind === "character" && typeof r.imageUrl === "string" && r.imageUrl)
+/**
+ * Референсы для ВИДЕО сцены (первый кадр сцены добавляется отдельно, image 1): ТОЛЬКО персонажи и реквизит
+ * ЭТОЙ сцены (scene.refIds, назначаются при нарезке), персонажи первыми. Без сториборда и локаций.
+ * Сцена без refIds (нарезана до этого правила) → все персонажи серии, как раньше.
+ */
+export function selectSceneVideoV2Refs(refs: EpisodeRefV2[], cap: number, scene?: Pick<EpisodeSceneV2, "refIds"> | null): EpisodeRefV2[] {
+  const withImage = refs.filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
+  const ids = Array.isArray(scene?.refIds) ? new Set(scene!.refIds) : null;
+  const pool = ids
+    ? withImage.filter((r) => (r.kind === "character" || r.kind === "prop") && ids.has(r.id))
+    : withImage.filter((r) => r.kind === "character");
+  return pool
+    .map((r, i) => [r, i] as const)
+    .sort((a, b) => (REF_KIND_ORDER[a[0].kind] - REF_KIND_ORDER[b[0].kind]) || a[1] - b[1])
+    .map(([r]) => r)
     .slice(0, Math.max(0, cap));
+}
+
+/**
+ * Какие референсы (персонажи/реквизит) присутствуют в каждом шоте — детерминированный разбор по тексту шота
+ * (имена персонажей латиницей / метка реквизита как подстрока). Используется как fallback, когда LLM-назначение не удалось.
+ */
+export function matchSceneRefsByText(shot: Partial<EpisodeShotV2>, refs: EpisodeRefV2[]): string[] {
+  const text = `${shotFrameText(shot)} ${oneLine(shot.action)} ${oneLine(shot.ending)}`.toLowerCase();
+  const out: string[] = [];
+  for (const r of refs) {
+    if (!r || (r.kind !== "character" && r.kind !== "prop")) continue;
+    const label = stripRefKindPrefixV2(r.label).toLowerCase().trim();
+    if (!label) continue;
+    const tokens = label.split(/[\s,]+/).filter((w) => w.length >= 3);
+    const hit = r.kind === "character" ? tokens.some((w) => text.includes(w)) : text.includes(label);
+    if (hit) out.push(r.id);
+  }
+  return out;
 }
 
 /**
@@ -1225,10 +1254,14 @@ export interface EpisodeSceneV2 {
   id: string;
   index: number;
   shotId: string;
-  /** Описание кадра на English (переведено при нарезке). */
+  /** Блок «Action» шота на English (переведено при нарезке) — единственное, что уходит в ACTIONS промпта видео. */
   action: string;
-  /** Описание финального кадра сцены на English — к чему приходит движение (генерируется при нарезке). */
+  /** Блок «Frame» шота на English — статичный первый кадр; только для генерации первого кадра, в промпт видео НЕ попадает. */
+  frame?: string;
+  /** Блок «Ending» шота на English — отдельный абзац END промпта видео (если шот без ending — генерируется при нарезке). */
   endFrame?: string;
+  /** id референсов (персонажи и реквизит), присутствующих именно в этой сцене — только они уходят в видео сцены. */
+  refIds?: string[];
   /** Длительность видео сцены (из шота). */
   durationSec?: number;
   firstFrameUrl?: string;
@@ -1260,7 +1293,9 @@ export function episodeScenesV2From(map: unknown, n: number): EpisodeSceneV2[] {
       index: Number(s.index) || 0,
       shotId: String(s.shotId ?? ""),
       action: s.action,
+      frame: optStr(s.frame),
       endFrame: optStr(s.endFrame),
+      refIds: Array.isArray(s.refIds) ? (s.refIds as unknown[]).filter((x): x is string => typeof x === "string" && !!x) : undefined,
       durationSec: Number.isFinite(Number(s.durationSec)) ? Number(s.durationSec) : undefined,
       firstFrameUrl: optStr(s.firstFrameUrl),
       firstFrameStatus: sceneStatus(s.firstFrameStatus),
@@ -1279,12 +1314,13 @@ export function episodeScenesV2From(map: unknown, n: number): EpisodeSceneV2[] {
  * Авто-промпт первого кадра сцены: standalone 9:16 кадр, воссозданный по панели #index листа-сториборда
  * (лист — первое изображение в image_input), плюс описание референсов (идут следом). style — VISUAL_STYLE.
  */
-export function buildSceneFrameV2Prompt(scene: Pick<EpisodeSceneV2, "index" | "action">, refs: EpisodeRefV2[], style: string): string {
+export function buildSceneFrameV2Prompt(scene: Pick<EpisodeSceneV2, "index" | "action" | "frame">, refs: EpisodeRefV2[], style: string): string {
   const refList = refs.filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
+  const frame = typeof scene.frame === "string" && scene.frame.trim() ? scene.frame : "";
   const head =
     `[VISUAL STYLE]: ${style}\n` +
     `Standalone vertical 9:16 cinematic frame. Recreate panel #${scene.index} from the provided storyboard sheet as a full standalone shot.\n` +
-    `ACTION: ${scene.action.replace(/\s+/g, " ").trim()}\n` +
+    (frame ? `FRAME: ${frame.replace(/\s+/g, " ").trim()}\n` : `ACTION: ${scene.action.replace(/\s+/g, " ").trim()}\n`) +
     `Image 1 is the storyboard sheet — use ONLY panel #${scene.index} as the composition guide (framing, blocking, camera angle). ` +
     `Output ONE full-bleed photorealistic frame: no grid, no panel borders, no number badges, no captions or any text.`;
   const refsBlock = refList.length
@@ -1309,14 +1345,18 @@ export const MAX_SCENE_VIDEO_REF_IMAGES = 4;
  */
 export function sceneVideoV2Prompt(
   scene: Pick<EpisodeSceneV2, "action" | "promptOverride" | "endFrame">,
-  characters: string[] = [],
+  refs: Array<string | Pick<EpisodeRefV2, "label" | "kind">> = [],
 ): string {
   const ov = typeof scene.promptOverride === "string" ? scene.promptOverride.trim() : "";
   if (ov) return ov;
   const end = typeof scene.endFrame === "string" ? scene.endFrame.trim() : "";
   const refLines = [
     "image 1 — the first frame of this shot: the space, the characters' positions in it, their poses, the action they are in the middle of, the shot size and camera angle. This is the only source of the layout — do not add, remove or move anything in the space. Do not take appearance or wardrobe from it.",
-    ...characters.map((name, i) => `image ${i + 2} — ${String(name).replace(/\s+/g, " ").trim()} (appearance only).`),
+    ...refs.map((r, i) => {
+      const label = (typeof r === "string" ? r : stripRefKindPrefixV2(r.label)).replace(/\s+/g, " ").trim();
+      const kind = typeof r === "string" ? "character" : r.kind;
+      return `image ${i + 2} — ${label} (${kind === "prop" ? "prop" : "character"}, appearance only).`;
+    }),
   ];
   const blocks = [`REFERENCES:\n${refLines.join("\n")}`, `ACTIONS:\n${scene.action.trim()}`];
   if (end) blocks.push(`END:\n${end}`);

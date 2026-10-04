@@ -136,11 +136,12 @@ export async function GET(request: Request) {
   // Промпт сцены = только T2V-промпт видео (промпт первого кадра сюда НЕ подмешивается). autoPrompt —
   // авто-версия без ручного override (базовая для сравнения в модалке); videoPrompt — итоговый (с override).
   const rawScenes = episodeScenesV2From(project.episodeScenesV2, episode);
-  // Имена персонажей для блока REFERENCES — те же рефы и тот же порядок, что воркер прикладывает после первого кадра.
-  const videoRefNames = selectSceneVideoV2Refs(episodeRefsV2From(project.episodeRefsV2, episode), MAX_SCENE_VIDEO_REF_IMAGES - 1).map((r) => r.label);
+  // Референсы блока REFERENCES — персонажи и реквизит ЭТОЙ сцены, тот же набор и порядок, что воркер прикладывает после первого кадра.
+  const allRefs = episodeRefsV2From(project.episodeRefsV2, episode);
   const scenes = await Promise.all(rawScenes.map(async (s) => {
+    const videoRefs = selectSceneVideoV2Refs(allRefs, MAX_SCENE_VIDEO_REF_IMAGES - 1, s);
     const en = { ...s, action: (await translateToEnglish(s.action)) || s.action };
-    return { ...s, autoPrompt: sceneVideoV2Prompt({ action: en.action, endFrame: en.endFrame, promptOverride: null }, videoRefNames), videoPrompt: sceneVideoV2Prompt(en, videoRefNames) };
+    return { ...s, autoPrompt: sceneVideoV2Prompt({ action: en.action, endFrame: en.endFrame, promptOverride: null }, videoRefs), videoPrompt: sceneVideoV2Prompt(en, videoRefs) };
   }));
   // Если job склейки упала/устарела, а в episodeFinalV2 застрял pending/running — показываем ошибку.
   let final = episodeFinalV2From(project.episodeFinalV2, episode);

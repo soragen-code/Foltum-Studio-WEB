@@ -2,7 +2,8 @@
  * Фоновый воркер потока v2 (вкладка «Сцены», кнопка «Запустить все сцены»): fan-out видео по всем сценам
  * серии с готовым первым кадром. Каждая сцена — Seedance 2.5 text-to-video с референс-изображениями:
  * reference_images = [первый кадр сцены (лук-якорь композиции) + канонические референсы персонажей/локаций],
- * prompt = sceneVideoV2Prompt (REFERENCES: image 1 = первый кадр, image 2..N = персонажи; ACTIONS; END — без негативов),
+ * prompt = sceneVideoV2Prompt (REFERENCES: image 1 = первый кадр, image 2..N = персонажи и реквизит ЭТОЙ сцены; ACTIONS = action шота;
+ * END = ending шота отдельным абзацем — без негативов),
  * duration = durationSec шота в [4,30]; результат грузится в S3. Первый кадр подаётся как референс, а не
  * как жёстко зафиксированный начальный кадр. Ошибка одной сцены не валит остальные. Если все видео готовы — перезапуск.
  * Возобновляемый: taskId Seedance хранится в сцене; при нехватке бюджета инвокации воркер уступает, а cron
@@ -15,7 +16,7 @@ import { runWithPromptContext } from "@/lib/prompt-log";
 import {
   cancelVideoPrediction, getVideoPredictionState, startVideoPrediction, SEEDANCE_I2V_MAX_DURATION, SEEDANCE_I2V_MIN_DURATION,
 } from "@/lib/wavespeed";
-import { episodeRefsV2From, episodeScenesV2From, MAX_SCENE_VIDEO_REF_IMAGES, sceneVideoV2Prompt, selectSceneVideoV2Refs } from "@/lib/idea-v2";
+import { episodeRefsV2From, episodeScenesV2From, MAX_SCENE_VIDEO_REF_IMAGES, sceneVideoV2Prompt, selectSceneVideoV2Refs, type EpisodeSceneV2 } from "@/lib/idea-v2";
 import { translateToEnglish } from "@/lib/translate-en";
 import { patchEpisodeSceneV2 } from "@/lib/episode-scenes-v2-store";
 import { runPool } from "@/lib/workers/episode-scene-frames-v2-job";
@@ -54,11 +55,10 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSce
   try {
     const row = await prisma.project.findUnique({ where: { id: projectId }, select: { episodeScenesV2: true, episodeRefsV2: true } });
     const all = episodeScenesV2From(row?.episodeScenesV2, episode);
-    // В видео сцены подаём ТОЛЬКО первый кадр + референсы ПЕРСОНАЖЕЙ (без сториборда и локаций) — общие для всех сцен.
-    // Один и тот же упорядоченный список даёт и картинки (image 2..N), и имена для блока REFERENCES промпта.
-    const videoRefs = selectSceneVideoV2Refs(episodeRefsV2From(row?.episodeRefsV2, episode), MAX_SCENE_REF_IMAGES - 1);
-    const refUrls = videoRefs.map((r) => r.imageUrl).filter((u): u is string => typeof u === "string" && !!u);
-    const refNames = videoRefs.map((r) => r.label);
+    // В видео сцены подаём ТОЛЬКО первый кадр + референсы персонажей и реквизита ЭТОЙ сцены (scene.refIds; без сториборда
+    // и локаций). Один и тот же упорядоченный список даёт и картинки (image 2..N), и строки блока REFERENCES промпта.
+    const allRefs = episodeRefsV2From(row?.episodeRefsV2, episode);
+    const videoRefsFor = (sc: EpisodeSceneV2) => selectSceneVideoV2Refs(allRefs, MAX_SCENE_REF_IMAGES - 1, sc);
 
     // Выбор сцен — только при первом запуске job; возобновлённый cron'ом воркер берёт сохранённый список.
     let meta = await readV2JobMeta(jobId);
@@ -96,8 +96,10 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSce
           await patchEpisodeSceneV2(projectId, episode, sc.id, { videoStatus: "running" });
           const duration = Math.max(SEEDANCE_I2V_MIN_DURATION, Math.min(SEEDANCE_I2V_MAX_DURATION, Math.round(sc.durationSec ?? 5)));
           // Промпт видео — только English (action уже переведён при нарезке; ручной override мог быть по-русски).
-          const videoPrompt = (await translateToEnglish(sceneVideoV2Prompt(sc, refNames))) || sceneVideoV2Prompt(sc, refNames);
-          // T2V с референсами: первый кадр сцены (лук-якорь) + канонические референсы персонажей/локаций, cap.
+          const videoRefs = videoRefsFor(sc);
+          const videoPrompt = (await translateToEnglish(sceneVideoV2Prompt(sc, videoRefs))) || sceneVideoV2Prompt(sc, videoRefs);
+          // T2V с референсами: первый кадр сцены (лук-якорь) + референсы персонажей/реквизита этой сцены, cap.
+          const refUrls = videoRefs.map((r) => r.imageUrl).filter((u): u is string => typeof u === "string" && !!u);
           const reference_images = [sc.firstFrameUrl!, ...refUrls].filter(Boolean).slice(0, MAX_SCENE_REF_IMAGES);
           taskId = await startVideoPrediction({ prompt: videoPrompt, reference_images, aspect_ratio: "9:16", resolution: "720p", duration, generate_audio: true });
           startedAt = Date.now();

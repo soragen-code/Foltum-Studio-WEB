@@ -2,7 +2,8 @@
  * Фоновый воркер потока v2 (вкладка «Сцены»): по аппруву сториборда «нарезает» первые кадры сцен.
  * Геометрический кроп листа ненадёжен, поэтому каждый кадр ГЕНЕРИРУЕТСЯ отдельно как standalone 9:16
  * (GPT Image 2.5 flare, image-to-image): image_input = [лист-сториборд, ...референсы серии], промпт —
- * buildSceneFrameV2Prompt (или promptOverride сцены). По сцене на кадр шот-листа; action переводится на EN.
+ * buildSceneFrameV2Prompt (или promptOverride сцены). По сцене на кадр шот-листа; frame/action/ending шота переводятся на EN
+ * по отдельности (в промпт видео уходят только action + ending), референсы персонажей/реквизита назначаются per-scene.
  * Ошибка одной сцены не валит остальные. Возобновляемый: при нехватке бюджета инвокации уступает, оставляя
  * сцены в pending, — cron (resumeEpisodeScenesV2Jobs) перезапускает воркер, и он продолжает без повторной подготовки.
  */
@@ -15,8 +16,8 @@ import { REFERENCE_ASPECT_RATIO, VISUAL_STYLE } from "@/lib/visual-style";
 import { runWithPromptContext } from "@/lib/prompt-log";
 import { translateRefLabelsToEnglish, translateToEnglish } from "@/lib/translate-en";
 import {
-  buildSceneFrameV2Prompt, episodeRefsV2From, episodeScenesV2From, episodeShotsV2From, episodeStoryboardV2From, selectStoryboardV2Refs, shotVisualText,
-  type EpisodeSceneV2,
+  buildSceneFrameV2Prompt, episodeRefsV2From, episodeScenesV2From, episodeShotsV2From, episodeStoryboardV2From, matchSceneRefsByText, selectStoryboardV2Refs, shotFrameText,
+  type EpisodeRefV2, type EpisodeSceneV2, type EpisodeShotV2,
 } from "@/lib/idea-v2";
 import { patchEpisodeSceneV2, setEpisodeScenesV2 } from "@/lib/episode-scenes-v2-store";
 import { patchV2JobMeta, readV2JobMeta, v2Budget } from "@/lib/workers/v2-job-budget";
@@ -52,6 +53,41 @@ async function describeEndFrames(actions: string[]): Promise<string[]> {
   }
 }
 
+/**
+ * Какие референсы (персонажи/реквизит серии) присутствуют в каждом шоте: одна LLM-выборка по тексту шотов.
+ * Возвращает массив id-списков в порядке шотов. При ошибке LLM — детерминированный разбор по тексту (matchSceneRefsByText).
+ */
+async function assignSceneRefs(shots: EpisodeShotV2[], refs: EpisodeRefV2[]): Promise<string[][]> {
+  const pool = refs.filter((r) => r && (r.kind === "character" || r.kind === "prop"));
+  const fallback = () => shots.map((s) => matchSceneRefsByText(s, pool));
+  if (!shots.length || !pool.length) return shots.map(() => []);
+  try {
+    const system =
+      "You map shots of a shot list to the reference assets (characters and props) that are VISIBLE in each shot. " +
+      "Return strict JSON only. Use ONLY ids from the provided list. A character counts as present if they are visible in the frame, the action or the ending of that shot " +
+      "(including a body part, a reflection or a silhouette). A prop counts as present only if it is visibly in the shot. Do not include locations.";
+    const user =
+      `References:\n` + pool.map((r) => `${r.id} | ${r.kind} | ${r.label.replace(/\s+/g, " ").trim()}`).join("\n") +
+      `\n\nShots (${shots.length}):\n` +
+      shots.map((s) => `#${s.index}\nFrame: ${shotFrameText(s)}\nAction: ${String(s.action ?? "").replace(/\s+/g, " ").trim()}\nEnding: ${String(s.ending ?? "").replace(/\s+/g, " ").trim()}`).join("\n\n") +
+      `\n\nReturn JSON: {"shots":[{"index":<shot number>,"refIds":["<id>",...]}]} with EXACTLY ${shots.length} entries, one per shot, same order.`;
+    const res = await chatJSON<{ shots?: Array<{ index?: number; refIds?: unknown }> }>(system, user, { maxTokens: 4000, temperature: 0.1 });
+    const arr = Array.isArray(res?.shots) ? res.shots : [];
+    if (arr.length !== shots.length) return fallback();
+    const valid = new Set(pool.map((r) => r.id));
+    const fb = fallback();
+    return shots.map((s, i) => {
+      const byIndex = arr.find((x) => Number(x?.index) === s.index) ?? arr[i];
+      const ids = Array.isArray(byIndex?.refIds) ? (byIndex!.refIds as unknown[]).filter((x): x is string => typeof x === "string" && valid.has(x)) : [];
+      // Детерминированные совпадения по имени добавляем всегда — модель иногда пропускает названного персонажа.
+      return Array.from(new Set([...ids, ...fb[i]]));
+    });
+  } catch (e: any) {
+    console.error("[episode-scene-frames-v2] assignSceneRefs failed:", String(e?.message ?? e).slice(0, 200));
+    return fallback();
+  }
+}
+
 /** Простой пул: не более limit задач одновременно. */
 export async function runPool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let next = 0;
@@ -79,13 +115,22 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSce
       // Переаппрув/обновление сториборда ПОЛНОСТЬЮ пересоздаёт сцены (первые кадры, видео, финальные кадры
       // нарезаются заново). Ручные промпты прежних сцен сохраняются, если сцена соответствует тому же шоту.
       const prev = new Map(episodeScenesV2From(row?.episodeScenesV2, episode).map((s) => [s.id, s]));
-      const actionsEn = await Promise.all(shots.map((s) => translateToEnglish(shotVisualText(s))));
-      const endFramesEn = await describeEndFrames(actionsEn);
+      // Три блока шота переводятся раздельно: frame → только первый кадр; action → ACTIONS; ending → END (отдельный абзац).
+      const allRefs = episodeRefsV2From(row?.episodeRefsV2, episode);
+      const [framesEn, actionsEn, endingsEn, refIdsPerShot] = await Promise.all([
+        Promise.all(shots.map((s) => translateToEnglish(shotFrameText(s)))),
+        Promise.all(shots.map((s) => translateToEnglish(s.action))),
+        Promise.all(shots.map((s) => translateToEnglish(s.ending ?? ""))),
+        assignSceneRefs(shots, allRefs),
+      ]);
+      // Шоты без ending (старый шот-лист) — финальный кадр описывает LLM по action.
+      const described = endingsEn.some((e) => !e.trim()) ? await describeEndFrames(actionsEn.map((a, i) => a || shots[i].action)) : [];
       scenes = shots.map((s, i) => {
         const id = `scene-${s.index}`;
         const p = prev.get(id);
+        const endFrame = endingsEn[i]?.trim() || described[i]?.trim() || undefined;
         return {
-          id, index: s.index, shotId: s.id, action: actionsEn[i] || s.action, endFrame: endFramesEn[i] || undefined, durationSec: s.durationSec,
+          id, index: s.index, shotId: s.id, action: actionsEn[i] || s.action, frame: framesEn[i] || undefined, endFrame, refIds: refIdsPerShot[i], durationSec: s.durationSec,
           firstFrameStatus: "pending", videoStatus: "idle",
           promptOverride: p && p.shotId === s.id ? p.promptOverride ?? null : null,
         };
