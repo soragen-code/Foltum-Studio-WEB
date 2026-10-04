@@ -1328,7 +1328,7 @@ export function matchSceneRefsByText(shot: Partial<EpisodeShotV2>, refs: Episode
 export function storyboardV2PromptKey(shots: EpisodeShotV2[], refs?: EpisodeRefV2[], visualStyle?: string, previousEnding?: string): string {
   const refList = (refs ?? []).filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
   const src = JSON.stringify([
-    "v6", // bump: стыковка серий (panel 1 = финальный кадр предыдущей серии с другого ракурса)
+    "v7", // bump: REFERENCE LOCK — панели не источник внешности/одежды, только референс
     visualStyle ?? "",
     previousEnding ?? "",
     shots.map((s) => [s.index, shotFrameText(s) || s.action || ""]),
@@ -1399,6 +1399,9 @@ export function buildReferenceLockV2(refList: EpisodeRefV2[], first: number, uni
         `- WARDROBE LOCK: each character's clothing (every garment, its cut, color, material, footwear) comes ONLY from the reference image and is reproduced EXACTLY ${every} — the same outfit as in the reference, no redesign, no recolor, no substitution. ` +
         `${text[0].toUpperCase()}${text.slice(1)} may only ADD removable gear worn ON TOP of the reference outfit (helmet, respirator/mask, goggles, gloves, bag, belt, weapon) and surface state (dust, dirt, blood, wet or torn fabric). ` +
         `If ${text} names a garment itself (overalls, uniform, jacket, coat, dress, suit, etc.), IGNORE that word and keep the reference wardrobe. ` +
+        (unit === "frame"
+          ? `If the storyboard panel shows different clothing, hair or a different-looking person than the reference image, the REFERENCE IMAGE WINS — the panel is a layout sketch only, never a source of appearance or wardrobe. `
+          : `Panels are never a source of appearance or wardrobe for later panels — go back to the reference image for every panel. `) +
         `Never cover the face unless ${text} explicitly says so.\n`
       : "") +
     (locs.length
@@ -1548,7 +1551,7 @@ export function buildSceneFrameV2Prompt(scene: Pick<EpisodeSceneV2, "index" | "a
     `[VISUAL STYLE]: ${style}\n` +
     `Standalone vertical 9:16 cinematic frame. Recreate panel #${scene.index} from the provided storyboard sheet as a full standalone shot.\n` +
     (frame ? `FRAME: ${frame.replace(/\s+/g, " ").trim()}\n` : `ACTION: ${scene.action.replace(/\s+/g, " ").trim()}\n`) +
-    `Image 1 is the storyboard sheet — use ONLY panel #${scene.index} as the composition guide (framing, blocking, camera angle). ` +
+    `Image 1 is the storyboard sheet — use ONLY panel #${scene.index} as the composition guide (framing, blocking, camera angle). Take NOTHING else from it: faces, hair and wardrobe come from the reference images below, not from the panel. ` +
     `Output ONE full-bleed photorealistic frame: no grid, no panel borders, no number badges, no captions or any text.`;
   const refsBlock = refList.length
     ? `\n\nREFERENCES: the next ${refList.length} attached image(s) are the canonical look of the recurring characters, locations and props — keep them identical. Bind each one BY POSITION (the Nth attached image = the Nth list item), never by name. The shot cites references as "(реф N)"; match that number to the "(реф N)" marker below:\n` +
@@ -1583,10 +1586,17 @@ export function sceneVideoV2Prompt(
     ...refs.map((r, i) => {
       const label = (typeof r === "string" ? r : stripRefKindPrefixV2(r.label)).replace(/\s+/g, " ").trim();
       const kind = typeof r === "string" ? "character" : r.kind;
-      return `image ${i + 2} — ${label} (${kind === "prop" ? "prop" : "character"}, appearance only).`;
+      return kind === "prop"
+        ? `image ${i + 2} — ${label} (prop, appearance only).`
+        : `image ${i + 2} — ${label} (character: face, hair and the EXACT wardrobe — every garment, its cut, color, material and footwear — come from this image only and stay unchanged for the whole clip; no redesign, no recolor, no substitution).`;
     }),
   ];
-  const blocks = [`REFERENCES:\n${refLines.join("\n")}`, `ACTIONS:\n${scene.action.trim()}`];
+  const hasChars = refs.some((r) => (typeof r === "string" ? "character" : r.kind) !== "prop");
+  const blocks = [
+    `REFERENCES:\n${refLines.join("\n")}` +
+      (hasChars ? `\nWARDROBE LOCK: if image 1 shows a character in clothing that differs from that character's reference image, the reference image wins — render the reference wardrobe from the first frame to the last.` : ""),
+    `ACTIONS:\n${scene.action.trim()}`,
+  ];
   if (end) blocks.push(`END:\n${end}`);
   return blocks.join("\n\n");
 }
