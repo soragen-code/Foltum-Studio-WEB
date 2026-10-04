@@ -31,13 +31,12 @@ export function DashboardClient() {
   const router = useRouter()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
-  // «Новый проект v2.0» — отдельный поток идея → синопсис (Claude Fable 5.1). Создаёт проект тем же
-  // POST /api/projects, но открывает мастер с ?flow=v2, где включается экран v2 (idea-stage-v2).
-  const [creatingV2, setCreatingV2] = useState(false)
+  // Создание проекта: POST /api/projects → сразу мастер проекта (единственный поток — идея → синопсис → сюжет → серии).
+  const [creating, setCreating] = useState(false)
 
-  const createProjectV2 = async () => {
-    if (creatingV2) return
-    setCreatingV2(true)
+  const createProject = async () => {
+    if (creating) return
+    setCreating(true)
     try {
       const res = await fetch('/api/projects', {
         method: 'POST',
@@ -45,12 +44,12 @@ export function DashboardClient() {
         body: JSON.stringify({ powerTier: 'LOW' }),
       })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) { toast.error(data?.error ?? t('dashboard.deleteFailed')); setCreatingV2(false); return }
+      if (!res.ok) { toast.error(data?.error ?? t('dashboard.deleteFailed')); setCreating(false); return }
       const id = data?.project?.id
-      router.push(`/project/${id}?flow=v2`)
+      router.push(`/project/${id}`)
     } catch {
       toast.error('Не удалось создать проект')
-      setCreatingV2(false)
+      setCreating(false)
     }
   }
   // Stage 46A — delete a project from the list: two-step confirm inside the card, then DELETE /api/projects/[id].
@@ -138,24 +137,17 @@ export function DashboardClient() {
               <Wand2 className="h-4 w-4" />
               {t('dashboard.manualMode')}
             </Link>
-            {/* «Новый проект v2.0» — поток идея/жанры → просмотр промпта → синопсис (Claude Fable 5.1). */}
+            {/* Основной поток: идея/жанры → синопсис → сюжет сезона → серии (экран v2). */}
             <button
               type="button"
-              onClick={createProjectV2}
-              disabled={creatingV2}
-              className="flex items-center gap-2 rounded-lg border border-border bg-card px-5 py-2.5 text-sm font-semibold transition hover:bg-muted disabled:opacity-50"
-              data-testid="dashboard-new-project-v2"
+              onClick={createProject}
+              disabled={creating}
+              className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
+              data-testid="dashboard-new-project"
             >
-              {creatingV2 ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-              Новый проект v2.0
-            </button>
-            <Link
-              href="/project/new"
-              className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
-            >
-              <Plus className="h-4 w-4" />
+              {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
               {t('dashboard.newProject')}
-            </Link>
+            </button>
           </div>
         </div>
 
@@ -176,13 +168,16 @@ export function DashboardClient() {
             <p className="mb-6 mt-1 text-sm text-muted-foreground">
               {t('dashboard.emptyHint')}
             </p>
-            <Link
-              href="/project/new"
-              className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
+            <button
+              type="button"
+              onClick={createProject}
+              disabled={creating}
+              className="flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50"
+              data-testid="dashboard-create-project"
             >
-              <Plus className="h-4 w-4" />
+              {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
               {t('dashboard.createProject')}
-            </Link>
+            </button>
           </motion.div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

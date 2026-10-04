@@ -1,17 +1,14 @@
 export const dynamic = "force-dynamic";
-export const maxDuration = 800; // may host a resumed video finalization via after()
+export const maxDuration = 60;
 
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { failStaleJobs, STALE_JOB_MS } from "@/lib/jobs";
-import { resumeVideoJob } from "@/lib/workers/video-job";
-import { advanceSeasonJob, SEASON_JOB_TYPE } from "@/lib/workers/season-script-job";
 
 /**
- * GET /api/jobs/[id] — status polling for a GenerationJob.
- * For character jobs the current characters (with image URLs so far) are included;
- * for video jobs the scene row is included.
+ * GET /api/jobs/[id] — status polling for a GenerationJob (v2 pipeline + /manual).
+ * (v1-specific resume hooks — video/season jobs, characters/scene includes — removed with flow 1.)
  */
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await auth();
@@ -19,14 +16,6 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
 
   const { id } = await params;
   let job = await prisma.generationJob.findUnique({ where: { id } });
-  // Video job whose worker went quiet → pick the WaveSpeed task up from here (resume / heartbeat)
-  if (job && (await resumeVideoJob(job))) {
-    job = await prisma.generationJob.findUnique({ where: { id } });
-  }
-  // Season script job: polling advances the state machine (OpenAI background response → next step).
-  if (job && job.type === SEASON_JOB_TYPE && ["pending", "processing"].includes(job.status)) {
-    job = (await advanceSeasonJob(job)) ?? job;
-  }
   // Stale processing job (function was killed) → mark failed so the UI stops waiting
   if (job && ["pending", "processing"].includes(job.status) && Date.now() - job.updatedAt.getTime() > STALE_JOB_MS) {
     await failStaleJobs({ projectId: job.projectId, type: job.type });
@@ -34,19 +23,11 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   }
   if (!job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
 
-  let characters: any[] | undefined;
-  let scene: any | undefined;
-  if (job.type === "characters") {
-    characters = await prisma.character.findMany({ where: { projectId: job.projectId }, orderBy: { createdAt: "asc" } });
-  } else if ((job.type === "video") && job.sceneId) {
-    scene = await prisma.scene.findUnique({ where: { id: job.sceneId } });
-  }
-
   let result: any = null;
   if (job.resultData) { try { result = JSON.parse(job.resultData); } catch {} }
 
   return NextResponse.json(
-    { job: { ...job, result }, characters, scene },
+    { job: { ...job, result } },
     { headers: { "Cache-Control": "no-store" } }
   );
 }

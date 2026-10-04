@@ -27,7 +27,7 @@ export default async function EpisodeV2Page({ params }: { params: Promise<{ id: 
   })
   if (!project) redirect('/dashboard')
 
-  const back = `/project/${project.id}?flow=v2`
+  const back = `/project/${project.id}`
   const n = Number(nRaw)
   const summary = Number.isInteger(n) && n > 0 ? seasonPlotEpisodeSummary(project.seasonPlotV2, n) : null
   if (!summary) redirect(back)
