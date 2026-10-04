@@ -1,11 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Header } from '@/components/header'
 import { IdeaStageV2 } from './idea-stage-v2'
 import { motion } from 'framer-motion'
 import { EntitlementsProvider } from '@/components/entitlements-context'
 import { NO_ENTITLEMENTS, type Entitlements } from '@/lib/entitlements'
+import { isDraftProjectV2 } from '@/lib/idea-v2'
 
 /**
  * Мастер проекта. Единственный поток приложения — экран v2:
@@ -14,6 +15,33 @@ import { NO_ENTITLEMENTS, type Entitlements } from '@/lib/entitlements'
  */
 export function ProjectWizard({ project: initialProject, entitlements = NO_ENTITLEMENTS }: { project: any; entitlements?: Entitlements }) {
   const [project, setProject] = useState(initialProject)
+
+  // Черновик (сюжет сезона не утверждён) не сохраняется: при уходе со страницы — закрытие вкладки,
+  // переход на дашборд, размонтирование — просим сервер удалить проект (он сам проверит, что это черновик).
+  // Ref читается в момент ухода, чтобы учитывать свежий stage после onRefresh.
+  const isDraftRef = useRef(isDraftProjectV2(project))
+  isDraftRef.current = isDraftProjectV2(project)
+  const projectId: string | undefined = project?.id
+  const unmountTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (!projectId) return
+    // Ремонт (React StrictMode в dev) отменяет отложенный discard предыдущего размонтирования.
+    if (unmountTimerRef.current) { clearTimeout(unmountTimerRef.current); unmountTimerRef.current = null }
+    const url = `/api/projects/${projectId}/discard`
+    let fired = false
+    const discard = () => {
+      if (fired || !isDraftRef.current) return
+      fired = true
+      if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') navigator.sendBeacon(url)
+      else void fetch(url, { method: 'POST', keepalive: true }).catch(() => {})
+    }
+    window.addEventListener('pagehide', discard)
+    return () => {
+      window.removeEventListener('pagehide', discard)
+      // На размонтировании (переход на дашборд и т.п.) — с задержкой, чтобы ремонт успел отменить.
+      unmountTimerRef.current = setTimeout(discard, 100)
+    }
+  }, [projectId])
 
   const refreshProject = async () => {
     try {

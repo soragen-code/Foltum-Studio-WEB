@@ -485,6 +485,19 @@ export function isSeasonPlotV2Locked(p: { stage?: string | null; seasonPlotV2?: 
 }
 export const SEASON_PLOT_V2_LOCKED_ERROR = "Season plot is approved — only episode scripts can be edited";
 
+/**
+ * Черновик v2: проект создан, но сюжет сезона ещё не утверждён (stage idea / logline_v2 / synopsis_v2,
+ * seasonPlotV2 пуст). Такой проект НЕ сохраняется: он скрыт на дашборде и удаляется, когда пользователь
+ * уходит со страницы проекта (POST /api/projects/[id]/discard) или при сборке мусора в GET /api/projects.
+ * Legacy-проекты (newFlow=false, стадии v1) черновиками не считаются.
+ */
+export const DRAFT_V2_STAGES = ["idea", LOGLINE_V2_STAGE, SYNOPSIS_V2_STAGE] as const;
+export function isDraftProjectV2(
+  p: { stage?: string | null; newFlow?: boolean | null; seasonPlotV2?: unknown } | null | undefined,
+): boolean {
+  return !!p && p.newFlow === true && !isSeasonPlotV2Locked(p) && (DRAFT_V2_STAGES as readonly string[]).includes(p.stage ?? "");
+}
+
 /** Правила (system) сюжета сезона v2. `<N>` — количество эпизодов, `<Language>` — язык синопсиса. Текст — по ТЗ; 05.10.2026 добавлен блок PACING (плотность действия на эпизод). */
 export const SEASON_PLOT_V2_RULES = `You are a development executive breaking an approved season synopsis into an episode-by-episode season plot for a vertical micro-series (60–100 second episodes, cliffhanger-driven). This season has exactly <N> episodes.
 

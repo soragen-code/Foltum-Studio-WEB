@@ -6,6 +6,10 @@ import { parseBody, createProjectSchema } from '@/lib/validations'
 import { legacyTierToPower, powerToLegacyTier, DEFAULT_POWER_TIER } from '@/lib/power-tier'
 import { PLACEHOLDER_PROJECT_NAME } from '@/lib/project-name'
 import { pickProjectCover } from '@/lib/project-cover'
+import { DRAFT_V2_STAGES } from '@/lib/idea-v2'
+
+// Черновики (сюжет сезона не утверждён) не сохраняются: скрыты из списка, а брошенные дольше этого срока удаляются.
+const STALE_DRAFT_MS = 2 * 60 * 60 * 1000
 
 export async function GET() {
   try {
@@ -16,8 +20,27 @@ export async function GET() {
     const user = await prisma.user.findUnique({ where: { email: session.user.email } })
     if (!user) return NextResponse.json({ projects: [] }, { status: 401 })
 
+    // Черновики v2 (stage idea/logline_v2/synopsis_v2) не сохраняются: обычно их удаляет discard при уходе
+    // со страницы, а брошенные (закрытая вкладка, обрыв) — подчищаем здесь. GenerationJob без FK → явно.
+    const draftWhere = { userId: user.id, newFlow: true, stage: { in: [...DRAFT_V2_STAGES] } }
+    try {
+      const stale = await prisma.project.findMany({
+        where: { ...draftWhere, updatedAt: { lt: new Date(Date.now() - STALE_DRAFT_MS) } },
+        select: { id: true },
+      })
+      if (stale.length) {
+        const ids = stale.map((p) => p.id)
+        await prisma.$transaction([
+          prisma.generationJob.deleteMany({ where: { projectId: { in: ids } } }),
+          prisma.project.deleteMany({ where: { id: { in: ids }, ...draftWhere } }),
+        ])
+      }
+    } catch (gcErr) {
+      console.error('Stale draft GC error:', gcErr)
+    }
+
     const rows = await prisma.project.findMany({
-      where: { userId: user.id },
+      where: { userId: user.id, NOT: draftWhere },
       orderBy: { updatedAt: 'desc' },
       // Stage 76: minimal season/episode/location slice to compute the dashboard cover.
       include: {
