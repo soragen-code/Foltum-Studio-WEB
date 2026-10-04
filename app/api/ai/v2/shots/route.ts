@@ -10,7 +10,7 @@ import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { chargeV2Credits } from "@/lib/v2-credits";
 import { V2_COSTS } from "@/lib/v2-costs";
 import { runEpisodeShotsV2Job, EPISODE_SHOTS_V2_JOB_TYPE } from "@/lib/workers/episode-shots-v2-job";
-import { episodeScriptV2From, episodeShotsV2From, episodeShotsV2SystemPrompt, synopsisLanguageFromCode } from "@/lib/idea-v2";
+import { episodeScriptV2From, episodeShotsV2From, episodeShotsV2SystemPrompt, episodeHandoffBlockV2, synopsisLanguageFromCode } from "@/lib/idea-v2";
 import { activeEpisodeJob, latestEpisodeJob, patchEpisodeShotV2 } from "@/lib/episode-shots-v2-store";
 
 /**
@@ -66,7 +66,7 @@ export async function POST(request: Request) {
       await prisma.generationJob.delete({ where: { id: job.id } }).catch(() => {});
       return NextResponse.json(charge.body, { status: charge.status });
     }
-    runInBackground(() => runEpisodeShotsV2Job(job.id, projectId, { episode, script, synopsisLanguage: synopsisLanguageFromCode(project.language), systemOverride: system }));
+    runInBackground(() => runEpisodeShotsV2Job(job.id, projectId, { episode, script, synopsisLanguage: synopsisLanguageFromCode(project.language), systemOverride: system, handoff: episodeHandoffBlockV2(project.episodeShotsV2, project.episodeScriptsV2, episode) }));
     return NextResponse.json({ jobId: job.id, resumed: false, cost: charge.cost, creditsRemaining: charge.creditsRemaining });
   } catch (err: any) {
     console.error("Episode shots v2 split error:", err);

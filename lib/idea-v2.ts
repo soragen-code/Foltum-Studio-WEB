@@ -908,8 +908,9 @@ export function scriptCharacterCuesV2(script: string): string[] {
  * Блок SERIES CONTINUITY для system-промптов сценария и рефов серии n: персонажи (полное имя + роль) и локации
  * из рефов серий 1..n-1 плюс cue-имена из их сценариев. Пустая строка — если ранних данных нет.
  */
-export function seriesContinuityBlockV2(refsMap: unknown, scriptsMap: unknown, episode: number): string {
+export function seriesContinuityBlockV2(refsMap: unknown, scriptsMap: unknown, episode: number, shotsMap?: unknown): string {
   if (episode <= 1) return "";
+  const handoff = shotsMap === undefined ? "" : episodeHandoffBlockV2(shotsMap, scriptsMap, episode);
   const chars = new Map<string, { label: string; role: string | null; key: string }>();
   const locs = new Map<string, { label: string; key: string }>();
   const cues: string[] = [];
@@ -930,7 +931,7 @@ export function seriesContinuityBlockV2(refsMap: unknown, scriptsMap: unknown, e
       cues.push(c);
     }
   }
-  if (!chars.size && !locs.size && !cues.length) return "";
+  if (!chars.size && !locs.size && !cues.length) return handoff;
   const lines: string[] = ["SERIES CONTINUITY (established in earlier episodes — this is the SAME series)"];
   if (chars.size || cues.length) {
     lines.push("Characters already established. Use EXACTLY these full names (first name + surname, same spelling) in every cue and action line — never shorten, rename or re-spell them, even if the summary/script uses only the first name:");
@@ -942,6 +943,7 @@ export function seriesContinuityBlockV2(refsMap: unknown, scriptsMap: unknown, e
     for (const l of locs.values()) lines.push(`- ${l.label} (key: ${l.key})`);
   }
   lines.push("For references: the same person/place MUST get the same key and label as listed above (e.g. a character mentioned only by first name is the established character with that first name). Only genuinely new characters/places get new keys.");
+  if (handoff) lines.push("", handoff);
   return lines.join("\n");
 }
 
@@ -1163,6 +1165,46 @@ export function episodeShotsV2From(map: unknown, n: number): EpisodeShotV2[] {
     : [];
 }
 
+/**
+ * Финальный момент серии n-1 (для стыковки серий): последний шот её шот-листа (frame/action/ending);
+ * если шот-листа ещё нет — хвост сценария серии n-1. null — для серии 1 или без данных.
+ */
+export function previousEpisodeEndingV2(shotsMap: unknown, scriptsMap: unknown, episode: number): { episode: number; frame: string; action: string; ending: string; scriptTail: string } | null {
+  if (!Number.isInteger(episode) || episode <= 1) return null;
+  const prev = episode - 1;
+  const shots = episodeShotsV2From(shotsMap, prev);
+  const last = shots.length ? shots[shots.length - 1] : null;
+  const frame = last ? oneLine(shotFrameText(last) || last.action) : "";
+  const action = last ? oneLine(last.action) : "";
+  const ending = last ? oneLine(last.ending) : "";
+  let scriptTail = "";
+  if (!frame) {
+    const lines = episodeScriptV2From(scriptsMap, prev).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    scriptTail = lines.slice(-12).join("\n");
+  }
+  if (!frame && !scriptTail) return null;
+  return { episode: prev, frame, action, ending, scriptTail };
+}
+
+/**
+ * Блок «PREVIOUS EPISODE ENDING» для промптов сценария/шот-листа серии n: серия начинается РОВНО с того момента,
+ * которым закончилась серия n-1 (первый кадр = последний кадр предыдущей серии с другого ракурса). "" — если нечего стыковать.
+ */
+export function episodeHandoffBlockV2(shotsMap: unknown, scriptsMap: unknown, episode: number): string {
+  const e = previousEpisodeEndingV2(shotsMap, scriptsMap, episode);
+  if (!e) return "";
+  const lines: string[] = [`PREVIOUS EPISODE ENDING (episode ${e.episode}) — episode ${episode} starts at this EXACT moment`];
+  if (e.frame) lines.push(`Final frame of episode ${e.episode}: ${e.frame}`);
+  if (e.action) lines.push(`Final action of episode ${e.episode}: ${e.action}`);
+  if (e.ending) lines.push(`State on the very last frame of episode ${e.episode}: ${e.ending}`);
+  if (e.scriptTail) lines.push(`Last lines of the episode ${e.episode} script:`, e.scriptTail);
+  lines.push(
+    `HARD RULE: episode ${episode} begins exactly where episode ${e.episode} ended — same location, same moment in time (no time skip, no "later", no new day, no recap, no title card), the same characters present in the same positions, same wardrobe, same prop and variable state (held items, masks, hoods, doors, lights). ` +
+    `The first scene / shot 1 / storyboard panel 1 of episode ${episode} shows this SAME final moment from a DIFFERENT camera angle or shot size (it is the same instant seen anew, not a new scene), and only then does the action move forward.`,
+  );
+  return lines.join("\n");
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // v2 · уровень эпизода: вкладка «Сториборд» (все кадры шот-листа одним листом)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1283,11 +1325,12 @@ export function matchSceneRefsByText(shot: Partial<EpisodeShotV2>, refs: Episode
  * Используется как ключ кэша EpisodeStoryboardV2.autoPromptKey: совпал → показываем сохранённый промпт сразу,
  * не совпал (шот-лист или рефы изменились) → промпт строится заново. Без node:crypto — модуль импортируется клиентом.
  */
-export function storyboardV2PromptKey(shots: EpisodeShotV2[], refs?: EpisodeRefV2[], visualStyle?: string): string {
+export function storyboardV2PromptKey(shots: EpisodeShotV2[], refs?: EpisodeRefV2[], visualStyle?: string, previousEnding?: string): string {
   const refList = (refs ?? []).filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
   const src = JSON.stringify([
-    "v5", // bump: WARDROBE LOCK (clothing strictly from reference; text may only add gear on top)
+    "v6", // bump: стыковка серий (panel 1 = финальный кадр предыдущей серии с другого ракурса)
     visualStyle ?? "",
+    previousEnding ?? "",
     shots.map((s) => [s.index, shotFrameText(s) || s.action || ""]),
     refList.map((r) => [r.id, r.kind, r.label, r.imageUrl]),
   ]);
@@ -1369,7 +1412,7 @@ export function buildReferenceLockV2(refList: EpisodeRefV2[], first: number, uni
   );
 }
 
-export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRefV2[], opts?: { visualStyle?: string }): string {
+export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRefV2[], opts?: { visualStyle?: string; previousEnding?: string }): string {
   const n = shots.length;
   const cols = 5;
   const rows = Math.max(5, Math.ceil(n / cols));
@@ -1419,7 +1462,12 @@ export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRe
     // Панели разделены пустой строкой (по ТЗ) — читаемее и для человека, и для модели.
     .join("\n\n");
 
-  return `${refsBlock}${styleLine}${header}\n\nPANELS:\n${panels}`;
+  const prevEnding = (opts?.previousEnding ?? "").replace(/\s+/g, " ").trim();
+  const handoff = prevEnding
+    ? `\n\nCONTINUITY WITH THE PREVIOUS EPISODE: Panel 1 depicts the SAME moment as the final panel of the previous episode — "${prevEnding}" — same place, same characters in the same positions, same wardrobe, same prop state, but seen from a DIFFERENT camera angle / shot size. It is a direct continuation of that frame, not a new scene.`
+    : "";
+
+  return `${refsBlock}${styleLine}${header}${handoff}\n\nPANELS:\n${panels}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

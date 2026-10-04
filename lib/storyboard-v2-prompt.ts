@@ -8,7 +8,7 @@
  */
 import {
   buildStoryboardV2Prompt, episodeRefsV2From, episodeShotsV2From, episodeStoryboardV2From, selectStoryboardV2Refs,
-  shotFrameText, storyboardV2PromptKey, type EpisodeRefV2Ordered, type EpisodeShotV2,
+  shotFrameText, storyboardV2PromptKey, previousEpisodeEndingV2, type EpisodeRefV2Ordered, type EpisodeShotV2,
 } from "@/lib/idea-v2";
 import { setEpisodeStoryboardV2 } from "@/lib/episode-storyboard-v2-store";
 import { WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
@@ -17,12 +17,14 @@ import { translateRefLabelsToEnglish, translateToEnglish } from "@/lib/translate
 
 type Row = { episodeShotsV2: unknown; episodeRefsV2: unknown; episodeStoryboardV2: unknown };
 
-export type StoryboardV2PromptInputs = { shots: EpisodeShotV2[]; refs: EpisodeRefV2Ordered[]; key: string };
+export type StoryboardV2PromptInputs = { shots: EpisodeShotV2[]; refs: EpisodeRefV2Ordered[]; key: string; previousEnding: string };
 
 export function storyboardV2PromptInputs(row: Row, episode: number): StoryboardV2PromptInputs {
   const shots = episodeShotsV2From(row.episodeShotsV2, episode);
   const refs = selectStoryboardV2Refs(episodeRefsV2From(row.episodeRefsV2, episode), WAVESPEED_IMAGE_MAX_REFS);
-  return { shots, refs, key: storyboardV2PromptKey(shots, refs, VISUAL_STYLE) };
+  // Стыковка серий: панель 1 = финальный кадр шот-листа серии n-1 (с другого ракурса).
+  const previousEnding = previousEpisodeEndingV2(row.episodeShotsV2, null, episode)?.frame ?? "";
+  return { shots, refs, key: storyboardV2PromptKey(shots, refs, VISUAL_STYLE, previousEnding), previousEnding };
 }
 
 /** Сохранённый авто-промпт, если он актуален для текущих шотов/рефов; иначе "" (без LLM). */
@@ -39,11 +41,12 @@ export async function ensureStoryboardV2AutoPrompt(projectId: string, episode: n
   if (cached) return { autoPrompt: cached, cached: true, inputs };
 
   // Промпт — только English: «Фрейм» шотов (RU) переводится слово в слово; метки рефов — одним пакетом.
-  const [shotsEn, refsEn] = await Promise.all([
+  const [shotsEn, refsEn, prevEndingEn] = await Promise.all([
     Promise.all(inputs.shots.map(async (sh) => { const fr = shotFrameText(sh) || sh.action; return { ...sh, frame: (await translateToEnglish(fr)) || fr }; })),
     translateRefLabelsToEnglish(inputs.refs),
+    inputs.previousEnding ? translateToEnglish(inputs.previousEnding).then((t) => t || inputs.previousEnding) : Promise.resolve(""),
   ]);
-  const autoPrompt = buildStoryboardV2Prompt(shotsEn, refsEn, { visualStyle: VISUAL_STYLE });
+  const autoPrompt = buildStoryboardV2Prompt(shotsEn, refsEn, { visualStyle: VISUAL_STYLE, previousEnding: prevEndingEn });
   await setEpisodeStoryboardV2(projectId, episode, { autoPrompt, autoPromptKey: inputs.key });
   return { autoPrompt, cached: false, inputs };
 }

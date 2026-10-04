@@ -16,9 +16,13 @@ import { translateToEnglish } from "@/lib/translate-en";
 export const EPISODE_SHOTS_V2_JOB_TYPE = "episode_shots_v2";
 export const EPISODE_SHOTS_V2_EXPECTED_SEC = 45;
 
-export interface EpisodeShotsV2JobParams { episode: number; script: string; synopsisLanguage?: string | null; systemOverride?: string | null }
+export interface EpisodeShotsV2JobParams {
+  episode: number; script: string; synopsisLanguage?: string | null; systemOverride?: string | null;
+  /** Блок PREVIOUS EPISODE ENDING (episodeHandoffBlockV2) — серия n начинается с финального кадра серии n-1; ставится перед сценарием в user-сообщении. */
+  handoff?: string | null;
+}
 
-async function runImpl(jobId: string, projectId: string, { episode, script, synopsisLanguage, systemOverride }: EpisodeShotsV2JobParams): Promise<void> {
+async function runImpl(jobId: string, projectId: string, { episode, script, synopsisLanguage, systemOverride, handoff }: EpisodeShotsV2JobParams): Promise<void> {
   let hb: ReturnType<typeof setInterval> | null = null;
   try {
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
@@ -26,13 +30,16 @@ async function runImpl(jobId: string, projectId: string, { episode, script, syno
     hb = setInterval(() => { heartbeatJob(jobId).catch(() => {}); }, 60_000);
     const system = systemOverride?.trim() || episodeShotsV2SystemPrompt(normalizeSynopsisLanguage(synopsisLanguage));
     const scriptEn = await translateToEnglish(script); // сценарий в модель уходит на английском; кадры — на языке синопсиса (управляет system)
+    const handoffText = handoff?.trim() ?? "";
+    const handoffEn = handoffText ? (await translateToEnglish(handoffText)) || handoffText : "";
+    const userMessage = handoffEn ? `${handoffEn}\n\n=== EPISODE ${episode} SHOOTING SCRIPT ===\n${scriptEn}` : scriptEn;
     await updateJob(jobId, { progress: 30, message: "Script translated, asking the model..." });
     let items: EpisodeShotV2[] = [];
     let lastError = "";
     for (let attempt = 0; attempt < 2 && !items.length; attempt++) {
       if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
       try {
-        const raw = await chat(system, scriptEn, { model: FABLE_MODEL, temperature: 0.3, maxTokens: 16000 });
+        const raw = await chat(system, userMessage, { model: FABLE_MODEL, temperature: 0.3, maxTokens: 16000 });
         await updateJob(jobId, { progress: 75, message: "Parsing the shot list..." });
         items = parseEpisodeShotsV2(safeJsonParse(raw));
         if (!items.length) throw new Error("no shots in model output");
