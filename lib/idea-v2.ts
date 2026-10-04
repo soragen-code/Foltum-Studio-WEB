@@ -1130,6 +1130,7 @@ export function selectSceneVideoV2Refs(refs: EpisodeRefV2[], cap: number, scene?
     ? withImage.filter((r) => (r.kind === "character" || r.kind === "prop") && ids.has(r.id))
     : withImage.filter((r) => r.kind === "character");
   return pool
+    .filter((r) => r.kind !== "location") // локации в видео сцены не передаются никогда (явный гард)
     .map((r, i) => [r, i] as const)
     .sort((a, b) => (REF_KIND_ORDER[a[0].kind] - REF_KIND_ORDER[b[0].kind]) || a[1] - b[1])
     .map(([r]) => r)

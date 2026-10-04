@@ -24,7 +24,8 @@ import { patchV2JobMeta, readV2JobMeta, v2Budget } from "@/lib/workers/v2-job-bu
 
 export const EPISODE_SCENE_FRAMES_V2_JOB_TYPE = "episode_scene_frames_v2";
 export const EPISODE_SCENE_FRAMES_V2_EXPECTED_SEC = 120;
-const CONCURRENCY = 4;
+/** Первые кадры всех сцен генерируются ПАРАЛЛЕЛЬНО (одновременно), без пачек/очереди. */
+const CONCURRENCY = Number.MAX_SAFE_INTEGER;
 
 export interface EpisodeSceneFramesV2JobParams { episode: number }
 

@@ -24,7 +24,8 @@ import { patchV2JobMeta, readV2JobMeta, v2Budget, V2BudgetYield } from "@/lib/wo
 
 export const EPISODE_SCENE_VIDEO_V2_JOB_TYPE = "episode_scene_video_v2";
 export const EPISODE_SCENE_VIDEO_V2_EXPECTED_SEC = 300;
-const CONCURRENCY = 4;
+/** Все сцены серии генерируются ПАРАЛЛЕЛЬНО (одновременно), без пачек/очереди. */
+const CONCURRENCY = Number.MAX_SAFE_INTEGER;
 /** Макс. референс-изображений на сцену в T2V: первый кадр сцены + канонические референсы. */
 const MAX_SCENE_REF_IMAGES = MAX_SCENE_VIDEO_REF_IMAGES;
 const VIDEO_TIMEOUT_MS = 12 * 60 * 1000;
