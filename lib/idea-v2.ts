@@ -1163,7 +1163,7 @@ export function matchSceneRefsByText(shot: Partial<EpisodeShotV2>, refs: Episode
 export function storyboardV2PromptKey(shots: EpisodeShotV2[], refs?: EpisodeRefV2[], visualStyle?: string): string {
   const refList = (refs ?? []).filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
   const src = JSON.stringify([
-    "v3", // bump: REFERENCE LOCK block added to the storyboard prompt
+    "v4", // bump: fixed 5x5 grid layout block (9:16 cells, explicit row map)
     visualStyle ?? "",
     shots.map((s) => [s.index, shotFrameText(s) || s.action || ""]),
     refList.map((r) => [r.id, r.kind, r.label, r.imageUrl]),
@@ -1182,7 +1182,7 @@ export function storyboardV2PromptKey(shots: EpisodeShotV2[], refs?: EpisodeRefV
  *  1) СПИСОК РЕФЕРЕНСОВ — САМЫМ ПЕРВЫМ блоком: «References:» + «Image N - <имя/название>» (N = позиция
  *     прикреплённой картинки в image_input; метки — English, без префикса типа; перевод делает вызывающий код).
  *     Без пояснительной сноски (по ТЗ) — привязка «Image N = N-я картинка» упомянута одной фразой в шапке;
- *  2) [VISUAL STYLE] (если передан) + ШАПКА — формат листа: сетка 5×5 (строки по числу кадров), вертикальный 9:16, номера панелей, без текста;
+ *  2) [VISUAL STYLE] (если передан) + ШАПКА — формат листа: ФИКСИРОВАННАЯ сетка 5×5 на листе 9:16 (каждая ячейка 9:16, одного размера), явная карта строк, сквозная нумерация, без текста;
  *  3) ПАНЕЛИ — «Panel N:» + описание «Фрейм» из шот-листа СЛОВО В СЛОВО (English — перевод делает вызывающий код).
  */
 /** Ведущий блок «References:\nImage N - ...\n\n» промпта листа (или ""). */
@@ -1245,13 +1245,26 @@ export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRe
   const style = (opts?.visualStyle ?? "").trim();
   const styleLine = style ? `[VISUAL STYLE]: ${style}\n` : "";
 
+  // Жёсткая раскладка: ВСЕГДА 5 колонок × 5 строк на листе 9:16 → каждая ячейка ровно 9:16 и одного размера.
+  // Явная карта «строка → номера панелей» + сквозная нумерация без пропусков: модель раньше рисовала 4 колонки
+  // и теряла номера (5, 9, 12), из-за чего сбивался порядок кадров.
+  const rowMap = Array.from({ length: rows }, (_, r) => {
+    const from = r * cols + 1, to = Math.min((r + 1) * cols, cols * rows);
+    const nums = Array.from({ length: to - from + 1 }, (_, k) => from + k);
+    const shown = nums.filter((k) => k <= n);
+    return `Row ${r + 1} (top to bottom): cells ${nums.join(", ")}` + (shown.length ? ` → panels ${shown.join(", ")}` : ` → EMPTY`) + (shown.length && shown.length < nums.length ? ` (cells ${nums.filter((k) => k > n).join(", ")} EMPTY)` : "");
+  }).join("\n");
+
   const header =
     `STORYBOARD SHEET FORMAT\n` +
-    `Create ONE single storyboard sheet: a ${cols}x${rows} grid (${cols} columns x ${rows} rows = ${cols * rows} cells) on a vertical 9:16 sheet. ` +
-    `Draw ALL ${n} shots of this episode, one shot per panel, in shot order: panels fill the grid left-to-right, then top-to-bottom (panel 1 is the top-left cell). ` +
-    (n < cols * rows ? `Cells after panel ${n} stay empty (plain dark background). ` : "") +
-    `No shot skipped, none merged, none repeated. ` +
-    `Every panel has a thin frame and a small clearly legible number badge in its top-left corner matching the shot number. ` +
+    `Create ONE single storyboard sheet on a vertical 9:16 canvas. The sheet is a FIXED grid of EXACTLY ${cols} columns x ${rows} rows = ${cols * rows} cells. ` +
+    `All ${cols * rows} cells are IDENTICAL in size and each cell is a vertical 9:16 frame (the canvas is split into ${cols} equal columns and ${rows} equal rows; thin uniform gutters). ` +
+    `Never use ${cols - 1} or ${cols + 1} columns, never make a cell wider, taller or larger than another, never merge cells, never leave a cell shape other than 9:16.\n` +
+    `GRID LAYOUT (cells are numbered 1..${cols * rows} left-to-right, then top-to-bottom; cell 1 is top-left, cell ${cols} is top-right, cell ${cols * rows} is bottom-right):\n${rowMap}\n` +
+    `Draw ALL ${n} shots of this episode, one shot per cell, in shot order: panel N goes into cell N. ` +
+    (n < cols * rows ? `Cells ${n + 1}..${cols * rows} stay empty (plain dark background, no frame content, but keep their number badge). ` : "") +
+    `Numbering is consecutive 1, 2, 3, ... ${cols * rows} with NO skipped numbers and NO repeated numbers; every cell shows its own number. No shot skipped, none merged, none repeated. ` +
+    `Every cell has a thin frame and a small clearly legible number badge in its top-left corner equal to the cell number (= shot number). ` +
     `Each panel is a photorealistic cinematic still depicting exactly the described static frame — same characters, wardrobe, props and environments across all panels` +
     (refList.length ? `, matching the attached reference images (Image N = the N-th attached image). ` : `. `) +
     `Only the small panel number labels may contain text; no captions, no other writing on the sheet.`;
