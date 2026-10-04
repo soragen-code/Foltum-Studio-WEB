@@ -15,7 +15,7 @@ import { ShotlistTab } from './shotlist-tab'
 import { StoryboardTab } from './storyboard-tab'
 import { ScenesTab } from './scenes-tab'
 import { V2_COSTS } from '@/lib/v2-costs'
-import { useEntitlements, LockedBadge } from '@/components/entitlements-context'
+import { useEntitlements, useLockHint, GatedButton } from '@/components/entitlements-context'
 
 /**
  * Поток v2 · страница эпизода. Вкладки расширяемы (TABS): «Сценарий», «Референсы» (refs-tab.tsx).
@@ -78,6 +78,7 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
   const ent = useEntitlements()
   const canInstruct = ent.prompt_instruct_edit
   const canViewPrompt = ent.prompt_view
+  const lockHint = useLockHint()
   const costTag = (n: number) => <span className="ml-0.5 whitespace-nowrap text-[11px] font-normal opacity-80" data-testid="episode-v2-cost">· {t('ideaV2.costCredits', { n })}</span>
   // Вкладка из URL (?tab=scenes): переход «← Серия N-1 / Серия N+1 →» сохраняет текущую вкладку.
   const searchParams = useSearchParams()
@@ -293,10 +294,11 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
   const btnPrimary = 'flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50'
   // Прозрачная (outline) кнопка для второстепенного действия «Превью».
   const btnGhost = 'inline-flex items-center gap-1.5 rounded-lg border border-border bg-transparent px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-muted/60 hover:border-foreground/30 disabled:opacity-50'
-  const previewBtn = (noRefine: boolean, testId: string, disabled = false) => canViewPrompt && (
-    <button onClick={() => openPreview(noRefine)} disabled={disabled || previewLoading || generating} className={btnGhost} data-testid={testId} title="Посмотреть/отредактировать промпт перед отправкой">
+  // Без Studio кнопка остаётся видимой: disabled + бейдж тарифа (единый паттерн GatedButton).
+  const previewBtn = (noRefine: boolean, testId: string, disabled = false) => (
+    <GatedButton feature="prompt_view" allowed={canViewPrompt} onClick={() => openPreview(noRefine)} disabled={disabled || previewLoading || generating} className={btnGhost} data-testid={testId} title="Посмотреть/отредактировать промпт перед отправкой">
       {previewLoading ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Собираем промпт...</> : <><Eye className="h-3.5 w-3.5" /> {t('ideaV2.preview')}</>}
-    </button>
+    </GatedButton>
   )
   const errorBox = error && (
     <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="episode-v2-error">{error}</div>
@@ -359,33 +361,26 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
           </div>
         </div>
         <pre className="mt-3 whitespace-pre-wrap break-words rounded-lg border border-border bg-background px-4 py-3 font-mono text-[13px] leading-relaxed text-foreground" data-testid="episode-v2-script-text">{script}</pre>
-        {!canInstruct && (
-          <div className="mt-5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/30 px-4 py-3" data-testid="episode-v2-script-refine-locked">
-            <span className="text-xs font-semibold text-foreground">{t('ideaV2.scriptRefineLabel')}</span>
-            <LockedBadge feature="prompt_instruct_edit" />
-          </div>
-        )}
-        {canInstruct && (
         <div className="mt-5 rounded-lg border border-border/70 bg-muted/30 px-4 py-3" data-testid="episode-v2-script-refine">
           <label htmlFor="episode-v2-script-refine-input" className="text-xs font-semibold text-foreground">{t('ideaV2.scriptRefineLabel')}</label>
           <textarea
             id="episode-v2-script-refine-input"
             value={refineText}
             onChange={(e) => { setRefineText(e.target.value); setRefineEn(''); setReady(false) }}
-            placeholder={t('ideaV2.scriptRefinePlaceholder')}
+            placeholder={canInstruct ? t('ideaV2.scriptRefinePlaceholder') : lockHint('prompt_instruct_edit')}
             rows={2}
+            disabled={!canInstruct}
             className="mt-2 w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
             data-testid="episode-v2-script-refine-input"
           />
           <p className="mt-1.5 text-[11px] text-muted-foreground">Правка уйдёт диалогом: модель видит прежний сценарий и все ранние правки. «{t('ideaV2.preview')}» — посмотреть/сохранить промпт, «{t('ideaV2.change')}» — отправить.</p>
           <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
             {previewBtn(false, 'episode-v2-script-refine-preview', !refineText.trim())}
-            <button onClick={() => generate()} disabled={generating || !refineText.trim()} className={btnMain} data-testid="episode-v2-script-refine-edit">
+            <GatedButton feature="prompt_instruct_edit" allowed={canInstruct} onClick={() => generate()} disabled={generating || !refineText.trim()} className={btnMain} data-testid="episode-v2-script-refine-edit">
               <Pencil className="h-3.5 w-3.5" /> {t('ideaV2.change')}{costTag(V2_COSTS.script)}
-            </button>
+            </GatedButton>
           </div>
         </div>
-        )}
         {canceled && <p className="mt-3 text-xs text-amber-500">{t('ideaV2.scriptCanceled')}</p>}
       </div>
     )

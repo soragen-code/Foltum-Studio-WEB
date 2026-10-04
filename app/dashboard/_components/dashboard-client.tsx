@@ -8,6 +8,7 @@ import { Header } from '@/components/header'
 import { Film, Plus, Clapperboard, Clock, ChevronRight, Sparkles, Zap, Crown, Trash2, Loader2, Wand2 } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { useTranslation } from '@/lib/i18n/context'
+import { useFeature, GatedButton } from '@/components/entitlements-context'
 
 interface Project {
   id: string
@@ -28,6 +29,7 @@ const tierConfig: Record<string, { icon: React.ElementType; color: string; label
 
 export function DashboardClient() {
   const { t, locale } = useTranslation()
+  const canManual = useFeature('manual_mode')
   const router = useRouter()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
@@ -128,15 +130,28 @@ export function DashboardClient() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {/* Stage 234: manual mode — free-form photo/video generation outside of projects */}
-            <Link
-              href="/manual"
-              className="flex items-center gap-2 rounded-lg border border-border bg-card px-5 py-2.5 text-sm font-semibold transition hover:bg-muted"
-              data-testid="dashboard-manual-mode"
-            >
-              <Wand2 className="h-4 w-4" />
-              {t('dashboard.manualMode')}
-            </Link>
+            {/* Stage 234: manual mode — free-form photo/video generation outside of projects.
+                Pro+: обычная ссылка; без доступа — та же кнопка, но disabled с бейджем тарифа (единый паттерн). */}
+            {canManual ? (
+              <Link
+                href="/manual"
+                className="flex items-center gap-2 rounded-lg border border-border bg-card px-5 py-2.5 text-sm font-semibold transition hover:bg-muted"
+                data-testid="dashboard-manual-mode"
+              >
+                <Wand2 className="h-4 w-4" />
+                {t('dashboard.manualMode')}
+              </Link>
+            ) : (
+              <GatedButton
+                feature="manual_mode"
+                allowed={false}
+                className="flex items-center gap-2 rounded-lg border border-border bg-card px-5 py-2.5 text-sm font-semibold transition hover:bg-muted"
+                data-testid="dashboard-manual-mode"
+              >
+                <Wand2 className="h-4 w-4" />
+                {t('dashboard.manualMode')}
+              </GatedButton>
+            )}
             {/* Основной поток: идея/жанры → синопсис → сюжет сезона → серии (экран v2). */}
             <button
               type="button"

@@ -1,14 +1,14 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, Wand2, Eye, RefreshCw, ImageIcon, Sparkles, X, Upload, UserRound, Lock, Link2 } from 'lucide-react'
+import { Loader2, Wand2, Eye, RefreshCw, ImageIcon, Sparkles, X, Upload, UserRound, Link2 } from 'lucide-react'
 import { FABLE_MODEL_LABEL, stripRefKindPrefixV2, type EpisodeRefV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from '../../../_components/cancel-button'
 import { useJobPolling, SmoothProgress } from '../../../_components/use-job-polling'
 import { RefPromptModal } from './ref-prompt-modal'
 import { V2_COSTS, refImagesCost } from '@/lib/v2-costs'
-import { useFeature, useLockHint } from '@/components/entitlements-context'
+import { useFeature, useLockHint, GatedButton } from '@/components/entitlements-context'
 
 /**
  * Поток v2 · вкладка «Референсы» серии n.
@@ -30,7 +30,6 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
   const canViewPrompt = useFeature('prompt_view') // Studio: просмотр/правка EN-промпта рефа
   const canInstruct = useFeature('prompt_instruct_edit') // Pro+: правка внешности инструкцией
   const ownFace = useFeature('own_references') // Studio: своё фото-референс персонажа
-  const lockHint = useLockHint()
   const costTag = (c: number) => <span className="ml-0.5 whitespace-nowrap text-[11px] font-normal opacity-80" data-testid="episode-v2-cost">· {t('ideaV2.costCredits', { n: c })}</span>
   const [items, setItems] = useState<EpisodeRefV2[]>(initialRefs)
   const [promptId, setPromptId] = useState('')
@@ -286,20 +285,21 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
                 />
               )}
               <div className="mt-3 flex overflow-hidden rounded-md border border-border">
-                <button onClick={() => setPromptId(r.id)} disabled={!canViewPrompt} title={canViewPrompt ? undefined : lockHint('prompt_view')} className={btnFlat} data-testid="episode-v2-ref-view-prompt">
+                <GatedButton feature="prompt_view" allowed={canViewPrompt} onClick={() => setPromptId(r.id)} className={btnFlat} data-testid="episode-v2-ref-view-prompt">
                   <Eye className="h-3.5 w-3.5" /> {t('ideaV2.refsViewPrompt')}
                   {r.promptDirty && <span className="absolute right-1 top-1 rounded-sm bg-primary px-1 text-[9px] font-bold uppercase leading-tight text-primary-foreground" data-testid="episode-v2-ref-prompt-new">new</span>}
-                </button>
+                </GatedButton>
                 <button onClick={() => void runImages([r.id])} disabled={busy || !r.prompt.trim()} className={`${btnFlat} border-l border-border`} data-testid="episode-v2-ref-regenerate">
                   {genBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} {r.imageUrl ? t('ideaV2.refsRegenerate') : t('ideaV2.refsGenerateOne')}{costTag(V2_COSTS.refImage)}
                 </button>
               </div>
-              {r.kind === 'character' && canInstruct && (
+              {r.kind === 'character' && (
                 <AppearanceRefineControl
                   projectId={projectId}
                   n={n}
                   refItem={r}
                   disabled={busy}
+                  allowed={canInstruct}
                   onRefined={(prompt) => setItems((list) => list.map((x) => (x.id === r.id ? { ...x, prompt, edited: true, promptDirty: true } : x)))}
                 />
               )}
@@ -392,17 +392,14 @@ function FaceRefControl({ projectId, n, refItem, ownFace, disabled, onChanged }:
             {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <X className="h-3 w-3" />} {t('ideaV2.refsFaceRemove')}
           </button>
         </div>
-      ) : ownFace ? (
+      ) : (
         <div className="mt-2">
           <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f) }} data-testid="episode-v2-ref-face-input" />
-          <button type="button" onClick={() => inputRef.current?.click()} disabled={busy || disabled} className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-border px-2.5 py-1.5 text-[11px] text-foreground transition hover:bg-muted/60 disabled:opacity-50" data-testid="episode-v2-ref-face-upload">
+          {/* Без Studio кнопка загрузки остаётся видимой: disabled + бейдж тарифа (единый паттерн GatedButton). */}
+          <GatedButton feature="own_references" allowed={ownFace} type="button" onClick={() => inputRef.current?.click()} disabled={busy || disabled} className="inline-flex items-center gap-1.5 rounded-md border border-dashed border-border px-2.5 py-1.5 text-[11px] text-foreground transition hover:bg-muted/60 disabled:opacity-50" data-testid="episode-v2-ref-face-upload">
             {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />} {t('ideaV2.refsFaceUpload')}
-          </button>
+          </GatedButton>
           <p className="mt-1.5 text-[10px] leading-snug text-muted-foreground">{t('ideaV2.refsFaceHint')}</p>
-        </div>
-      ) : (
-        <div className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 py-1.5 text-[11px] text-muted-foreground" data-testid="episode-v2-ref-face-locked">
-          <Lock className="h-3.5 w-3.5" /> {t('ideaV2.refsFaceLocked')}
         </div>
       )}
       {error && <p className="mt-1.5 text-[10px] text-destructive" data-testid="episode-v2-ref-face-error">{error}</p>}
@@ -416,11 +413,14 @@ function FaceRefControl({ projectId, n, refItem, ownFace, disabled, onChanged }:
  * (POST /api/ai/v2/refs/appearance), получает обновлённый EN-промпт, который сохраняется с promptDirty=true
  * (на кнопке «Промпт» загорается бейдж «new»). Затем пользователь перегенерирует фото по новому промпту.
  */
-function AppearanceRefineControl({ projectId, n, refItem, disabled, onRefined }: {
+function AppearanceRefineControl({ projectId, n, refItem, disabled, allowed, onRefined }: {
   projectId: string; n: number; refItem: EpisodeRefV2; disabled: boolean
+  /** prompt_instruct_edit (Pro+): без доступа поле disabled с подсказкой, кнопка — disabled с бейджем тарифа. */
+  allowed: boolean
   onRefined: (prompt: string) => void
 }) {
   const { t } = useTranslation()
+  const lockHint = useLockHint()
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -451,12 +451,14 @@ function AppearanceRefineControl({ projectId, n, refItem, disabled, onRefined }:
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void apply() } }}
-          disabled={busy || disabled}
-          placeholder={t('ideaV2.refsAppearancePlaceholder')}
+          disabled={busy || disabled || !allowed}
+          placeholder={allowed ? t('ideaV2.refsAppearancePlaceholder') : lockHint('prompt_instruct_edit')}
           className="min-w-0 flex-1 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-foreground outline-none transition focus:border-foreground/40 disabled:opacity-50"
           data-testid="episode-v2-ref-appearance-input"
         />
-        <button
+        <GatedButton
+          feature="prompt_instruct_edit"
+          allowed={allowed}
           type="button"
           onClick={() => void apply()}
           disabled={busy || disabled || !text.trim()}
@@ -464,7 +466,7 @@ function AppearanceRefineControl({ projectId, n, refItem, disabled, onRefined }:
           data-testid="episode-v2-ref-appearance-apply"
         >
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t('ideaV2.refsAppearanceApply')}
-        </button>
+        </GatedButton>
       </div>
       {error && <p className="mt-1.5 text-[10px] text-destructive" data-testid="episode-v2-ref-appearance-error">{error}</p>}
     </div>

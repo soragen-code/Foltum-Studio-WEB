@@ -8,7 +8,7 @@ import { CancelButton } from '../../../_components/cancel-button'
 import { useJobPolling, SmoothProgress } from '../../../_components/use-job-polling'
 import { StoryboardPromptModal, type StoryboardPromptRef } from './storyboard-prompt-modal'
 import { V2_COSTS, sceneFramesCost } from '@/lib/v2-costs'
-import { useFeature, useLockHint } from '@/components/entitlements-context'
+import { useFeature, GatedButton } from '@/components/entitlements-context'
 
 const draftKey = (pid: string, n: number) => `foltum:v2:storyboard-prompt:${pid}:${n}`
 
@@ -30,7 +30,6 @@ export function StoryboardTab({ projectId, n, hasShots, initialShotsCount = 0, i
 }) {
   const { t } = useTranslation()
   const canViewPrompt = useFeature('prompt_view') // Studio: кнопка «Промпт» скрыта без доступа (сервер тоже проверяет)
-  const lockHint = useLockHint()
   const [storyboard, setStoryboard] = useState<EpisodeStoryboardV2 | null>(initialStoryboard)
   // Число кадров шот-листа — для стоимости нарезки первых кадров (10 кредитов за сцену); обновляется из GET.
   const [shotsCount, setShotsCount] = useState(initialShotsCount)
@@ -255,12 +254,12 @@ export function StoryboardTab({ projectId, n, hasShots, initialShotsCount = 0, i
         <p className="text-sm text-muted-foreground">{t('ideaV2.storyboardIntro')}</p>
         {hasShots && (
           <div className="flex flex-wrap items-stretch gap-2">
-            <button onClick={() => void openPrompt()} disabled={building || !canViewPrompt} title={canViewPrompt ? undefined : lockHint('prompt_view')} className={btnBar} data-testid="episode-v2-storyboard-view-prompt">
+            <GatedButton feature="prompt_view" allowed={canViewPrompt} onClick={() => void openPrompt()} disabled={building} className={btnBar} data-testid="episode-v2-storyboard-view-prompt">
               <Eye className="h-4 w-4" /> {t('ideaV2.shotsViewPrompt')}
               {promptEdited && (
                 <span className="rounded-sm bg-primary px-1 text-[9px] font-bold uppercase leading-tight text-primary-foreground">{t('ideaV2.refsEdited')}</span>
               )}
-            </button>
+            </GatedButton>
             <button onClick={() => void build()} disabled={building} className={`${btnBar} min-w-[180px]`} data-testid="episode-v2-storyboard-build">
               {building ? <Loader2 className="h-4 w-4 animate-spin" /> : img ? <RefreshCw className="h-4 w-4" /> : <LayoutGrid className="h-4 w-4" />}
               {img ? t('ideaV2.storyboardRebuild') : t('ideaV2.storyboardBuild')}{costTag(V2_COSTS.storyboard)}

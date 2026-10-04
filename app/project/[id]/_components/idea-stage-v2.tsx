@@ -10,7 +10,7 @@ import { CancelButton } from './cancel-button'
 import { useJobPolling, SmoothProgress } from './use-job-polling'
 import { PromptModal } from './v2-prompt-modal'
 import { V2_COSTS } from '@/lib/v2-costs'
-import { useEntitlements, LockedBadge } from '@/components/entitlements-context'
+import { useEntitlements, useLockHint, GatedButton } from '@/components/entitlements-context'
 
 /** Примерная длительность генерации синопсиса v2 — управляет плавным прогресс-баром. */
 const SYNOPSIS_V2_EXPECTED_SEC = 50
@@ -260,6 +260,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const ent = useEntitlements()
   const canInstruct = ent.prompt_instruct_edit
   const canViewPrompt = ent.prompt_view
+  const lockHint = useLockHint()
   // Стоимость шага в кредитах — показывается на каждой кнопке генерации (списывается сервером при старте job).
   const costTag = (n: number) => <span className="ml-0.5 whitespace-nowrap text-[11px] font-normal opacity-80" data-testid="idea-v2-cost">· {t('ideaV2.costCredits', { n })}</span>
   useEffect(() => {
@@ -743,10 +744,11 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const btnMain = 'flex items-center gap-1.5 rounded-lg bg-secondary px-3 py-1.5 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50'
   // Прозрачная (outline) кнопка для второстепенных действий «Превью» и «Открыть».
   const btnGhost = 'inline-flex items-center gap-1.5 rounded-lg border border-border bg-transparent px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-muted/60 hover:border-foreground/30 disabled:opacity-50'
-  const previewBtn = (k: Kind, noRefine: boolean, testId: string, disabled = false) => canViewPrompt && (
-    <button onClick={() => openPreview(k, noRefine)} disabled={disabled || previewLoading === k || generating} className={btnGhost} data-testid={testId} title="Посмотреть/отредактировать промпт перед отправкой">
+  // Без Studio кнопка остаётся видимой: disabled + бейдж тарифа (единый паттерн GatedButton).
+  const previewBtn = (k: Kind, noRefine: boolean, testId: string, disabled = false) => (
+    <GatedButton feature="prompt_view" allowed={canViewPrompt} onClick={() => openPreview(k, noRefine)} disabled={disabled || previewLoading === k || generating} className={btnGhost} data-testid={testId} title="Посмотреть/отредактировать промпт перед отправкой">
       {previewLoading === k ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Собираем промпт...</> : <><Eye className="h-3.5 w-3.5" /> {t('ideaV2.preview')}</>}
-    </button>
+    </GatedButton>
   )
 
   // ─── Модалка просмотра / редактирования промпта синопсиса (только «Сохранить» и «Закрыть»; генерацию не запускает)
@@ -938,36 +940,32 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-result-stale">Идея, жанры, язык или число эпизодов изменились — вернитесь на шаг 1 и нажмите «Продолжить», чтобы перегенерировать синопсис.</p>
           )}
           {locked && <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="idea-v2-locked"><Lock className="h-3.5 w-3.5" /> {t('ideaV2.lockedHint')}</p>}
-          {!inputDirty && !locked && !canInstruct && (
-            <div className="mt-5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/30 px-4 py-3" data-testid="idea-v2-synopsis-refine-locked">
-              <span className="text-xs font-semibold text-foreground">Что изменить в синопсисе?</span>
-              <LockedBadge feature="prompt_instruct_edit" />
-            </div>
-          )}
-          {!inputDirty && !locked && canInstruct && (
+          {!inputDirty && !locked && (
             <div className="mt-5 rounded-lg border border-border/70 bg-muted/30 px-4 py-3" data-testid="idea-v2-synopsis-refine">
               <label htmlFor="idea-v2-synopsis-refine-input" className="text-xs font-semibold text-foreground">Что изменить в синопсисе?</label>
               <textarea
                 id="idea-v2-synopsis-refine-input"
                 value={refineText}
                 onChange={(e) => onRefineChange(e.target.value)}
-                placeholder="Например: сделай ставки выше, добавь романтическую линию, перенеси действие в 90-е..."
+                placeholder={canInstruct ? 'Например: сделай ставки выше, добавь романтическую линию, перенеси действие в 90-е...' : lockHint('prompt_instruct_edit')}
                 rows={2}
-                disabled={generating}
+                disabled={generating || !canInstruct}
                 className="mt-2 w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
                 data-testid="idea-v2-synopsis-refine-input"
               />
               <p className="mt-1.5 text-[11px] text-muted-foreground">Правка уйдёт диалогом: модель видит прежний синопсис и все ранние правки. «Превью» — посмотреть/сохранить промпт, «Изменить» — отправить.</p>
               <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
                 {previewBtn('synopsis', false, 'idea-v2-synopsis-refine-preview', !refineText.trim())}
-                <button
+                <GatedButton
+                  feature="prompt_instruct_edit"
+                  allowed={canInstruct}
                   onClick={() => generate('synopsis')}
                   disabled={generating || !refineText.trim()}
                   className={`${btnMain} flex-shrink-0`}
                   data-testid="idea-v2-synopsis-refine-edit"
                 >
                   <Pencil className="h-3.5 w-3.5" /> Изменить{costTag(V2_COSTS.synopsis)}
-                </button>
+                </GatedButton>
               </div>
             </div>
           )}
@@ -1063,36 +1061,32 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-plot-stale">Идея, жанры, язык или число эпизодов изменились — вернитесь на шаг 1 и нажмите «Продолжить», чтобы перегенерировать синопсис и сюжет.</p>
           )}
           {locked && <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="idea-v2-locked"><Lock className="h-3.5 w-3.5" /> {t('ideaV2.lockedHint')}</p>}
-          {!inputDirty && !locked && !canInstruct && (
-            <div className="mt-5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/30 px-4 py-3" data-testid="idea-v2-plot-refine-locked">
-              <span className="text-xs font-semibold text-foreground">Что изменить в сюжете сезона?</span>
-              <LockedBadge feature="prompt_instruct_edit" />
-            </div>
-          )}
-          {!inputDirty && !locked && canInstruct && (
+          {!inputDirty && !locked && (
             <div className="mt-5 rounded-lg border border-border/70 bg-muted/30 px-4 py-3" data-testid="idea-v2-plot-refine">
               <label htmlFor="idea-v2-plot-refine-input" className="text-xs font-semibold text-foreground">Что изменить в сюжете сезона?</label>
               <textarea
                 id="idea-v2-plot-refine-input"
                 value={plotRefineText}
                 onChange={(e) => onPlotRefineChange(e.target.value)}
-                placeholder={t('ideaV2.plotRefinePlaceholder')}
+                placeholder={canInstruct ? t('ideaV2.plotRefinePlaceholder') : lockHint('prompt_instruct_edit')}
                 rows={2}
-                disabled={generating}
+                disabled={generating || !canInstruct}
                 className="mt-2 w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
                 data-testid="idea-v2-plot-refine-input"
               />
               <p className="mt-1.5 text-[11px] text-muted-foreground">Правка уйдёт диалогом: модель видит прежний сюжет и все ранние правки. «{t('ideaV2.preview')}» — посмотреть/сохранить промпт, «{t('ideaV2.change')}» — отправить.</p>
               <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
                 {previewBtn('plot', false, 'idea-v2-plot-refine-preview', !plotRefineText.trim())}
-                <button
+                <GatedButton
+                  feature="prompt_instruct_edit"
+                  allowed={canInstruct}
                   onClick={() => generate('plot')}
                   disabled={generating || !plotRefineText.trim()}
                   className={`${btnMain} flex-shrink-0`}
                   data-testid="idea-v2-plot-refine-edit"
                 >
                   <Pencil className="h-3.5 w-3.5" /> {t('ideaV2.change')}{costTag(V2_COSTS.plot)}
-                </button>
+                </GatedButton>
               </div>
             </div>
           )}
