@@ -1598,12 +1598,23 @@ export function sceneVideoV2Prompt(
     `ACTIONS:\n${scene.action.trim()}`,
   ];
   if (end) blocks.push(`END:\n${end}`);
+  blocks.push(SCENE_VIDEO_AUDIO_BLOCK_V2);
   return blocks.join("\n\n");
 }
 
-/** Финальный ролик серии (Project.episodeFinalV2["<n>"]): склейка видео всех сцен по index. */
+/**
+ * Звук клипа Seedance: только диегетический звук сцены и реплики — БЕЗ музыки. Фоновая музыка серии —
+ * один трек на всю серию (ACE-Step), который подмешивается при склейке (episode-assemble-v2-job);
+ * музыка внутри отдельных клипов при склейке рвалась бы на стыках и спорила бы с общим треком.
+ */
+export const SCENE_VIDEO_AUDIO_BLOCK_V2 =
+  "AUDIO:\nOnly the natural, diegetic sound of the scene (room tone and ambience, footsteps, cloth, props, breathing) and the characters' spoken lines exactly as written in ACTIONS. NO background music, NO soundtrack, NO score, NO musical stingers or jingles of any kind — the episode's music is added separately in the edit.";
+
+/** Финальный ролик серии (Project.episodeFinalV2["<n>"]): склейка видео всех сцен по index + фоновая музыка. */
 export interface EpisodeFinalV2 {
   videoUrl?: string;
+  /** Фоновый музыкальный трек серии (ACE-Step 1.5), подмешанный в videoUrl; пусто — склейка без музыки. */
+  musicUrl?: string;
   status?: EpisodeSceneStatusV2;
   error?: string;
   updatedAt?: string;
@@ -1612,7 +1623,51 @@ export interface EpisodeFinalV2 {
 export function episodeFinalV2From(map: unknown, n: number): EpisodeFinalV2 | null {
   const v = map && typeof map === "object" ? (map as Record<string, any>)[String(n)] : null;
   if (!v || typeof v !== "object") return null;
-  return { videoUrl: optStr(v.videoUrl), status: sceneStatus(v.status), error: optStr(v.error), updatedAt: optStr(v.updatedAt) };
+  return { videoUrl: optStr(v.videoUrl), musicUrl: optStr(v.musicUrl), status: sceneStatus(v.status), error: optStr(v.error), updatedAt: optStr(v.updatedAt) };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// v2 · музыка серии: один фоновый трек (ACE-Step 1.5) на всю серию, подмешивается при склейке
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Теги по умолчанию, если LLM не вернула своих (или сценария ещё нет): нейтральный кинематографичный эмбиент. */
+export const EPISODE_MUSIC_FALLBACK_TAGS_V2 =
+  "cinematic score, ambient, atmospheric, subtle, emotional, soft piano, strings, film soundtrack, instrumental, no vocals, slow tempo";
+
+/** Теги, которые ДОЛЖНЫ быть в любом ответе: трек фоновый и без вокала (иначе он спорит с репликами). */
+const EPISODE_MUSIC_REQUIRED_TAGS_V2 = ["cinematic score", "film soundtrack", "instrumental", "no vocals", "background music"];
+
+export function episodeMusicTagsV2SystemPrompt(): string {
+  return [
+    "You are a film composer picking the mood of a background score for ONE episode of a vertical (9:16) drama series.",
+    "Given the episode script, return the music generation tags for ONE continuous instrumental track that will play UNDER the whole episode (dialogue is on top of it, so it must stay subtle and unobtrusive).",
+    "Reply with STRICT JSON: {\"tags\": \"<comma-separated tags>\"} — 8 to 14 tags in English only: genre, mood (match the dominant emotion of the episode), 2–4 instruments, tempo. No lyrics, no vocals, no song structure words.",
+  ].join("\n");
+}
+
+export function episodeMusicTagsV2UserPrompt(script: string, synopsis?: string | null): string {
+  const parts: string[] = [];
+  const syn = typeof synopsis === "string" ? synopsis.trim() : "";
+  if (syn) parts.push(`SERIES SYNOPSIS:\n${syn.slice(0, 3000)}`);
+  parts.push(`EPISODE SCRIPT:\n${script.trim().slice(0, 12000)}`);
+  return parts.join("\n\n");
+}
+
+/** Нормализует теги из ответа LLM: чистит, дедуплицирует, обрезает до 16 и дописывает обязательные. Пусто → fallback. */
+export function normalizeEpisodeMusicTagsV2(raw: unknown): string {
+  const src = typeof raw === "string" ? raw : Array.isArray(raw) ? raw.filter((x) => typeof x === "string").join(",") : "";
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of src.split(/[,\n;]+/)) {
+    const c = t.replace(/[^\p{L}\p{N}\s&'-]/gu, " ").replace(/\s+/g, " ").trim().toLowerCase();
+    if (!c || c.length > 40 || seen.has(c)) continue;
+    seen.add(c);
+    out.push(c);
+    if (out.length >= 16) break;
+  }
+  if (!out.length) return EPISODE_MUSIC_FALLBACK_TAGS_V2;
+  for (const req of EPISODE_MUSIC_REQUIRED_TAGS_V2) if (!seen.has(req)) { out.push(req); seen.add(req); }
+  return out.join(", ");
 }
 
 /** Все сцены серии готовы к склейке: есть хотя бы одна, и у каждой videoStatus=done + videoUrl. */

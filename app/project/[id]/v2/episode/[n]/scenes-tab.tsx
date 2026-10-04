@@ -5,7 +5,7 @@ import { Loader2, Eye, Play, AlertTriangle, Film, Download, RotateCcw, RefreshCw
 import type { EpisodeFinalV2, EpisodeSceneV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { ScenePromptModal, type ScenePromptRef, type ScenePromptScene } from './scene-prompt-modal'
-import { sceneVideosCost } from '@/lib/v2-costs'
+import { assembleCost, sceneVideosCost } from '@/lib/v2-costs'
 
 /**
  * Поток v2 · вкладка «Сцены» серии n.
@@ -182,7 +182,9 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
                 <p className="font-semibold text-foreground">{t('ideaV2.finalReady')}</p>
               ) : !canAssemble ? (
                 <p>{t('ideaV2.assembleNeedAllVideos')}</p>
-              ) : null}
+              ) : (
+                <p data-testid="episode-v2-assemble-music-hint">{t('ideaV2.assembleMusicHint')}</p>
+              )}
               {!assembling && final?.status === 'error' && final.error && <p className="mt-1 text-destructive" title={final.error}>{final.error}</p>}
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -199,7 +201,7 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
                 data-testid="episode-v2-assemble-btn"
               >
                 {assembling || assembleBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : finalReady ? <RotateCcw className="h-4 w-4" /> : <Film className="h-4 w-4" />}
-                {finalReady ? t('ideaV2.reassemble') : t('ideaV2.assembleEpisode')}
+                {finalReady ? t('ideaV2.reassemble') : t('ideaV2.assembleEpisode')}<span className="ml-0.5 whitespace-nowrap text-[11px] font-normal opacity-80" data-testid="episode-v2-assemble-cost">· {t('ideaV2.costCredits', { n: assembleCost() })}</span>
               </button>
             </div>
           </div>

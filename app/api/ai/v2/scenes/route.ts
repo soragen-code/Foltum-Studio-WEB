@@ -16,7 +16,7 @@ import { setEpisodeStoryboardV2 } from "@/lib/episode-storyboard-v2-store";
 import { WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
 import { translateToEnglish } from "@/lib/translate-en";
 import { chargeV2Credits } from "@/lib/v2-credits";
-import { sceneFramesCost, sceneVideosCost } from "@/lib/v2-costs";
+import { assembleCost, sceneFramesCost, sceneVideosCost } from "@/lib/v2-costs";
 
 /**
  * Поток v2 · вкладка «Сцены» серии n.
@@ -129,7 +129,10 @@ export async function POST(request: Request) {
       }
       const active = await activeEpisodeJob(projectId, EPISODE_ASSEMBLE_V2_JOB_TYPE, episode);
       if (!active) await setEpisodeFinalV2(projectId, episode, { status: "pending", error: "" });
-      const r = await startJob(projectId, episode, EPISODE_ASSEMBLE_V2_JOB_TYPE, (jobId) => runEpisodeAssembleV2Job(jobId, projectId, { episode }));
+      const r = await startJob(projectId, episode, EPISODE_ASSEMBLE_V2_JOB_TYPE, (jobId) => runEpisodeAssembleV2Job(jobId, projectId, { episode }),
+        { userId: project.userId, cost: assembleCost(), step: "assemble" });
+      // Кредитов не хватило: job удалён — не оставляем финал в «pending» без воркера.
+      if (!r.ok && !active) await setEpisodeFinalV2(projectId, episode, { status: "idle", error: "" }).catch(() => {});
       return NextResponse.json(r.body, { status: r.status });
     }
 
@@ -222,6 +225,6 @@ export async function GET(request: Request) {
     assembleJob,
     final,
     allVideosReady: allSceneVideosReady(rawScenes),
-    costs: { launchAll: sceneVideosCost(rawScenes) },
+    costs: { launchAll: sceneVideosCost(rawScenes), assemble: assembleCost() },
   }, { headers: { "Cache-Control": "no-store" } });
 }

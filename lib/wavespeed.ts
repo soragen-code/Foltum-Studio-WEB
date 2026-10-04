@@ -5,7 +5,8 @@
 /*    image-to-video (first / last frame = scene keyframes).           */
 /*  - Seedream 5.0 Pro images live in lib/providers/image-provider.ts  */
 /*    and reuse the generic transport exported here.                    */
-/*  - ACE-Step 1.5 background music lives in lib/music.ts.              */
+/*  - ACE-Step 1.5 background music (one track per episode, mixed in by  */
+/*    the v2 assemble worker) — see the ACE-Step section at the bottom.  */
 /*  Every task follows the same contract: ONE POST that returns a task  */
 /*  id, then GET /predictions/{id}/result polling — no paid blind       */
 /*  retries; on a dropped connection the caller polls by id.            */
@@ -299,4 +300,39 @@ export async function getVideoPredictionState(id: string): Promise<PredictionSta
 /** Best-effort cancel of a scene video task. */
 export async function cancelVideoPrediction(id: string): Promise<void> {
   return wavespeedCancel(id);
+}
+
+/* ------------------------------------------------------------------ */
+/*  ACE-Step 1.5 — background music (v2: ONE instrumental track per   */
+/*  episode, mixed under the stitched clips by episode-assemble-v2).   */
+/* ------------------------------------------------------------------ */
+
+export const ACE_STEP_SLUG = "wavespeed-ai/ace-step-1.5";
+export const ACE_STEP_MIN_DURATION = 5;
+export const ACE_STEP_MAX_DURATION = 240;
+
+export interface AceStepMusicInput {
+  /** Comma-separated genre / mood / instruments / tempo tags (English). */
+  tags: string;
+  /** Target length in seconds; clamped to [5, 240]. */
+  durationSec: number;
+  seed?: number;
+}
+
+/** Pure body builder (exported for tests). Empty `lyrics` = instrumental track. */
+export function buildAceStepMusicBody(input: AceStepMusicInput): Record<string, unknown> {
+  const raw = Number.isFinite(input.durationSec) ? Math.ceil(input.durationSec) : 60;
+  const duration = Math.max(ACE_STEP_MIN_DURATION, Math.min(ACE_STEP_MAX_DURATION, raw));
+  const body: Record<string, unknown> = { tags: input.tags.trim(), lyrics: "", duration };
+  if (Number.isFinite(input.seed as number)) body.seed = Math.round(input.seed as number);
+  return body;
+}
+
+/** Submit an ACE-Step 1.5 music task and wait for the audio URL (one POST + polling by id). */
+export async function generateAceStepMusic(
+  input: AceStepMusicInput,
+  opts: { timeoutMs?: number; shouldCancel?: () => Promise<boolean> } = {},
+): Promise<string> {
+  const id = await wavespeedSubmit(ACE_STEP_SLUG, buildAceStepMusicBody(input), "ACE-Step music");
+  return wavespeedWait(id, { label: "ACE-Step music", timeoutMs: opts.timeoutMs ?? 240_000, shouldCancel: opts.shouldCancel });
 }
