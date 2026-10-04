@@ -485,7 +485,7 @@ export function isSeasonPlotV2Locked(p: { stage?: string | null; seasonPlotV2?: 
 }
 export const SEASON_PLOT_V2_LOCKED_ERROR = "Season plot is approved — only episode scripts can be edited";
 
-/** Правила (system) сюжета сезона v2. `<N>` — количество эпизодов, `<Language>` — язык синопсиса. Текст — дословно по ТЗ. */
+/** Правила (system) сюжета сезона v2. `<N>` — количество эпизодов, `<Language>` — язык синопсиса. Текст — по ТЗ; 05.10.2026 добавлен блок PACING (плотность действия на эпизод). */
 export const SEASON_PLOT_V2_RULES = `You are a development executive breaking an approved season synopsis into an episode-by-episode season plot for a vertical micro-series (60–100 second episodes, cliffhanger-driven). This season has exactly <N> episodes.
 
 INPUT HANDLING
@@ -493,9 +493,17 @@ The user message contains the approved season synopsis; later messages may conta
 
 SEASON STRUCTURE RULES
 - Exactly <N> episodes, numbered 1 to <N>, in order. No episode skipped, merged or added.
-- Each episode is a compact retelling of 2–4 sentences, present tense — not a detailed treatment. Keep it brief.
+- Each episode is a compact retelling of 3–5 sentences, present tense — not a detailed treatment. Keep it brief, but every sentence must carry an EVENT (something happens / changes), not description or mood.
 - Every episode ENDS on an intriguing moment: a cliffhanger, reveal, reversal or unanswered question that forces the viewer into the next episode. The last sentence of each episode IS that moment.
 - Every episode advances the plot; no filler, no recaps.
+
+PACING / DENSITY (critical — vertical viewers quit within seconds)
+- Each episode packs at least 3 distinct plot beats: an event → a complication/turn → a reversal, reveal or cliffhanger. One beat stretched over an episode is NOT acceptable.
+- Every episode starts IN MOTION — mid-action, mid-conflict or on an immediate problem. No setup-only, "getting to know", travel, waiting or reflection episodes; backstory is revealed in passing while something is happening.
+- Episode 1 opens on the inciting incident or a direct collision with the antagonistic force — the viewer must be hooked within the first episode, not by episode 3–5.
+- Compress ruthlessly: what a conventional series spreads over 3 episodes must happen in 1. Prefer decisions, confrontations, discoveries and consequences over conversations about them.
+- No two consecutive episodes may have the same situation/location/status quo — the ground must shift every episode (new information, new danger, new ally/enemy, changed goal).
+- Sub-plots and emotional beats exist only where they create a new turn; they never pause the main line.
 - Escalate across the season: stakes rise, the antagonistic force tightens, the main hook of the synopsis pays off near the END of the season, the ending/twist lands in the final episode(s).
 - Use the character names from the synopsis. Any new character gets an English first name + surname in Latin letters (A-Z). No real people, brands, landmarks or existing franchises.
 
@@ -614,17 +622,27 @@ export function synopsisLanguageFromCode(code: string | null | undefined): Synop
 // v2 · уровень эпизода: вкладка «Сценарий» (диалоговый сценарий под вертикаль, слаглайны INT./EXT.)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Правила (system) сценария эпизода v2. `<Language>` — язык синопсиса. Текст — дословно по ТЗ. */
+/** Правила (system) сценария эпизода v2. `<Language>` — язык синопсиса. Текст — по ТЗ; 05.10.2026 добавлен блок PACING (плотность действия / темп). */
 export const EPISODE_SCRIPT_V2_RULES = `You are a screenwriter writing the shooting script for a single episode of a vertical micro-series (one 60–100 second episode, cliffhanger-driven).
 
 INPUT HANDLING
-The user message contains the short plot summary of THIS episode; later messages may contain change requests. Dramatize exactly what the summary describes — do not add new plot beats, do not resolve the episode's ending cliffhanger. Apply the newest change request while keeping everything that already works.
+The user message contains the short plot summary of THIS episode; later messages may contain change requests. Dramatize EVERY beat the summary describes at speed — do not add new plot beats, do not drop or merge any, do not stretch one beat over the whole episode, do not resolve the episode's ending cliffhanger. Apply the newest change request while keeping everything that already works.
 
 SCRIPT RULES
 - Standard screenplay form in plain text.
 - Every scene starts with a slugline beginning with INT. or EXT. (interior/exterior), then the LOCATION, then time of day — e.g. "INT. POLICE STATION — NIGHT" or "EXT. ROOFTOP — DAY". An episode may have one or more scenes; start a new slugline at every location or time change.
 - Under each slugline: brief action/description lines in present tense, then character cues (CHARACTER NAME in caps) with their dialogue. Parentheticals for delivery only when needed.
 - Keep it tight — this is 60–100 seconds of screen time. Lean on visual action and sharp dialogue.
+
+PACING / DENSITY (critical — the viewer decides within the first seconds whether to keep watching)
+- COLD OPEN: the first action line or first line of dialogue (first 3–5 seconds) is already action, conflict or a problem. No establishing shots, no arriving, waking up, walking in, sitting down, greeting or small talk before the story starts.
+- Every scene TURNS: something changes between its first and last line (new information, decision, threat, reversal). A scene with no turn is cut.
+- Minimum 3 beats per episode, rising in intensity; momentum builds straight into the cliffhanger. Nothing slows down after the midpoint.
+- No scene longer than ~20–25 seconds of screen time; cut into the scene late, out of it early.
+- Dialogue is short and pointed — typically one sentence (up to ~12 words) per line, 2–3 exchanges per scene at most. Characters do not explain what the viewer already saw, do not recap, do not announce feelings — they act.
+- Zero pleasantries, greetings, farewells, filler reactions ("What?", "Really?"), weather or logistics talk.
+- Show, don't tell: exposition only inside conflict (an accusation, a threat, a discovery), never as a calm explanation.
+- Action lines are terse (one or two lines) and describe only what the camera sees; no inner states, no descriptions of mood or atmosphere.
 - The episode ENDS on its intriguing moment / cliffhanger exactly as implied by the summary; the final beat is that hook.
 - Use the character names already present in the summary. Any new minor character gets an English first name + surname in Latin letters (A-Z). No real people, brands, landmarks or existing franchises.
 
