@@ -7,6 +7,8 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
+import { chargeV2Credits } from "@/lib/v2-credits";
+import { V2_COSTS } from "@/lib/v2-costs";
 import { runSynopsisV2Job, SYNOPSIS_V2_JOB_TYPE } from "@/lib/workers/synopsis-v2-job";
 import { normalizeSynopsisLanguage, normalizeEpisodesCount, isSeasonPlotV2Locked, SEASON_PLOT_V2_LOCKED_ERROR } from "@/lib/idea-v2";
 
@@ -80,10 +82,15 @@ export async function POST(request: Request) {
     const job = await prisma.generationJob.create({
       data: { type: SYNOPSIS_V2_JOB_TYPE, status: "pending", progress: 0, message: "Starting…", projectId },
     });
+    const charge = await chargeV2Credits(user.id, V2_COSTS.synopsis, "synopsis", job.id);
+    if (!charge.ok) {
+      await prisma.generationJob.delete({ where: { id: job.id } }).catch(() => {});
+      return NextResponse.json(charge.body, { status: charge.status });
+    }
     // Правка: текущий синопсис — из тела либо из проекта (после перезагрузки клиент мог его не прислать).
     const currentSynopsis = (synopsis ?? "").trim() || (refine ? (project.synopsis ?? "").trim() : "") || null;
     runInBackground(() => runSynopsisV2Job(job.id, projectId, { idea, ideaEn, genres, wishes, wishesEn, synopsisLanguage, episodesCount, synopsis: currentSynopsis, refine, refineEn, synopsisBase, synopsisTurns, overrideMessages, overrideSystem, overrideUser, overrideAssistant }));
-    return NextResponse.json({ jobId: job.id, resumed: false });
+    return NextResponse.json({ jobId: job.id, resumed: false, cost: charge.cost, creditsRemaining: charge.creditsRemaining });
   } catch (err: any) {
     console.error("Synopsis v2 generation error:", err);
     return NextResponse.json({ error: "Generation failed: " + (err?.message ?? "Unknown error") }, { status: 500 });

@@ -15,6 +15,8 @@ import { activeEpisodeJob, latestEpisodeJob, patchEpisodeSceneV2, resetEpisodeFi
 import { setEpisodeStoryboardV2 } from "@/lib/episode-storyboard-v2-store";
 import { WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
 import { translateToEnglish } from "@/lib/translate-en";
+import { chargeV2Credits } from "@/lib/v2-credits";
+import { sceneFramesCost, sceneVideosCost } from "@/lib/v2-costs";
 
 /**
  * Поток v2 · вкладка «Сцены» серии n.
@@ -37,18 +39,40 @@ const patchSchema = z.object({ projectId: z.string().min(1), episode: z.coerce.n
 async function ownedProject(email: string, projectId: string) {
   const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
   if (!user) return null;
-  return prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, episodeShotsV2: true, episodeRefsV2: true, episodeStoryboardV2: true, episodeScenesV2: true, episodeFinalV2: true } });
+  return prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, userId: true, episodeShotsV2: true, episodeRefsV2: true, episodeStoryboardV2: true, episodeScenesV2: true, episodeFinalV2: true } });
 }
 
-async function startJob(projectId: string, episode: number, type: string, run: (jobId: string) => Promise<void>) {
+type StartJobResult =
+  | { ok: true; body: { jobId: string; resumed: boolean; cost?: number; creditsRemaining?: number }; status: 200 }
+  | { ok: false; body: Record<string, unknown>; status: number };
+
+/** Создаёт job (или возвращает активную). charge — списание кредитов за шаг v2: при нехватке job удаляется, ответ 402. */
+async function startJob(
+  projectId: string,
+  episode: number,
+  type: string,
+  run: (jobId: string) => Promise<void>,
+  charge?: { userId: string; cost: number; step: string },
+): Promise<StartJobResult> {
   await failStaleJobs({ projectId, type });
   const active = await activeEpisodeJob(projectId, type, episode);
-  if (active) return { jobId: active.id, resumed: true };
+  if (active) return { ok: true, status: 200, body: { jobId: active.id, resumed: true } };
   const job = await prisma.generationJob.create({
     data: { type, status: "pending", progress: 0, message: "Starting...", projectId, resultData: JSON.stringify({ episode }) },
   });
+  let cost: number | undefined;
+  let creditsRemaining: number | undefined;
+  if (charge) {
+    const c = await chargeV2Credits(charge.userId, charge.cost, charge.step, job.id);
+    if (!c.ok) {
+      await prisma.generationJob.delete({ where: { id: job.id } }).catch(() => {});
+      return { ok: false, status: c.status, body: c.body };
+    }
+    cost = c.cost;
+    creditsRemaining = c.creditsRemaining;
+  }
   runInBackground(() => run(job.id));
-  return { jobId: job.id, resumed: false };
+  return { ok: true, status: 200, body: { jobId: job.id, resumed: false, cost, creditsRemaining } };
 }
 
 export async function POST(request: Request) {
@@ -65,14 +89,16 @@ export async function POST(request: Request) {
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
 
     if (action === "approve") {
-      if (!episodeShotsV2From(project.episodeShotsV2, episode).length) return NextResponse.json({ error: "Сначала разбейте сценарий на кадры" }, { status: 400 });
+      const shots = episodeShotsV2From(project.episodeShotsV2, episode);
+      if (!shots.length) return NextResponse.json({ error: "Сначала разбейте сценарий на кадры" }, { status: 400 });
       if (!episodeStoryboardV2From(project.episodeStoryboardV2, episode)?.imageUrl) return NextResponse.json({ error: "Сначала соберите сториборд" }, { status: 400 });
       if (await activeEpisodeJob(projectId, EPISODE_ASSEMBLE_V2_JOB_TYPE, episode)) return NextResponse.json({ error: "Дождитесь окончания сборки серии" }, { status: 409 });
       await setEpisodeStoryboardV2(projectId, episode, { approved: true });
       // Новая нарезка = новые сцены: прежний финальный ролик больше не соответствует им — сбрасываем вместе со сценами.
       await resetEpisodeFinalV2(projectId, episode);
-      const r = await startJob(projectId, episode, EPISODE_SCENE_FRAMES_V2_JOB_TYPE, (jobId) => runEpisodeSceneFramesV2Job(jobId, projectId, { episode }));
-      return NextResponse.json(r);
+      const r = await startJob(projectId, episode, EPISODE_SCENE_FRAMES_V2_JOB_TYPE, (jobId) => runEpisodeSceneFramesV2Job(jobId, projectId, { episode }),
+        { userId: project.userId, cost: sceneFramesCost(shots.length), step: "sceneFrames" });
+      return NextResponse.json(r.body, { status: r.status });
     }
 
     if (action === "rebuild-prompts") {
@@ -104,14 +130,16 @@ export async function POST(request: Request) {
       const active = await activeEpisodeJob(projectId, EPISODE_ASSEMBLE_V2_JOB_TYPE, episode);
       if (!active) await setEpisodeFinalV2(projectId, episode, { status: "pending", error: "" });
       const r = await startJob(projectId, episode, EPISODE_ASSEMBLE_V2_JOB_TYPE, (jobId) => runEpisodeAssembleV2Job(jobId, projectId, { episode }));
-      return NextResponse.json(r);
+      return NextResponse.json(r.body, { status: r.status });
     }
 
-    if (!episodeScenesV2From(project.episodeScenesV2, episode).some((s) => s.firstFrameUrl)) {
+    const scenesForVideo = episodeScenesV2From(project.episodeScenesV2, episode);
+    if (!scenesForVideo.some((s) => s.firstFrameUrl)) {
       return NextResponse.json({ error: "Нет сцен с готовым первым кадром" }, { status: 400 });
     }
-    const r = await startJob(projectId, episode, EPISODE_SCENE_VIDEO_V2_JOB_TYPE, (jobId) => runEpisodeSceneVideoV2Job(jobId, projectId, { episode }));
-    return NextResponse.json(r);
+    const r = await startJob(projectId, episode, EPISODE_SCENE_VIDEO_V2_JOB_TYPE, (jobId) => runEpisodeSceneVideoV2Job(jobId, projectId, { episode }),
+      { userId: project.userId, cost: sceneVideosCost(scenesForVideo), step: "sceneVideos" });
+    return NextResponse.json(r.body, { status: r.status });
   } catch (err: any) {
     console.error("Episode scenes v2 error:", err);
     return NextResponse.json({ error: "Scenes request failed: " + (err?.message ?? "Unknown error") }, { status: 500 });
@@ -194,5 +222,6 @@ export async function GET(request: Request) {
     assembleJob,
     final,
     allVideosReady: allSceneVideosReady(rawScenes),
+    costs: { launchAll: sceneVideosCost(rawScenes) },
   }, { headers: { "Cache-Control": "no-store" } });
 }

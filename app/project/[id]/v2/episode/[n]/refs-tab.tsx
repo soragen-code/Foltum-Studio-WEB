@@ -7,6 +7,7 @@ import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from '../../../_components/cancel-button'
 import { useJobPolling, SmoothProgress } from '../../../_components/use-job-polling'
 import { RefPromptModal } from './ref-prompt-modal'
+import { V2_COSTS, refImagesCost } from '@/lib/v2-costs'
 
 /**
  * Поток v2 · вкладка «Референсы» серии n.
@@ -25,6 +26,7 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs, ownFace =
   projectId: string; n: number; hasScript: boolean; initialRefs: EpisodeRefV2[]; ownFace?: boolean
 }) {
   const { t } = useTranslation()
+  const costTag = (c: number) => <span className="ml-0.5 whitespace-nowrap text-[11px] font-normal opacity-80" data-testid="episode-v2-cost">· {t('ideaV2.costCredits', { n: c })}</span>
   const [items, setItems] = useState<EpisodeRefV2[]>(initialRefs)
   const [promptId, setPromptId] = useState('')
   const [lightbox, setLightbox] = useState<{ url: string; alt: string } | null>(null)
@@ -186,12 +188,12 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs, ownFace =
           {hasScript && (
             <button onClick={() => void runExtract()} disabled={busy} className={`${btnBar} min-w-[180px]`} data-testid="episode-v2-refs-extract">
               {extracting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-              {items.length ? t('ideaV2.refsReextract') : t('ideaV2.refsExtract')}
+              {items.length ? t('ideaV2.refsReextract') : t('ideaV2.refsExtract')}{costTag(V2_COSTS.refsExtract)}
             </button>
           )}
           {items.length > 0 && (
             <button onClick={() => void runImages()} disabled={busy} className={`${btnBar} min-w-[180px]`} data-testid="episode-v2-refs-generate-all">
-              {generatingImages ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} {t('ideaV2.refsGenerateAll')}
+              {generatingImages ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} {t('ideaV2.refsGenerateAll')}{costTag(refImagesCost(items.length))}
             </button>
           )}
         </div>
@@ -263,7 +265,7 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs, ownFace =
                   {r.promptDirty && <span className="absolute right-1 top-1 rounded-sm bg-primary px-1 text-[9px] font-bold uppercase leading-tight text-primary-foreground" data-testid="episode-v2-ref-prompt-new">new</span>}
                 </button>
                 <button onClick={() => void runImages([r.id])} disabled={busy || !r.prompt.trim()} className={`${btnFlat} border-l border-border`} data-testid="episode-v2-ref-regenerate">
-                  {genBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} {r.imageUrl ? t('ideaV2.refsRegenerate') : t('ideaV2.refsGenerateOne')}
+                  {genBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} {r.imageUrl ? t('ideaV2.refsRegenerate') : t('ideaV2.refsGenerateOne')}{costTag(V2_COSTS.refImage)}
                 </button>
               </div>
               {r.kind === 'character' && (

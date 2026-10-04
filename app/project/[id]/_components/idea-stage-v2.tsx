@@ -9,6 +9,7 @@ import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from './cancel-button'
 import { useJobPolling, SmoothProgress } from './use-job-polling'
 import { PromptModal } from './v2-prompt-modal'
+import { V2_COSTS } from '@/lib/v2-costs'
 
 /** Примерная длительность генерации синопсиса v2 — управляет плавным прогресс-баром. */
 const SYNOPSIS_V2_EXPECTED_SEC = 50
@@ -254,6 +255,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
 
   // ─── Промпты: диалог messages из preview (system первым) + правки system и крайнего user
   const { t, locale } = useTranslation()
+  // Стоимость шага в кредитах — показывается на каждой кнопке генерации (списывается сервером при старте job).
+  const costTag = (n: number) => <span className="ml-0.5 whitespace-nowrap text-[11px] font-normal opacity-80" data-testid="idea-v2-cost">· {t('ideaV2.costCredits', { n })}</span>
   useEffect(() => {
     const saved = loadLang(project.id) ?? (savedSynopsis ? langFromCode(project?.language) : null)
     setSynopsisLang(saved ?? langFromLocale(locale))
@@ -804,7 +807,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
               Отмена
             </button>
             <button onClick={() => void confirmResetAndSend()} className="flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110" data-testid="idea-v2-reset-confirm">
-              <RotateCcw className="h-4 w-4" /> Продолжить и сбросить
+              <RotateCcw className="h-4 w-4" /> Продолжить и сбросить{costTag(V2_COSTS.synopsis)}
             </button>
           </div>
         </div>
@@ -893,7 +896,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           <div className="flex flex-wrap items-center gap-2">
             {previewBtn('synopsis', true, 'idea-v2-synopsis-generate-preview')}
             <button onClick={() => generate('synopsis', true)} disabled={generating} className={btnPrimary} data-testid="idea-v2-synopsis-generate">
-              <Wand2 className="h-4 w-4" /> Сгенерировать
+              <Wand2 className="h-4 w-4" /> Сгенерировать{costTag(V2_COSTS.synopsis)}
             </button>
           </div>,
           <button onClick={() => goStep('idea')} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground" data-testid="idea-v2-synopsis-back">
@@ -952,7 +955,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                   className={`${btnMain} flex-shrink-0`}
                   data-testid="idea-v2-synopsis-refine-edit"
                 >
-                  <Pencil className="h-3.5 w-3.5" /> Изменить
+                  <Pencil className="h-3.5 w-3.5" /> Изменить{costTag(V2_COSTS.synopsis)}
                 </button>
               </div>
             </div>
@@ -965,7 +968,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           locked ? null : <div className="flex flex-wrap items-center gap-2">
             {previewBtn('plot', true, 'idea-v2-result-plot-preview', inputDirty)}
             <button onClick={continueFromSynopsis} disabled={generating || inputDirty} className={btnPrimary} data-testid="idea-v2-result-continue">
-              Продолжить <ArrowRight className="h-4 w-4" />
+              Продолжить{costTag(V2_COSTS.plot)} <ArrowRight className="h-4 w-4" />
             </button>
           </div>,
           <button onClick={() => goStep('idea')} disabled={!stepClickable.idea} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground disabled:opacity-50" data-testid="idea-v2-result-back">
@@ -1000,7 +1003,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           <div className="flex flex-wrap items-center gap-2">
             {previewBtn('plot', true, 'idea-v2-plot-generate-preview')}
             <button onClick={() => generate('plot', true)} disabled={generating || !hasSynopsis} className={btnPrimary} data-testid="idea-v2-plot-generate">
-              <Wand2 className="h-4 w-4" /> Сгенерировать
+              <Wand2 className="h-4 w-4" /> Сгенерировать{costTag(V2_COSTS.plot)}
             </button>
           </div>,
           <button onClick={() => goStep('synopsis')} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground" data-testid="idea-v2-plot-back">
@@ -1071,7 +1074,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                   className={`${btnMain} flex-shrink-0`}
                   data-testid="idea-v2-plot-refine-edit"
                 >
-                  <Pencil className="h-3.5 w-3.5" /> {t('ideaV2.change')}
+                  <Pencil className="h-3.5 w-3.5" /> {t('ideaV2.change')}{costTag(V2_COSTS.plot)}
                 </button>
               </div>
             </div>
@@ -1231,7 +1234,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             className={btnPrimary}
             data-testid="idea-v2-generate"
           >
-            {savingInput ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />} Продолжить
+            {savingInput ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />} Продолжить{costTag(V2_COSTS.synopsis)}
           </button>
         </div>,
         hasSynopsis && !inputDirty ? (

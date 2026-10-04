@@ -7,6 +7,8 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
+import { chargeV2Credits } from "@/lib/v2-credits";
+import { V2_COSTS } from "@/lib/v2-costs";
 import { runEpisodeScriptV2Job, episodeOfScriptJob, EPISODE_SCRIPT_V2_JOB_TYPE } from "@/lib/workers/episode-script-v2-job";
 import { seasonPlotEpisodeSummary, episodeScriptV2From, synopsisLanguageFromCode } from "@/lib/idea-v2";
 
@@ -59,11 +61,16 @@ export async function POST(request: Request) {
     const job = await prisma.generationJob.create({
       data: { type: EPISODE_SCRIPT_V2_JOB_TYPE, status: "pending", progress: 0, message: "Starting...", projectId, resultData: JSON.stringify({ episode }) },
     });
+    const charge = await chargeV2Credits(user.id, V2_COSTS.script, "script", job.id);
+    if (!charge.ok) {
+      await prisma.generationJob.delete({ where: { id: job.id } }).catch(() => {});
+      return NextResponse.json(charge.body, { status: charge.status });
+    }
     const script = refine ? episodeScriptV2From(project.episodeScriptsV2, episode) || null : null;
     runInBackground(() => runEpisodeScriptV2Job(job.id, projectId, {
       episode, summary, synopsisLanguage: synopsisLanguageFromCode(project.language), script, refine, refineEn, scriptBase, scriptTurns, overrideMessages,
     }));
-    return NextResponse.json({ jobId: job.id, resumed: false });
+    return NextResponse.json({ jobId: job.id, resumed: false, cost: charge.cost, creditsRemaining: charge.creditsRemaining });
   } catch (err: any) {
     console.error("Episode script v2 generation error:", err);
     return NextResponse.json({ error: "Generation failed: " + (err?.message ?? "Unknown error") }, { status: 500 });

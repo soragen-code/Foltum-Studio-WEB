@@ -7,6 +7,8 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
+import { chargeV2Credits } from "@/lib/v2-credits";
+import { V2_COSTS } from "@/lib/v2-costs";
 import { runEpisodeShotsV2Job, EPISODE_SHOTS_V2_JOB_TYPE } from "@/lib/workers/episode-shots-v2-job";
 import { episodeScriptV2From, episodeShotsV2From, episodeShotsV2SystemPrompt, synopsisLanguageFromCode } from "@/lib/idea-v2";
 import { activeEpisodeJob, latestEpisodeJob, patchEpisodeShotV2 } from "@/lib/episode-shots-v2-store";
@@ -34,7 +36,7 @@ const SHOT_PATCH_STR_FIELDS = ["frame", "ending"] as const;
 async function ownedProject(email: string, projectId: string) {
   const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
   if (!user) return null;
-  return prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, language: true, episodeScriptsV2: true, episodeShotsV2: true } });
+  return prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, userId: true, language: true, episodeScriptsV2: true, episodeShotsV2: true } });
 }
 
 export async function POST(request: Request) {
@@ -59,8 +61,13 @@ export async function POST(request: Request) {
     const job = await prisma.generationJob.create({
       data: { type: EPISODE_SHOTS_V2_JOB_TYPE, status: "pending", progress: 0, message: "Starting...", projectId, resultData: JSON.stringify({ episode }) },
     });
+    const charge = await chargeV2Credits(project.userId, V2_COSTS.shots, "shots", job.id);
+    if (!charge.ok) {
+      await prisma.generationJob.delete({ where: { id: job.id } }).catch(() => {});
+      return NextResponse.json(charge.body, { status: charge.status });
+    }
     runInBackground(() => runEpisodeShotsV2Job(job.id, projectId, { episode, script, synopsisLanguage: synopsisLanguageFromCode(project.language), systemOverride: system }));
-    return NextResponse.json({ jobId: job.id, resumed: false });
+    return NextResponse.json({ jobId: job.id, resumed: false, cost: charge.cost, creditsRemaining: charge.creditsRemaining });
   } catch (err: any) {
     console.error("Episode shots v2 split error:", err);
     return NextResponse.json({ error: "Shot split failed: " + (err?.message ?? "Unknown error") }, { status: 500 });

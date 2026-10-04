@@ -7,6 +7,8 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
+import { chargeV2Credits } from "@/lib/v2-credits";
+import { V2_COSTS } from "@/lib/v2-costs";
 import { runLoglineV2Job, LOGLINE_V2_JOB_TYPE } from "@/lib/workers/logline-v2-job";
 import { isSeasonPlotV2Locked, SEASON_PLOT_V2_LOCKED_ERROR } from "@/lib/idea-v2";
 
@@ -79,8 +81,13 @@ export async function POST(request: Request) {
     const job = await prisma.generationJob.create({
       data: { type: LOGLINE_V2_JOB_TYPE, status: "pending", progress: 0, message: "Starting…", projectId },
     });
+    const charge = await chargeV2Credits(user.id, V2_COSTS.logline, "logline", job.id);
+    if (!charge.ok) {
+      await prisma.generationJob.delete({ where: { id: job.id } }).catch(() => {});
+      return NextResponse.json(charge.body, { status: charge.status });
+    }
     runInBackground(() => runLoglineV2Job(job.id, projectId, { idea, ideaEn, loglineLanguage, genres, wishes, wishesEn, logline, refine, refineEn, loglineBase, loglineTurns, overrideMessages, overrideSystem, overrideUser, overrideAssistant }));
-    return NextResponse.json({ jobId: job.id, resumed: false });
+    return NextResponse.json({ jobId: job.id, resumed: false, cost: charge.cost, creditsRemaining: charge.creditsRemaining });
   } catch (err: any) {
     console.error("Logline v2 generation error:", err);
     return NextResponse.json({ error: "Generation failed: " + (err?.message ?? "Unknown error") }, { status: 500 });

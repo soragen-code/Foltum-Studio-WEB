@@ -7,6 +7,8 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
+import { chargeV2Credits } from "@/lib/v2-credits";
+import { V2_COSTS } from "@/lib/v2-costs";
 import { runEpisodeStoryboardV2Job, EPISODE_STORYBOARD_V2_JOB_TYPE } from "@/lib/workers/episode-storyboard-v2-job";
 import { episodeShotsV2From, episodeStoryboardV2From } from "@/lib/idea-v2";
 import { peekStoryboardV2AutoPrompt, storyboardV2PromptInputs } from "@/lib/storyboard-v2-prompt";
@@ -23,7 +25,7 @@ const postSchema = z.object({ projectId: z.string().min(1), episode: z.coerce.nu
 async function ownedProject(email: string, projectId: string) {
   const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
   if (!user) return null;
-  return prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, episodeShotsV2: true, episodeRefsV2: true, episodeStoryboardV2: true } });
+  return prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, userId: true, episodeShotsV2: true, episodeRefsV2: true, episodeStoryboardV2: true } });
 }
 
 export async function POST(request: Request) {
@@ -54,8 +56,13 @@ export async function POST(request: Request) {
     const job = await prisma.generationJob.create({
       data: { type: EPISODE_STORYBOARD_V2_JOB_TYPE, status: "pending", progress: 0, message: "Starting...", projectId, resultData: JSON.stringify({ episode }) },
     });
+    const charge = await chargeV2Credits(project.userId, V2_COSTS.storyboard, "storyboard", job.id);
+    if (!charge.ok) {
+      await prisma.generationJob.delete({ where: { id: job.id } }).catch(() => {});
+      return NextResponse.json(charge.body, { status: charge.status });
+    }
     runInBackground(() => runEpisodeStoryboardV2Job(job.id, projectId, { episode }));
-    return NextResponse.json({ jobId: job.id, resumed: false });
+    return NextResponse.json({ jobId: job.id, resumed: false, cost: charge.cost, creditsRemaining: charge.creditsRemaining });
   } catch (err: any) {
     console.error("Episode storyboard v2 build error:", err);
     return NextResponse.json({ error: "Storyboard build failed: " + (err?.message ?? "Unknown error") }, { status: 500 });
@@ -87,5 +94,6 @@ export async function GET(request: Request) {
     storyboard: episodeStoryboardV2From(project.episodeStoryboardV2, episode),
     autoPrompt,
     refs: refsPreview,
+    shotsCount: episodeShotsV2From(project.episodeShotsV2, episode).length,
   }, { headers: { "Cache-Control": "no-store" } });
 }

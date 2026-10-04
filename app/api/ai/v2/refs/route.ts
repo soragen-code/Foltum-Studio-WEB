@@ -7,6 +7,8 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
+import { chargeV2Credits } from "@/lib/v2-credits";
+import { V2_COSTS } from "@/lib/v2-costs";
 import { runEpisodeRefsV2Job, EPISODE_REFS_V2_JOB_TYPE } from "@/lib/workers/episode-refs-v2-job";
 import { episodeScriptV2From, episodeRefsV2From, synopsisLanguageFromCode } from "@/lib/idea-v2";
 import { activeEpisodeJob, latestEpisodeJob, patchEpisodeRefV2 } from "@/lib/episode-refs-v2-store";
@@ -23,7 +25,7 @@ const patchSchema = postSchema.extend({ id: z.string().min(1).max(200), prompt: 
 async function ownedProject(email: string, projectId: string) {
   const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
   if (!user) return null;
-  return prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, language: true, episodeScriptsV2: true, episodeRefsV2: true } });
+  return prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, userId: true, language: true, episodeScriptsV2: true, episodeRefsV2: true } });
 }
 
 export async function POST(request: Request) {
@@ -48,8 +50,13 @@ export async function POST(request: Request) {
     const job = await prisma.generationJob.create({
       data: { type: EPISODE_REFS_V2_JOB_TYPE, status: "pending", progress: 0, message: "Starting...", projectId, resultData: JSON.stringify({ episode }) },
     });
+    const charge = await chargeV2Credits(project.userId, V2_COSTS.refsExtract, "refs-extract", job.id);
+    if (!charge.ok) {
+      await prisma.generationJob.delete({ where: { id: job.id } }).catch(() => {});
+      return NextResponse.json(charge.body, { status: charge.status });
+    }
     runInBackground(() => runEpisodeRefsV2Job(job.id, projectId, { episode, script, synopsisLanguage: synopsisLanguageFromCode(project.language) }));
-    return NextResponse.json({ jobId: job.id, resumed: false });
+    return NextResponse.json({ jobId: job.id, resumed: false, cost: charge.cost, creditsRemaining: charge.creditsRemaining });
   } catch (err: any) {
     console.error("Episode refs v2 extraction error:", err);
     return NextResponse.json({ error: "Extraction failed: " + (err?.message ?? "Unknown error") }, { status: 500 });

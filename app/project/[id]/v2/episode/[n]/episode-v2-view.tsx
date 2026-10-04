@@ -14,6 +14,7 @@ import { EpisodeRefsTab } from './refs-tab'
 import { ShotlistTab } from './shotlist-tab'
 import { StoryboardTab } from './storyboard-tab'
 import { ScenesTab } from './scenes-tab'
+import { V2_COSTS } from '@/lib/v2-costs'
 
 /**
  * Поток v2 · страница эпизода. Вкладки расширяемы (TABS): «Сценарий», «Референсы» (refs-tab.tsx).
@@ -72,6 +73,7 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
   projectId: string; projectTitle: string; n: number; summary: string; initialScript: string; initialRefs?: EpisodeRefV2[]; initialShots?: EpisodeShotV2[]; initialStoryboard?: EpisodeStoryboardV2 | null; initialScenes?: EpisodeSceneV2[]; backHref: string; ownFace?: boolean; prevN?: number | null; nextN?: number | null
 }) {
   const { t, locale } = useTranslation()
+  const costTag = (n: number) => <span className="ml-0.5 whitespace-nowrap text-[11px] font-normal opacity-80" data-testid="episode-v2-cost">· {t('ideaV2.costCredits', { n })}</span>
   // Вкладка из URL (?tab=scenes): переход «← Серия N-1 / Серия N+1 →» сохраняет текущую вкладку.
   const searchParams = useSearchParams()
   const tabParam = searchParams?.get('tab') as TabKey | null
@@ -325,7 +327,7 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
           <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
             {previewBtn(true, 'episode-v2-script-preview')}
             <button onClick={() => generate(true)} disabled={generating} className={btnPrimary} data-testid="episode-v2-script-generate">
-              <Wand2 className="h-4 w-4" /> {t('ideaV2.generate')}
+              <Wand2 className="h-4 w-4" /> {t('ideaV2.generate')}{costTag(V2_COSTS.script)}
             </button>
           </div>
           {canceled && <p className="mt-3 text-xs text-amber-500">{t('ideaV2.scriptCanceled')}</p>}
@@ -351,7 +353,7 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
           <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
             {previewBtn(false, 'episode-v2-script-refine-preview', !refineText.trim())}
             <button onClick={() => generate()} disabled={generating || !refineText.trim()} className={btnMain} data-testid="episode-v2-script-refine-edit">
-              <Pencil className="h-3.5 w-3.5" /> {t('ideaV2.change')}
+              <Pencil className="h-3.5 w-3.5" /> {t('ideaV2.change')}{costTag(V2_COSTS.script)}
             </button>
           </div>
         </div>
@@ -406,7 +408,7 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
             {tab === 'script' && renderScriptTab()}
             {tab === 'refs' && <EpisodeRefsTab projectId={projectId} n={n} hasScript={!!script && !generating} initialRefs={initialRefs} ownFace={ownFace} />}
             {tab === 'shots' && <ShotlistTab projectId={projectId} n={n} hasScript={!!script && !generating} scriptText={script} initialShots={initialShots} />}
-            {tab === 'storyboard' && <StoryboardTab projectId={projectId} n={n} hasShots={initialShots.length > 0} initialStoryboard={initialStoryboard} onOpenScenes={() => setTab('scenes')} />}
+            {tab === 'storyboard' && <StoryboardTab projectId={projectId} n={n} hasShots={initialShots.length > 0} initialShotsCount={initialShots.length} initialStoryboard={initialStoryboard} onOpenScenes={() => setTab('scenes')} />}
             {tab === 'scenes' && <ScenesTab projectId={projectId} n={n} initialScenes={initialScenes} initialApproved={!!initialStoryboard?.approved} />}
           </div>
           {error && tab === 'script' && <div className="mt-4">{errorBox}</div>}

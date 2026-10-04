@@ -7,6 +7,7 @@
  */
 import { after } from "next/server";
 import { prisma } from "@/lib/db";
+import { refundV2JobCredits } from "@/lib/v2-credits";
 
 export const WORKER_SECRET_HEADER = "x-worker-secret";
 
@@ -156,6 +157,8 @@ export async function completeJob(jobId: string, resultData?: unknown, message =
 
 export async function failJob(jobId: string, error: string): Promise<void> {
   await updateJob(jobId, { status: "failed", message: "Failed", error: error.slice(0, 2000) });
+  // Шаги v2 списывают кредиты при запуске job — упавшая job возвращает их (идемпотентно, по jobId в CreditTransaction).
+  await refundV2JobCredits(jobId);
 }
 
 /** Terminal job statuses — polling stops and the UI shows a final state. */

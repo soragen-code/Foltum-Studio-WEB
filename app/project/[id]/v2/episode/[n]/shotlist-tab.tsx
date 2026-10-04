@@ -7,6 +7,7 @@ import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from '../../../_components/cancel-button'
 import { useJobPolling, SmoothProgress } from '../../../_components/use-job-polling'
 import { ShotPromptModal } from './shot-prompt-modal'
+import { V2_COSTS } from '@/lib/v2-costs'
 
 /**
  * Поток v2 · вкладка «Шот-лист» серии n.
@@ -172,7 +173,7 @@ export function ShotlistTab({ projectId, n, hasScript, scriptText, initialShots 
           {hasScript && (
             <button onClick={() => void runExtract()} disabled={extracting} className={`${btnBar} min-w-[180px]`} data-testid="episode-v2-shots-extract">
               {extracting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />}
-              {items.length ? t('ideaV2.shotsReextract') : t('ideaV2.shotsExtract')}
+              {items.length ? t('ideaV2.shotsReextract') : t('ideaV2.shotsExtract')}<span className="ml-0.5 whitespace-nowrap text-[11px] font-normal opacity-80" data-testid="episode-v2-cost">· {t('ideaV2.costCredits', { n: V2_COSTS.shots })}</span>
             </button>
           )}
         </div>

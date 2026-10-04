@@ -7,6 +7,8 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
+import { chargeV2Credits } from "@/lib/v2-credits";
+import { V2_COSTS } from "@/lib/v2-costs";
 import { runSeasonPlotV2Job, SEASON_PLOT_V2_JOB_TYPE } from "@/lib/workers/season-plot-v2-job";
 import { normalizeSynopsisLanguage, normalizeEpisodesCount, synopsisLanguageFromCode, isSeasonPlotV2Locked, SEASON_PLOT_V2_LOCKED_ERROR } from "@/lib/idea-v2";
 
@@ -70,9 +72,14 @@ export async function POST(request: Request) {
     const job = await prisma.generationJob.create({
       data: { type: SEASON_PLOT_V2_JOB_TYPE, status: "pending", progress: 0, message: "Starting...", projectId },
     });
+    const charge = await chargeV2Credits(user.id, V2_COSTS.plot, "plot", job.id);
+    if (!charge.ok) {
+      await prisma.generationJob.delete({ where: { id: job.id } }).catch(() => {});
+      return NextResponse.json(charge.body, { status: charge.status });
+    }
     const currentPlot = (plot ?? "").trim() || (refine ? (project.seasonPlotV2 ?? "").trim() : "") || null;
     runInBackground(() => runSeasonPlotV2Job(job.id, projectId, { synopsis, synopsisLanguage, episodesCount, plot: currentPlot, refine, refineEn, plotBase, plotTurns, overrideMessages, overrideSystem, overrideUser, overrideAssistant }));
-    return NextResponse.json({ jobId: job.id, resumed: false });
+    return NextResponse.json({ jobId: job.id, resumed: false, cost: charge.cost, creditsRemaining: charge.creditsRemaining });
   } catch (err: any) {
     console.error("Season plot v2 generation error:", err);
     return NextResponse.json({ error: "Generation failed: " + (err?.message ?? "Unknown error") }, { status: 500 });

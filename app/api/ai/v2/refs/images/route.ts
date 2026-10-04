@@ -7,6 +7,8 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { runInBackground, failStaleJobs } from "@/lib/jobs";
+import { chargeV2Credits } from "@/lib/v2-credits";
+import { refImagesCost } from "@/lib/v2-costs";
 import { runEpisodeRefImagesV2Job, EPISODE_REF_IMAGES_V2_JOB_TYPE } from "@/lib/workers/episode-ref-images-v2-job";
 import { episodeRefsV2From } from "@/lib/idea-v2";
 import { activeEpisodeJob, latestEpisodeJob } from "@/lib/episode-refs-v2-store";
@@ -26,7 +28,7 @@ const postSchema = z.object({
 async function ownedProject(email: string, projectId: string) {
   const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
   if (!user) return null;
-  return prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, episodeRefsV2: true } });
+  return prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, userId: true, episodeRefsV2: true } });
 }
 
 export async function POST(request: Request) {
@@ -52,8 +54,13 @@ export async function POST(request: Request) {
     const job = await prisma.generationJob.create({
       data: { type: EPISODE_REF_IMAGES_V2_JOB_TYPE, status: "pending", progress: 0, message: "Starting...", projectId, resultData: JSON.stringify({ episode, total: target.length }) },
     });
+    const charge = await chargeV2Credits(project.userId, refImagesCost(target.length), "ref-images", job.id);
+    if (!charge.ok) {
+      await prisma.generationJob.delete({ where: { id: job.id } }).catch(() => {});
+      return NextResponse.json(charge.body, { status: charge.status });
+    }
     runInBackground(() => runEpisodeRefImagesV2Job(job.id, projectId, { episode, ids: target }));
-    return NextResponse.json({ jobId: job.id, resumed: false, total: target.length });
+    return NextResponse.json({ jobId: job.id, resumed: false, total: target.length, cost: charge.cost, creditsRemaining: charge.creditsRemaining });
   } catch (err: any) {
     console.error("Episode ref images v2 error:", err);
     return NextResponse.json({ error: "Generation failed: " + (err?.message ?? "Unknown error") }, { status: 500 });

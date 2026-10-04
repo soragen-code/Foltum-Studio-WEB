@@ -7,6 +7,7 @@ import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from '../../../_components/cancel-button'
 import { useJobPolling, SmoothProgress } from '../../../_components/use-job-polling'
 import { StoryboardPromptModal, type StoryboardPromptRef } from './storyboard-prompt-modal'
+import { V2_COSTS, sceneFramesCost } from '@/lib/v2-costs'
 
 const draftKey = (pid: string, n: number) => `foltum:v2:storyboard-prompt:${pid}:${n}`
 
@@ -23,11 +24,14 @@ const isActive = (j: any) => !!j && (j.status === 'pending' || j.status === 'pro
 
 const SCENES_API = '/api/ai/v2/scenes'
 
-export function StoryboardTab({ projectId, n, hasShots, initialStoryboard, onOpenScenes }: {
-  projectId: string; n: number; hasShots: boolean; initialStoryboard: EpisodeStoryboardV2 | null; onOpenScenes?: () => void
+export function StoryboardTab({ projectId, n, hasShots, initialShotsCount = 0, initialStoryboard, onOpenScenes }: {
+  projectId: string; n: number; hasShots: boolean; initialShotsCount?: number; initialStoryboard: EpisodeStoryboardV2 | null; onOpenScenes?: () => void
 }) {
   const { t } = useTranslation()
   const [storyboard, setStoryboard] = useState<EpisodeStoryboardV2 | null>(initialStoryboard)
+  // Число кадров шот-листа — для стоимости нарезки первых кадров (1 кредит за сцену); обновляется из GET.
+  const [shotsCount, setShotsCount] = useState(initialShotsCount)
+  const costTag = (c: number) => <span className="ml-0.5 whitespace-nowrap text-[11px] font-normal opacity-80" data-testid="episode-v2-cost">· {t('ideaV2.costCredits', { n: c })}</span>
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [starting, setStarting] = useState(false)
@@ -108,6 +112,7 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard, onOpe
           if ('storyboard' in d) setStoryboard(d.storyboard ?? null)
           if (typeof d.autoPrompt === 'string') setAutoPrompt(d.autoPrompt)
           if (Array.isArray(d.refs)) setRefs(d.refs)
+          if (typeof d.shotsCount === 'number') setShotsCount(d.shotsCount)
           return true
         }
       } catch { /* транзиентно */ }
@@ -165,6 +170,7 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard, onOpe
         if ('storyboard' in d) setStoryboard(d.storyboard ?? null)
         if (typeof d.autoPrompt === 'string') setAutoPrompt(d.autoPrompt)
         if (Array.isArray(d.refs)) setRefs(d.refs)
+        if (typeof d.shotsCount === 'number') setShotsCount(d.shotsCount)
         if (isActive(d.job)) { jobIdRef.current = d.job.id; poll.start(d.job.id) }
         // Идущая нарезка первых кадров (после аппрува) — продолжить показ статуса.
         const sc = await fetch(`${SCENES_API}?projectId=${projectId}&episode=${n}`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null)
@@ -254,7 +260,7 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard, onOpe
             </button>
             <button onClick={() => void build()} disabled={building} className={`${btnBar} min-w-[180px]`} data-testid="episode-v2-storyboard-build">
               {building ? <Loader2 className="h-4 w-4 animate-spin" /> : img ? <RefreshCw className="h-4 w-4" /> : <LayoutGrid className="h-4 w-4" />}
-              {img ? t('ideaV2.storyboardRebuild') : t('ideaV2.storyboardBuild')}
+              {img ? t('ideaV2.storyboardRebuild') : t('ideaV2.storyboardBuild')}{costTag(V2_COSTS.storyboard)}
             </button>
           </div>
         )}
@@ -291,7 +297,7 @@ export function StoryboardTab({ projectId, n, hasShots, initialStoryboard, onOpe
             <div className="mt-3 flex max-w-md flex-col gap-2" data-testid="episode-v2-storyboard-approve-box">
               <div className="flex flex-wrap items-center gap-2">
                 <button onClick={() => void approve()} disabled={cutting} className={btnBar} data-testid="episode-v2-storyboard-approve">
-                  {cutting ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />} {t('ideaV2.approveStoryboard')}
+                  {cutting ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />} {t('ideaV2.approveStoryboard')}{costTag(sceneFramesCost(shotsCount))}
                 </button>
                 {storyboard?.approved && !cutting && (
                   <span className="inline-flex items-center gap-1 text-xs text-emerald-500" data-testid="episode-v2-storyboard-approved"><CheckCircle2 className="h-3.5 w-3.5" /> {t('ideaV2.storyboardApproved')}</span>
