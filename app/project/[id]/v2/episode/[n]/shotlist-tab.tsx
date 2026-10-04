@@ -128,6 +128,17 @@ export function ShotlistTab({ projectId, n, hasScript, scriptText, initialShots 
     try { await fetch(`/api/ai/jobs/${id}/cancel`, { method: 'POST' }) } catch { /* поллинг повторит */ }
   }
 
+  // «Пересобрать промпт»: свежий системный промпт с сервера (актуальные правила + язык проекта), сохранённая правка сбрасывается.
+  const rebuildSystemPrompt = async (): Promise<string> => {
+    const d = await fetch(`${API}?projectId=${projectId}&episode=${n}`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+    const fresh = typeof d?.autoSystem === 'string' && d.autoSystem.trim() ? d.autoSystem : ''
+    if (!fresh) return ''
+    setAutoSystem(fresh)
+    setSystemDraft('')
+    try { localStorage.removeItem(draftKey(projectId, n)) } catch { /* недоступно */ }
+    return fresh
+  }
+
   const saveSystemDraft = (system: string) => {
     setSystemDraft(system)
     try {
@@ -212,6 +223,7 @@ export function ShotlistTab({ projectId, n, hasScript, scriptText, initialShots 
           systemDraft={systemDraft}
           scriptText={script}
           onSave={saveSystemDraft}
+          onRebuild={rebuildSystemPrompt}
           onClose={() => setPromptOpen(false)}
         />
       )}

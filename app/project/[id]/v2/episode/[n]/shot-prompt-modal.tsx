@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Loader2, Eye, Copy, Check, X, Info, RotateCcw, ChevronDown, ChevronRight } from 'lucide-react'
+import { Loader2, Eye, Copy, Check, X, Info, RotateCcw, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react'
 import { useTranslation } from '@/lib/i18n/context'
 
 /**
@@ -10,9 +10,12 @@ import { useTranslation } from '@/lib/i18n/context'
  * Сообщение user (сценарий серии) показывается ниже как read-only (аккордеон, свёрнут).
  * «Сохранить» → поднимает отредактированный system наверх (localStorage-черновик); «Закрыть» — без сохранения.
  */
-export function ShotPromptModal({ autoSystem, systemDraft, scriptText, onSave, onClose }: {
+export function ShotPromptModal({ autoSystem, systemDraft, scriptText, onSave, onRebuild, onClose }: {
   autoSystem: string; systemDraft: string; scriptText: string
-  onSave: (system: string) => void; onClose: () => void
+  onSave: (system: string) => void
+  /** «Пересобрать промпт»: заново получить актуальный системный промпт с сервера, сбросить сохранённую правку; возвращает свежий текст. */
+  onRebuild?: () => Promise<string>
+  onClose: () => void
 }) {
   const { t } = useTranslation()
   const [draft, setDraft] = useState(systemDraft.trim() ? systemDraft : autoSystem)
@@ -24,6 +27,8 @@ export function ShotPromptModal({ autoSystem, systemDraft, scriptText, onSave, o
   const [copied, setCopied] = useState(false)
   const [saved, setSaved] = useState(false)
   const [userOpen, setUserOpen] = useState(false)
+  const [rebuilding, setRebuilding] = useState(false)
+  const [rebuilt, setRebuilt] = useState(false)
   const edited = !!autoSystem.trim() && draft.trim() !== autoSystem.trim()
   const dirty = draft !== (systemDraft.trim() ? systemDraft : autoSystem)
 
@@ -35,6 +40,15 @@ export function ShotPromptModal({ autoSystem, systemDraft, scriptText, onSave, o
     try { await navigator.clipboard.writeText(draft); setCopied(true); setTimeout(() => setCopied(false), 1500) } catch { /* буфер недоступен */ }
   }
   const resetAuto = () => setDraft(autoSystem)
+  const rebuild = async () => {
+    if (!onRebuild || rebuilding) return
+    setRebuilding(true)
+    try {
+      const fresh = await onRebuild()
+      if (fresh.trim()) { setDraft(fresh); setRebuilt(true); setTimeout(() => setRebuilt(false), 1500) }
+    } catch { /* сеть — оставляем текущий текст */ }
+    finally { setRebuilding(false) }
+  }
   const save = () => {
     if (!draft.trim()) return
     onSave(draft)
@@ -66,6 +80,11 @@ export function ShotPromptModal({ autoSystem, systemDraft, scriptText, onSave, o
               <button type="button" onClick={resetAuto} disabled={!edited} className={`${btnBase} ${btnIdle} disabled:opacity-40`} title={t('ideaV2.shotsPromptResetHint')} data-testid="episode-v2-shot-reset">
                 <RotateCcw className="h-3.5 w-3.5" /> {t('ideaV2.shotsPromptReset')}
               </button>
+              {onRebuild && (
+                <button type="button" onClick={() => void rebuild()} disabled={rebuilding} className={`${btnBase} ${rebuilt ? btnActive : btnIdle} disabled:opacity-60`} title={t('ideaV2.shotsPromptRebuildHint')} data-testid="episode-v2-shot-rebuild">
+                  {rebuilding ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : rebuilt ? <Check className="h-3.5 w-3.5 text-primary" /> : <RefreshCw className="h-3.5 w-3.5" />} {rebuilt ? t('ideaV2.shotsPromptRebuilt') : t('ideaV2.shotsPromptRebuild')}
+                </button>
+              )}
             </div>
           </div>
           <textarea
