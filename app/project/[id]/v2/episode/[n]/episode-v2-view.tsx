@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { Loader2, Eye, Pencil, ArrowLeft, ArrowRight, Wand2, FileText, Images, Clapperboard, LayoutGrid, Film } from 'lucide-react'
+import { Loader2, Eye, Pencil, ArrowLeft, ArrowRight, Wand2, RefreshCw, FileText, Images, Clapperboard, LayoutGrid, Film } from 'lucide-react'
 import { Header } from '@/components/header'
 import { FABLE_MODEL_LABEL, type EpisodeRefV2, type EpisodeShotV2, type EpisodeStoryboardV2, type EpisodeSceneV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
@@ -336,7 +336,23 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
     }
     return (
       <div data-testid="episode-v2-script-result">
-        <p className="text-sm text-muted-foreground">Модель: <span className="font-semibold text-foreground">{FABLE_MODEL_LABEL}</span></p>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm text-muted-foreground">Модель: <span className="font-semibold text-foreground">{FABLE_MODEL_LABEL}</span></p>
+          {/* Перегенерация с нуля (без правок): тот же путь, что и первая генерация — свежий промпт с актуальным
+              контекстом (имена персонажей и финальный кадр предыдущей серии); текущий сценарий будет заменён. */}
+          <div className="flex flex-wrap items-center gap-2">
+            {previewBtn(true, 'episode-v2-script-regenerate-preview')}
+            <button
+              onClick={() => { if (window.confirm(t('ideaV2.scriptRegenerateConfirm'))) generate(true) }}
+              disabled={generating}
+              className={btnMain}
+              title={t('ideaV2.scriptRegenerateHint')}
+              data-testid="episode-v2-script-regenerate"
+            >
+              <RefreshCw className="h-3.5 w-3.5" /> {t('ideaV2.scriptRegenerate')}{costTag(V2_COSTS.script)}
+            </button>
+          </div>
+        </div>
         <pre className="mt-3 whitespace-pre-wrap break-words rounded-lg border border-border bg-background px-4 py-3 font-mono text-[13px] leading-relaxed text-foreground" data-testid="episode-v2-script-text">{script}</pre>
         <div className="mt-5 rounded-lg border border-border/70 bg-muted/30 px-4 py-3" data-testid="episode-v2-script-refine">
           <label htmlFor="episode-v2-script-refine-input" className="text-xs font-semibold text-foreground">{t('ideaV2.scriptRefineLabel')}</label>
