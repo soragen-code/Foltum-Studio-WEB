@@ -14,7 +14,7 @@ import { ScenePromptModal, type ScenePromptRef, type ScenePromptScene } from './
 const API = '/api/ai/v2/scenes'
 const POLL_MS = 3000
 
-type SceneRow = EpisodeSceneV2 & { autoPrompt?: string; videoPrompt?: string }
+type SceneRow = EpisodeSceneV2 & { autoPrompt?: string; videoPrompt?: string; videoRefs?: ScenePromptRef[] }
 type JobLite = { id: string; status: string; error?: string | null } | null
 type ScenesData = { scenes: SceneRow[]; refs: ScenePromptRef[]; storyboardUrl: string | null; approved: boolean; framesJob: JobLite; videoJob: JobLite; assembleJob: JobLite; final: EpisodeFinalV2 | null; allVideosReady: boolean }
 
@@ -116,6 +116,7 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
   const modalScene: ScenePromptScene | null = promptScene ? {
     id: promptScene.id, index: promptScene.index, action: promptScene.action, endFrame: promptScene.endFrame, promptOverride: promptScene.promptOverride,
     autoPrompt: promptScene.autoPrompt ?? '', videoPrompt: promptScene.videoPrompt ?? promptScene.action,
+    firstFrameUrl: promptScene.firstFrameUrl ?? null,
   } : null
 
   return (
@@ -228,8 +229,7 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
           projectId={projectId}
           n={n}
           scene={modalScene}
-          refs={data.refs}
-          storyboardUrl={data.storyboardUrl}
+          refs={promptScene?.videoRefs ?? []}
           onSaved={() => void load()}
           onClose={() => setPromptFor(null)}
         />

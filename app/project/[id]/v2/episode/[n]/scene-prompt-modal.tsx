@@ -7,13 +7,15 @@ import { useTranslation } from '@/lib/i18n/context'
 /**
  * Поток v2 · модалка промпта сцены (по образцу storyboard-prompt-modal.tsx).
  * EN-промпт первого кадра: авто или ручной (promptOverride) → «Сохранить» = PATCH /api/ai/v2/scenes.
- * «РУ» — перевод только для просмотра (/api/ai/translate). Ниже — промпт видео и референсы (read-only).
+ * «РУ» — перевод только для просмотра (/api/ai/translate). Ниже — промпт видео и референсы (read-only):
+ * image 1 — первый кадр ЭТОЙ сцены (вырезан из сториборда), далее — только персонажи и реквизит сцены. Лист-сториборд
+ * и локации в видео сцены НЕ передаются.
  */
 export type ScenePromptRef = { id: string; label: string; kind: 'character' | 'location' | 'prop'; imageUrl?: string | null }
-export type ScenePromptScene = { id: string; index: number; action: string; endFrame?: string; promptOverride?: string | null; autoPrompt: string; videoPrompt: string }
+export type ScenePromptScene = { id: string; index: number; action: string; endFrame?: string; promptOverride?: string | null; autoPrompt: string; videoPrompt: string; firstFrameUrl?: string | null }
 
-export function ScenePromptModal({ projectId, n, scene, refs, storyboardUrl, onSaved, onClose }: {
-  projectId: string; n: number; scene: ScenePromptScene; refs: ScenePromptRef[]; storyboardUrl?: string | null
+export function ScenePromptModal({ projectId, n, scene, refs, onSaved, onClose }: {
+  projectId: string; n: number; scene: ScenePromptScene; refs: ScenePromptRef[]
   onSaved: () => void; onClose: () => void
 }) {
   const { t } = useTranslation()
@@ -115,18 +117,18 @@ export function ScenePromptModal({ projectId, n, scene, refs, storyboardUrl, onS
           <div className="rounded-lg border border-border">
             <div className="flex items-center justify-between gap-2 px-3 py-2">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('ideaV2.scenesRefsLabel')}</span>
-              <span className="text-[10px] text-muted-foreground/70">{refs.length + (storyboardUrl ? 1 : 0)}</span>
+              <span className="text-[10px] text-muted-foreground/70">{refs.length + (scene.firstFrameUrl ? 1 : 0)}</span>
             </div>
             <div className="grid grid-cols-3 gap-2 border-t border-border p-3 sm:grid-cols-4" data-testid="episode-v2-scene-refs">
-              {storyboardUrl && (
-                <div className="overflow-hidden rounded-md border border-primary/50 bg-muted/20">
+              {scene.firstFrameUrl && (
+                <div className="overflow-hidden rounded-md border border-primary/50 bg-muted/20" data-testid="episode-v2-scene-ref-first-frame">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <div className="aspect-square w-full bg-muted/30"><img src={storyboardUrl} alt={t('ideaV2.storyboardTab')} className="h-full w-full object-cover" /></div>
-                  <p className="truncate px-1.5 py-1 text-[10px] text-primary">{t('ideaV2.storyboardTab')}</p>
+                  <div className="aspect-square w-full bg-muted/30"><img src={scene.firstFrameUrl} alt={t('ideaV2.scenesFirstFrameRef')} className="h-full w-full object-cover" /></div>
+                  <p className="truncate px-1.5 py-1 text-[10px] text-primary">{t('ideaV2.scenesFirstFrameRef', { i: 1 })}</p>
                 </div>
               )}
-              {refs.map((r) => (
-                <div key={r.id} className="overflow-hidden rounded-md border border-border bg-muted/20">
+              {refs.map((r, k) => (
+                <div key={r.id} className="overflow-hidden rounded-md border border-border bg-muted/20" title={`image ${k + (scene.firstFrameUrl ? 2 : 1)}`}>
                   <div className="aspect-square w-full bg-muted/30">
                     {r.imageUrl
                       /* eslint-disable-next-line @next/next/no-img-element */

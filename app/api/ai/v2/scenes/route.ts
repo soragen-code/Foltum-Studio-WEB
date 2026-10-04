@@ -29,7 +29,7 @@ import { translateToEnglish } from "@/lib/translate-en";
  * (ответ возвращается сразу, закрытие вкладки работу не прерывает). Воркеры возобновляемые: если инвокация упёрлась
  * в maxDuration или упала, cron /api/cron/advance-chains (resumeEpisodeScenesV2Jobs) перезапускает их раз в минуту.
  * GET лишь ЧИТАЕТ состояние (сцены + последние job) — поллинг вкладки ничего не двигает.
- * GET   ?projectId&episode → { scenes (+autoPrompt/videoPrompt), refs, approved, framesJob, videoJob }.
+ * GET   ?projectId&episode → { scenes (+autoPrompt/videoPrompt/videoRefs), refs (нарезка кадров), approved, framesJob, videoJob }.
  */
 const postSchema = z.object({ projectId: z.string().min(1), episode: z.coerce.number().int().min(1).max(999), action: z.enum(["approve", "launch-all", "assemble", "rebuild-prompts"]) });
 const patchSchema = z.object({ projectId: z.string().min(1), episode: z.coerce.number().int().min(1).max(999), sceneId: z.string().min(1).max(64), prompt: z.string().max(100000) });
@@ -170,7 +170,13 @@ export async function GET(request: Request) {
     const videoRefs = selectSceneVideoV2Refs(allRefs, MAX_SCENE_VIDEO_REF_IMAGES - 1, s);
     const [actionEn, endEn] = await Promise.all([translateToEnglish(s.action), translateToEnglish(s.endFrame)]);
     const en = { ...s, action: actionEn || s.action, endFrame: endEn || s.endFrame };
-    return { ...s, autoPrompt: sceneVideoV2Prompt({ action: en.action, endFrame: en.endFrame, promptOverride: null }, videoRefs), videoPrompt: sceneVideoV2Prompt(en, videoRefs) };
+    return {
+      ...s,
+      autoPrompt: sceneVideoV2Prompt({ action: en.action, endFrame: en.endFrame, promptOverride: null }, videoRefs),
+      videoPrompt: sceneVideoV2Prompt(en, videoRefs),
+      // Ровно те картинки, что уходят в видео этой сцены после первого кадра (image 2..N): персонажи и реквизит сцены.
+      videoRefs: videoRefs.map((r) => ({ id: r.id, label: r.label, kind: r.kind, imageUrl: r.imageUrl })),
+    };
   }));
   // Если job склейки упала/устарела, а в episodeFinalV2 застрял pending/running — показываем ошибку.
   let final = episodeFinalV2From(project.episodeFinalV2, episode);
