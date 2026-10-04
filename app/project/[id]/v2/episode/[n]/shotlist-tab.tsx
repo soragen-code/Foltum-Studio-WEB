@@ -17,7 +17,7 @@ import { ShotPromptModal } from './shot-prompt-modal'
  * повторная разбивка такие кадры не перезатирает. Задача возобновляется при повторном открытии страницы.
  */
 const API = '/api/ai/v2/shots'
-const EXTRACT_EXPECTED_SEC = 45
+const EXTRACT_EXPECTED_SEC = 210 // реальные прогоны: 1,5–3,5 мин (перевод + длинный JSON с 3 полями на кадр)
 const isActive = (j: any) => !!j && (j.status === 'pending' || j.status === 'processing')
 const draftKey = (pid: string, n: number) => `foltum:v2:shots-prompt:${pid}:${n}`
 
@@ -175,7 +175,7 @@ export function ShotlistTab({ projectId, n, hasScript, scriptText, initialShots 
             <p className="inline-flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin text-primary" /> {t('ideaV2.shotsExtracting')}</p>
           )}
           <div className="flex items-center justify-between gap-2">
-            <p className="min-w-0 text-xs text-muted-foreground">{t('ideaV2.shotsExtracting')} {t('ideaV2.shotsCanClose')}</p>
+            <p className="min-w-0 text-xs text-muted-foreground">{t('ideaV2.shotsExtracting')} {t('ideaV2.shotsExtractEta')} {t('ideaV2.shotsCanClose')}</p>
             <CancelButton onCancel={cancelJob} testId="episode-v2-shots-extract-cancel" className="flex-shrink-0" />
           </div>
         </div>

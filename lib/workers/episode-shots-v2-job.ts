@@ -26,12 +26,14 @@ async function runImpl(jobId: string, projectId: string, { episode, script, syno
     hb = setInterval(() => { heartbeatJob(jobId).catch(() => {}); }, 60_000);
     const system = systemOverride?.trim() || episodeShotsV2SystemPrompt(normalizeSynopsisLanguage(synopsisLanguage));
     const scriptEn = await translateToEnglish(script); // сценарий в модель уходит на английском; кадры — на языке синопсиса (управляет system)
+    await updateJob(jobId, { progress: 30, message: "Script translated, asking the model..." });
     let items: EpisodeShotV2[] = [];
     let lastError = "";
     for (let attempt = 0; attempt < 2 && !items.length; attempt++) {
       if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
       try {
         const raw = await chat(system, scriptEn, { model: FABLE_MODEL, temperature: 0.3, maxTokens: 16000 });
+        await updateJob(jobId, { progress: 75, message: "Parsing the shot list..." });
         items = parseEpisodeShotsV2(safeJsonParse(raw));
         if (!items.length) throw new Error("no shots in model output");
       } catch (e: any) {
