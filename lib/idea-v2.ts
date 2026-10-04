@@ -728,6 +728,8 @@ export interface EpisodeRefV2 {
   imageUrl?: string | null;
   imageStatus?: EpisodeRefImageStatusV2 | null;
   imageError?: string | null;
+  /** Реф унаследован из более ранней серии (номер серии-источника): картинка/промпт те же, заново не генерируется. */
+  inheritedFrom?: number | null;
 }
 
 /** Срезать ведущий префикс типа из метки рефа («Персонаж: Анна» → «Анна»); INT./EXT. не трогается. */
@@ -812,7 +814,7 @@ export function mergeEpisodeRefsV2(prev: EpisodeRefV2[], fresh: EpisodeRefV2[]):
     const keepImage = p.imageUrl && (keepPrompt || p.prompt.trim() === f.prompt.trim());
     // Сохраняем прикреплённое пользователем фото-референс внешности (userRefUrl) при повторном извлечении.
     const keepFace = f.kind === "character" && p.userRefUrl?.trim() ? { userRefUrl: p.userRefUrl } : {};
-    return { ...f, prompt, edited: keepPrompt || undefined, ...keepFace, ...(keepImage ? { imageUrl: p.imageUrl, imageStatus: "done" as const } : {}) };
+    return { ...f, prompt, edited: keepPrompt || undefined, ...keepFace, ...(keepImage ? { imageUrl: p.imageUrl, imageStatus: "done" as const, ...(p.inheritedFrom ? { inheritedFrom: p.inheritedFrom } : {}) } : {}) };
   });
 }
 
@@ -820,6 +822,52 @@ export function mergeEpisodeRefsV2(prev: EpisodeRefV2[], fresh: EpisodeRefV2[]):
 export function episodeRefsV2From(map: unknown, n: number): EpisodeRefV2[] {
   const v = map && typeof map === "object" ? (map as Record<string, any>)[String(n)] : null;
   return Array.isArray(v?.items) ? (v.items as EpisodeRefV2[]).filter((r) => r && typeof r.id === "string" && typeof r.prompt === "string") : [];
+}
+
+const refMatchKey = (s: string) => stripRefKindPrefixV2(s).toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "");
+const refIdKey = (id: string) => id.replace(/^(character|location|prop)-/, "").replace(/-\d+$/, "").replace(/[^a-z0-9]+/g, "");
+
+/**
+ * Найти тот же персонаж/локацию/реквизит в более ранних сериях (самая ранняя серия с готовой картинкой — канон, она первой):
+ * совпадение по id (`<kind>-<key>`), иначе по типу + нормализованной метке, иначе метка ↔ ключ id.
+ * Возвращает реф-источник с готовой картинкой и номер его серии, либо null.
+ */
+export function findEarlierEpisodeRefV2(map: unknown, episode: number, ref: Pick<EpisodeRefV2, "id" | "kind" | "label">): { ref: EpisodeRefV2; episode: number } | null {
+  const episodes = (map && typeof map === "object" ? Object.keys(map as object) : [])
+    .map(Number).filter((k) => Number.isInteger(k) && k >= 1 && k < episode).sort((a, b) => a - b);
+  const lk = refMatchKey(ref.label);
+  const ik = refIdKey(ref.id);
+  for (const n0 of episodes) {
+    const items = episodeRefsV2From(map, n0).filter((r) => r.kind === ref.kind && r.imageUrl && r.imageStatus !== "generating");
+    const hit = items.find((r) => r.id === ref.id)
+      ?? (lk ? items.find((r) => refMatchKey(r.label) === lk) : undefined)
+      ?? (ik ? items.find((r) => refIdKey(r.id) === ik) : undefined)
+      ?? (lk ? items.find((r) => refIdKey(r.id) === lk) : undefined)
+      ?? (ik ? items.find((r) => refMatchKey(r.label) === ik) : undefined);
+    if (hit) return { ref: hit, episode: hit.inheritedFrom && hit.inheritedFrom < n0 ? hit.inheritedFrom : n0 };
+  }
+  return null;
+}
+
+/**
+ * Наследование рефов из ранних серий: то, что уже есть в сериях 1..n-1, не генерируется заново —
+ * в серию n копируются картинка, промпт (внешность/гардероб) и пользовательское фото источника, проставляется inheritedFrom.
+ * force=false — свои (сгенерированные именно в серии n) картинки не трогаем, подтягиваем только рефы без картинки
+ * или уже унаследованные; force=true — источник из ранней серии побеждает всегда.
+ */
+export function inheritEpisodeRefsV2(map: unknown, episode: number, items: EpisodeRefV2[], force = false): { items: EpisodeRefV2[]; inherited: number } {
+  if (episode <= 1) return { items, inherited: 0 };
+  let inherited = 0;
+  const out = items.map((r) => {
+    const own = !!r.imageUrl && !r.inheritedFrom;
+    if (own && !force) return r;
+    const src = findEarlierEpisodeRefV2(map, episode, r);
+    if (!src) return r;
+    inherited++;
+    const face = r.kind === "character" ? { userRefUrl: r.userRefUrl?.trim() || src.ref.userRefUrl || null } : {};
+    return { ...r, prompt: src.ref.prompt, imageUrl: src.ref.imageUrl, imageStatus: "done" as const, imageError: null, promptDirty: false, ...face, inheritedFrom: src.episode };
+  });
+  return { items: out, inherited };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

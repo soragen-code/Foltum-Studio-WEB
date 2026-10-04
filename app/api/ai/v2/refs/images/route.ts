@@ -44,7 +44,8 @@ export async function POST(request: Request) {
     const project = await ownedProject(session.user.email, projectId);
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
     const items = episodeRefsV2From(project.episodeRefsV2, episode);
-    const target = ids?.length ? items.filter((r) => ids.includes(r.id)).map((r) => r.id) : items.map((r) => r.id);
+    // «Сгенерировать все» не трогает рефы, унаследованные из ранних серий (у них уже есть та же картинка); явный выбор по ids — перегенерирует.
+    const target = ids?.length ? items.filter((r) => ids.includes(r.id)).map((r) => r.id) : items.filter((r) => !(r.inheritedFrom && r.imageUrl)).map((r) => r.id);
     if (!target.length) return NextResponse.json({ error: "No references to generate" }, { status: 400 });
 
     await failStaleJobs({ projectId, type: EPISODE_REF_IMAGES_V2_JOB_TYPE });

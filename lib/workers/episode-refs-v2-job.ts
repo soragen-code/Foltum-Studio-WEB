@@ -8,7 +8,7 @@ import { prisma } from "@/lib/db";
 import { updateJob, completeJob, failJob, heartbeatJob, markCanceled, isCancelRequested } from "@/lib/jobs";
 import { chat, safeJsonParse } from "@/lib/ai";
 import { runWithPromptContext } from "@/lib/prompt-log";
-import { FABLE_MODEL, episodeRefsV2SystemPrompt, parseEpisodeRefsV2, mergeEpisodeRefsV2, episodeRefsV2From, normalizeSynopsisLanguage, type EpisodeRefV2 } from "@/lib/idea-v2";
+import { FABLE_MODEL, episodeRefsV2SystemPrompt, parseEpisodeRefsV2, mergeEpisodeRefsV2, inheritEpisodeRefsV2, episodeRefsV2From, normalizeSynopsisLanguage, type EpisodeRefV2 } from "@/lib/idea-v2";
 import { setEpisodeRefsV2 } from "@/lib/episode-refs-v2-store";
 
 export const EPISODE_REFS_V2_JOB_TYPE = "episode_refs_v2";
@@ -40,7 +40,8 @@ async function runImpl(jobId: string, projectId: string, { episode, script, syno
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
     await updateJob(jobId, { progress: 90, message: "Saving references..." });
     const prevRow = await prisma.project.findUnique({ where: { id: projectId }, select: { episodeRefsV2: true } });
-    const merged = mergeEpisodeRefsV2(episodeRefsV2From(prevRow?.episodeRefsV2, episode), items);
+    // Персонажи/локации/реквизит, уже имеющиеся в ранних сериях, не генерируются заново — берём тот же реф (картинка + промпт).
+    const merged = inheritEpisodeRefsV2(prevRow?.episodeRefsV2, episode, mergeEpisodeRefsV2(episodeRefsV2From(prevRow?.episodeRefsV2, episode), items)).items;
     await setEpisodeRefsV2(projectId, episode, merged);
     await completeJob(jobId, { episode, count: merged.length }, "References ready");
   } catch (err: any) {

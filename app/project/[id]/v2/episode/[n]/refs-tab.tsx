@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Loader2, Wand2, Eye, RefreshCw, ImageIcon, Sparkles, X, Upload, UserRound, Lock } from 'lucide-react'
+import { Loader2, Wand2, Eye, RefreshCw, ImageIcon, Sparkles, X, Upload, UserRound, Lock, Link2 } from 'lucide-react'
 import { FABLE_MODEL_LABEL, stripRefKindPrefixV2, type EpisodeRefV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from '../../../_components/cancel-button'
@@ -17,7 +17,7 @@ import { V2_COSTS, refImagesCost } from '@/lib/v2-costs'
  * (GPT Image 2.5 flare). Генерация всегда берёт сохранённый промпт из стора.
  * Обе задачи возобновляются при повторном открытии страницы.
  */
-const API = { refs: '/api/ai/v2/refs', images: '/api/ai/v2/refs/images', face: '/api/ai/v2/refs/face', appearance: '/api/ai/v2/refs/appearance' }
+const API = { refs: '/api/ai/v2/refs', images: '/api/ai/v2/refs/images', inherit: '/api/ai/v2/refs/inherit', face: '/api/ai/v2/refs/face', appearance: '/api/ai/v2/refs/appearance' }
 const EXTRACT_EXPECTED_SEC = 45
 const IMAGE_EXPECTED_SEC = 40
 const isActive = (j: any) => !!j && (j.status === 'pending' || j.status === 'processing')
@@ -61,7 +61,7 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs, ownFace =
   }, [lightbox, promptId])
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [starting, setStarting] = useState<'' | 'extract' | 'images'>('')
+  const [starting, setStarting] = useState<'' | 'extract' | 'images' | 'inherit'>('')
   const [imagesTotal, setImagesTotal] = useState(0)
   const extractIdRef = useRef<string | null>(null)
   const imagesIdRef = useRef<string | null>(null)
@@ -135,6 +135,19 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs, ownFace =
     finally { setStarting('') }
   }
 
+  // Взять те же рефы (картинка + промпт) из ранних серий — без генерации и без кредитов.
+  const runInherit = async () => {
+    setError(''); setNotice(''); setStarting('inherit')
+    try {
+      const res = await fetch(API.inherit, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId, episode: n }) })
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) { setError(d?.error ?? t('ideaV2.refsInheritFailed')); return }
+      if (Array.isArray(d?.items)) setItems(d.items)
+      setNotice(t(Number(d?.inherited) > 0 ? 'ideaV2.refsInheritDone' : 'ideaV2.refsInheritNone', { n: Number(d?.inherited ?? 0) }))
+    } catch { setError(t('ideaV2.refsNetworkError')) }
+    finally { setStarting('') }
+  }
+
   const runImages = async (ids?: string[]) => {
     setError(''); setNotice(''); images.clear(); setStarting('images')
     try {
@@ -144,7 +157,7 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs, ownFace =
       if (d?.resumed) setNotice(t('ideaV2.refsAlreadyRunning'))
       if (d?.jobId) { imagesIdRef.current = d.jobId; setImagesTotal(Number(d.total ?? ids?.length ?? items.length)); images.start(d.jobId) }
       if (!d?.resumed) {
-        const target = new Set(ids ?? items.map((r) => r.id))
+        const target = new Set(ids ?? items.filter((r) => !(r.inheritedFrom && r.imageUrl)).map((r) => r.id))
         setItems((list) => list.map((r) => (target.has(r.id) ? { ...r, imageStatus: 'generating', imageError: null } : r)))
       }
     } catch { setError(t('ideaV2.refsNetworkError')) }
@@ -178,7 +191,9 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs, ownFace =
 
   const ej = extract.job
   const ij = images.job
-  const busy = extracting || generatingImages
+  const busy = extracting || generatingImages || starting === 'inherit'
+  // «Сгенерировать все» не трогает рефы, унаследованные из ранних серий (та же картинка, 0 кредитов).
+  const generateAllCount = items.filter((r) => !(r.inheritedFrom && r.imageUrl)).length
 
   return (
     <div data-testid="episode-v2-refs">
@@ -191,9 +206,14 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs, ownFace =
               {items.length ? t('ideaV2.refsReextract') : t('ideaV2.refsExtract')}{costTag(V2_COSTS.refsExtract)}
             </button>
           )}
+          {items.length > 0 && n > 1 && (
+            <button onClick={() => void runInherit()} disabled={busy} className={`${btnBar} min-w-[180px]`} title={t('ideaV2.refsInheritHint')} data-testid="episode-v2-refs-inherit">
+              {starting === 'inherit' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />} {t('ideaV2.refsInherit')}
+            </button>
+          )}
           {items.length > 0 && (
-            <button onClick={() => void runImages()} disabled={busy} className={`${btnBar} min-w-[180px]`} data-testid="episode-v2-refs-generate-all">
-              {generatingImages ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} {t('ideaV2.refsGenerateAll')}{costTag(refImagesCost(items.length))}
+            <button onClick={() => void runImages()} disabled={busy || !generateAllCount} className={`${btnBar} min-w-[180px]`} data-testid="episode-v2-refs-generate-all">
+              {generatingImages ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} {t('ideaV2.refsGenerateAll')}{costTag(refImagesCost(generateAllCount))}
             </button>
           )}
         </div>
@@ -246,6 +266,7 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs, ownFace =
                   <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${kindBadge[r.kind] ?? 'bg-muted text-muted-foreground'}`}>{t(`ideaV2.refsKind.${r.kind}`)}</span>
                   <span className="min-w-0 break-words text-sm font-semibold text-foreground" data-testid="episode-v2-ref-label">{stripRefKindPrefixV2(r.label)}</span>
                   {r.edited && <span className="text-[10px] text-muted-foreground">· {t('ideaV2.refsEdited')}</span>}
+                  {!!r.inheritedFrom && !!r.imageUrl && <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-medium text-sky-600 dark:text-sky-400" title={t('ideaV2.refsInheritedHint')} data-testid="episode-v2-ref-inherited">{t('ideaV2.refsInherited', { n: r.inheritedFrom })}</span>}
                 </div>
                 {r.role?.trim() && <div className="mt-0.5 text-xs text-muted-foreground" data-testid="episode-v2-ref-role">{r.role.trim()}</div>}
               </div>

@@ -62,7 +62,7 @@ async function runImpl(jobId: string, projectId: string, { episode, ids }: Episo
         const remote = await generateImage({ prompt: episodeRefImagePromptV2(r), aspect_ratio: REFERENCE_ASPECT_RATIO, modelSlug: WAVESPEED_GPT_IMAGE_25_FLARE_T2I, ...(faceRef ? { image_input: faceRef } : {}) }, { jobId, shouldCancel: canceled });
         if (await canceled()) throw new GenerationCanceledError();
         const url = await uploadRemoteToS3(remote, `media/public/v2-refs/${projectId}/${episode}/${VISUAL_STYLE_ID}/${r.id}-${Date.now()}.png`, "image/png");
-        await patchEpisodeRefV2(projectId, episode, r.id, { imageUrl: url, imageStatus: "done", imageError: null, promptDirty: false });
+        await patchEpisodeRefV2(projectId, episode, r.id, { imageUrl: url, imageStatus: "done", imageError: null, promptDirty: false, inheritedFrom: null });
       } catch (e: any) {
         if (e instanceof GenerationCanceledError) {
           for (const x of refs.slice(done)) await patchEpisodeRefV2(projectId, episode, x.id, { imageStatus: x.imageUrl ? "done" : null });
