@@ -53,7 +53,7 @@ export type WfpProduct = {
   tier?: string;
 };
 
-// Paid-only credit model: 1 credit = 1 second of video = $1. Prices in USD.
+// Paid-only credit model: 10 credits = 1 second of video. Prices in USD.
 // Subscriptions grant FEATURE ACCESS only (credits: 0) — credits are pack-only.
 export const WFP_PRODUCTS: Record<string, WfpProduct> = {
   // Subscription plans (set tier + unlock features; they do NOT grant credits)
@@ -61,9 +61,9 @@ export const WFP_PRODUCTS: Record<string, WfpProduct> = {
   pro: { id: "pro", name: "Foltum Studio — Pro (access plan)", amount: 99, credits: 0, kind: "subscription", tier: "pro" },
   studio: { id: "studio", name: "Foltum Studio — Studio (access plan)", amount: 299, credits: 0, kind: "subscription", tier: "studio" },
   // One-off credit packs
-  mini: { id: "mini", name: "30 credits pack", amount: 19.99, credits: 30, kind: "credits" },
-  plus: { id: "plus", name: "80 credits pack", amount: 49.99, credits: 80, kind: "credits" },
-  max: { id: "max", name: "300 credits pack", amount: 99.99, credits: 300, kind: "credits" },
+  mini: { id: "mini", name: "300 credits pack", amount: 19.99, credits: 300, kind: "credits" },
+  plus: { id: "plus", name: "800 credits pack", amount: 49.99, credits: 800, kind: "credits" },
+  max: { id: "max", name: "3000 credits pack", amount: 99.99, credits: 3000, kind: "credits" },
 };
 
 export function getProduct(id: string): WfpProduct | null {

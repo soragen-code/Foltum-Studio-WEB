@@ -16,7 +16,7 @@ async function main() {
       email: testEmail,
       name: 'Test Admin',
       password: hashedTestPassword,
-      credits: 500,
+      credits: 5000,
     },
   })
 

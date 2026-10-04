@@ -29,7 +29,7 @@ export function StoryboardTab({ projectId, n, hasShots, initialShotsCount = 0, i
 }) {
   const { t } = useTranslation()
   const [storyboard, setStoryboard] = useState<EpisodeStoryboardV2 | null>(initialStoryboard)
-  // Число кадров шот-листа — для стоимости нарезки первых кадров (1 кредит за сцену); обновляется из GET.
+  // Число кадров шот-листа — для стоимости нарезки первых кадров (10 кредитов за сцену); обновляется из GET.
   const [shotsCount, setShotsCount] = useState(initialShotsCount)
   const costTag = (c: number) => <span className="ml-0.5 whitespace-nowrap text-[11px] font-normal opacity-80" data-testid="episode-v2-cost">· {t('ideaV2.costCredits', { n: c })}</span>
   const [error, setError] = useState('')

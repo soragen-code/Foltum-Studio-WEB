@@ -57,9 +57,9 @@ export const MANUAL_IMAGE_MODELS: ManualImageModelDef[] = [
 
 export const DEFAULT_MANUAL_IMAGE_MODEL_ID = MANUAL_IMAGE_MODELS[0].id;
 /** Credits charged per manual photo (and per added reference frame). */
-export const MANUAL_PHOTO_COST = 1;
+export const MANUAL_PHOTO_COST = 10;
 /** Credits charged per second of manual video. */
-export const MANUAL_VIDEO_COST_PER_SEC = 1;
+export const MANUAL_VIDEO_COST_PER_SEC = 10;
 
 const BY_ID = new Map(MANUAL_IMAGE_MODELS.map((m) => [m.id, m]));
 

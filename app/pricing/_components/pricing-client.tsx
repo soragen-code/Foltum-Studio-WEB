@@ -53,9 +53,9 @@ const plans = [
 ]
 
 const creditPacks = [
-  { id: 'mini', credits: 30, price: '$19.99' },
-  { id: 'plus', credits: 80, price: '$49.99' },
-  { id: 'max', credits: 300, price: '$99.99' },
+  { id: 'mini', credits: 300, price: '$19.99' },
+  { id: 'plus', credits: 800, price: '$49.99' },
+  { id: 'max', credits: 3000, price: '$99.99' },
 ]
 
 function postToWayForPay(action: string, fields: Record<string, any>) {
@@ -269,7 +269,7 @@ export function PricingClient({ currentTier = null }: { currentTier?: string | n
                 style={{ boxShadow: 'var(--shadow-sm)' }}
               >
                 <div className="mb-1 font-mono text-2xl font-bold text-primary">{pack.credits}</div>
-                <div className="text-xs text-muted-foreground">{t('pricing.packUnit', { credits: pack.credits })}</div>
+                <div className="text-xs text-muted-foreground">{t('pricing.packUnit', { credits: pack.credits, seconds: pack.credits / 10 })}</div>
                 <div className="mt-2 flex items-center justify-center gap-1 text-sm font-semibold">
                   {buying === pack.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShoppingCart className="h-3 w-3" />}
                   {pack.price}
