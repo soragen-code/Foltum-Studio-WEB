@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Loader2, Eye, Pencil, ArrowLeft, Wand2, FileText, Images, Clapperboard, LayoutGrid, Film } from 'lucide-react'
+import { useSearchParams } from 'next/navigation'
+import { Loader2, Eye, Pencil, ArrowLeft, ArrowRight, Wand2, FileText, Images, Clapperboard, LayoutGrid, Film } from 'lucide-react'
 import { Header } from '@/components/header'
 import { FABLE_MODEL_LABEL, type EpisodeRefV2, type EpisodeShotV2, type EpisodeStoryboardV2, type EpisodeSceneV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
@@ -65,10 +66,17 @@ const storeDialog = (pid: string, n: number, base: string, turns: ScriptTurn[]) 
   } catch { /* localStorage недоступен */ }
 }
 
-export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScript, initialRefs = [], initialShots = [], initialStoryboard = null, initialScenes = [], backHref, ownFace = false }: {
-  projectId: string; projectTitle: string; n: number; summary: string; initialScript: string; initialRefs?: EpisodeRefV2[]; initialShots?: EpisodeShotV2[]; initialStoryboard?: EpisodeStoryboardV2 | null; initialScenes?: EpisodeSceneV2[]; backHref: string; ownFace?: boolean
+const TAB_KEYS: TabKey[] = ['script', 'refs', 'shots', 'storyboard', 'scenes']
+
+export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScript, initialRefs = [], initialShots = [], initialStoryboard = null, initialScenes = [], backHref, ownFace = false, prevN = null, nextN = null }: {
+  projectId: string; projectTitle: string; n: number; summary: string; initialScript: string; initialRefs?: EpisodeRefV2[]; initialShots?: EpisodeShotV2[]; initialStoryboard?: EpisodeStoryboardV2 | null; initialScenes?: EpisodeSceneV2[]; backHref: string; ownFace?: boolean; prevN?: number | null; nextN?: number | null
 }) {
   const { t, locale } = useTranslation()
+  // Вкладка из URL (?tab=scenes): переход «← Серия N-1 / Серия N+1 →» сохраняет текущую вкладку.
+  const searchParams = useSearchParams()
+  const tabParam = searchParams?.get('tab') as TabKey | null
+  const initialTab: TabKey = tabParam && TAB_KEYS.includes(tabParam) ? tabParam : 'script'
+  const episodeHref = (m: number, tabKey: TabKey) => `/project/${projectId}/v2/episode/${m}${tabKey !== 'script' ? `?tab=${tabKey}` : ''}`
   const TABS: { key: TabKey; label: string; icon: typeof FileText }[] = [
     { key: 'script', label: t('ideaV2.scriptTab'), icon: FileText },
     { key: 'refs', label: t('ideaV2.refsTab'), icon: Images },
@@ -76,7 +84,7 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
     { key: 'storyboard', label: t('ideaV2.storyboardTab'), icon: LayoutGrid },
     { key: 'scenes', label: t('ideaV2.scenesTab'), icon: Film },
   ]
-  const [tab, setTab] = useState<TabKey>('script')
+  const [tab, setTab] = useState<TabKey>(initialTab)
 
   const [script, setScript] = useState(initialScript.trim())
   const [refineText, setRefineText] = useState('')
@@ -362,7 +370,24 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
           </Link>
         </div>
         <div className={cardCls} style={cardStyle}>
-          <h1 className="font-display text-2xl font-bold tracking-tight" data-testid="episode-v2-title">{t('ideaV2.episodeTitle', { n })}</h1>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="font-display text-2xl font-bold tracking-tight" data-testid="episode-v2-title">{t('ideaV2.episodeTitle', { n })}</h1>
+            {/* Навигация между сериями: «← Серия N-1» / «Серия N+1 →» (та же вкладка через ?tab=). */}
+            {(prevN !== null || nextN !== null) && (
+              <div className="ml-auto flex items-center gap-2" data-testid="episode-v2-nav">
+                {prevN !== null && (
+                  <Link href={episodeHref(prevN, tab)} className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-xs font-semibold transition hover:bg-muted" data-testid="episode-v2-prev">
+                    <ArrowLeft className="h-3.5 w-3.5" /> {t('ideaV2.episodeTitle', { n: prevN })}
+                  </Link>
+                )}
+                {nextN !== null && (
+                  <Link href={episodeHref(nextN, tab)} className="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-1.5 text-xs font-semibold transition hover:bg-muted" data-testid="episode-v2-next">
+                    {t('ideaV2.episodeTitle', { n: nextN })} <ArrowRight className="h-3.5 w-3.5" />
+                  </Link>
+                )}
+              </div>
+            )}
+          </div>
           <div className="mt-5 flex gap-1 overflow-x-auto border-b border-border [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" role="tablist" data-testid="episode-v2-tabs">
             {TABS.map((x) => (
               <button

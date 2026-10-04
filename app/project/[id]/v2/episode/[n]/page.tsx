@@ -1,7 +1,8 @@
 import { auth } from '@/auth'
 import { redirect } from 'next/navigation'
+import { Suspense } from 'react'
 import { prisma } from '@/lib/db'
-import { seasonPlotEpisodeSummary, episodeScriptV2From, episodeRefsV2From, episodeShotsV2From, episodeStoryboardV2From, episodeScenesV2From } from '@/lib/idea-v2'
+import { seasonPlotEpisodeSummary, parseSeasonPlotV2, episodeScriptV2From, episodeRefsV2From, episodeShotsV2From, episodeStoryboardV2From, episodeScenesV2From } from '@/lib/idea-v2'
 import { canUse } from '@/lib/entitlements'
 import { EpisodeV2View } from './episode-v2-view'
 
@@ -30,8 +31,14 @@ export default async function EpisodeV2Page({ params }: { params: Promise<{ id: 
   const n = Number(nRaw)
   const summary = Number.isInteger(n) && n > 0 ? seasonPlotEpisodeSummary(project.seasonPlotV2, n) : null
   if (!summary) redirect(back)
+  // Соседние серии (по маркерам "#<n>" сюжета сезона) — для кнопок «← Серия N-1 / Серия N+1 →» на странице.
+  const episodeNumbers = (parseSeasonPlotV2(project.seasonPlotV2) ?? []).map((e) => e.n).filter((x) => Number.isInteger(x) && x > 0).sort((a, b) => a - b)
+  const idx = episodeNumbers.indexOf(n)
+  const prevN = idx > 0 ? episodeNumbers[idx - 1] : null
+  const nextN = idx >= 0 && idx < episodeNumbers.length - 1 ? episodeNumbers[idx + 1] : null
 
   return (
+    <Suspense>
     <EpisodeV2View
       projectId={project.id}
       projectTitle={String(project.name ?? '')}
@@ -44,6 +51,9 @@ export default async function EpisodeV2Page({ params }: { params: Promise<{ id: 
       initialScenes={episodeScenesV2From(project.episodeScenesV2, n)}
       backHref={back}
       ownFace={ownFace}
+      prevN={prevN}
+      nextN={nextN}
     />
+    </Suspense>
   )
 }

@@ -2,6 +2,7 @@
  * Фоновый воркер потока v2 (вкладка «Сцены», кнопка «Собрать эпизод»): склеивает видео всех сцен серии
  * в порядке index в один финальный mp4 (H.264 + AAC, 1080×1920, 24 fps) через ffmpeg-static и грузит в S3.
  * Клипы перекодируются единообразно (scale/pad + fps + stereo 44.1k; клип без звука получает тишину),
+ * звук каждого клипа подгоняется точно под длину его видео (apad+atrim) и получает короткие фейды на стыках,
  * затем concat-фильтр — надёжно для клипов с разными параметрами. Результат — Project.episodeFinalV2["<n>"].
  */
 import { promises as fs } from "fs";
@@ -20,6 +21,8 @@ export const EPISODE_ASSEMBLE_V2_EXPECTED_SEC = 90;
 const W = 1080;
 const H = 1920;
 const FPS = 24;
+/** Длительность fade-in/fade-out звука на границах клипов (с). */
+const AUDIO_FADE_SEC = 0.4;
 
 export interface EpisodeAssembleV2JobParams { episode: number }
 
@@ -58,8 +61,16 @@ export async function runEpisodeAssembleV2Job(jobId: string, projectId: string, 
       const vTrim = d > 0 ? `trim=0:${d.toFixed(3)},setpts=PTS-STARTPTS,` : "";
       parts.push(`[${i}:v]${vTrim}scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${FPS},format=yuv420p[v${i}]`);
       const aSrc = silentIdx.has(i) ? `${silentIdx.get(i)}:a` : `${i}:a:0`;
-      const aTrim = d > 0 ? `atrim=0:${d.toFixed(3)},asetpts=PTS-STARTPTS,` : "";
-      parts.push(`[${aSrc}]${aTrim}aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[a${i}]`);
+      // Звук выравнивается ТОЧНО по длине видео клипа (apad + atrim): если дорожка короче/длиннее картинки,
+      // concat без этого сдвигает весь дальнейший звук относительно видео («музыка не совпадает»).
+      const aTrim = d > 0 ? `apad,atrim=0:${d.toFixed(3)},asetpts=PTS-STARTPTS,` : "";
+      // Короткий fade-in/out на стыках: музыка/атмосфера каждого клипа генерируется отдельно, без фейдов
+      // на монтажной склейке она обрывается щелчком. Клипы с тишиной фейды не меняют.
+      const fadeD = Math.min(AUDIO_FADE_SEC, d > 0 ? d / 2 : AUDIO_FADE_SEC);
+      const aFade = d > 0 && !silentIdx.has(i)
+        ? `afade=t=in:st=0:d=${fadeD.toFixed(3)}:curve=qsin,afade=t=out:st=${Math.max(0, d - fadeD).toFixed(3)}:d=${fadeD.toFixed(3)}:curve=qsin,`
+        : "";
+      parts.push(`[${aSrc}]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,${aTrim}${aFade}asetpts=PTS-STARTPTS[a${i}]`);
       concatIn.push(`[v${i}][a${i}]`);
     });
     parts.push(`${concatIn.join("")}concat=n=${files.length}:v=1:a=1[vout][aout]`);
