@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, Wand2, Eye, Pencil, Check, X, Clapperboard } from 'lucide-react'
-import { FABLE_MODEL_LABEL, shotFrameText, type EpisodeShotV2 } from '@/lib/idea-v2'
+import { FABLE_MODEL_LABEL, episodeShotsV2SystemPrompt, shotFrameText, synopsisLanguageFromCode, type EpisodeShotV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { CancelButton } from '../../../_components/cancel-button'
 import { useJobPolling, SmoothProgress } from '../../../_components/use-job-polling'
@@ -30,14 +30,20 @@ export function ShotlistTab({ projectId, n, hasScript, scriptText, initialShots 
   const [notice, setNotice] = useState('')
   const [starting, setStarting] = useState(false)
   const [promptOpen, setPromptOpen] = useState(false)
-  const [autoSystem, setAutoSystem] = useState('')
+  // Авто-system считаем сразу на клиенте (шаблон не зависит от языка проекта), сервер лишь уточняет его в GET —
+  // иначе модалка, открытая до ответа GET, оставалась с пустым полем.
+  const [autoSystem, setAutoSystem] = useState(() => episodeShotsV2SystemPrompt(synopsisLanguageFromCode(null)))
   const [systemDraft, setSystemDraft] = useState('')
   const [script, setScript] = useState(scriptText)
   const extractIdRef = useRef<string | null>(null)
 
   // Черновик системного промпта из localStorage (per-episode).
   useEffect(() => {
-    try { const v = localStorage.getItem(draftKey(projectId, n)); if (v) setSystemDraft(v) } catch { /* недоступно */ }
+    try {
+      const v = localStorage.getItem(draftKey(projectId, n))
+      if (v && v.trim()) setSystemDraft(v)
+      else if (v !== null) localStorage.removeItem(draftKey(projectId, n))
+    } catch { /* недоступно */ }
   }, [projectId, n])
 
   // Блокировка вертикального скролла при открытой модалке.
@@ -91,7 +97,7 @@ export function ShotlistTab({ projectId, n, hasScript, scriptText, initialShots 
         const d = await fetch(`${API}?projectId=${projectId}&episode=${n}`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null)
         if (ignore || !d) return
         if (Array.isArray(d.items)) setItems(d.items)
-        if (typeof d.autoSystem === 'string') setAutoSystem(d.autoSystem)
+        if (typeof d.autoSystem === 'string' && d.autoSystem.trim()) setAutoSystem(d.autoSystem)
         if (typeof d.scriptText === 'string' && d.scriptText) setScript(d.scriptText)
         if (isActive(d.job)) { extractIdRef.current = d.job.id; extract.start(d.job.id) }
       } catch { /* транзиентно */ }

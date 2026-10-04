@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Loader2, Eye, Copy, Check, X, Info, RotateCcw, ChevronDown, ChevronRight } from 'lucide-react'
 import { useTranslation } from '@/lib/i18n/context'
 
@@ -15,12 +15,17 @@ export function ShotPromptModal({ autoSystem, systemDraft, scriptText, onSave, o
   onSave: (system: string) => void; onClose: () => void
 }) {
   const { t } = useTranslation()
-  const [draft, setDraft] = useState(systemDraft || autoSystem)
+  const [draft, setDraft] = useState(systemDraft.trim() ? systemDraft : autoSystem)
+  // Если авто-промпт подъехал позже открытия модалки, а поле ещё пустое — подставляем его (не считаем правкой).
+  useEffect(() => {
+    if (!draft.trim() && autoSystem.trim()) setDraft(systemDraft.trim() ? systemDraft : autoSystem)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoSystem, systemDraft])
   const [copied, setCopied] = useState(false)
   const [saved, setSaved] = useState(false)
   const [userOpen, setUserOpen] = useState(false)
-  const edited = draft.trim() !== autoSystem.trim()
-  const dirty = draft !== (systemDraft || autoSystem)
+  const edited = !!autoSystem.trim() && draft.trim() !== autoSystem.trim()
+  const dirty = draft !== (systemDraft.trim() ? systemDraft : autoSystem)
 
   const btnBase = 'inline-flex items-center justify-center gap-1 rounded-md border px-1.5 py-1 text-xs font-medium transition'
   const btnIdle = 'border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground'
