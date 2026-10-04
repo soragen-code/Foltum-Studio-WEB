@@ -17,18 +17,80 @@ const TRANSLATOR_SYSTEM =
   "Preserve meaning, line breaks, lists and punctuation. Keep proper names transliterated. " +
   "Output ONLY the English translation, without the markers, preamble or commentary.";
 
-/** Переводит текст на английский; английский (или пустой) текст возвращает как есть. При ошибке — оригинал. */
+/**
+ * Переводит текст на английский; английский (или пустой) текст возвращает как есть.
+ * Результат принимается только если он действительно English (модель иногда возвращает исходник/эхо);
+ * иначе — повтор (до 2 попыток). При ошибке — оригинал.
+ */
 export async function translateToEnglish(text: string | null | undefined): Promise<string> {
   const t = (text ?? "").trim();
   if (!t || detectLanguage(t) === "en") return t;
-  try {
-    const out = await chat(TRANSLATOR_SYSTEM, `<<<TEXT>>>\n${t}\n<<<END>>>`, { temperature: 0.2, maxTokens: 2000 });
-    const clean = (out ?? "").replace(/<<<(TEXT|END)>>>/g, "").trim();
-    return clean || t;
-  } catch (err) {
-    console.error("translateToEnglish failed, using original:", err);
-    return t;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const out = await chat(TRANSLATOR_SYSTEM, `<<<TEXT>>>\n${t}\n<<<END>>>`, { temperature: 0.2, maxTokens: 2000 });
+      const clean = (out ?? "").replace(/<<<(TEXT|END)>>>/g, "").trim();
+      if (clean && detectLanguage(clean) === "en") return clean;
+      console.error(`translateToEnglish: non-English result (attempt ${attempt + 1}), retrying`);
+    } catch (err) {
+      console.error(`translateToEnglish failed (attempt ${attempt + 1}):`, err);
+    }
   }
+  return t;
+}
+
+const BLOCKS_BATCH = 8;
+const BLOCKS_CONCURRENCY = 3;
+
+/**
+ * Переводит МНОГО блоков текста (абзацы шотов: frame/action/ending) на английский батчами по BLOCKS_BATCH —
+ * один запрос на батч вместо десятков параллельных вызовов (лимиты API → молчаливый откат на русский).
+ * Каждый блок помечен маркером <<<#k>>>; ответ разбирается по маркерам, каждый блок проверяется на English.
+ * Блоки, которые не удалось перевести батчем, переводятся поштучно (translateToEnglish с повтором).
+ * Возвращает массив той же длины и порядка; английские/пустые блоки — как есть.
+ */
+export async function translateBlocksToEnglish(texts: Array<string | null | undefined>): Promise<string[]> {
+  const src = texts.map((t) => (t ?? "").trim());
+  const out = src.slice();
+  const todo = src.map((t, i) => ({ t, i })).filter(({ t }) => t && detectLanguage(t) !== "en");
+  if (!todo.length) return out;
+  const batches: Array<typeof todo> = [];
+  for (let k = 0; k < todo.length; k += BLOCKS_BATCH) batches.push(todo.slice(k, k + BLOCKS_BATCH));
+  const failed: typeof todo = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < batches.length) {
+      const batch = batches[next++];
+      let parsed = new Map<number, string>();
+      try {
+        const body = batch.map(({ t }, k) => `<<<#${k + 1}>>>\n${t}`).join("\n\n");
+        const res = await chat(
+          TRANSLATOR_SYSTEM + " The text consists of numbered blocks, each starting with a marker line <<<#N>>>. Translate each block separately and output the SAME markers <<<#N>>> before each translated block, in the same order, with the SAME number of blocks.",
+          `<<<TEXT>>>\n${body}\n<<<END>>>`,
+          { temperature: 0.1, maxTokens: 6000 },
+        );
+        const clean = (res ?? "").replace(/<<<(TEXT|END)>>>/g, "");
+        const re = /<<<#(\d+)>>>\s*([\s\S]*?)(?=<<<#\d+>>>|$)/g;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(clean))) parsed.set(Number(m[1]), m[2].trim());
+      } catch (err) {
+        console.error("translateBlocksToEnglish batch failed, falling back to per-item:", err);
+        parsed = new Map();
+      }
+      batch.forEach((item, k) => {
+        const v = parsed.get(k + 1);
+        if (v && detectLanguage(v) === "en") out[item.i] = v;
+        else failed.push(item);
+      });
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(BLOCKS_CONCURRENCY, batches.length) }, worker));
+  // Поштучный откат — с ограниченной параллельностью (те же лимиты API).
+  let fi = 0;
+  const fallbackWorker = async () => {
+    while (fi < failed.length) { const item = failed[fi++]; out[item.i] = (await translateToEnglish(item.t)) || item.t; }
+  };
+  await Promise.all(Array.from({ length: Math.min(BLOCKS_CONCURRENCY, failed.length) }, fallbackWorker));
+  return out;
 }
 
 /**

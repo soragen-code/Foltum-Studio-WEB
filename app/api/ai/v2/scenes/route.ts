@@ -164,7 +164,8 @@ export async function GET(request: Request) {
   const allRefs = episodeRefsV2From(project.episodeRefsV2, episode);
   const scenes = await Promise.all(rawScenes.map(async (s) => {
     const videoRefs = selectSceneVideoV2Refs(allRefs, MAX_SCENE_VIDEO_REF_IMAGES - 1, s);
-    const en = { ...s, action: (await translateToEnglish(s.action)) || s.action };
+    const [actionEn, endEn] = await Promise.all([translateToEnglish(s.action), translateToEnglish(s.endFrame)]);
+    const en = { ...s, action: actionEn || s.action, endFrame: endEn || s.endFrame };
     return { ...s, autoPrompt: sceneVideoV2Prompt({ action: en.action, endFrame: en.endFrame, promptOverride: null }, videoRefs), videoPrompt: sceneVideoV2Prompt(en, videoRefs) };
   }));
   // Если job склейки упала/устарела, а в episodeFinalV2 застрял pending/running — показываем ошибку.

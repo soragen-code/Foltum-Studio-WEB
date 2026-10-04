@@ -14,7 +14,7 @@ import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { completeJob, failJob, heartbeatJob, isCancelRequested, markCanceled, updateJob } from "@/lib/jobs";
 import { REFERENCE_ASPECT_RATIO, VISUAL_STYLE } from "@/lib/visual-style";
 import { runWithPromptContext } from "@/lib/prompt-log";
-import { translateRefLabelsToEnglish, translateToEnglish } from "@/lib/translate-en";
+import { translateBlocksToEnglish, translateRefLabelsToEnglish } from "@/lib/translate-en";
 import {
   buildSceneFrameV2Prompt, episodeRefsV2From, episodeScenesV2From, episodeShotsV2From, episodeStoryboardV2From, matchSceneRefsByText, selectStoryboardV2Refs, shotFrameText,
   type EpisodeRefV2, type EpisodeSceneV2, type EpisodeShotV2,
@@ -97,12 +97,13 @@ export interface ScenePromptData { action: string; frame?: string; endFrame?: st
  * Используется при нарезке и при «Пересобрать промпты» (без перегенерации кадров/видео).
  */
 export async function prepareScenePromptData(shots: EpisodeShotV2[], allRefs: EpisodeRefV2[]): Promise<ScenePromptData[]> {
-  const [framesEn, actionsEn, endingsEn, refIdsPerShot] = await Promise.all([
-    Promise.all(shots.map((s) => translateToEnglish(shotFrameText(s)))),
-    Promise.all(shots.map((s) => translateToEnglish(s.action))),
-    Promise.all(shots.map((s) => translateToEnglish(s.ending ?? ""))),
+  // Все блоки (frame/action/ending × N шотов) переводятся батчами одним пулом — не десятками параллельных вызовов.
+  const n = shots.length;
+  const [blocksEn, refIdsPerShot] = await Promise.all([
+    translateBlocksToEnglish([...shots.map((s) => shotFrameText(s)), ...shots.map((s) => s.action), ...shots.map((s) => s.ending ?? "")]),
     assignSceneRefs(shots, allRefs),
   ]);
+  const framesEn = blocksEn.slice(0, n), actionsEn = blocksEn.slice(n, 2 * n), endingsEn = blocksEn.slice(2 * n, 3 * n);
   // Шоты без ending (старый шот-лист) — финальный кадр описывает LLM по action.
   const described = endingsEn.some((e) => !e.trim()) ? await describeEndFrames(actionsEn.map((a, i) => a || shots[i].action)) : [];
   return shots.map((s, i) => ({
