@@ -644,10 +644,14 @@ export interface EpisodeScriptV2Input {
   /** Базовый сценарий S0 и применённые пары «правка → сценарий». */
   scriptBase?: string | null;
   scriptTurns?: { refine: string; script: string }[] | null;
+  /** Блок SERIES CONTINUITY (имена персонажей/локаций из ранних серий) — см. seriesContinuityBlockV2; дописывается в system. */
+  continuity?: string | null;
 }
 
 export function episodeScriptV2SystemPrompt(input: EpisodeScriptV2Input): string {
-  return EPISODE_SCRIPT_V2_RULES.replace(/<Language>/g, normalizeSynopsisLanguage(input.synopsisLanguage));
+  const base = EPISODE_SCRIPT_V2_RULES.replace(/<Language>/g, normalizeSynopsisLanguage(input.synopsisLanguage));
+  const cont = (input.continuity ?? "").trim();
+  return cont ? `${base}\n\n${cont}` : base;
 }
 
 export const EPISODE_SCRIPT_V2_CONTEXT_NOTE =
@@ -771,8 +775,10 @@ Return ONLY a JSON object, no markdown fences, no commentary:
 {"refs":[{"kind":"character","key":"...","label":"...","setting":null,"role":"...","prompt":"..."},{"kind":"location","key":"...","label":"...","setting":"INT","role":null,"prompt":"..."}]}
 Order: characters first, then locations, then props.`;
 
-export function episodeRefsV2SystemPrompt(language: SynopsisLanguage | string): string {
-  return EPISODE_REFS_V2_RULES.replace(/<Language>/g, String(language || DEFAULT_SYNOPSIS_LANGUAGE));
+export function episodeRefsV2SystemPrompt(language: SynopsisLanguage | string, continuity?: string | null): string {
+  const base = EPISODE_REFS_V2_RULES.replace(/<Language>/g, String(language || DEFAULT_SYNOPSIS_LANGUAGE));
+  const cont = (continuity ?? "").trim();
+  return cont ? `${base}\n\n${cont}` : base;
 }
 
 const refSlug = (s: string) => s.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48);
@@ -824,7 +830,15 @@ export function episodeRefsV2From(map: unknown, n: number): EpisodeRefV2[] {
   return Array.isArray(v?.items) ? (v.items as EpisodeRefV2[]).filter((r) => r && typeof r.id === "string" && typeof r.prompt === "string") : [];
 }
 
-const refMatchKey = (s: string) => stripRefKindPrefixV2(s).toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "");
+const refMatchKey = (s: string) => stripRefKindPrefixV2(s).toLowerCase().normalize("NFKD").replace(/[^a-z0-9\u0430-\u044f\u0451]+/g, "");
+const refFirstName = (label: string) => refMatchKey((stripRefKindPrefixV2(label).trim().split(/\s+/)[0] ?? ""));
+/** Персонаж по имени без фамилии («Grace» ↔ «Grace Harper»): единственное совпадение по первому слову, иначе null. */
+function uniqueFirstNameHit(items: EpisodeRefV2[], label: string): EpisodeRefV2 | undefined {
+  const fn = refFirstName(label);
+  if (!fn || fn.length < 2) return undefined;
+  const hits = items.filter((r) => refFirstName(r.label) === fn);
+  return hits.length === 1 ? hits[0] : undefined;
+}
 const refIdKey = (id: string) => id.replace(/^(character|location|prop)-/, "").replace(/-\d+$/, "").replace(/[^a-z0-9]+/g, "");
 
 /**
@@ -843,7 +857,8 @@ export function findEarlierEpisodeRefV2(map: unknown, episode: number, ref: Pick
       ?? (lk ? items.find((r) => refMatchKey(r.label) === lk) : undefined)
       ?? (ik ? items.find((r) => refIdKey(r.id) === ik) : undefined)
       ?? (lk ? items.find((r) => refIdKey(r.id) === lk) : undefined)
-      ?? (ik ? items.find((r) => refMatchKey(r.label) === ik) : undefined);
+      ?? (ik ? items.find((r) => refMatchKey(r.label) === ik) : undefined)
+      ?? (ref.kind === "character" ? uniqueFirstNameHit(items, ref.label) : undefined);
     if (hit) return { ref: hit, episode: hit.inheritedFrom && hit.inheritedFrom < n0 ? hit.inheritedFrom : n0 };
   }
   return null;
@@ -865,9 +880,69 @@ export function inheritEpisodeRefsV2(map: unknown, episode: number, items: Episo
     if (!src) return r;
     inherited++;
     const face = r.kind === "character" ? { userRefUrl: r.userRefUrl?.trim() || src.ref.userRefUrl || null } : {};
-    return { ...r, prompt: src.ref.prompt, imageUrl: src.ref.imageUrl, imageStatus: "done" as const, imageError: null, promptDirty: false, ...face, inheritedFrom: src.episode };
+    // Имя/название — как в ранней серии (полное имя с фамилией), роль — если своей нет.
+    return { ...r, label: src.ref.label || r.label, role: r.role?.trim() || src.ref.role || r.role, prompt: src.ref.prompt, imageUrl: src.ref.imageUrl, imageStatus: "done" as const, imageError: null, promptDirty: false, ...face, inheritedFrom: src.episode };
   });
   return { items: out, inherited };
+}
+
+/** Реплики-cue из сценария: строки ЦЕЛИКОМ в верхнем регистре (1–4 слова), не слаглайны. "GRACE HARPER (V.O.)" → "GRACE HARPER". */
+export function scriptCharacterCuesV2(script: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of String(script ?? "").split(/\r?\n/)) {
+    const line = raw.trim().replace(/\s*\((?:V\.O\.|O\.S\.|CONT'D|ЗК|ВПЗ|[^)]{0,20})\)\s*$/i, "").trim();
+    if (!line || /^(INT|EXT)\b/i.test(line) || line.length > 40) continue;
+    if (line !== line.toUpperCase() || !/[A-ZА-ЯЁ]/.test(line)) continue;
+    const words = line.split(/\s+/);
+    if (words.length > 4 || /[.!?:,]$/.test(line)) continue;
+    const key = line.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(line);
+  }
+  return out;
+}
+
+/**
+ * Блок SERIES CONTINUITY для system-промптов сценария и рефов серии n: персонажи (полное имя + роль) и локации
+ * из рефов серий 1..n-1 плюс cue-имена из их сценариев. Пустая строка — если ранних данных нет.
+ */
+export function seriesContinuityBlockV2(refsMap: unknown, scriptsMap: unknown, episode: number): string {
+  if (episode <= 1) return "";
+  const chars = new Map<string, { label: string; role: string | null; key: string }>();
+  const locs = new Map<string, { label: string; key: string }>();
+  const cues: string[] = [];
+  const cueSeen = new Set<string>();
+  for (let n0 = 1; n0 < episode; n0++) {
+    for (const r of episodeRefsV2From(refsMap, n0)) {
+      const label = stripRefKindPrefixV2(r.label).trim();
+      if (!label) continue;
+      const k = refMatchKey(label);
+      const key = r.id.replace(/^(character|location|prop)-/, "").replace(/-\d+$/, "");
+      if (r.kind === "character" && !chars.has(k)) chars.set(k, { label, role: r.role?.trim() || null, key });
+      if (r.kind === "location" && !locs.has(k)) locs.set(k, { label, key });
+    }
+    for (const c of scriptCharacterCuesV2(episodeScriptV2From(scriptsMap, n0))) {
+      const k = refMatchKey(c);
+      if (chars.has(k) || cueSeen.has(k)) continue;
+      cueSeen.add(k);
+      cues.push(c);
+    }
+  }
+  if (!chars.size && !locs.size && !cues.length) return "";
+  const lines: string[] = ["SERIES CONTINUITY (established in earlier episodes — this is the SAME series)"];
+  if (chars.size || cues.length) {
+    lines.push("Characters already established. Use EXACTLY these full names (first name + surname, same spelling) in every cue and action line — never shorten, rename or re-spell them, even if the summary/script uses only the first name:");
+    for (const c of chars.values()) lines.push(`- ${c.label}${c.role ? ` — ${c.role}` : ""} (key: ${c.key})`);
+    for (const c of cues) lines.push(`- ${c}`);
+  }
+  if (locs.size) {
+    lines.push("Locations already established — reuse the same names when the story returns to them:");
+    for (const l of locs.values()) lines.push(`- ${l.label} (key: ${l.key})`);
+  }
+  lines.push("For references: the same person/place MUST get the same key and label as listed above (e.g. a character mentioned only by first name is the established character with that first name). Only genuinely new characters/places get new keys.");
+  return lines.join("\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

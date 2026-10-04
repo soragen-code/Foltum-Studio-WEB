@@ -10,7 +10,7 @@ import { runInBackground, failStaleJobs } from "@/lib/jobs";
 import { chargeV2Credits } from "@/lib/v2-credits";
 import { V2_COSTS } from "@/lib/v2-costs";
 import { runEpisodeScriptV2Job, episodeOfScriptJob, EPISODE_SCRIPT_V2_JOB_TYPE } from "@/lib/workers/episode-script-v2-job";
-import { seasonPlotEpisodeSummary, episodeScriptV2From, synopsisLanguageFromCode } from "@/lib/idea-v2";
+import { seasonPlotEpisodeSummary, episodeScriptV2From, synopsisLanguageFromCode, seriesContinuityBlockV2 } from "@/lib/idea-v2";
 
 /**
  * POST /api/ai/v2/script  { projectId, episode, refine?, refineEn?, scriptBase?, scriptTurns?, overrideMessages? }
@@ -49,7 +49,7 @@ export async function POST(request: Request) {
 
     const user = await prisma.user.findUnique({ where: { email: session.user.email }, select: { id: true } });
     if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
-    const project = await prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, seasonPlotV2: true, language: true, episodeScriptsV2: true } });
+    const project = await prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, seasonPlotV2: true, language: true, episodeScriptsV2: true, episodeRefsV2: true } });
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
     const summary = seasonPlotEpisodeSummary(project.seasonPlotV2, episode);
     if (!summary) return NextResponse.json({ error: "Episode not found in season plot" }, { status: 404 });
@@ -69,6 +69,8 @@ export async function POST(request: Request) {
     const script = refine ? episodeScriptV2From(project.episodeScriptsV2, episode) || null : null;
     runInBackground(() => runEpisodeScriptV2Job(job.id, projectId, {
       episode, summary, synopsisLanguage: synopsisLanguageFromCode(project.language), script, refine, refineEn, scriptBase, scriptTurns, overrideMessages,
+      // Имена персонажей/локаций из ранних серий — те же полные имена (имя + фамилия) в этой серии.
+      continuity: seriesContinuityBlockV2(project.episodeRefsV2, project.episodeScriptsV2, episode),
     }));
     return NextResponse.json({ jobId: job.id, resumed: false, cost: charge.cost, creditsRemaining: charge.creditsRemaining });
   } catch (err: any) {

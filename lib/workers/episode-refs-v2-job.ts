@@ -8,7 +8,7 @@ import { prisma } from "@/lib/db";
 import { updateJob, completeJob, failJob, heartbeatJob, markCanceled, isCancelRequested } from "@/lib/jobs";
 import { chat, safeJsonParse } from "@/lib/ai";
 import { runWithPromptContext } from "@/lib/prompt-log";
-import { FABLE_MODEL, episodeRefsV2SystemPrompt, parseEpisodeRefsV2, mergeEpisodeRefsV2, inheritEpisodeRefsV2, episodeRefsV2From, normalizeSynopsisLanguage, type EpisodeRefV2 } from "@/lib/idea-v2";
+import { FABLE_MODEL, episodeRefsV2SystemPrompt, parseEpisodeRefsV2, mergeEpisodeRefsV2, inheritEpisodeRefsV2, episodeRefsV2From, seriesContinuityBlockV2, normalizeSynopsisLanguage, type EpisodeRefV2 } from "@/lib/idea-v2";
 import { setEpisodeRefsV2 } from "@/lib/episode-refs-v2-store";
 
 export const EPISODE_REFS_V2_JOB_TYPE = "episode_refs_v2";
@@ -22,7 +22,9 @@ async function runImpl(jobId: string, projectId: string, { episode, script, syno
     if (await isCancelRequested(jobId)) { await markCanceled(jobId); return; }
     await updateJob(jobId, { status: "processing", progress: 10, message: "Extracting references from the script..." });
     hb = setInterval(() => { heartbeatJob(jobId).catch(() => {}); }, 60_000);
-    const system = episodeRefsV2SystemPrompt(normalizeSynopsisLanguage(synopsisLanguage));
+    // Имена/ключи из ранних серий — тот же персонаж («Grace» = «Grace Harper») получает тот же key/label.
+    const ctxRow = await prisma.project.findUnique({ where: { id: projectId }, select: { episodeRefsV2: true, episodeScriptsV2: true } });
+    const system = episodeRefsV2SystemPrompt(normalizeSynopsisLanguage(synopsisLanguage), seriesContinuityBlockV2(ctxRow?.episodeRefsV2, ctxRow?.episodeScriptsV2, episode));
     let items: EpisodeRefV2[] = [];
     let lastError = "";
     for (let attempt = 0; attempt < 2 && !items.length; attempt++) {

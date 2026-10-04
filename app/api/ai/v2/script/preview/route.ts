@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
-import { buildEpisodeScriptV2Parts, seasonPlotEpisodeSummary, episodeScriptV2From, synopsisLanguageFromCode } from "@/lib/idea-v2";
+import { buildEpisodeScriptV2Parts, seasonPlotEpisodeSummary, episodeScriptV2From, synopsisLanguageFromCode, seriesContinuityBlockV2 } from "@/lib/idea-v2";
 import { translateScriptRefines } from "@/lib/translate-en";
 
 /**
@@ -30,7 +30,7 @@ export async function POST(request: Request) {
     if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
     const { projectId, episode, refine, scriptBase, scriptTurns } = parsed.data;
 
-    const project = await prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, seasonPlotV2: true, language: true, episodeScriptsV2: true } });
+    const project = await prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, seasonPlotV2: true, language: true, episodeScriptsV2: true, episodeRefsV2: true } });
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
     const summary = seasonPlotEpisodeSummary(project.seasonPlotV2, episode);
     if (!summary) return NextResponse.json({ error: "Episode not found in season plot" }, { status: 404 });
@@ -38,7 +38,7 @@ export async function POST(request: Request) {
     const synopsisLanguage = synopsisLanguageFromCode(project.language);
     const { refine: refineEn, scriptTurns: turnsEn } = await translateScriptRefines({ refine, scriptTurns });
     const script = refine ? episodeScriptV2From(project.episodeScriptsV2, episode) || null : null;
-    const { system, user: userPrompt, assistant, model, contextIncluded, contextNote, messages } = buildEpisodeScriptV2Parts({ summary, synopsisLanguage, script, refine: refineEn, scriptBase, scriptTurns: turnsEn });
+    const { system, user: userPrompt, assistant, model, contextIncluded, contextNote, messages } = buildEpisodeScriptV2Parts({ summary, synopsisLanguage, script, refine: refineEn, scriptBase, scriptTurns: turnsEn, continuity: seriesContinuityBlockV2(project.episodeRefsV2, project.episodeScriptsV2, episode) });
     return NextResponse.json(
       { system, user: userPrompt, assistant, model, contextIncluded, contextNote, messages, refineEn: refineEn || undefined, synopsisLanguage, episode },
       { headers: { "Cache-Control": "no-store" } },

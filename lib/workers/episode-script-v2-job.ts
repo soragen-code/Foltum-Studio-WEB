@@ -30,6 +30,8 @@ export interface EpisodeScriptV2JobParams {
   scriptBase?: string | null;
   scriptTurns?: { refine: string; script: string }[] | null;
   overrideMessages?: V2Msg[] | null;
+  /** SERIES CONTINUITY (имена из ранних серий) — seriesContinuityBlockV2. */
+  continuity?: string | null;
 }
 
 /** Номер серии задачи (resultData.episode), либо null. */
@@ -43,7 +45,7 @@ async function runEpisodeScriptV2JobImpl(jobId: string, projectId: string, param
     const { episode, summary, script: prevScript, refine: refineRaw, refineEn, scriptBase, scriptTurns: turnsRaw, overrideMessages } = params;
     const synopsisLanguage = normalizeSynopsisLanguage(params.synopsisLanguage);
     const { refine, scriptTurns } = await translateScriptRefines({ refine: refineRaw, refineEn, scriptTurns: turnsRaw });
-    const parts = buildEpisodeScriptV2Parts({ summary, synopsisLanguage, script: prevScript, refine, scriptBase, scriptTurns });
+    const parts = buildEpisodeScriptV2Parts({ summary, synopsisLanguage, script: prevScript, refine, scriptBase, scriptTurns, continuity: params.continuity });
     let messages = resolveV2Messages(parts.messages, { overrideMessages });
     if (overrideMessages?.length && messages.filter((m) => m.role !== "system").length > 1 && messages[messages.length - 1].role === "user") {
       const last = messages[messages.length - 1];
