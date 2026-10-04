@@ -4,13 +4,15 @@ import { useState } from 'react'
 import { Header } from '@/components/header'
 import { IdeaStageV2 } from './idea-stage-v2'
 import { motion } from 'framer-motion'
+import { EntitlementsProvider } from '@/components/entitlements-context'
+import { NO_ENTITLEMENTS, type Entitlements } from '@/lib/entitlements'
 
 /**
  * Мастер проекта. Единственный поток приложения — экран v2:
  * Идея → Синопсис → Сюжет сезона → серии (/project/[id]/v2/episode/[n]).
  * Старый пятишаговый пайплайн (v1) удалён; любой проект, независимо от его stage, открывается здесь.
  */
-export function ProjectWizard({ project: initialProject }: { project: any; entitlements?: import('@/lib/entitlements').Entitlements }) {
+export function ProjectWizard({ project: initialProject, entitlements = NO_ENTITLEMENTS }: { project: any; entitlements?: Entitlements }) {
   const [project, setProject] = useState(initialProject)
 
   const refreshProject = async () => {
@@ -39,7 +41,9 @@ export function ProjectWizard({ project: initialProject }: { project: any; entit
           animate={{ opacity: 1, x: 0 }}
           transition={{ duration: 0.3 }}
         >
-          <IdeaStageV2 project={project} onRefresh={refreshProject} />
+          <EntitlementsProvider value={entitlements}>
+            <IdeaStageV2 project={project} onRefresh={refreshProject} />
+          </EntitlementsProvider>
         </motion.div>
       </main>
     </div>

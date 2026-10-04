@@ -8,6 +8,7 @@ import { CancelButton } from '../../../_components/cancel-button'
 import { useJobPolling, SmoothProgress } from '../../../_components/use-job-polling'
 import { ShotPromptModal } from './shot-prompt-modal'
 import { V2_COSTS } from '@/lib/v2-costs'
+import { useFeature, useLockHint } from '@/components/entitlements-context'
 
 /**
  * Поток v2 · вкладка «Шот-лист» серии n.
@@ -26,6 +27,8 @@ export function ShotlistTab({ projectId, n, hasScript, scriptText, initialShots 
   projectId: string; n: number; hasScript: boolean; scriptText: string; initialShots: EpisodeShotV2[]
 }) {
   const { t } = useTranslation()
+  const canViewPrompt = useFeature('prompt_view') // Studio: кнопка «Промпт» скрыта без доступа (сервер тоже проверяет)
+  const lockHint = useLockHint()
   const [items, setItems] = useState<EpisodeShotV2[]>(initialShots)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -164,7 +167,7 @@ export function ShotlistTab({ projectId, n, hasScript, scriptText, initialShots 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted-foreground">{t('ideaV2.shotsIntro')} <span className="font-semibold text-foreground">{FABLE_MODEL_LABEL}</span></p>
         <div className="flex flex-wrap items-stretch gap-2">
-          <button onClick={() => setPromptOpen(true)} disabled={extracting} className={`${btnBar} min-w-[140px]`} data-testid="episode-v2-shots-view-prompt">
+          <button onClick={() => setPromptOpen(true)} disabled={extracting || !canViewPrompt} title={canViewPrompt ? undefined : lockHint('prompt_view')} className={`${btnBar} min-w-[140px]`} data-testid="episode-v2-shots-view-prompt">
             <Eye className="h-4 w-4" /> {t('ideaV2.shotsViewPrompt')}
             {systemDraft.trim() && autoSystem && systemDraft.trim() !== autoSystem.trim() && (
               <span className="rounded-sm bg-primary px-1 text-[9px] font-bold uppercase leading-tight text-primary-foreground">{t('ideaV2.refsEdited')}</span>

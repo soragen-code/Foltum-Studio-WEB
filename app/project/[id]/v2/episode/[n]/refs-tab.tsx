@@ -8,6 +8,7 @@ import { CancelButton } from '../../../_components/cancel-button'
 import { useJobPolling, SmoothProgress } from '../../../_components/use-job-polling'
 import { RefPromptModal } from './ref-prompt-modal'
 import { V2_COSTS, refImagesCost } from '@/lib/v2-costs'
+import { useFeature, useLockHint } from '@/components/entitlements-context'
 
 /**
  * Поток v2 · вкладка «Референсы» серии n.
@@ -22,10 +23,14 @@ const EXTRACT_EXPECTED_SEC = 45
 const IMAGE_EXPECTED_SEC = 40
 const isActive = (j: any) => !!j && (j.status === 'pending' || j.status === 'processing')
 
-export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs, ownFace = false }: {
-  projectId: string; n: number; hasScript: boolean; initialRefs: EpisodeRefV2[]; ownFace?: boolean
+export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs }: {
+  projectId: string; n: number; hasScript: boolean; initialRefs: EpisodeRefV2[]
 }) {
   const { t } = useTranslation()
+  const canViewPrompt = useFeature('prompt_view') // Studio: просмотр/правка EN-промпта рефа
+  const canInstruct = useFeature('prompt_instruct_edit') // Pro+: правка внешности инструкцией
+  const ownFace = useFeature('own_references') // Studio: своё фото-референс персонажа
+  const lockHint = useLockHint()
   const costTag = (c: number) => <span className="ml-0.5 whitespace-nowrap text-[11px] font-normal opacity-80" data-testid="episode-v2-cost">· {t('ideaV2.costCredits', { n: c })}</span>
   const [items, setItems] = useState<EpisodeRefV2[]>(initialRefs)
   const [promptId, setPromptId] = useState('')
@@ -281,7 +286,7 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs, ownFace =
                 />
               )}
               <div className="mt-3 flex overflow-hidden rounded-md border border-border">
-                <button onClick={() => setPromptId(r.id)} className={btnFlat} data-testid="episode-v2-ref-view-prompt">
+                <button onClick={() => setPromptId(r.id)} disabled={!canViewPrompt} title={canViewPrompt ? undefined : lockHint('prompt_view')} className={btnFlat} data-testid="episode-v2-ref-view-prompt">
                   <Eye className="h-3.5 w-3.5" /> {t('ideaV2.refsViewPrompt')}
                   {r.promptDirty && <span className="absolute right-1 top-1 rounded-sm bg-primary px-1 text-[9px] font-bold uppercase leading-tight text-primary-foreground" data-testid="episode-v2-ref-prompt-new">new</span>}
                 </button>
@@ -289,7 +294,7 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs, ownFace =
                   {genBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />} {r.imageUrl ? t('ideaV2.refsRegenerate') : t('ideaV2.refsGenerateOne')}{costTag(V2_COSTS.refImage)}
                 </button>
               </div>
-              {r.kind === 'character' && (
+              {r.kind === 'character' && canInstruct && (
                 <AppearanceRefineControl
                   projectId={projectId}
                   n={n}
@@ -332,7 +337,7 @@ export function EpisodeRefsTab({ projectId, n, hasScript, initialRefs, ownFace =
 /**
  * Контрол «фото-референс внешности» для рефа-персонажа (v2).
  * Пользователь прикрепляет своё фото → при генерации изображения рефа оно подаётся в модель как image_input,
- * чтобы персонаж был похож на человека с фото. Gate own_face (Basic+). POST/DELETE → /api/ai/v2/refs/face.
+ * чтобы персонаж был похож на человека с фото. Gate own_references (Studio). POST/DELETE → /api/ai/v2/refs/face.
  */
 function FaceRefControl({ projectId, n, refItem, ownFace, disabled, onChanged }: {
   projectId: string; n: number; refItem: EpisodeRefV2; ownFace: boolean; disabled: boolean

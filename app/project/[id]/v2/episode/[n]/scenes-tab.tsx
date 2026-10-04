@@ -6,6 +6,7 @@ import type { EpisodeFinalV2, EpisodeSceneV2 } from '@/lib/idea-v2'
 import { useTranslation } from '@/lib/i18n/context'
 import { ScenePromptModal, type ScenePromptRef, type ScenePromptScene } from './scene-prompt-modal'
 import { assembleCost, sceneVideosCost } from '@/lib/v2-costs'
+import { useFeature, useLockHint } from '@/components/entitlements-context'
 
 /**
  * Поток v2 · вкладка «Сцены» серии n.
@@ -26,6 +27,8 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
   projectId: string; n: number; initialScenes?: EpisodeSceneV2[]; initialApproved?: boolean
 }) {
   const { t } = useTranslation()
+  const canViewPrompt = useFeature('prompt_view') // Studio: кнопка «Промпт» скрыта без доступа (сервер тоже проверяет)
+  const lockHint = useLockHint()
   const [data, setData] = useState<ScenesData>({ scenes: initialScenes, refs: [], storyboardUrl: null, approved: initialApproved, framesJob: null, videoJob: null, assembleJob: null, final: null, allVideosReady: false })
   const [loaded, setLoaded] = useState(false)
   const [launching, setLaunching] = useState(false)
@@ -247,7 +250,7 @@ export function ScenesTab({ projectId, n, initialScenes = [], initialApproved = 
               {s.firstFrameStatus === 'error' && s.firstFrameError && <p className="line-clamp-2 text-[11px] text-destructive" title={s.firstFrameError}>{s.firstFrameError}</p>}
               {s.videoStatus === 'error' && <p className="line-clamp-2 text-[11px] text-destructive" title={s.videoError}>{t('ideaV2.scenesVideoError')}{s.videoError ? `: ${s.videoError}` : ''}</p>}
               <div className="mt-auto pt-1">
-                <button onClick={() => setPromptFor(s.id)} disabled={!s.autoPrompt} className={btnV1} data-testid={`episode-v2-scene-prompt-${s.index}`}>
+                <button onClick={() => setPromptFor(s.id)} disabled={!s.autoPrompt || !canViewPrompt} title={canViewPrompt ? undefined : lockHint('prompt_view')} className={btnV1} data-testid={`episode-v2-scene-prompt-${s.index}`}>
                   <Eye className="h-3.5 w-3.5" /> {t('ideaV2.scenesPromptTitle')}
                 </button>
               </div>

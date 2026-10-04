@@ -11,6 +11,7 @@ import { chargeV2Credits } from "@/lib/v2-credits";
 import { V2_COSTS } from "@/lib/v2-costs";
 import { runLoglineV2Job, LOGLINE_V2_JOB_TYPE } from "@/lib/workers/logline-v2-job";
 import { isSeasonPlotV2Locked, SEASON_PLOT_V2_LOCKED_ERROR } from "@/lib/idea-v2";
+import { denyFeature, hasText } from "@/lib/feature-gate";
 
 /**
  * POST /api/ai/v2/logline  { projectId, idea? | genres?, loglineLanguage?, overrideMessages? }
@@ -55,6 +56,9 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null);
     const parsed = generateSchema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+    // Правка инструкцией (refine) — prompt_instruct_edit (Pro+); свой промпт (override*) — prompt_edit (Studio).
+    if (hasText(parsed.data.refine) || hasText(parsed.data.refineEn)) { const d = await denyFeature(session.user.email, "prompt_instruct_edit"); if (d) return d; }
+    if (Array.isArray(parsed.data.overrideMessages) || hasText((parsed.data as any).overrideSystem) || hasText((parsed.data as any).overrideUser) || hasText((parsed.data as any).overrideAssistant)) { const d = await denyFeature(session.user.email, "prompt_edit"); if (d) return d; }
     const { projectId, idea, ideaEn, loglineLanguage, genres, wishes, wishesEn, logline, refine, refineEn, loglineBase, loglineTurns, overrideMessages, overrideSystem, overrideUser, overrideAssistant } = parsed.data;
 
     if (!(idea && idea.trim()) && !(genres && genres.length))

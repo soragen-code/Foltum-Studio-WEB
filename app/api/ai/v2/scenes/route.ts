@@ -17,6 +17,7 @@ import { WAVESPEED_IMAGE_MAX_REFS } from "@/lib/providers/image-provider";
 import { translateToEnglish } from "@/lib/translate-en";
 import { chargeV2Credits } from "@/lib/v2-credits";
 import { assembleCost, sceneFramesCost, sceneVideosCost } from "@/lib/v2-costs";
+import { denyFeature, hasText } from "@/lib/feature-gate";
 
 /**
  * Поток v2 · вкладка «Сцены» серии n.
@@ -155,6 +156,7 @@ export async function PATCH(request: Request) {
     if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const parsed = patchSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+    const deniedEdit = await denyFeature(session.user.email, "prompt_edit"); if (deniedEdit) return deniedEdit; // правка промпта сцены — Studio
     const { projectId, episode, sceneId, prompt } = parsed.data;
     const project = await ownedProject(session.user.email, projectId);
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });

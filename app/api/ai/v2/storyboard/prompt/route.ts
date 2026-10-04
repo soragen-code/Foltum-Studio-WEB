@@ -8,6 +8,7 @@ import { prisma } from "@/lib/db";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { ensureStoryboardV2AutoPrompt } from "@/lib/storyboard-v2-prompt";
 import { setEpisodeStoryboardV2 } from "@/lib/episode-storyboard-v2-store";
+import { denyFeature, hasText } from "@/lib/feature-gate";
 
 /**
  * Поток v2 · кнопка «Промпт» на вкладке «Сториборд».
@@ -25,6 +26,7 @@ export async function POST(request: Request) {
     if (limited) return limited;
     const parsed = schema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+    const deniedView = await denyFeature(session.user.email, "prompt_view"); if (deniedView) return deniedView; // просмотр промпта — Studio
     const { projectId, episode, force } = parsed.data;
 
     const user = await prisma.user.findUnique({ where: { email: session.user.email }, select: { id: true } });

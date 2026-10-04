@@ -6,6 +6,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { buildSynopsisV2Parts, normalizeSynopsisLanguage, normalizeEpisodesCount } from "@/lib/idea-v2";
 import { translateToEnglish, translateSynopsisRefines } from "@/lib/translate-en";
+import { denyFeature, hasText } from "@/lib/feature-gate";
 
 /**
  * POST /api/ai/v2/synopsis/preview  { projectId, idea? | genres?, wishes?, synopsisLanguage?, episodesCount?, refine?, synopsisBase?, synopsisTurns? }
@@ -38,6 +39,9 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null);
     const parsed = previewSchema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+    // Просмотр промптов генерации — фича prompt_view (Studio).
+    const deniedView = await denyFeature(session.user.email, "prompt_view");
+    if (deniedView) return deniedView;
     const { projectId, idea, genres, wishes, synopsisLanguage: langRaw, episodesCount: epRaw, synopsis, refine, synopsisBase, synopsisTurns } = parsed.data;
 
     const project = await prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, synopsis: true } });

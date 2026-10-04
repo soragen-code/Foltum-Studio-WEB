@@ -11,6 +11,7 @@ import { chargeV2Credits } from "@/lib/v2-credits";
 import { V2_COSTS } from "@/lib/v2-costs";
 import { runEpisodeScriptV2Job, episodeOfScriptJob, EPISODE_SCRIPT_V2_JOB_TYPE } from "@/lib/workers/episode-script-v2-job";
 import { seasonPlotEpisodeSummary, episodeScriptV2From, synopsisLanguageFromCode, seriesContinuityBlockV2 } from "@/lib/idea-v2";
+import { denyFeature, hasText } from "@/lib/feature-gate";
 
 /**
  * POST /api/ai/v2/script  { projectId, episode, refine?, refineEn?, scriptBase?, scriptTurns?, overrideMessages? }
@@ -45,6 +46,9 @@ export async function POST(request: Request) {
 
     const parsed = generateSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+    // Правка инструкцией (refine) — prompt_instruct_edit (Pro+); свой промпт (override*) — prompt_edit (Studio).
+    if (hasText(parsed.data.refine) || hasText(parsed.data.refineEn)) { const d = await denyFeature(session.user.email, "prompt_instruct_edit"); if (d) return d; }
+    if (Array.isArray(parsed.data.overrideMessages) || hasText((parsed.data as any).overrideSystem) || hasText((parsed.data as any).overrideUser) || hasText((parsed.data as any).overrideAssistant)) { const d = await denyFeature(session.user.email, "prompt_edit"); if (d) return d; }
     const { projectId, episode, refine, refineEn, scriptBase, scriptTurns, overrideMessages } = parsed.data;
 
     const user = await prisma.user.findUnique({ where: { email: session.user.email }, select: { id: true } });

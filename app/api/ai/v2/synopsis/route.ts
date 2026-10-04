@@ -11,6 +11,7 @@ import { chargeV2Credits } from "@/lib/v2-credits";
 import { V2_COSTS } from "@/lib/v2-costs";
 import { runSynopsisV2Job, SYNOPSIS_V2_JOB_TYPE } from "@/lib/workers/synopsis-v2-job";
 import { normalizeSynopsisLanguage, normalizeEpisodesCount, isSeasonPlotV2Locked, SEASON_PLOT_V2_LOCKED_ERROR } from "@/lib/idea-v2";
+import { denyFeature, hasText } from "@/lib/feature-gate";
 
 /**
  * POST /api/ai/v2/synopsis  { projectId, idea? | genres?, wishes?, synopsisLanguage?, episodesCount?, refine?, synopsisBase?, synopsisTurns?, overrideMessages? }
@@ -54,6 +55,9 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null);
     const parsed = generateSchema.safeParse(body);
     if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+    // Правка инструкцией (refine) — prompt_instruct_edit (Pro+); свой промпт (override*) — prompt_edit (Studio).
+    if (hasText(parsed.data.refine) || hasText(parsed.data.refineEn)) { const d = await denyFeature(session.user.email, "prompt_instruct_edit"); if (d) return d; }
+    if (Array.isArray(parsed.data.overrideMessages) || hasText((parsed.data as any).overrideSystem) || hasText((parsed.data as any).overrideUser) || hasText((parsed.data as any).overrideAssistant)) { const d = await denyFeature(session.user.email, "prompt_edit"); if (d) return d; }
     const { projectId, idea, ideaEn, genres, wishes, wishesEn, synopsisLanguage: langRaw, episodesCount: epRaw, synopsis, refine, refineEn, synopsisBase, synopsisTurns, overrideMessages, overrideSystem, overrideUser, overrideAssistant } = parsed.data;
     const synopsisLanguage = normalizeSynopsisLanguage(langRaw);
     const episodesCount = normalizeEpisodesCount(epRaw);

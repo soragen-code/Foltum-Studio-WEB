@@ -12,6 +12,7 @@ import { V2_COSTS } from "@/lib/v2-costs";
 import { runEpisodeRefsV2Job, EPISODE_REFS_V2_JOB_TYPE } from "@/lib/workers/episode-refs-v2-job";
 import { episodeScriptV2From, episodeRefsV2From, synopsisLanguageFromCode } from "@/lib/idea-v2";
 import { activeEpisodeJob, latestEpisodeJob, patchEpisodeRefV2 } from "@/lib/episode-refs-v2-store";
+import { denyFeature, hasText } from "@/lib/feature-gate";
 
 /**
  * Поток v2 · вкладка «Референсы» серии n.
@@ -84,6 +85,7 @@ export async function PATCH(request: Request) {
     if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const parsed = patchSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+    const deniedEdit = await denyFeature(session.user.email, "prompt_edit"); if (deniedEdit) return deniedEdit; // правка EN-промпта рефа — Studio
     const { projectId, episode, id, prompt } = parsed.data;
     const project = await ownedProject(session.user.email, projectId);
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });

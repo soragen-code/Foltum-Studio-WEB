@@ -15,6 +15,7 @@ import { ShotlistTab } from './shotlist-tab'
 import { StoryboardTab } from './storyboard-tab'
 import { ScenesTab } from './scenes-tab'
 import { V2_COSTS } from '@/lib/v2-costs'
+import { useEntitlements, LockedBadge } from '@/components/entitlements-context'
 
 /**
  * Поток v2 · страница эпизода. Вкладки расширяемы (TABS): «Сценарий», «Референсы» (refs-tab.tsx).
@@ -69,10 +70,14 @@ const storeDialog = (pid: string, n: number, base: string, turns: ScriptTurn[]) 
 
 const TAB_KEYS: TabKey[] = ['script', 'refs', 'shots', 'storyboard', 'scenes']
 
-export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScript, initialRefs = [], initialShots = [], initialStoryboard = null, initialScenes = [], backHref, ownFace = false, prevN = null, nextN = null }: {
-  projectId: string; projectTitle: string; n: number; summary: string; initialScript: string; initialRefs?: EpisodeRefV2[]; initialShots?: EpisodeShotV2[]; initialStoryboard?: EpisodeStoryboardV2 | null; initialScenes?: EpisodeSceneV2[]; backHref: string; ownFace?: boolean; prevN?: number | null; nextN?: number | null
+export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScript, initialRefs = [], initialShots = [], initialStoryboard = null, initialScenes = [], backHref, prevN = null, nextN = null }: {
+  projectId: string; projectTitle: string; n: number; summary: string; initialScript: string; initialRefs?: EpisodeRefV2[]; initialShots?: EpisodeShotV2[]; initialStoryboard?: EpisodeStoryboardV2 | null; initialScenes?: EpisodeSceneV2[]; backHref: string; prevN?: number | null; nextN?: number | null
 }) {
   const { t, locale } = useTranslation()
+  // Доступы по тарифу (см. lib/entitlements.ts): правки инструкцией — Pro+, промпты — Studio.
+  const ent = useEntitlements()
+  const canInstruct = ent.prompt_instruct_edit
+  const canViewPrompt = ent.prompt_view
   const costTag = (n: number) => <span className="ml-0.5 whitespace-nowrap text-[11px] font-normal opacity-80" data-testid="episode-v2-cost">· {t('ideaV2.costCredits', { n })}</span>
   // Вкладка из URL (?tab=scenes): переход «← Серия N-1 / Серия N+1 →» сохраняет текущую вкладку.
   const searchParams = useSearchParams()
@@ -288,7 +293,7 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
   const btnPrimary = 'flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110 disabled:opacity-50'
   // Прозрачная (outline) кнопка для второстепенного действия «Превью».
   const btnGhost = 'inline-flex items-center gap-1.5 rounded-lg border border-border bg-transparent px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-muted/60 hover:border-foreground/30 disabled:opacity-50'
-  const previewBtn = (noRefine: boolean, testId: string, disabled = false) => (
+  const previewBtn = (noRefine: boolean, testId: string, disabled = false) => canViewPrompt && (
     <button onClick={() => openPreview(noRefine)} disabled={disabled || previewLoading || generating} className={btnGhost} data-testid={testId} title="Посмотреть/отредактировать промпт перед отправкой">
       {previewLoading ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Собираем промпт...</> : <><Eye className="h-3.5 w-3.5" /> {t('ideaV2.preview')}</>}
     </button>
@@ -354,6 +359,13 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
           </div>
         </div>
         <pre className="mt-3 whitespace-pre-wrap break-words rounded-lg border border-border bg-background px-4 py-3 font-mono text-[13px] leading-relaxed text-foreground" data-testid="episode-v2-script-text">{script}</pre>
+        {!canInstruct && (
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/30 px-4 py-3" data-testid="episode-v2-script-refine-locked">
+            <span className="text-xs font-semibold text-foreground">{t('ideaV2.scriptRefineLabel')}</span>
+            <LockedBadge feature="prompt_instruct_edit" />
+          </div>
+        )}
+        {canInstruct && (
         <div className="mt-5 rounded-lg border border-border/70 bg-muted/30 px-4 py-3" data-testid="episode-v2-script-refine">
           <label htmlFor="episode-v2-script-refine-input" className="text-xs font-semibold text-foreground">{t('ideaV2.scriptRefineLabel')}</label>
           <textarea
@@ -373,6 +385,7 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
             </button>
           </div>
         </div>
+        )}
         {canceled && <p className="mt-3 text-xs text-amber-500">{t('ideaV2.scriptCanceled')}</p>}
       </div>
     )
@@ -422,7 +435,7 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
           </div>
           <div className="mt-4" role="tabpanel">
             {tab === 'script' && renderScriptTab()}
-            {tab === 'refs' && <EpisodeRefsTab projectId={projectId} n={n} hasScript={!!script && !generating} initialRefs={initialRefs} ownFace={ownFace} />}
+            {tab === 'refs' && <EpisodeRefsTab projectId={projectId} n={n} hasScript={!!script && !generating} initialRefs={initialRefs} />}
             {tab === 'shots' && <ShotlistTab projectId={projectId} n={n} hasScript={!!script && !generating} scriptText={script} initialShots={initialShots} />}
             {tab === 'storyboard' && <StoryboardTab projectId={projectId} n={n} hasShots={initialShots.length > 0} initialShotsCount={initialShots.length} initialStoryboard={initialStoryboard} onOpenScenes={() => setTab('scenes')} />}
             {tab === 'scenes' && <ScenesTab projectId={projectId} n={n} initialScenes={initialScenes} initialApproved={!!initialStoryboard?.approved} />}

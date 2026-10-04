@@ -9,6 +9,7 @@ import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 import { chat } from "@/lib/ai";
 import { episodeRefsV2From } from "@/lib/idea-v2";
 import { patchEpisodeRefV2 } from "@/lib/episode-refs-v2-store";
+import { denyFeature, hasText } from "@/lib/feature-gate";
 
 /**
  * Поток v2 · вкладка «Референсы» · рефайн внешности персонажа промптом.
@@ -43,6 +44,7 @@ export async function POST(request: Request) {
 
     const parsed = schema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+    const deniedRefine = await denyFeature(session.user.email, "prompt_instruct_edit"); if (deniedRefine) return deniedRefine; // правка внешности инструкцией — Pro+
     const { projectId, episode, id, instruction } = parsed.data;
 
     const project = await ownedProject(session.user.email, projectId);

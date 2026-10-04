@@ -12,6 +12,7 @@ import { V2_COSTS } from "@/lib/v2-costs";
 import { runEpisodeShotsV2Job, EPISODE_SHOTS_V2_JOB_TYPE } from "@/lib/workers/episode-shots-v2-job";
 import { episodeScriptV2From, episodeShotsV2From, episodeShotsV2SystemPrompt, episodeHandoffBlockV2, synopsisLanguageFromCode } from "@/lib/idea-v2";
 import { activeEpisodeJob, latestEpisodeJob, patchEpisodeShotV2 } from "@/lib/episode-shots-v2-store";
+import { denyFeature, hasText } from "@/lib/feature-gate";
 
 /**
  * Поток v2 · вкладка «Шот-лист» серии n.
@@ -47,6 +48,7 @@ export async function POST(request: Request) {
     if (limited) return limited;
     const parsed = postSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+    if (hasText(parsed.data.system)) { const d = await denyFeature(session.user.email, "prompt_edit"); if (d) return d; } // свой системный промпт — Studio
     const { projectId, episode, system } = parsed.data;
 
     const project = await ownedProject(session.user.email, projectId);

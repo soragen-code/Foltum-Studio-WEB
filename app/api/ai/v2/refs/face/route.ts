@@ -23,7 +23,7 @@ import { patchEpisodeRefV2 } from "@/lib/episode-refs-v2-store";
  * POST   multipart/form-data { projectId, episode, id, file } (image/jpeg|png|webp, ≤ 8 МБ)
  *        → загрузка в S3 (public key), запись userRefUrl, удаление прежнего фото best-effort. Возвращает { userRefUrl }.
  * DELETE multipart/form-data { projectId, episode, id } → очистка userRefUrl (S3 delete best-effort). Возвращает { userRefUrl: null }.
- * Фича «own_face» (Basic+). Владение: ref → project → userId. Кредиты не списываются (только загрузка).
+ * Фича «own_references» (Studio). Владение: ref → project → userId. Кредиты не списываются (только загрузка).
  */
 async function ownedRef(email: string, projectId: string, episode: number, id: string) {
   const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
@@ -65,9 +65,9 @@ export async function POST(request: Request) {
     const limited = rateLimitByUser(request, "ai:v2:refs-face", session.user.email, RATE_LIMITS.ai);
     if (limited) return limited;
 
-    // Feature gate: uploading a real face photo ("own_face") requires an active Basic+ subscription.
+    // Feature gate: uploading a real face photo ("own_references") requires an active Studio subscription.
     const gateUser = await prisma.user.findUnique({ where: { id: session.user.id }, select: { subscriptionTier: true, subscriptionExpiresAt: true } });
-    const denied = requireFeature(gateUser, "own_face");
+    const denied = requireFeature(gateUser, "own_references");
     if (denied) return NextResponse.json(denied, { status: 403 });
 
     let form: FormData;

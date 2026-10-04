@@ -6,6 +6,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { buildEpisodeScriptV2Parts, seasonPlotEpisodeSummary, episodeScriptV2From, synopsisLanguageFromCode, seriesContinuityBlockV2 } from "@/lib/idea-v2";
 import { translateScriptRefines } from "@/lib/translate-en";
+import { denyFeature, hasText } from "@/lib/feature-gate";
 
 /**
  * POST /api/ai/v2/script/preview  { projectId, episode, refine?, scriptBase?, scriptTurns? }
@@ -28,6 +29,9 @@ export async function POST(request: Request) {
 
     const parsed = previewSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+    // Просмотр промптов генерации — фича prompt_view (Studio).
+    const deniedView = await denyFeature(session.user.email, "prompt_view");
+    if (deniedView) return deniedView;
     const { projectId, episode, refine, scriptBase, scriptTurns } = parsed.data;
 
     const project = await prisma.project.findFirst({ where: { id: projectId, userId: user.id }, select: { id: true, seasonPlotV2: true, language: true, episodeScriptsV2: true, episodeRefsV2: true, episodeShotsV2: true } });

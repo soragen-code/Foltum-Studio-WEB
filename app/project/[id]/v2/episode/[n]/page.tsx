@@ -3,7 +3,8 @@ import { redirect } from 'next/navigation'
 import { Suspense } from 'react'
 import { prisma } from '@/lib/db'
 import { seasonPlotEpisodeSummary, parseSeasonPlotV2, episodeScriptV2From, episodeRefsV2From, episodeShotsV2From, episodeStoryboardV2From, episodeScenesV2From } from '@/lib/idea-v2'
-import { canUse } from '@/lib/entitlements'
+import { computeEntitlements } from '@/lib/entitlements'
+import { EntitlementsProvider } from '@/components/entitlements-context'
 import { EpisodeV2View } from './episode-v2-view'
 
 export const dynamic = 'force-dynamic'
@@ -20,7 +21,8 @@ export default async function EpisodeV2Page({ params }: { params: Promise<{ id: 
 
   const user = await prisma.user.findUnique({ where: { email: session.user.email! }, select: { id: true, subscriptionTier: true, subscriptionExpiresAt: true } })
   if (!user) redirect('/login')
-  const ownFace = canUse(user, 'own_face')
+  // Матрица доступов по тарифу (Basic/Pro/Studio) — считается на сервере, клиент читает через useEntitlements().
+  const entitlements = computeEntitlements(user)
   const project = await prisma.project.findFirst({
     where: { id, userId: user.id },
     select: { id: true, name: true, seasonPlotV2: true, episodeScriptsV2: true, episodeRefsV2: true, episodeShotsV2: true, episodeStoryboardV2: true, episodeScenesV2: true },
@@ -39,6 +41,7 @@ export default async function EpisodeV2Page({ params }: { params: Promise<{ id: 
 
   return (
     <Suspense>
+    <EntitlementsProvider value={entitlements}>
     <EpisodeV2View
       projectId={project.id}
       projectTitle={String(project.name ?? '')}
@@ -50,10 +53,10 @@ export default async function EpisodeV2Page({ params }: { params: Promise<{ id: 
       initialStoryboard={episodeStoryboardV2From(project.episodeStoryboardV2, n)}
       initialScenes={episodeScenesV2From(project.episodeScenesV2, n)}
       backHref={back}
-      ownFace={ownFace}
       prevN={prevN}
       nextN={nextN}
     />
+    </EntitlementsProvider>
     </Suspense>
   )
 }

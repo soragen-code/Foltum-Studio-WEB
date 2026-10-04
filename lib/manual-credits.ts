@@ -4,6 +4,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
+import { requireFeature } from "@/lib/entitlements";
 import { rateLimitByUser, RATE_LIMITS } from "@/lib/rate-limit";
 
 export interface ManualUser { id: string; email: string; credits: number }
@@ -14,8 +15,11 @@ export async function requireManualUser(request: Request, scope: string): Promis
   if (!session?.user?.email) return { response: NextResponse.json({ error: "Login required" }, { status: 401 }) };
   const limited = rateLimitByUser(request, scope, session.user.email, RATE_LIMITS.ai);
   if (limited) return { response: limited };
-  const user = await prisma.user.findUnique({ where: { email: session.user.email }, select: { id: true, email: true, credits: true } });
+  const user = await prisma.user.findUnique({ where: { email: session.user.email }, select: { id: true, email: true, credits: true, subscriptionTier: true, subscriptionExpiresAt: true } });
   if (!user) return { response: NextResponse.json({ error: "User not found" }, { status: 404 }) };
+  // Manual mode is a Pro+ feature: every /api/manual/* route goes through here, so this is the single server gate.
+  const denied = requireFeature(user, "manual_mode");
+  if (denied) return { response: NextResponse.json(denied, { status: 403 }) };
   return { user: { id: user.id, email: user.email, credits: user.credits ?? 0 } };
 }
 

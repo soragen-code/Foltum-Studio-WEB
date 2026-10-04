@@ -18,9 +18,7 @@ const plans = [
     activeColor: 'border-green-500 ring-2 ring-green-500/20',
     iconColor: 'text-green-400',
     features: [
-      'pricing.feat.ownFace',
-      'pricing.feat.promptEdit',
-      'pricing.feat.manualPrompt',
+      'pricing.feat.autoGenerate',
     ],
   },
   {
@@ -33,6 +31,8 @@ const plans = [
     iconColor: 'text-primary',
     features: [
       'pricing.feat.allBasic',
+      'pricing.feat.instructEdit',
+      'pricing.feat.manualMode',
     ],
     popular: true,
   },
@@ -46,7 +46,8 @@ const plans = [
     iconColor: 'text-red-400',
     features: [
       'pricing.feat.allPro',
-      'pricing.feat.maxAccess',
+      'pricing.feat.promptViewEdit',
+      'pricing.feat.ownRefs',
     ],
   },
 ]

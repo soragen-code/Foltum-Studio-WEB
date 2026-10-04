@@ -10,6 +10,7 @@ import { CancelButton } from './cancel-button'
 import { useJobPolling, SmoothProgress } from './use-job-polling'
 import { PromptModal } from './v2-prompt-modal'
 import { V2_COSTS } from '@/lib/v2-costs'
+import { useEntitlements, LockedBadge } from '@/components/entitlements-context'
 
 /** Примерная длительность генерации синопсиса v2 — управляет плавным прогресс-баром. */
 const SYNOPSIS_V2_EXPECTED_SEC = 50
@@ -255,6 +256,10 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
 
   // ─── Промпты: диалог messages из preview (system первым) + правки system и крайнего user
   const { t, locale } = useTranslation()
+  // Доступы по тарифу: правки инструкцией — Pro+, просмотр/правка промптов — Studio (сервер проверяет то же).
+  const ent = useEntitlements()
+  const canInstruct = ent.prompt_instruct_edit
+  const canViewPrompt = ent.prompt_view
   // Стоимость шага в кредитах — показывается на каждой кнопке генерации (списывается сервером при старте job).
   const costTag = (n: number) => <span className="ml-0.5 whitespace-nowrap text-[11px] font-normal opacity-80" data-testid="idea-v2-cost">· {t('ideaV2.costCredits', { n })}</span>
   useEffect(() => {
@@ -738,7 +743,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const btnMain = 'flex items-center gap-1.5 rounded-lg bg-secondary px-3 py-1.5 text-xs font-semibold text-secondary-foreground transition hover:brightness-110 disabled:opacity-50'
   // Прозрачная (outline) кнопка для второстепенных действий «Превью» и «Открыть».
   const btnGhost = 'inline-flex items-center gap-1.5 rounded-lg border border-border bg-transparent px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-muted/60 hover:border-foreground/30 disabled:opacity-50'
-  const previewBtn = (k: Kind, noRefine: boolean, testId: string, disabled = false) => (
+  const previewBtn = (k: Kind, noRefine: boolean, testId: string, disabled = false) => canViewPrompt && (
     <button onClick={() => openPreview(k, noRefine)} disabled={disabled || previewLoading === k || generating} className={btnGhost} data-testid={testId} title="Посмотреть/отредактировать промпт перед отправкой">
       {previewLoading === k ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Собираем промпт...</> : <><Eye className="h-3.5 w-3.5" /> {t('ideaV2.preview')}</>}
     </button>
@@ -933,7 +938,13 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-result-stale">Идея, жанры, язык или число эпизодов изменились — вернитесь на шаг 1 и нажмите «Продолжить», чтобы перегенерировать синопсис.</p>
           )}
           {locked && <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="idea-v2-locked"><Lock className="h-3.5 w-3.5" /> {t('ideaV2.lockedHint')}</p>}
-          {!inputDirty && !locked && (
+          {!inputDirty && !locked && !canInstruct && (
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/30 px-4 py-3" data-testid="idea-v2-synopsis-refine-locked">
+              <span className="text-xs font-semibold text-foreground">Что изменить в синопсисе?</span>
+              <LockedBadge feature="prompt_instruct_edit" />
+            </div>
+          )}
+          {!inputDirty && !locked && canInstruct && (
             <div className="mt-5 rounded-lg border border-border/70 bg-muted/30 px-4 py-3" data-testid="idea-v2-synopsis-refine">
               <label htmlFor="idea-v2-synopsis-refine-input" className="text-xs font-semibold text-foreground">Что изменить в синопсисе?</label>
               <textarea
@@ -1052,7 +1063,13 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-plot-stale">Идея, жанры, язык или число эпизодов изменились — вернитесь на шаг 1 и нажмите «Продолжить», чтобы перегенерировать синопсис и сюжет.</p>
           )}
           {locked && <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="idea-v2-locked"><Lock className="h-3.5 w-3.5" /> {t('ideaV2.lockedHint')}</p>}
-          {!inputDirty && !locked && (
+          {!inputDirty && !locked && !canInstruct && (
+            <div className="mt-5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/70 bg-muted/30 px-4 py-3" data-testid="idea-v2-plot-refine-locked">
+              <span className="text-xs font-semibold text-foreground">Что изменить в сюжете сезона?</span>
+              <LockedBadge feature="prompt_instruct_edit" />
+            </div>
+          )}
+          {!inputDirty && !locked && canInstruct && (
             <div className="mt-5 rounded-lg border border-border/70 bg-muted/30 px-4 py-3" data-testid="idea-v2-plot-refine">
               <label htmlFor="idea-v2-plot-refine-input" className="text-xs font-semibold text-foreground">Что изменить в сюжете сезона?</label>
               <textarea

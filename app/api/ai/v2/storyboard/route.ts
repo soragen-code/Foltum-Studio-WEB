@@ -13,6 +13,7 @@ import { runEpisodeStoryboardV2Job, EPISODE_STORYBOARD_V2_JOB_TYPE } from "@/lib
 import { episodeShotsV2From, episodeStoryboardV2From } from "@/lib/idea-v2";
 import { peekStoryboardV2AutoPrompt, storyboardV2PromptInputs } from "@/lib/storyboard-v2-prompt";
 import { activeEpisodeJob, latestEpisodeJob, setEpisodeStoryboardV2 } from "@/lib/episode-storyboard-v2-store";
+import { denyFeature, hasText } from "@/lib/feature-gate";
 
 /**
  * Поток v2 · вкладка «Сториборд» серии n.
@@ -36,6 +37,7 @@ export async function POST(request: Request) {
     if (limited) return limited;
     const parsed = postSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+    if (typeof parsed.data.prompt === "string") { const d = await denyFeature(session.user.email, "prompt_edit"); if (d) return d; } // правка/сброс промпта сториборда — Studio
     const { projectId, episode } = parsed.data;
 
     const project = await ownedProject(session.user.email, projectId);
