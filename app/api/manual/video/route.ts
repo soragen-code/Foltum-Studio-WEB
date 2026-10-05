@@ -5,7 +5,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { runInBackground } from "@/lib/jobs";
 import { buildVideoRequest, getVideoModel, resolveDuration } from "@/lib/video-models";
-import { MANUAL_VIDEO_COST_PER_SEC } from "@/lib/manual-image-models";
+import { MANUAL_VIDEO_COST_PER_SEC, MANUAL_VIDEO_MIN_SEC, MANUAL_VIDEO_MAX_SEC } from "@/lib/manual-image-models";
 import { MANUAL_VIDEO_JOB_TYPE, MANUAL_PROJECT_ID, runManualJob } from "@/lib/workers/manual-job";
 import { requireManualUser, chargeCredits, cleanUrls } from "@/lib/manual-credits";
 
@@ -38,7 +38,8 @@ export async function POST(request: Request) {
   if (mode === "t2v" && !def.slugT2V) return NextResponse.json({ error: `Model "${def.label}" does not support text-to-video` }, { status: 400 });
 
   const requested = Number(body?.duration ?? 5);
-  const duration = resolveDuration(def, Math.max(4, Math.min(10, Number.isFinite(requested) ? requested : 5)));
+  // Clamp to the manual bounds (4–30 s), then let the model catalog snap it (Seedance 2.5 accepts the full 4–30 s range).
+  const duration = resolveDuration(def, Math.max(MANUAL_VIDEO_MIN_SEC, Math.min(MANUAL_VIDEO_MAX_SEC, Number.isFinite(requested) ? requested : 5)));
   const cost = Math.max(1, duration * MANUAL_VIDEO_COST_PER_SEC);
 
   const charged = await chargeCredits(user, cost, `Manual video ${duration}s (${def.label})`);

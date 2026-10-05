@@ -9,7 +9,7 @@ import Link from 'next/link'
 import { ArrowLeft, Camera, Clapperboard, Download, Loader2, Plus, RefreshCw, Send, Trash2, Upload, X, ImageOff, AlertCircle, ChevronLeft, ChevronRight, Play } from 'lucide-react'
 import { Header } from '@/components/header'
 import { useTranslation } from '@/lib/i18n/context'
-import { MANUAL_IMAGE_MODELS, DEFAULT_MANUAL_IMAGE_MODEL_ID, MANUAL_PHOTO_COST, MANUAL_VIDEO_COST_PER_SEC } from '@/lib/manual-image-models'
+import { MANUAL_IMAGE_MODELS, DEFAULT_MANUAL_IMAGE_MODEL_ID, MANUAL_PHOTO_COST, MANUAL_VIDEO_COST_PER_SEC, MANUAL_VIDEO_MIN_SEC, MANUAL_VIDEO_MAX_SEC } from '@/lib/manual-image-models'
 import { VIDEO_FAMILIES, DEFAULT_VIDEO_MODEL_ID, getVideoModel } from '@/lib/video-models'
 import { useJobPolling, JobProgressBar, type JobPollResponse } from '@/app/project/[id]/_components/use-job-polling'
 import { compressImageForUpload } from '@/lib/client-image-compress'
@@ -318,11 +318,12 @@ export function ManualClient() {
   const canSwitchToRefs = videoMode === 'i2v' && !!videoDef.slugT2V && videoDef.refImages
   const durationOptions = useMemo(() => {
     if (videoDef.fixedDurations) {
-      const opts = videoDef.durations.filter((d) => d >= 4 && d <= 10)
+      const opts = videoDef.durations.filter((d) => d >= MANUAL_VIDEO_MIN_SEC && d <= MANUAL_VIDEO_MAX_SEC)
       return opts.length ? opts : [videoDef.durations[0]]
     }
     const [min, max] = videoDef.durations
-    const lo = Math.max(4, min), hi = Math.min(10, max)
+    // Range models (Seedance 2.5: 4–30 s) — every whole second up to the catalog/manual cap.
+    const lo = Math.max(MANUAL_VIDEO_MIN_SEC, min), hi = Math.min(MANUAL_VIDEO_MAX_SEC, max)
     const out: number[] = []
     for (let d = lo; d <= hi; d++) out.push(d)
     return out

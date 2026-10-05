@@ -60,6 +60,9 @@ export const DEFAULT_MANUAL_IMAGE_MODEL_ID = MANUAL_IMAGE_MODELS[0].id;
 export const MANUAL_PHOTO_COST = 10;
 /** Credits charged per second of manual video. */
 export const MANUAL_VIDEO_COST_PER_SEC = 10;
+/** Manual video duration bounds (seconds). The model catalog narrows them further (Seedance 2.5 → up to 30 s; Kling/MiniMax/Veo keep their discrete 5–10 s sets). */
+export const MANUAL_VIDEO_MIN_SEC = 4;
+export const MANUAL_VIDEO_MAX_SEC = 30;
 
 const BY_ID = new Map(MANUAL_IMAGE_MODELS.map((m) => [m.id, m]));
 
