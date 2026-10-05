@@ -221,13 +221,13 @@ export function locationImagePrompt(visualPrompt: string, name = ""): string {
  * weather, light direction and palette stay identical — only the camera moves.
  */
 export const LOCATION_ANGLES = [
-  { key: "imageUrl", angle: "wide", label: "Общий план" },
+  { key: "imageUrl", angle: "wide", label: "Wide shot" },
   // Stage 111 — the SECOND MANDATORY frame of every location: a slightly ELEVATED view (camera ~2.5–3 m,
   // tilted down) that shows where every zone / object / doorway sits relative to the others. Stored in
   // the `imageReverse` column (free since Stage 46A — no DB migration); it is a LAYOUT reference for the
   // video model, never the camera angle of a shot.
-  { key: "imageReverse", angle: "layout", label: "Ракурс сверху (планировка)" },
-  { key: "imageDetail", angle: "detail", label: "Средний план" },
+  { key: "imageReverse", angle: "layout", label: "Top-down view (layout)" },
+  { key: "imageDetail", angle: "detail", label: "Medium shot" },
 ] as const;
 /** Stage 111 — the mandatory base angles every location must carry before the scenes step unlocks. */
 export const LOCATION_REQUIRED_ANGLES: readonly LocationAngle[] = ["wide", "layout"];
@@ -298,11 +298,11 @@ export function locationAnglePrompt(visualPrompt: string, name = "", angle: Loca
  * removed — the elevated LAYOUT view is now a mandatory base frame (LOCATION_ANGLES), so five slots remain.
  */
 export const LOCATION_SHOT_PLAN = [
-  { key: "far-edge", label: "С дальнего края", prompt: "a LOW angle (camera near the floor) from the FAR / opposite short edge of the space, the far end now closest to camera, the main zone receding deep behind" },
-  { key: "other-zone", label: "Другая зона", prompt: "an eye-level view from the 90° SIDE of a SEPARATE zone or corner of the place not shown in the previous frames (a secondary area, seating, storage, passage) — revealing more of the same place" },
-  { key: "threshold", label: "От входа", prompt: "a threshold / doorway view from the ENTRANCE at standing eye height, looking through the opening into the depth of the space (foreground frame, mid-ground, deep background)" },
-  { key: "length", label: "Вдоль пространства", prompt: "a long shot at eye level from one END of the space looking straight down its LENGTH, strong leading lines receding to the far wall or horizon" },
-  { key: "light", label: "К источнику света", prompt: "a shot aimed TOWARD the main window / light source from mid-height on the shaded side, backlit, showing how the light enters and falls across the surfaces" },
+  { key: "far-edge", label: "From the far edge", prompt: "a LOW angle (camera near the floor) from the FAR / opposite short edge of the space, the far end now closest to camera, the main zone receding deep behind" },
+  { key: "other-zone", label: "Another zone", prompt: "an eye-level view from the 90° SIDE of a SEPARATE zone or corner of the place not shown in the previous frames (a secondary area, seating, storage, passage) — revealing more of the same place" },
+  { key: "threshold", label: "From the entrance", prompt: "a threshold / doorway view from the ENTRANCE at standing eye height, looking through the opening into the depth of the space (foreground frame, mid-ground, deep background)" },
+  { key: "length", label: "Along the space", prompt: "a long shot at eye level from one END of the space looking straight down its LENGTH, strong leading lines receding to the far wall or horizon" },
+  { key: "light", label: "Toward the light source", prompt: "a shot aimed TOWARD the main window / light source from mid-height on the shaded side, backlit, showing how the light enters and falls across the surfaces" },
 ] as const;
 export const LOCATION_EXTRA_LABELS = LOCATION_SHOT_PLAN.map((p) => p.label) as readonly string[];
 /** Russian UI label of extra slot `i` (wraps for legacy locations that carry more extras than the plan has slots). */

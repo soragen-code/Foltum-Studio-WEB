@@ -1035,7 +1035,7 @@ const oneLine = (v: unknown): string => String(v ?? "").replace(/\s+/g, " ").tri
  */
 export function legacyShotFrame(shot: Partial<EpisodeShotV2>): string {
   return LEGACY_FRAME_FIELDS
-    .map((k) => oneLine((shot as any)[k]).replace(/\s*\(\s*реф\s*\d+\s*\)/gi, "").replace(/[.;,\s]+$/, ""))
+    .map((k) => oneLine((shot as any)[k]).replace(/\s*\(\s*(?:реф|ref)\s*\d+\s*\)/gi, "").replace(/[.;,\s]+$/, ""))
     .filter(Boolean)
     .join(". ");
 }
@@ -1585,9 +1585,9 @@ export function buildSceneFrameV2Prompt(scene: Pick<EpisodeSceneV2, "index" | "a
     `Image 1 is the storyboard sheet — use ONLY panel #${scene.index} as the composition guide (framing, blocking, camera angle). Take NOTHING else from it: faces, hair and wardrobe come from the reference images below, not from the panel. ` +
     `Output ONE full-bleed photorealistic frame: no grid, no panel borders, no number badges, no captions or any text.`;
   const refsBlock = refList.length
-    ? `\n\nREFERENCES: the next ${refList.length} attached image(s) are the canonical look of the recurring characters, locations and props — keep them identical. Bind each one BY POSITION (the Nth attached image = the Nth list item), never by name. The shot cites references as "(реф N)"; match that number to the "(реф N)" marker below:\n` +
+    ? `\n\nREFERENCES: the next ${refList.length} attached image(s) are the canonical look of the recurring characters, locations and props — keep them identical. Bind each one BY POSITION (the Nth attached image = the Nth list item), never by name. The shot cites references as "(ref N)"; match that number to the "(ref N)" marker below:\n` +
       refList
-        .map((r, i) => `Image ${i + 2} = реф ${(r as any).ord ?? i + 1} (${r.kind === "character" ? "character" : r.kind === "location" ? "location" : "prop"}): ${r.label.replace(/\s+/g, " ").trim()}`)
+        .map((r, i) => `Image ${i + 2} = ref ${(r as any).ord ?? i + 1} (${r.kind === "character" ? "character" : r.kind === "location" ? "location" : "prop"}): ${r.label.replace(/\s+/g, " ").trim()}`)
         .join("\n") +
       buildReferenceLockV2(refList, 2, "frame")
     : "";

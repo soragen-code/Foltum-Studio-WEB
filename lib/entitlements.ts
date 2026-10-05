@@ -147,5 +147,5 @@ export function requireFeature(
 ): FeatureDenial | null {
   if (canUse(user, feature)) return null;
   const requiredTier = FEATURE_MIN_TIER[feature];
-  return { error: "subscription_required", feature, requiredTier, message: `Доступно с тарифа ${TIER_NAMES[requiredTier]}` };
+  return { error: "subscription_required", feature, requiredTier, message: `Available from the ${TIER_NAMES[requiredTier]} plan` };
 }

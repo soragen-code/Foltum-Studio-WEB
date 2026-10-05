@@ -11,12 +11,13 @@ export const ADMIN_TZ = "Europe/Kyiv";
 
 export type PeriodKey = "today" | "week" | "month" | "year" | "all";
 export const PERIODS: readonly PeriodKey[] = ["today", "week", "month", "year", "all"];
-export const PERIOD_LABELS: Record<PeriodKey, string> = {
-  today: "Сегодня",
-  week: "7 дней",
-  month: "30 дней",
-  year: "Год",
-  all: "Всего",
+/** Dictionary keys (lib/i18n) for the period column headers — translate with serverT(locale). */
+export const PERIOD_LABEL_KEYS: Record<PeriodKey, string> = {
+  today: "admin.period.today",
+  week: "admin.period.week",
+  month: "admin.period.month",
+  year: "admin.period.year",
+  all: "admin.period.all",
 };
 
 function tzOffsetMinutes(tz: string, date: Date): number {

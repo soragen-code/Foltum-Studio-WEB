@@ -59,7 +59,7 @@ export function Header({ projectName = null, projectId = null }: { projectName?:
                 data-testid="header-admin-link"
               >
                 <ShieldCheck className="h-4 w-4" />
-                Админ
+                {t('nav.admin')}
               </Link>
             ) : null}
             {activeSub ? (
