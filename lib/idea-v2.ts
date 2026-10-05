@@ -331,17 +331,15 @@ export function synopsisV2MetaUserPrompt(synopsis: string): string {
 
 /* ───────────── Логлайн v2: Идея/жанры → 1 предложение (25–40 слов, без имён, сезонный вопрос) ───────────── */
 
-/** Языки вывода логлайна (whitelist для API; значение — английское название языка, подставляется в system). */
-export const LOGLINE_LANGUAGES = ["Russian", "English", "Spanish", "German", "French"] as const;
+/** Языки генерации синопсиса/сюжета/сценария (whitelist для API; английское название подставляется в system). 05.10.2026 по ТЗ — только три: English / Russian / Ukrainian. */
+export const LOGLINE_LANGUAGES = ["English", "Russian", "Ukrainian"] as const;
 export type LoglineLanguage = (typeof LOGLINE_LANGUAGES)[number];
 export const DEFAULT_LOGLINE_LANGUAGE: LoglineLanguage = "Russian";
 /** Соответствие языка логлайна ISO-коду Project.language. */
 export const LOGLINE_LANGUAGE_CODES: Record<LoglineLanguage, IdeaLanguage> = {
-  Russian: "ru",
   English: "en",
-  Spanish: "es",
-  German: "de",
-  French: "fr",
+  Russian: "ru",
+  Ukrainian: "uk",
 };
 /** Нормализация значения с клиента: whitelist, иначе дефолт ("Russian"). */
 export function normalizeLoglineLanguage(value: unknown): LoglineLanguage {
@@ -498,17 +496,33 @@ export function isSeasonPlotV2Locked(p: { stage?: string | null; seasonPlotV2?: 
 export const SEASON_PLOT_V2_LOCKED_ERROR = "Season plot is approved — only episode scripts can be edited";
 
 /**
- * Черновик v2: проект создан, но сюжет сезона ещё не утверждён (stage idea / logline_v2 / synopsis_v2,
- * seasonPlotV2 пуст). Такой проект НЕ сохраняется: он скрыт на дашборде и удаляется, когда пользователь
+ * Черновик v2: проект создан, но синопсис ещё не готов (stage idea / logline_v2, либо synopsis_v2 с пустым
+ * Project.synopsis). Такой проект НЕ сохраняется: он скрыт на дашборде и удаляется, когда пользователь
  * уходит со страницы проекта (POST /api/projects/[id]/discard) или при сборке мусора в GET /api/projects.
+ * Как только синопсис сгенерирован — проект сохраняется (виден на дашборде, при уходе не удаляется).
+ * Пока крутится фоновая задача синопсиса/сюжета, discard и GC проект не трогают (типы задач — IDEA_V2_JOB_TYPES, статусы ACTIVE_JOB_STATUSES).
  * Legacy-проекты (newFlow=false, стадии v1) черновиками не считаются.
  */
-export const DRAFT_V2_STAGES = ["idea", LOGLINE_V2_STAGE, SYNOPSIS_V2_STAGE] as const;
+export const DRAFT_V2_STAGES = ["idea", LOGLINE_V2_STAGE] as const;
 export function isDraftProjectV2(
-  p: { stage?: string | null; newFlow?: boolean | null; seasonPlotV2?: unknown } | null | undefined,
+  p: { stage?: string | null; newFlow?: boolean | null; synopsis?: string | null; seasonPlotV2?: unknown } | null | undefined,
 ): boolean {
-  return !!p && p.newFlow === true && !isSeasonPlotV2Locked(p) && (DRAFT_V2_STAGES as readonly string[]).includes(p.stage ?? "");
+  if (!p || p.newFlow !== true || isSeasonPlotV2Locked(p)) return false;
+  const stage = p.stage ?? "";
+  if ((DRAFT_V2_STAGES as readonly string[]).includes(stage)) return true;
+  return stage === SYNOPSIS_V2_STAGE && String(p.synopsis ?? "").trim().length === 0;
 }
+/** Prisma-условие «черновик v2» (зеркало isDraftProjectV2 без учёта seasonPlotV2 — на draft-стадиях его нет). */
+export const DRAFT_V2_WHERE = {
+  newFlow: true,
+  OR: [
+    { stage: { in: [...DRAFT_V2_STAGES] } },
+    { stage: SYNOPSIS_V2_STAGE, OR: [{ synopsis: null }, { synopsis: "" }] },
+  ],
+} as const;
+/** Фоновые задачи шагов 2–3 (GenerationJob.type): пока такая задача pending/processing, проект нельзя удалять как черновик. */
+export const IDEA_V2_JOB_TYPES = ["synopsis_v2", "season_plot_v2"] as const;
+export const ACTIVE_JOB_STATUSES = ["pending", "processing"] as const;
 
 /** Правила (system) сюжета сезона v2. `<N>` — количество эпизодов, `<Language>` — язык синопсиса. Текст — по ТЗ; 05.10.2026 добавлен блок PACING (плотность действия на эпизод). */
 export const SEASON_PLOT_V2_RULES = `You are a development executive breaking an approved season synopsis into an episode-by-episode season plot for a vertical micro-series (60–100 second episodes, cliffhanger-driven). This season has exactly <N> episodes.

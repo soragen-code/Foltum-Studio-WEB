@@ -134,9 +134,9 @@ const storeLang = (projectId: string, lang: SynopsisLanguage) => {
   try { window.localStorage.setItem(langKey(projectId), lang) } catch { /* localStorage недоступен */ }
 }
 /** Подписи языков (нативные названия — одинаковы для RU/EN UI). */
-const LANG_LABELS: Record<SynopsisLanguage, string> = { Russian: 'Русский', English: 'English', Spanish: 'Español', German: 'Deutsch', French: 'Français' }
-/** Язык синопсиса по умолчанию — язык интерфейса (ru → Русский, иначе English). */
-const langFromLocale = (locale: string): SynopsisLanguage => (locale === 'ru' ? 'Russian' : 'English')
+const LANG_LABELS: Record<SynopsisLanguage, string> = { English: 'English', Russian: 'Русский', Ukrainian: 'Українська' }
+/** Язык синопсиса по умолчанию — язык интерфейса (ru → Русский, uk → Українська, иначе English). */
+const langFromLocale = (locale: string): SynopsisLanguage => (locale === 'ru' ? 'Russian' : locale === 'uk' ? 'Ukrainian' : 'English')
 /** Восстановление с другого устройства: ISO-код Project.language → язык синопсиса (только если синопсис уже сгенерирован). */
 const langFromCode = (code: unknown): SynopsisLanguage | null => {
   const hit = (Object.keys(SYNOPSIS_LANGUAGE_CODES) as SynopsisLanguage[]).find((l) => SYNOPSIS_LANGUAGE_CODES[l] === code)
