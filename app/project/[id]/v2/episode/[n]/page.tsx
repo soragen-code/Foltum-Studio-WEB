@@ -5,6 +5,7 @@ import { prisma } from '@/lib/db'
 import { seasonPlotEpisodeSummary, parseSeasonPlotV2, episodeScriptV2From, episodeRefsV2From, episodeShotsV2From, episodeStoryboardV2From, episodeScenesV2From } from '@/lib/idea-v2'
 import { computeEntitlements } from '@/lib/entitlements'
 import { EntitlementsProvider } from '@/components/entitlements-context'
+import { GenerateLocked } from '@/components/generate-locked'
 import { EpisodeV2View } from './episode-v2-view'
 
 export const dynamic = 'force-dynamic'
@@ -28,6 +29,8 @@ export default async function EpisodeV2Page({ params }: { params: Promise<{ id: 
     select: { id: true, name: true, seasonPlotV2: true, episodeScriptsV2: true, episodeRefsV2: true, episodeShotsV2: true, episodeStoryboardV2: true, episodeScenesV2: true },
   })
   if (!project) redirect('/dashboard')
+  // Без активной подписки (Basic+) — заглушка вместо экрана серии.
+  if (!entitlements.auto_generate) return <GenerateLocked projectName={String(project.name ?? '')} />
 
   const back = `/project/${project.id}`
   const n = Number(nRaw)

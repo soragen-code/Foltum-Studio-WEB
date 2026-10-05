@@ -22,6 +22,8 @@ export async function POST(request: Request) {
   try {
     const session = await auth();
     if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    // Без активной подписки (Basic+) генерация недоступна целиком.
+    { const dAuto = await denyFeature(session.user.email, "auto_generate"); if (dAuto) return dAuto; }
     const limited = rateLimitByUser(request, "ai:v2:storyboard:prompt", session.user.email, RATE_LIMITS.ai);
     if (limited) return limited;
     const parsed = schema.safeParse(await request.json().catch(() => null));

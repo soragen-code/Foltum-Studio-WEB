@@ -9,7 +9,7 @@ import { useTranslation } from '@/lib/i18n/context'
 /**
  * Client-side access to the server-computed entitlement map (see lib/entitlements.ts).
  * Pages compute `computeEntitlements(user)` on the server and wrap their client tree in <EntitlementsProvider>.
- * Outside a provider everything but auto-generation is treated as locked (safe default — never over-grants).
+ * Outside a provider everything is treated as locked (safe default — never over-grants).
  */
 const Ctx = createContext<Entitlements>(NO_ENTITLEMENTS)
 

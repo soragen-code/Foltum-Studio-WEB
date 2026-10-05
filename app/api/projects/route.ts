@@ -7,6 +7,7 @@ import { legacyTierToPower, powerToLegacyTier, DEFAULT_POWER_TIER } from '@/lib/
 import { PLACEHOLDER_PROJECT_NAME } from '@/lib/project-name'
 import { pickProjectCover } from '@/lib/project-cover'
 import { DRAFT_V2_STAGES } from '@/lib/idea-v2'
+import { denyFeature } from '@/lib/feature-gate'
 
 // Черновики (сюжет сезона не утверждён) не сохраняются: скрыты из списка, а брошенные дольше этого срока удаляются.
 const STALE_DRAFT_MS = 2 * 60 * 60 * 1000
@@ -71,6 +72,8 @@ export async function POST(request: Request) {
     }
     const user = await prisma.user.findUnique({ where: { email: session.user.email } })
     if (!user) return NextResponse.json({ error: 'User not found' }, { status: 404 })
+    // Без активной подписки (Basic+) проекты не создаются — 403 subscription_required.
+    { const dAuto = await denyFeature(session.user.email, 'auto_generate'); if (dAuto) return dAuto; }
 
     const parsed = await parseBody(request, createProjectSchema)
     if (!parsed.ok) return parsed.response

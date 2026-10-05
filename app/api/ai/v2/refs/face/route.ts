@@ -13,6 +13,7 @@ import { USER_REF_MIME_EXT, USER_REF_MAX_BYTES } from "@/lib/character-user-refs
 import { requireFeature } from "@/lib/entitlements";
 import { episodeRefsV2From } from "@/lib/idea-v2";
 import { patchEpisodeRefV2 } from "@/lib/episode-refs-v2-store";
+import { denyFeature } from "@/lib/feature-gate";
 
 /**
  * Поток v2 · пользовательское фото-референс для рефа ПЕРСОНАЖА серии n.
@@ -62,6 +63,8 @@ export async function POST(request: Request) {
   try {
     const session = await auth();
     if (!session?.user?.id || !session.user.email) return NextResponse.json({ error: "Login required" }, { status: 401 });
+    // Без активной подписки (Basic+) генерация недоступна целиком.
+    { const dAuto = await denyFeature(session.user.email, "auto_generate"); if (dAuto) return dAuto; }
     const limited = rateLimitByUser(request, "ai:v2:refs-face", session.user.email, RATE_LIMITS.ai);
     if (limited) return limited;
 
@@ -114,6 +117,8 @@ export async function DELETE(request: Request) {
   try {
     const session = await auth();
     if (!session?.user?.id || !session.user.email) return NextResponse.json({ error: "Login required" }, { status: 401 });
+    // Без активной подписки (Basic+) генерация недоступна целиком.
+    { const dAuto = await denyFeature(session.user.email, "auto_generate"); if (dAuto) return dAuto; }
     const limited = rateLimitByUser(request, "ai:v2:refs-face", session.user.email, RATE_LIMITS.ai);
     if (limited) return limited;
 

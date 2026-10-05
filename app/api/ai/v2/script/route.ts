@@ -41,6 +41,8 @@ export async function POST(request: Request) {
   try {
     const session = await auth();
     if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    // Без активной подписки (Basic+) генерация недоступна целиком.
+    { const dAuto = await denyFeature(session.user.email, "auto_generate"); if (dAuto) return dAuto; }
     const limited = rateLimitByUser(request, "ai:v2:script", session.user.email, RATE_LIMITS.ai);
     if (limited) return limited;
 
@@ -87,6 +89,8 @@ export async function POST(request: Request) {
 export async function GET(request: Request) {
   const session = await auth();
   if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Без активной подписки (Basic+) генерация недоступна целиком.
+  { const dAuto = await denyFeature(session.user.email, "auto_generate"); if (dAuto) return dAuto; }
   const url = new URL(request.url);
   const projectId = url.searchParams.get("projectId") ?? "";
   const episode = Number(url.searchParams.get("episode"));

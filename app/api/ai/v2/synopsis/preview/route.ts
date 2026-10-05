@@ -32,6 +32,8 @@ export async function POST(request: Request) {
   try {
     const session = await auth();
     if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    // Без активной подписки (Basic+) генерация недоступна целиком.
+    { const dAuto = await denyFeature(session.user.email, "auto_generate"); if (dAuto) return dAuto; }
 
     const user = await prisma.user.findUnique({ where: { email: session.user.email }, select: { id: true } });
     if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });

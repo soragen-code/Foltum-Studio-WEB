@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { Header } from '@/components/header'
-import { Film, Plus, Clapperboard, Clock, ChevronRight, Sparkles, Zap, Crown, Trash2, Loader2, Wand2 } from 'lucide-react'
+import { Film, Plus, Clapperboard, Clock, ChevronRight, Sparkles, Zap, Crown, Trash2, Loader2, Wand2, Lock } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { useTranslation } from '@/lib/i18n/context'
 import { useFeature, GatedButton } from '@/components/entitlements-context'
@@ -30,6 +30,8 @@ const tierConfig: Record<string, { icon: React.ElementType; color: string; label
 export function DashboardClient() {
   const { t, locale } = useTranslation()
   const canManual = useFeature('manual_mode')
+  // Без активной подписки (Basic+) создавать проекты нельзя — кнопки заблокированы с бейджем Basic.
+  const canGenerate = useFeature('auto_generate')
   const router = useRouter()
   const [projects, setProjects] = useState<Project[]>([])
   const [loading, setLoading] = useState(true)
@@ -153,7 +155,9 @@ export function DashboardClient() {
               </GatedButton>
             )}
             {/* Основной поток: идея/жанры → синопсис → сюжет сезона → серии (экран v2). */}
-            <button
+            <GatedButton
+              feature="auto_generate"
+              allowed={canGenerate}
               type="button"
               onClick={createProject}
               disabled={creating}
@@ -162,10 +166,18 @@ export function DashboardClient() {
             >
               {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
               {t('dashboard.newProject')}
-            </button>
+            </GatedButton>
           </div>
         </div>
 
+        {!canGenerate && (
+          <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-green-500/40 bg-green-500/10 px-4 py-3 text-sm" data-testid="dashboard-locked-banner">
+            <span className="inline-flex items-center gap-2"><Lock className="h-4 w-4 text-green-400" /> {t('ent.dashboardLocked')}</span>
+            <Link href="/pricing" className="rounded-lg bg-primary px-4 py-1.5 text-xs font-semibold text-primary-foreground transition hover:brightness-110" data-testid="dashboard-locked-pricing">
+              {t('ent.goPricing')}
+            </Link>
+          </div>
+        )}
         {loading ? (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {[1, 2, 3].map((i: number) => (
@@ -183,7 +195,9 @@ export function DashboardClient() {
             <p className="mb-6 mt-1 text-sm text-muted-foreground">
               {t('dashboard.emptyHint')}
             </p>
-            <button
+            <GatedButton
+              feature="auto_generate"
+              allowed={canGenerate}
               type="button"
               onClick={createProject}
               disabled={creating}
@@ -192,7 +206,7 @@ export function DashboardClient() {
             >
               {creating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
               {t('dashboard.createProject')}
-            </button>
+            </GatedButton>
           </motion.div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

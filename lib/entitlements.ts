@@ -2,14 +2,14 @@
  * Feature entitlements — the single source of truth for which subscription tier unlocks which feature.
  *
  * Subscriptions grant FEATURE ACCESS only (they no longer grant credits — credits are pack-only).
- * A user can generate video (always at the maximum model quality) with purchased credits WITHOUT any subscription;
- * a subscription unlocks the premium features below on top of that.
+ * WITHOUT an active subscription the user can do NOTHING (no project creation, no generation, no manual mode):
+ * Basic is the entry ticket; Pro/Studio unlock the premium features below on top of it.
  *
  * Add a new capability by extending `Feature` and `FEATURE_MIN_TIER` (and `FEATURE_LABELS` for UI).
  */
 
 export type Feature =
-  | "auto_generate" // run the automatic v2 pipeline (idea → synopsis → plot → episodes); every plan, incl. no subscription
+  | "auto_generate" // create projects & run the automatic v2 pipeline (idea → synopsis → plot → episodes); Basic+ only
   | "prompt_instruct_edit" // revise a result with a natural-language instruction ("what to change") — synopsis/plot/script/appearance
   | "manual_mode" // /manual page + /api/manual/* (standalone photo/video generation)
   | "manual_prompt_edit" // edit / regenerate prompts inside manual mode
@@ -28,10 +28,11 @@ export const TIER_ORDER: readonly Tier[] = ["free", "basic", "pro", "studio"];
  * Basic  — automatic generation only (no instruction edits, no prompts, no manual mode).
  * Pro    — + edits by instruction + manual mode (incl. manual prompt edit).
  * Studio — + view/edit raw prompts + own character/location references.
- * `auto_generate` is "free": users without a subscription keep generating with purchased credits (unchanged behaviour).
+ * Free (no active subscription) — nothing: `auto_generate` requires Basic, so every generation route and
+ * project creation return 403 subscription_required (credits are kept and usable once a subscription is active).
  */
 export const FEATURE_MIN_TIER: Record<Feature, Tier> = {
-  auto_generate: "free",
+  auto_generate: "basic",
   prompt_instruct_edit: "pro",
   manual_mode: "pro",
   manual_prompt_edit: "pro",
@@ -112,7 +113,7 @@ export const FEATURES: readonly Feature[] = [
 
 /** Entitlements of a user with no access at all (client-side default before the server map arrives). */
 export const NO_ENTITLEMENTS: Entitlements = Object.freeze(
-  Object.fromEntries(FEATURES.map((f) => [f, f === "auto_generate"])) as Entitlements
+  Object.fromEntries(FEATURES.map((f) => [f, false])) as Entitlements
 );
 
 /** Compute the full entitlement map for a user (server-side), to hand to client components. */

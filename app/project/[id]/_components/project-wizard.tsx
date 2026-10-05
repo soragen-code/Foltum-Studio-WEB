@@ -7,6 +7,7 @@ import { motion } from 'framer-motion'
 import { EntitlementsProvider } from '@/components/entitlements-context'
 import { NO_ENTITLEMENTS, type Entitlements } from '@/lib/entitlements'
 import { isDraftProjectV2 } from '@/lib/idea-v2'
+import { GenerateLocked } from '@/components/generate-locked'
 
 /**
  * Мастер проекта. Единственный поток приложения — экран v2:
@@ -50,6 +51,9 @@ export function ProjectWizard({ project: initialProject, entitlements = NO_ENTIT
       if (data?.project) setProject(data.project)
     } catch {}
   }
+
+  // Без активной подписки (Basic+) — заглушка вместо мастера (сервер тоже отдаёт 403 на все генерации).
+  if (!entitlements.auto_generate) return <GenerateLocked projectName={project?.name} />
 
   return (
     <div className="min-h-screen bg-background">

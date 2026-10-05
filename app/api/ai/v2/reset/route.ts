@@ -5,6 +5,7 @@ import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
 import { isSeasonPlotV2Locked, SEASON_PLOT_V2_LOCKED_ERROR } from "@/lib/idea-v2";
+import { denyFeature } from "@/lib/feature-gate";
 
 /**
  * POST /api/ai/v2/reset  { projectId }
@@ -19,6 +20,8 @@ export async function POST(request: Request) {
   try {
     const session = await auth();
     if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    // Без активной подписки (Basic+) генерация недоступна целиком.
+    { const dAuto = await denyFeature(session.user.email, "auto_generate"); if (dAuto) return dAuto; }
 
     const body = await request.json().catch(() => null);
     const parsed = schema.safeParse(body);
