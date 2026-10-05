@@ -662,8 +662,8 @@ const ru: Dict = {
   'admin.dramas.col.created': 'Создана',
   'admin.dramas.col.updated': 'Обновлена',
   'admin.dramas.test': 'тест',
-  'admin.dramas.empty': 'Драм пока нет.',
-  'admin.dramas.note': 'Сортировка: по числу готовых эпизодов (собрано финальное видео), затем по дате обновления. Готово / всего эпизодов. Черновики (идея, логлайн, синопсис) не показываются. Время — {tz}.',
+  'admin.dramas.empty': 'Драм с собранными сериями пока нет.',
+  'admin.dramas.note': 'Показаны только драмы, где собрана хотя бы одна серия. Сортировка: по числу готовых эпизодов (собрано финальное видео), затем по дате обновления. Готово / всего эпизодов. Время — {tz}.',
   'api.insufficientCredits': 'Недостаточно кредитов: нужно {cost}, на балансе {balance}',
 }
 
@@ -1303,8 +1303,8 @@ const en: Dict = {
   'admin.dramas.col.created': 'Created',
   'admin.dramas.col.updated': 'Updated',
   'admin.dramas.test': 'test',
-  'admin.dramas.empty': 'No dramas yet.',
-  'admin.dramas.note': 'Sorted by number of ready episodes (final video assembled), then by update date. Ready / total episodes. Drafts (idea, logline, synopsis) are hidden. Time zone — {tz}.',
+  'admin.dramas.empty': 'No dramas with assembled episodes yet.',
+  'admin.dramas.note': 'Only dramas with at least one assembled episode are shown. Sorted by number of ready episodes (final video assembled), then by update date. Ready / total episodes. Time zone — {tz}.',
   'api.insufficientCredits': 'Not enough credits: {cost} needed, balance {balance}',
 }
 
@@ -1944,8 +1944,8 @@ const uk: Dict = {
   'admin.dramas.col.created': 'Створена',
   'admin.dramas.col.updated': 'Оновлена',
   'admin.dramas.test': 'тест',
-  'admin.dramas.empty': 'Драм поки немає.',
-  'admin.dramas.note': 'Сортування: за кількістю готових епізодів (зібрано фінальне відео), потім за датою оновлення. Готово / усього епізодів. Чернетки (ідея, логлайн, синопсис) не показуються. Час — {tz}.',
+  'admin.dramas.empty': 'Драм із зібраними серіями поки немає.',
+  'admin.dramas.note': 'Показано лише драми, де зібрано хоча б одну серію. Сортування: за кількістю готових епізодів (зібрано фінальне відео), потім за датою оновлення. Готово / усього епізодів. Час — {tz}.',
   'api.insufficientCredits': 'Недостатньо кредитів: потрібно {cost}, на балансі {balance}',
 }
 
