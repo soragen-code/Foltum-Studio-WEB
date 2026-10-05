@@ -10,6 +10,8 @@
  */
 
 const SEEDED_TEST_ACCOUNT = "abacus-f264e062@example.com";
+/** The owner's test account on production. */
+const PROD_TEST_ACCOUNT = "test@foltum.dev";
 
 function parseEnvList(v: string | undefined): string[] {
   return (v ?? "")
@@ -20,6 +22,7 @@ function parseEnvList(v: string | undefined): string[] {
 
 export const ADMIN_EMAILS: ReadonlySet<string> = new Set<string>([
   SEEDED_TEST_ACCOUNT,
+  PROD_TEST_ACCOUNT,
   ...parseEnvList(process.env.ADMIN_EMAILS),
 ]);
 
