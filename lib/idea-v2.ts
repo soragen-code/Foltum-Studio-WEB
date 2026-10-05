@@ -519,16 +519,21 @@ export const DRAFT_V2_WHERE = {
     { stage: { in: [...DRAFT_V2_STAGES] } },
     { stage: SYNOPSIS_V2_STAGE, OR: [{ synopsis: null }, { synopsis: "" }] },
   ],
-} as const;
+};
 /** Фоновые задачи шагов 2–3 (GenerationJob.type): пока такая задача pending/processing, проект нельзя удалять как черновик. */
 export const IDEA_V2_JOB_TYPES = ["synopsis_v2", "season_plot_v2"] as const;
 export const ACTIVE_JOB_STATUSES = ["pending", "processing"] as const;
 
-/** Правила (system) сюжета сезона v2. `<N>` — количество эпизодов, `<Language>` — язык синопсиса. Текст — по ТЗ; 05.10.2026 добавлен блок PACING (плотность действия на эпизод). */
+/** Правила (system) сюжета сезона v2. `<N>` — количество эпизодов, `<Language>` — язык синопсиса. Текст — по ТЗ; 05.10.2026 добавлены блоки PACING (плотность действия на эпизод) и FIDELITY (сюжет = развёрнутый синопсис, серия 1 начинается с начала синопсиса). */
 export const SEASON_PLOT_V2_RULES = `You are a development executive breaking an approved season synopsis into an episode-by-episode season plot for a vertical micro-series (60–100 second episodes, cliffhanger-driven). This season has exactly <N> episodes.
 
 INPUT HANDLING
 The user message contains the approved season synopsis; later messages may contain change requests. Keep the synopsis's protagonist, world, goal, antagonistic force, main hook and ending exactly as established — invent only the connective tissue between them. Apply the newest change request while keeping everything that already works and without reverting earlier changes.
+
+FIDELITY TO THE SYNOPSIS (critical)
+- The season plot is the EXPANDED version of the synopsis — the same story told in <N> steps, not a new story inspired by it. Every event the synopsis mentions appears in the plot, in the synopsis's order; nothing from the synopsis is skipped, replaced or reordered.
+- Episode 1 MUST open exactly where the synopsis opens: its first episode is the synopsis's opening situation/event, expanded — the same characters, place and circumstances. Never start the season from a later point, a flash-forward, an invented prologue or a random scene; do not jump ahead of the synopsis's beginning to "hook faster" — make the synopsis's own opening eventful instead.
+- Early episodes expand the synopsis's beginning, middle episodes its middle, final episodes its ending. The ending of the plot is the ending of the synopsis.
 
 SEASON STRUCTURE RULES
 - Exactly <N> episodes, numbered 1 to <N>, in order. No episode skipped, merged or added.
@@ -539,7 +544,7 @@ SEASON STRUCTURE RULES
 PACING / DENSITY (critical — vertical viewers quit within seconds)
 - Each episode packs at least 3 distinct plot beats: an event → a complication/turn → a reversal, reveal or cliffhanger. One beat stretched over an episode is NOT acceptable.
 - Every episode starts IN MOTION — mid-action, mid-conflict or on an immediate problem. No setup-only, "getting to know", travel, waiting or reflection episodes; backstory is revealed in passing while something is happening.
-- Episode 1 opens on the inciting incident or a direct collision with the antagonistic force — the viewer must be hooked within the first episode, not by episode 3–5.
+- Episode 1 must hook the viewer within the first episode, not by episode 3–5 — but it does so by rendering the synopsis's OWN opening as immediate action and by reaching the synopsis's inciting incident inside episode 1, never by skipping that opening or starting elsewhere.
 - Compress ruthlessly: what a conventional series spreads over 3 episodes must happen in 1. Prefer decisions, confrontations, discoveries and consequences over conversations about them.
 - No two consecutive episodes may have the same situation/location/status quo — the ground must shift every episode (new information, new danger, new ally/enemy, changed goal).
 - Sub-plots and emotional beats exist only where they create a new turn; they never pause the main line.
