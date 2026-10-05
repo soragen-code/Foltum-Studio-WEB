@@ -5,12 +5,17 @@
  */
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { requireFeature, type Feature } from "@/lib/entitlements";
+import { requireFeature, TIER_NAMES, type Feature } from "@/lib/entitlements";
+import { translate } from "@/lib/i18n/dictionary";
+import { localeOf } from "@/lib/i18n/server";
 
 export async function denyFeature(email: string, feature: Feature): Promise<NextResponse | null> {
-  const user = await prisma.user.findUnique({ where: { email }, select: { subscriptionTier: true, subscriptionExpiresAt: true } });
+  const user = await prisma.user.findUnique({ where: { email }, select: { email: true, subscriptionTier: true, subscriptionExpiresAt: true, locale: true } });
   const denied = requireFeature(user, feature);
-  return denied ? NextResponse.json(denied, { status: 403 }) : null;
+  if (!denied) return null;
+  // Localize the human-readable message to the user's UI locale (requireFeature itself stays pure / Russian default).
+  const message = translate(localeOf(user?.locale), "ent.lockedTier", { tier: TIER_NAMES[denied.requiredTier] });
+  return NextResponse.json({ ...denied, message }, { status: 403 });
 }
 
 /** True when `v` is a non-empty instruction / override string (the only case that needs a paid feature). */

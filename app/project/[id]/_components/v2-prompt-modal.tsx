@@ -54,9 +54,9 @@ export function PromptModal({
 
   const label = (m: PromptMsg, i: number) => {
     const j = i - off // позиция в истории: 0 — первый user, 1 — ответ 0, 2 — правка 1, 3 — ответ 1, ...
-    if (m.role === 'assistant') return j === 1 ? `Assistant · ответ ${firstAnswerTag}` : `Assistant · ответ ${Math.floor(j / 2)}`
-    if (j === 0) return total === 1 ? 'User · задание (уходит сейчас)' : 'User · задание'
-    return i === lastIdx ? 'User · текущая правка (уходит сейчас)' : `User · правка ${Math.floor(j / 2)}`
+    if (m.role === 'assistant') return t('promptModal.assistantAnswer', { n: j === 1 ? firstAnswerTag : Math.floor(j / 2) })
+    if (j === 0) return total === 1 ? t('promptModal.userTaskNow') : t('promptModal.userTask')
+    return i === lastIdx ? t('promptModal.userEditNow') : t('promptModal.userEdit', { n: Math.floor(j / 2) })
   }
 
   return (
@@ -66,7 +66,7 @@ export function PromptModal({
           <h3 className="flex items-center gap-2 font-display text-lg font-semibold">
             <Eye className="h-5 w-5 text-primary" /> {title}
           </h3>
-          <button onClick={onClose} className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Закрыть" data-testid="idea-v2-preview-close">
+          <button onClick={onClose} className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label={t('common.close')} data-testid="idea-v2-preview-close">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -79,7 +79,7 @@ export function PromptModal({
           <div data-testid="idea-v2-dialog">
             <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Отправляемый диалог · system + {total} {total === 1 ? 'сообщение' : total < 5 ? 'сообщения' : 'сообщений'}
+                {t('promptModal.dialogHeader', { n: total })}
               </span>
               <div className="flex items-center gap-1">
                 <button
@@ -95,7 +95,7 @@ export function PromptModal({
                   type="button"
                   onClick={() => void onToggleRu()}
                   className={`${btnBase} ${ruOn ? btnActive : btnIdle}`}
-                  title="Показать перевод на русский (только для просмотра; в API уходит оригинал)"
+                  title={t('promptModal.ruTitle')}
                   aria-pressed={ruOn}
                   data-testid="idea-v2-dialog-ru"
                 >
@@ -110,9 +110,9 @@ export function PromptModal({
               return (
                 <div className="mb-2 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2" data-testid="idea-v2-dialog-system" data-editable={readOnly ? 'false' : 'true'}>
                   <div className="mb-1 flex items-center justify-between gap-2">
-                    <span className="text-[11px] font-semibold text-muted-foreground" title={t('ideaV2.systemHint')}>System · {t('ideaV2.system')} (правила, уходит первым)</span>
+                    <span className="text-[11px] font-semibold text-muted-foreground" title={t('ideaV2.systemHint')}>System · {t('ideaV2.system')} {t('promptModal.rulesFirst')}</span>
                     <div className="flex items-center gap-1">
-                      {sysEdited && <span className="text-[11px] text-amber-500">изменено</span>}
+                      {sysEdited && <span className="text-[11px] text-amber-500">{t('promptModal.edited')}</span>}
                       {!readOnly && <button type="button" onClick={onResetSys} disabled={!sysEdited} className={`${btnBase} ${btnIdle} disabled:opacity-40`} title={t('board.resetPrompt')} data-testid="idea-v2-reset-system">
                         <RotateCcw className="h-3.5 w-3.5" /> {t('board.resetPrompt')}
                       </button>}
@@ -129,7 +129,7 @@ export function PromptModal({
                     />
                     {ruOn && ruLoading && (
                       <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg bg-background/60">
-                        <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> Переводим…</span>
+                        <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> {t('ideaV2.refsTranslating')}</span>
                       </div>
                     )}
                   </div>
@@ -146,7 +146,7 @@ export function PromptModal({
               >
                 <span className="inline-flex items-center gap-1.5">
                   {historyOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                  {t('ideaV2.history')} · {total} {total === 1 ? 'сообщение' : total < 5 ? 'сообщения' : 'сообщений'}
+                  {t('ideaV2.history')} · {t('promptModal.msgCount', { n: total })}
                 </span>
                 <span className="text-[11px] font-normal">{t('ideaV2.historyHint')}</span>
               </button>
@@ -167,7 +167,7 @@ export function PromptModal({
                           <span className="text-[11px] font-semibold text-muted-foreground">{i + 1 - off}. {label(m, i)}</span>
                         </div>
                         <pre className="whitespace-pre-wrap break-words font-sans text-xs leading-relaxed text-foreground/90">
-                          {ruOn && ruLoading ? <span className="inline-flex items-center gap-1.5 text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> Переводим...</span> : text}
+                          {ruOn && ruLoading ? <span className="inline-flex items-center gap-1.5 text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin text-primary" /> {t('ideaV2.refsTranslating')}</span> : text}
                         </pre>
                       </li>
                     )
@@ -176,13 +176,13 @@ export function PromptModal({
               )}
             </div>
             {ruOn && !ruLoading && (
-              <p className="mt-1 text-[11px] text-muted-foreground">Показан перевод на русский — только для просмотра. В генерацию уходит оригинал; редактирование system доступно при выключенном RU.</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">{t('promptModal.ruNote')}</p>
             )}
           </div>
         </div>
         <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
           <button onClick={onClose} className="flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted" data-testid="idea-v2-preview-cancel">
-            Закрыть
+            {t('common.close')}
           </button>
           {!readOnly && <button onClick={onSave} disabled={saveDisabled || (hasSys && !sysEdit.trim())} className={`flex items-center gap-2 rounded-lg border border-border bg-background px-4 py-2.5 text-sm font-semibold transition hover:bg-muted ${saved ? 'text-primary' : ''}`} data-testid="idea-v2-preview-save">
             <Check className="h-4 w-4" /> {saved ? t('ideaV2.saved') : t('common.save')}

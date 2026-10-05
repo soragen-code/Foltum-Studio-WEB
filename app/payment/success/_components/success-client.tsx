@@ -6,6 +6,8 @@ import { useSearchParams } from 'next/navigation'
 import { Header } from '@/components/header'
 import { CheckCircle2, Loader2, Home, Coins, AlertCircle, Clock, Crown, LogIn, CreditCard } from 'lucide-react'
 import { motion } from 'framer-motion'
+import { useTranslation } from '@/lib/i18n/context'
+import { DATE_LOCALES } from '@/lib/i18n/dictionary'
 
 type Phase = 'processing' | 'approved' | 'declined' | 'pending'
 
@@ -26,15 +28,16 @@ function tierName(t?: string | null): string {
   return t.charAt(0).toUpperCase() + t.slice(1)
 }
 
-function formatDate(iso?: string | null): string {
+function formatDate(iso: string | null | undefined, dateLocale: string): string {
   if (!iso) return ''
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
-  return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })
+  return d.toLocaleDateString(dateLocale, { day: 'numeric', month: 'long', year: 'numeric' })
 }
 
 export function SuccessClient() {
   const params = useSearchParams()
+  const { t, locale } = useTranslation()
   const order = params.get('order')
 
   const [phase, setPhase] = useState<Phase>(order ? 'processing' : 'pending')
@@ -100,7 +103,7 @@ export function SuccessClient() {
 
   const isSubscription = data?.kind === 'subscription'
   const planLabel = tierName(data?.tier ?? data?.subscriptionTier)
-  const expiresLabel = formatDate(data?.subscriptionExpiresAt)
+  const expiresLabel = formatDate(data?.subscriptionExpiresAt, DATE_LOCALES[locale])
 
   return (
     <div className="min-h-screen bg-background">
@@ -115,9 +118,9 @@ export function SuccessClient() {
           {phase === 'processing' && (
             <>
               <Loader2 className="mx-auto mb-4 h-14 w-14 animate-spin text-primary" />
-              <h1 className="font-display text-2xl font-bold tracking-tight">Обрабатываем платёж…</h1>
+              <h1 className="font-display text-2xl font-bold tracking-tight">{t('pay.processing')}</h1>
               <p className="mt-2 text-sm text-muted-foreground">
-                Подтверждаем оплату. Это займёт несколько секунд.
+                {t('pay.processingHint')}
               </p>
             </>
           )}
@@ -125,15 +128,15 @@ export function SuccessClient() {
           {phase === 'approved' && isSubscription && (
             <>
               <Crown className="mx-auto mb-4 h-14 w-14 text-primary" />
-              <h1 className="font-display text-2xl font-bold tracking-tight">Подписка активирована</h1>
+              <h1 className="font-display text-2xl font-bold tracking-tight">{t('pay.subActivated')}</h1>
               <p className="mt-2 text-sm text-muted-foreground">
-                {planLabel ? `План ${planLabel} активен. ` : 'Подписка активна. '}
-                Открыт доступ к премиум-функциям.
+                {planLabel ? `${t('pay.planActive', { plan: planLabel })} ` : `${t('pay.subActive')} `}
+                {t('pay.premiumUnlocked')}
               </p>
               {expiresLabel && (
                 <div className="mt-5 inline-flex items-center gap-2 rounded-full bg-primary/10 px-4 py-2 text-sm font-medium text-primary">
                   <Clock className="h-4 w-4" />
-                  Действует до {expiresLabel}
+                  {t('pay.validUntil', { date: expiresLabel })}
                 </div>
               )}
             </>
@@ -142,22 +145,22 @@ export function SuccessClient() {
           {phase === 'approved' && !isSubscription && (
             <>
               <CheckCircle2 className="mx-auto mb-4 h-14 w-14 text-green-400" />
-              <h1 className="font-display text-2xl font-bold tracking-tight">Покупка успешна</h1>
+              <h1 className="font-display text-2xl font-bold tracking-tight">{t('pay.purchaseOk')}</h1>
               <p className="mt-2 text-sm text-muted-foreground">
-                {data?.productName ? `«${data.productName}» оплачен.` : 'Платёж прошёл успешно.'}
+                {data?.productName ? t('pay.productPaid', { name: data.productName }) : t('pay.paymentOk')}
               </p>
               <div className="mt-5 flex flex-col items-center gap-2">
                 {typeof data?.credits === 'number' && data.credits > 0 && (
                   <div className="inline-flex items-center gap-2 rounded-full bg-green-500/10 px-4 py-2 text-sm font-semibold text-green-400">
                     <Coins className="h-4 w-4" />
-                    +{data.credits} кредитов начислено
+                    {t('pay.creditsAdded', { n: data.credits })}
                   </div>
                 )}
                 {typeof data?.balance === 'number' && (
                   <div className="inline-flex items-center gap-2 rounded-full bg-muted px-4 py-2 text-sm">
                     <Coins className="h-4 w-4 text-primary" />
-                    Текущий баланс:{' '}
-                    <span className="font-mono font-bold text-primary">{data.balance}</span> кредитов
+                    {t('pay.currentBalance')}{' '}
+                    <span className="font-mono font-bold text-primary">{data.balance}</span> {t('pay.creditsWord')}
                   </div>
                 )}
               </div>
@@ -167,14 +170,14 @@ export function SuccessClient() {
           {phase === 'pending' && (
             <>
               <Clock className="mx-auto mb-4 h-14 w-14 text-primary" />
-              <h1 className="font-display text-2xl font-bold tracking-tight">Платёж обрабатывается</h1>
+              <h1 className="font-display text-2xl font-bold tracking-tight">{t('pay.pending')}</h1>
               {needLogin ? (
                 <p className="mt-2 text-sm text-muted-foreground">
-                  Готово. Если вы не авторизованы на этом устройстве — войдите, изменения уже применены.
+                  {t('pay.pendingDone')}
                 </p>
               ) : (
                 <p className="mt-2 text-sm text-muted-foreground">
-                  Оплата принята, статус обновится в течение пары минут. Баланс и подписка обновятся автоматически.
+                  {t('pay.pendingWait')}
                 </p>
               )}
             </>
@@ -183,9 +186,9 @@ export function SuccessClient() {
           {phase === 'declined' && (
             <>
               <AlertCircle className="mx-auto mb-4 h-14 w-14 text-destructive" />
-              <h1 className="font-display text-2xl font-bold tracking-tight">Платёж отклонён</h1>
+              <h1 className="font-display text-2xl font-bold tracking-tight">{t('pay.declined')}</h1>
               <p className="mt-2 text-sm text-muted-foreground">
-                Оплата не была завершена. Попробуйте ещё раз или выберите другой способ оплаты.
+                {t('pay.declinedHint')}
               </p>
             </>
           )}
@@ -197,7 +200,7 @@ export function SuccessClient() {
                 className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground transition hover:brightness-110"
               >
                 <LogIn className="h-4 w-4" />
-                Войти
+                {t('pay.signIn')}
               </Link>
             )}
             <Link
@@ -209,7 +212,7 @@ export function SuccessClient() {
               }`}
             >
               <Home className="h-4 w-4" />
-              На главную
+              {t('pay.home')}
             </Link>
             {phase === 'approved' && isSubscription ? (
               <Link
@@ -217,14 +220,14 @@ export function SuccessClient() {
                 className="flex items-center gap-1.5 text-xs text-muted-foreground underline-offset-2 hover:text-primary hover:underline"
               >
                 <CreditCard className="h-3.5 w-3.5" />
-                К тарифам
+                {t('pay.toPricing')}
               </Link>
             ) : (
               <Link
                 href="/pricing"
                 className="text-xs text-muted-foreground underline-offset-2 hover:text-primary hover:underline"
               >
-                Вернуться к тарифам
+                {t('pay.backToPricing')}
               </Link>
             )}
           </div>

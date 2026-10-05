@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 300; // перевод фреймов/меток на English при первом построении
 
 import { NextResponse } from "next/server";
+import { serverT, sessionLocale } from "@/lib/i18n/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -21,6 +22,7 @@ const schema = z.object({ projectId: z.string().min(1), episode: z.coerce.number
 export async function POST(request: Request) {
   try {
     const session = await auth();
+    const t = serverT(sessionLocale(session));
     if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     // Без активной подписки (Basic+) генерация недоступна целиком.
     { const dAuto = await denyFeature(session.user.email, "auto_generate"); if (dAuto) return dAuto; }
@@ -40,7 +42,7 @@ export async function POST(request: Request) {
     // «Пересобрать» (force): авто-промпт строится заново по актуальным шотам/рефам из БД, ручной override сбрасывается.
     if (force) await setEpisodeStoryboardV2(projectId, episode, { promptOverride: null });
     const built = await ensureStoryboardV2AutoPrompt(projectId, episode, project, { force });
-    if (!built.autoPrompt) return NextResponse.json({ error: "Сначала разбейте сценарий на кадры" }, { status: 400 });
+    if (!built.autoPrompt) return NextResponse.json({ error: t('api.needShots') }, { status: 400 });
     const refs = built.inputs.refs.map((r) => ({ id: r.id, label: r.label, kind: r.kind, imageUrl: r.imageUrl }));
     return NextResponse.json({ autoPrompt: built.autoPrompt, cached: built.cached, refs }, { headers: { "Cache-Control": "no-store" } });
   } catch (err: any) {

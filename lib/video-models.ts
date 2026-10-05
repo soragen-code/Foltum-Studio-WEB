@@ -80,7 +80,7 @@ export const VIDEO_MODEL_CATALOG: VideoModelDef[] = [
   /* ── Seedance (ByteDance) — DEFAULT ─────────────────────────────────────── */
   {
     id: "seedance-2.5",
-    label: "Seedance 2.5 — со звуком (по умолчанию)",
+    label: "Seedance 2.5 — with audio (default)",
     family: "seedance",
     slugT2V: "bytedance/seedance-2.5/text-to-video",
     slugI2V: "bytedance/seedance-2.5/image-to-video",
@@ -240,7 +240,7 @@ export const VIDEO_MODEL_CATALOG: VideoModelDef[] = [
   /* ── Veo (Google) ───────────────────────────────────────────────────────── */
   {
     id: "veo3",
-    label: "Veo 3 — со звуком",
+    label: "Veo 3 — with audio",
     family: "veo",
     slugT2V: "google/veo3",
     slugI2V: "google/veo3",
@@ -254,7 +254,7 @@ export const VIDEO_MODEL_CATALOG: VideoModelDef[] = [
   },
   {
     id: "veo3-fast",
-    label: "Veo 3 Fast — со звуком",
+    label: "Veo 3 Fast — with audio",
     family: "veo",
     slugT2V: "google/veo3-fast",
     slugI2V: "google/veo3-fast",
@@ -268,7 +268,7 @@ export const VIDEO_MODEL_CATALOG: VideoModelDef[] = [
   },
   {
     id: "veo3.1",
-    label: "Veo 3.1 — со звуком",
+    label: "Veo 3.1 — with audio",
     family: "veo",
     slugT2V: "google/veo3.1/text-to-video",
     slugI2V: undefined,

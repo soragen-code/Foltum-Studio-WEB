@@ -148,7 +148,7 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
     } else if (res.job.status === 'canceled') {
       setCanceled(true)
     } else {
-      setError(res.job.error ?? 'Не удалось сгенерировать сценарий')
+      setError(res.job.error ?? t('ideaV2.scriptGenFailed'))
     }
   }
   const job = useJobPolling({ intervalMs: 800, onFinish: finish })
@@ -197,7 +197,7 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
         body: JSON.stringify({ projectId, episode: n, ...refineArgs(noRefine) }),
       })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok) { setError(d?.error ?? 'Не удалось собрать промпт'); return null }
+      if (!res.ok) { setError(d?.error ?? t('ideaV2.promptBuildFailed')); return null }
       const refineEnNow = typeof d.refineEn === 'string' ? d.refineEn : ''
       setRefineEn(refineEnNow)
       let list: Msg[] = isMsgList(d.messages) ? d.messages.map((m: Msg) => ({ role: m.role, content: m.content })) : []
@@ -211,15 +211,16 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
       const sysE = draft && typeof draft.sysEdit === 'string' && draft.sysEdit.trim() && (draft.sysOrig ?? '') === sysO ? draft.sysEdit : sysO
       const hist = nonSystem(list).length
       const dialogNote = hist > 1
-        ? ` Запрос уйдёт диалогом: system (правила) + ${hist} сообщений истории (свёрнута ниже, новые сверху): модель видит свои прежние ответы и все ранние правки. Редактировать можно только system.`
-        : ' Запрос уйдёт как system (правила) + user (краткий сюжет серии). Редактировать можно только system.'
-      const noteText = `${d.contextNote ?? ''}${dialogNote}`
+        ? t('ideaV2.dialogNoteHistory', { hist })
+        : t('ideaV2.dialogNoteSingle', { input: t('ideaV2.dialogInput.episode') })
+      // contextNote from the server is Russian-only — render the localized equivalent instead.
+      const noteText = `${d.contextNote ? t('ideaV2.ctxNote.script') : ''}${dialogNote}`
       setMsgs(list); setSysEdit(sysE); setNote(noteText)
       setMsgsRu(null); setMsgsRuOn(false); setReady(true)
       fpRef.current = fp
       storeDraft(projectId, n, { sysOrig: sysO, sysEdit: sysE, fp, list, note: noteText, refineEn: refineEnNow })
       return { list, sysEdit: sysE, refineEn: refineEnNow }
-    } catch { setError('Ошибка сети'); return null }
+    } catch { setError(t('common.networkError')); return null }
   }
 
   // «Превью»: собирает промпт (из кэша, если вводные не менялись) и показывает модалку. Генерацию не запускает.
@@ -253,9 +254,9 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
       if (override) body.overrideMessages = override
       const res = await fetch(API.generate, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok) { setError(d?.error ?? 'Не удалось сгенерировать сценарий'); return }
+      if (!res.ok) { setError(d?.error ?? t('ideaV2.scriptGenFailed')); return }
       if (d?.jobId) { activeJobIdRef.current = d.jobId; job.start(d.jobId) }
-    } catch { setError('Ошибка сети') }
+    } catch { setError(t('common.networkError')) }
     finally { setStarting(false) }
   }
 
@@ -296,8 +297,8 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
   const btnGhost = 'inline-flex items-center gap-1.5 rounded-lg border border-border bg-transparent px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-muted/60 hover:border-foreground/30 disabled:opacity-50'
   // Без Studio кнопка остаётся видимой: disabled + бейдж тарифа (единый паттерн GatedButton).
   const previewBtn = (noRefine: boolean, testId: string, disabled = false) => (
-    <GatedButton feature="prompt_view" allowed={canViewPrompt} onClick={() => openPreview(noRefine)} disabled={disabled || previewLoading || generating} className={btnGhost} data-testid={testId} title="Посмотреть/отредактировать промпт перед отправкой">
-      {previewLoading ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Собираем промпт...</> : <><Eye className="h-3.5 w-3.5" /> {t('ideaV2.preview')}</>}
+    <GatedButton feature="prompt_view" allowed={canViewPrompt} onClick={() => openPreview(noRefine)} disabled={disabled || previewLoading || generating} className={btnGhost} data-testid={testId} title={t('ideaV2.previewTitle')}>
+      {previewLoading ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> {t('ideaV2.promptBuilding')}</> : <><Eye className="h-3.5 w-3.5" /> {t('ideaV2.preview')}</>}
     </GatedButton>
   )
   const errorBox = error && (
@@ -310,17 +311,17 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
       return (
         <div data-testid="episode-v2-script-generating">
           <p className="text-sm text-muted-foreground">
-            Отправляется в: <span className="font-semibold text-foreground">{FABLE_MODEL_LABEL}</span>.
+            {t('ideaV2.sentTo')} <span className="font-semibold text-foreground">{FABLE_MODEL_LABEL}</span>.
           </p>
           <div className="mt-4 space-y-2">
             {j ? <SmoothProgress job={j} expectedTotalSec={SCRIPT_EXPECTED_SEC} /> : (
-              <p className="inline-flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin text-primary" /> Запуск генерации...</p>
+              <p className="inline-flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin text-primary" /> {t('ideaV2.starting')}</p>
             )}
             {String(j?.streamedText ?? '').trim() && (
               <pre className="max-h-[480px] overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-background px-4 py-3 font-mono text-xs leading-relaxed text-foreground" data-testid="episode-v2-script-streaming">{String(j?.streamedText ?? '')}</pre>
             )}
             <div className="flex items-center justify-between gap-2">
-              <p className="min-w-0 text-xs text-muted-foreground">{t('ideaV2.scriptGenerating')} Вкладку можно закрыть — прогресс и текст сохранятся.</p>
+              <p className="min-w-0 text-xs text-muted-foreground">{t('ideaV2.scriptGenerating')} {t('ideaV2.canClose')}</p>
               <CancelButton onCancel={cancel} testId="episode-v2-cancel" className="flex-shrink-0" />
             </div>
           </div>
@@ -344,7 +345,7 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
     return (
       <div data-testid="episode-v2-script-result">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm text-muted-foreground">Модель: <span className="font-semibold text-foreground">{FABLE_MODEL_LABEL}</span></p>
+          <p className="text-sm text-muted-foreground">{t('common.model')} <span className="font-semibold text-foreground">{FABLE_MODEL_LABEL}</span></p>
           {/* Перегенерация с нуля (без правок): тот же путь, что и первая генерация — свежий промпт с актуальным
               контекстом (имена персонажей и финальный кадр предыдущей серии); текущий сценарий будет заменён. */}
           <div className="flex flex-wrap items-center gap-2">
@@ -373,7 +374,7 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
             className="mt-2 w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
             data-testid="episode-v2-script-refine-input"
           />
-          <p className="mt-1.5 text-[11px] text-muted-foreground">Правка уйдёт диалогом: модель видит прежний сценарий и все ранние правки. «{t('ideaV2.preview')}» — посмотреть/сохранить промпт, «{t('ideaV2.change')}» — отправить.</p>
+          <p className="mt-1.5 text-[11px] text-muted-foreground">{t('ideaV2.refineNote', { what: t('ideaV2.refineWhat.script'), preview: t('ideaV2.preview'), change: t('ideaV2.change') })}</p>
           <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
             {previewBtn(false, 'episode-v2-script-refine-preview', !refineText.trim())}
             <GatedButton feature="prompt_instruct_edit" allowed={canInstruct} onClick={() => generate()} disabled={generating || !refineText.trim()} className={btnMain} data-testid="episode-v2-script-refine-edit">
@@ -441,7 +442,7 @@ export function EpisodeV2View({ projectId, projectTitle, n, summary, initialScri
       {previewOpen && !generating && (
         <PromptModal
           kind="script"
-          title="Промпт сценария серии"
+          title={t('ideaV2.scriptPromptTitle')}
           firstAnswerTag="S0"
           messages={msgs}
           sysEdit={sysEdit}

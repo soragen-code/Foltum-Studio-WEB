@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 800; // нарезка кадров / видео сцен крутятся в фоне этой инвокации
 
 import { NextResponse } from "next/server";
+import { serverT, sessionLocale } from "@/lib/i18n/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -79,6 +80,7 @@ async function startJob(
 export async function POST(request: Request) {
   try {
     const session = await auth();
+    const t = serverT(sessionLocale(session));
     if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     // Без активной подписки (Basic+) генерация недоступна целиком.
     { const dAuto = await denyFeature(session.user.email, "auto_generate"); if (dAuto) return dAuto; }
@@ -93,9 +95,9 @@ export async function POST(request: Request) {
 
     if (action === "approve") {
       const shots = episodeShotsV2From(project.episodeShotsV2, episode);
-      if (!shots.length) return NextResponse.json({ error: "Сначала разбейте сценарий на кадры" }, { status: 400 });
-      if (!episodeStoryboardV2From(project.episodeStoryboardV2, episode)?.imageUrl) return NextResponse.json({ error: "Сначала соберите сториборд" }, { status: 400 });
-      if (await activeEpisodeJob(projectId, EPISODE_ASSEMBLE_V2_JOB_TYPE, episode)) return NextResponse.json({ error: "Дождитесь окончания сборки серии" }, { status: 409 });
+      if (!shots.length) return NextResponse.json({ error: t('api.needShots') }, { status: 400 });
+      if (!episodeStoryboardV2From(project.episodeStoryboardV2, episode)?.imageUrl) return NextResponse.json({ error: t('api.needStoryboard') }, { status: 400 });
+      if (await activeEpisodeJob(projectId, EPISODE_ASSEMBLE_V2_JOB_TYPE, episode)) return NextResponse.json({ error: t('api.waitAssemble') }, { status: 409 });
       await setEpisodeStoryboardV2(projectId, episode, { approved: true });
       // Новая нарезка = новые сцены: прежний финальный ролик больше не соответствует им — сбрасываем вместе со сценами.
       await resetEpisodeFinalV2(projectId, episode);
@@ -107,15 +109,15 @@ export async function POST(request: Request) {
     if (action === "rebuild-prompts") {
       const shots = episodeShotsV2From(project.episodeShotsV2, episode);
       const scenes = episodeScenesV2From(project.episodeScenesV2, episode);
-      if (!shots.length) return NextResponse.json({ error: "Сначала разбейте сценарий на кадры" }, { status: 400 });
-      if (!scenes.length) return NextResponse.json({ error: "Нет сцен для пересборки" }, { status: 400 });
-      if (await activeEpisodeJob(projectId, EPISODE_SCENE_FRAMES_V2_JOB_TYPE, episode)) return NextResponse.json({ error: "Дождитесь окончания нарезки сцен" }, { status: 409 });
+      if (!shots.length) return NextResponse.json({ error: t('api.needShots') }, { status: 400 });
+      if (!scenes.length) return NextResponse.json({ error: t('api.noScenesRebuild') }, { status: 400 });
+      if (await activeEpisodeJob(projectId, EPISODE_SCENE_FRAMES_V2_JOB_TYPE, episode)) return NextResponse.json({ error: t('api.waitCut') }, { status: 409 });
       // Сцена ↔ шот: по shotId, иначе по номеру (scene-N ↔ shot #N). Сцены без шота остаются как есть.
       const byId = new Map(shots.map((s) => [s.id, s]));
       const byIndex = new Map(shots.map((s) => [s.index, s]));
       const pairs = scenes.map((sc) => ({ sc, shot: byId.get(sc.shotId) ?? byIndex.get(sc.index) ?? null }));
       const matched = pairs.filter((p): p is { sc: typeof p.sc; shot: NonNullable<typeof p.shot> } => !!p.shot);
-      if (!matched.length) return NextResponse.json({ error: "Сцены не соответствуют текущему шот-листу — подтвердите сториборд заново" }, { status: 400 });
+      if (!matched.length) return NextResponse.json({ error: t('api.scenesMismatch') }, { status: 400 });
       const prepared = await prepareScenePromptData(matched.map((p) => p.shot), episodeRefsV2From(project.episodeRefsV2, episode));
       const byScene = new Map(matched.map((p, i) => [p.sc.id, { shot: p.shot, data: prepared[i] }]));
       const next = scenes.map((sc) => {
@@ -128,7 +130,7 @@ export async function POST(request: Request) {
 
     if (action === "assemble") {
       if (!allSceneVideosReady(episodeScenesV2From(project.episodeScenesV2, episode))) {
-        return NextResponse.json({ error: "Дождитесь готовности всех видео сцен", allVideosReady: false }, { status: 400 });
+        return NextResponse.json({ error: t('api.waitAllVideos'), allVideosReady: false }, { status: 400 });
       }
       const active = await activeEpisodeJob(projectId, EPISODE_ASSEMBLE_V2_JOB_TYPE, episode);
       if (!active) await setEpisodeFinalV2(projectId, episode, { status: "pending", error: "" });
@@ -141,7 +143,7 @@ export async function POST(request: Request) {
 
     const scenesForVideo = episodeScenesV2From(project.episodeScenesV2, episode);
     if (!scenesForVideo.some((s) => s.firstFrameUrl)) {
-      return NextResponse.json({ error: "Нет сцен с готовым первым кадром" }, { status: 400 });
+      return NextResponse.json({ error: t('api.noFramesReady') }, { status: 400 });
     }
     const r = await startJob(projectId, episode, EPISODE_SCENE_VIDEO_V2_JOB_TYPE, (jobId) => runEpisodeSceneVideoV2Job(jobId, projectId, { episode }),
       { userId: project.userId, cost: sceneVideosCost(scenesForVideo), step: "sceneVideos" });

@@ -7,6 +7,8 @@
  * Бесплатные шаги (cost 0) ничего не пишут.
  */
 import { prisma } from "@/lib/db";
+import { translate } from "@/lib/i18n/dictionary";
+import { localeOf } from "@/lib/i18n/server";
 
 export type V2ChargeResult =
   | { ok: true; cost: number; creditsRemaining: number }
@@ -24,9 +26,10 @@ export async function chargeV2Credits(userId: string, cost: number, step: string
   }
   const res = await prisma.user.updateMany({ where: { id: userId, credits: { gte: amount } }, data: { credits: { decrement: amount } } });
   if (res.count === 0) {
-    const u = await prisma.user.findUnique({ where: { id: userId }, select: { credits: true } });
+    const u = await prisma.user.findUnique({ where: { id: userId }, select: { credits: true, locale: true } });
     const balance = u?.credits ?? 0;
-    return { ok: false, status: 402, body: { error: `Недостаточно кредитов: нужно ${amount}, на балансе ${balance}`, code: "INSUFFICIENT_CREDITS", cost: amount, balance } };
+    const error = translate(localeOf(u?.locale), "api.insufficientCredits", { cost: amount, balance });
+    return { ok: false, status: 402, body: { error, code: "INSUFFICIENT_CREDITS", cost: amount, balance } };
   }
   await prisma.creditTransaction.create({ data: { userId, amount: -amount, description: v2ChargeDescription(step, jobId) } });
   const u = await prisma.user.findUnique({ where: { id: userId }, select: { credits: true } });

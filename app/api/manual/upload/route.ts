@@ -1,6 +1,8 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
+import { auth } from "@/auth";
+import { serverT, sessionLocale } from "@/lib/i18n/server";
 import { uploadBufferToS3 } from "@/lib/s3-upload";
 import { getBucketConfig } from "@/lib/aws-config";
 import { requireManualUser } from "@/lib/manual-credits";
@@ -31,6 +33,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ url });
   } catch (err) {
     console.error("[manual/upload] S3 upload failed:", err);
-    return NextResponse.json({ error: "Не удалось сохранить файл на сервере. Повторите попытку." }, { status: 500 });
+    const t = serverT(sessionLocale(await auth().catch(() => null)));
+    return NextResponse.json({ error: t('api.uploadSaveFailed') }, { status: 500 });
   }
 }

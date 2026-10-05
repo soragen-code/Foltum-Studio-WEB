@@ -1,6 +1,7 @@
 export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
+import { serverT, sessionLocale } from "@/lib/i18n/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -22,13 +23,14 @@ const approveSchema = z.object({
 export async function POST(request: Request) {
   try {
     const session = await auth();
+    const t = serverT(sessionLocale(session));
     if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     // Без активной подписки (Basic+) генерация недоступна целиком.
     { const dAuto = await denyFeature(session.user.email, "auto_generate"); if (dAuto) return dAuto; }
 
     const body = await request.json().catch(() => null);
     const parsed = approveSchema.safeParse(body);
-    if (!parsed.success) return NextResponse.json({ error: "Логлайн слишком короткий или пустой" }, { status: 400 });
+    if (!parsed.success) return NextResponse.json({ error: t('api.loglineTooShort') }, { status: 400 });
     const { projectId, logline } = parsed.data;
 
     const user = await prisma.user.findUnique({ where: { email: session.user.email }, select: { id: true } });

@@ -53,7 +53,7 @@ export function DashboardClient() {
       const id = data?.project?.id
       router.push(`/project/${id}`)
     } catch {
-      toast.error('Не удалось создать проект')
+      toast.error(t('dashboard.createFailed'))
       setCreating(false)
     }
   }

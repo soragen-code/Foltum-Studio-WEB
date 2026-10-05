@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 800; // сборка листа-сториборда крутится в фоне этой инвокации
 
 import { NextResponse } from "next/server";
+import { serverT, sessionLocale } from "@/lib/i18n/server";
 import { z } from "zod";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/db";
@@ -32,6 +33,7 @@ async function ownedProject(email: string, projectId: string) {
 export async function POST(request: Request) {
   try {
     const session = await auth();
+    const t = serverT(sessionLocale(session));
     if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     // Без активной подписки (Basic+) генерация недоступна целиком.
     { const dAuto = await denyFeature(session.user.email, "auto_generate"); if (dAuto) return dAuto; }
@@ -45,7 +47,7 @@ export async function POST(request: Request) {
     const project = await ownedProject(session.user.email, projectId);
     if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
     const shots = episodeShotsV2From(project.episodeShotsV2, episode);
-    if (!shots.length) return NextResponse.json({ error: "Сначала разбейте сценарий на кадры" }, { status: 400 });
+    if (!shots.length) return NextResponse.json({ error: t('api.needShots') }, { status: 400 });
 
     // Ручная правка промпта: пустая строка → сброс к авто (null); непустая → переопределение.
     if (typeof parsed.data.prompt === "string") {

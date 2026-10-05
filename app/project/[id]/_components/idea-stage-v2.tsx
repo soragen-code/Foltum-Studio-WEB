@@ -159,7 +159,7 @@ const API: Record<Kind, { generate: string; preview: string }> = {
   synopsis: { generate: '/api/ai/v2/synopsis', preview: '/api/ai/v2/synopsis/preview' },
   plot: { generate: '/api/ai/v2/plot', preview: '/api/ai/v2/plot/preview' },
 }
-const KIND_LABEL: Record<Kind, string> = { synopsis: 'синопсиса', plot: 'сюжета сезона' }
+const KIND_LABEL_KEY: Record<Kind, string> = { synopsis: 'ideaV2.kind.synopsis', plot: 'ideaV2.kind.plot' } // genitive, for {kind} params
 
 /**
  * Поток «Новый проект v2.0» — два шага: Идея → Синопсис (шаг логлайна убран; синопсис строится прямо из идеи/жанров).
@@ -358,7 +358,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     } else if (res.job.status === 'canceled') {
       setCanceled(k)
     } else {
-      setError(res.job.error ?? `Не удалось сгенерировать ${KIND_LABEL[k]}`)
+      setError(res.job.error ?? t('ideaV2.genFailed', { kind: t(KIND_LABEL_KEY[k]) }))
     }
   }
   const synopsisJob = useJobPolling({ intervalMs: 800, onFinish: finish('synopsis') })
@@ -507,7 +507,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
         body: JSON.stringify({ projectId: project.id, ...inputBody(k), ...args }),
       })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok) { setError(d?.error ?? 'Не удалось собрать промпт'); return null }
+      if (!res.ok) { setError(d?.error ?? t('ideaV2.promptBuildFailed')); return null }
       if (typeof d.wishesEn === 'string') setWishesEn(d.wishesEn)
       if (typeof d.ideaEn === 'string') setIdeaEn(d.ideaEn)
       const refineEnNow = typeof d.refineEn === 'string' ? d.refineEn : ''
@@ -533,9 +533,10 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       setMsgsRu(null); setMsgsRuOn(false)
       const hist = nonSystem(list).length
       const dialogNote = hist > 1
-        ? ` Запрос уйдёт диалогом: system (правила) + ${hist} сообщений истории (свёрнута ниже, новые сверху): модель видит свои прежние ответы и все ранние правки. Редактировать можно только system.`
-        : ' Запрос уйдёт как system (правила) + user (ваш ввод). Редактировать можно только system.'
-      const noteText = `${d.contextNote ?? ''}${dialogNote}`
+        ? t('ideaV2.dialogNoteHistory', { hist })
+        : t('ideaV2.dialogNoteSingle', { input: t('ideaV2.dialogInput.user') })
+      // contextNote from the server is Russian-only — render the localized equivalent by step kind instead.
+      const noteText = `${d.contextNote ? t(k === 'plot' ? 'ideaV2.ctxNote.plot' : 'ideaV2.ctxNote.synopsis') : ''}${dialogNote}`
       setNote((s) => ({ ...s, [k]: noteText }))
       setReady((s) => ({ ...s, [k]: true }))
       // Кэш: собранный промпт под отпечаток текущих вводных (+ применённые правки) — следующее открытие без preview.
@@ -545,7 +546,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
         refineEn: refineEnNow, wishesEn: typeof d.wishesEn === 'string' ? d.wishesEn : '', ideaEn: typeof d.ideaEn === 'string' ? d.ideaEn : '',
       })
       return { list, sysEdit: sysE, refineEn: refineEnNow }
-    } catch { setError('Ошибка сети'); return null }
+    } catch { setError(t('common.networkError')); return null }
   }
 
   const resetModalFlags = (k: Kind) => {
@@ -590,10 +591,10 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       if (override) body.overrideMessages = override
       const res = await fetch(API[k].generate, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       const d = await res.json().catch(() => ({}))
-      if (!res.ok) { setError(d?.error ?? `Не удалось сгенерировать ${KIND_LABEL[k]}`); return }
+      if (!res.ok) { setError(d?.error ?? t('ideaV2.genFailed', { kind: t(KIND_LABEL_KEY[k]) })); return }
       if (d?.jobId) { activeJobIdRef.current = d.jobId; jobs[k].start(d.jobId) }
       else onRefresh()
-    } catch { setError('Ошибка сети') }
+    } catch { setError(t('common.networkError')) }
     finally { setStarting(null) }
   }
 
@@ -603,7 +604,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const continueFromIdea = () => {
     if (locked) return
     if (!canProceed) {
-      setError(mode === 'idea' ? 'Опишите идею хотя бы одним–двумя предложениями' : 'Выберите хотя бы один жанр')
+      setError(mode === 'idea' ? t('ideaV2.ideaTooShort') : t('ideaV2.pickGenre'))
       return
     }
     commitEpisodes(episodesText)
@@ -641,9 +642,9 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       })
       if (!res.ok) {
         const d = await res.json().catch(() => ({}))
-        setSavingInput(false); setError(d?.error ?? 'Не удалось сбросить синопсис'); return
+        setSavingInput(false); setError(d?.error ?? t('ideaV2.resetSynopsisFailed')); return
       }
-    } catch { setSavingInput(false); setError('Ошибка сети'); return }
+    } catch { setSavingInput(false); setError(t('common.networkError')); return }
     setSavingInput(false)
     invalidateDownstream()
     onRefresh()
@@ -701,8 +702,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     setView(key)
   }
   const V2_STEPS: { key: StepKey; label: string }[] = [
-    { key: 'idea', label: 'Идея' },
-    { key: 'synopsis', label: 'Синопсис' },
+    { key: 'idea', label: t('ideaV2.stepIdea') },
+    { key: 'synopsis', label: t('ideaV2.stepSynopsis') },
     { key: 'plot', label: t('ideaV2.seasonPlot') },
   ]
   const stepsBar = (() => {
@@ -746,8 +747,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const btnGhost = 'inline-flex items-center gap-1.5 rounded-lg border border-border bg-transparent px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-muted/60 hover:border-foreground/30 disabled:opacity-50'
   // Без Studio кнопка остаётся видимой: disabled + бейдж тарифа (единый паттерн GatedButton).
   const previewBtn = (k: Kind, noRefine: boolean, testId: string, disabled = false) => (
-    <GatedButton feature="prompt_view" allowed={canViewPrompt} onClick={() => openPreview(k, noRefine)} disabled={disabled || previewLoading === k || generating} className={btnGhost} data-testid={testId} title="Посмотреть/отредактировать промпт перед отправкой">
-      {previewLoading === k ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Собираем промпт...</> : <><Eye className="h-3.5 w-3.5" /> {t('ideaV2.preview')}</>}
+    <GatedButton feature="prompt_view" allowed={canViewPrompt} onClick={() => openPreview(k, noRefine)} disabled={disabled || previewLoading === k || generating} className={btnGhost} data-testid={testId} title={t('ideaV2.previewTitle')}>
+      {previewLoading === k ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> {t('ideaV2.promptBuilding')}</> : <><Eye className="h-3.5 w-3.5" /> {t('ideaV2.preview')}</>}
     </GatedButton>
   )
 
@@ -766,7 +767,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
     return (
       <PromptModal
         kind={promptKind}
-        title={`Промпт ${KIND_LABEL[promptKind]}`}
+        title={t('ideaV2.promptOf', { kind: t(KIND_LABEL_KEY[promptKind]) })}
         firstAnswerTag={promptKind === 'plot' ? 'P0' : 'S0'}
         messages={curMsgs}
         sysEdit={sysEdit[promptKind]}
@@ -800,21 +801,21 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
         <div className="flex w-full max-w-lg flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl" onClick={(e) => e.stopPropagation()}>
           <div className="flex items-center justify-between gap-2 border-b border-border px-5 py-3.5">
             <h3 className="flex items-center gap-2 font-display text-lg font-semibold">
-              <Info className="h-5 w-5 text-amber-500" /> Изменения затронут следующие шаги
+              <Info className="h-5 w-5 text-amber-500" /> {t('ideaV2.resetTitle')}
             </h3>
-            <button onClick={close} className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label="Закрыть">
+            <button onClick={close} className="rounded-lg p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground" aria-label={t('common.close')}>
               <X className="h-5 w-5" />
             </button>
           </div>
           <div className="px-5 py-4 text-sm text-muted-foreground">
-            Вы изменили {mode === 'idea' ? 'идею' : 'жанры или пожелания'}. Если продолжить, ранее сгенерированные синопсис и сюжет сезона будут сброшены и потребуют повторной генерации.
+            {t('ideaV2.resetBody', { what: t(mode === 'idea' ? 'ideaV2.resetWhat.idea' : 'ideaV2.resetWhat.genres') })}
           </div>
           <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3.5">
             <button onClick={close} className="rounded-lg border border-border bg-background px-5 py-2.5 text-sm font-semibold text-foreground transition hover:bg-muted" data-testid="idea-v2-reset-cancel">
-              Отмена
+              {t('common.cancel')}
             </button>
             <button onClick={() => void confirmResetAndSend()} className="flex items-center gap-2 rounded-lg bg-secondary px-5 py-2.5 text-sm font-semibold text-secondary-foreground transition hover:brightness-110" data-testid="idea-v2-reset-confirm">
-              <RotateCcw className="h-4 w-4" /> Продолжить и сбросить{costTag(V2_COSTS.synopsis)}
+              <RotateCcw className="h-4 w-4" /> {t('ideaV2.resetConfirm')}{costTag(V2_COSTS.synopsis)}
             </button>
           </div>
         </div>
@@ -847,23 +848,23 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
         {errorBox}
         <div className={cardCls} style={cardStyle} data-testid="idea-v2-generating" data-kind={gk}>
           <h2 className="flex items-center gap-2 font-display text-xl font-bold">
-            <Wand2 className="h-5 w-5 text-primary" /> Генерация {KIND_LABEL[gk]}
+            <Wand2 className="h-5 w-5 text-primary" /> {t('ideaV2.generatingKind', { kind: t(KIND_LABEL_KEY[gk]) })}
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Отправляется в: <span className="font-semibold text-foreground" data-testid="idea-v2-model">{FABLE_MODEL_LABEL}</span>.
+            {t('ideaV2.sentTo')} <span className="font-semibold text-foreground" data-testid="idea-v2-model">{FABLE_MODEL_LABEL}</span>.
           </p>
           <div className="mt-4 space-y-2" data-testid="idea-v2-progress">
             {j ? (
               <SmoothProgress job={j} expectedTotalSec={gk === 'plot' ? SEASON_PLOT_V2_EXPECTED_SEC : SYNOPSIS_V2_EXPECTED_SEC} />
             ) : (
-              <p className="inline-flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin text-primary" /> Запуск генерации…</p>
+              <p className="inline-flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="h-3 w-3 animate-spin text-primary" /> {t('ideaV2.starting')}</p>
             )}
             {String(j?.streamedText ?? '').trim() && (
               <GrowingStream text={String(j?.streamedText ?? '')} active={isActive(j)} className={SYNOPSIS_TEXT_CLS} testId={gk === 'plot' ? 'idea-v2-plot-streaming' : 'idea-v2-synopsis-streaming'} />
             )}
             <div className="flex items-center justify-between gap-2">
               <p className="min-w-0 text-xs text-muted-foreground">
-                {gk === 'plot' ? t('ideaV2.plotGenerating') : 'Пишем синопсис сезона по вашей идее/жанрам.'} Вкладку можно закрыть — прогресс и текст сохранятся.
+                {gk === 'plot' ? t('ideaV2.plotGenerating') : t('ideaV2.synopsisGenerating')} {t('ideaV2.canClose')}
               </p>
               <CancelButton onCancel={cancel} testId="idea-v2-cancel" className="flex-shrink-0" />
             </div>
@@ -884,30 +885,30 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 className="flex items-center gap-2 font-display text-xl font-bold">
-                <BookOpen className="h-5 w-5 text-primary" /> Шаг 2: синопсис
+                <BookOpen className="h-5 w-5 text-primary" /> {t('ideaV2.step2Synopsis')}
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Модель: <span className="font-semibold text-foreground" data-testid="idea-v2-model">{FABLE_MODEL_LABEL}</span>
+                {t('common.model')} <span className="font-semibold text-foreground" data-testid="idea-v2-model">{FABLE_MODEL_LABEL}</span>
               </p>
             </div>
           </div>
 
           <div className="mt-4 rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground" data-testid="idea-v2-synopsis-empty">
-            Синопсис ещё не сгенерирован. Нажмите «Сгенерировать» — идея/жанры развернутся в синопсис сезона на 7–10 предложений.
+            {t('ideaV2.synopsisEmpty')}
           </div>
           {error && <div className="mt-4">{errorBox}</div>}
-          {canceled === 'synopsis' && <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">Генерация синопсиса отменена.</p>}
+          {canceled === 'synopsis' && <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">{t('ideaV2.synopsisCanceled')}</p>}
         </div>
         {stepFooter(
           'idea-v2-synopsis-footer',
           <div className="flex flex-wrap items-center gap-2">
             {previewBtn('synopsis', true, 'idea-v2-synopsis-generate-preview')}
             <button onClick={() => generate('synopsis', true)} disabled={generating} className={btnPrimary} data-testid="idea-v2-synopsis-generate">
-              <Wand2 className="h-4 w-4" /> Сгенерировать{costTag(V2_COSTS.synopsis)}
+              <Wand2 className="h-4 w-4" /> {t('ideaV2.generate')}{costTag(V2_COSTS.synopsis)}
             </button>
           </div>,
           <button onClick={() => goStep('idea')} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground" data-testid="idea-v2-synopsis-back">
-            <ArrowLeft className="h-4 w-4" /> К идее
+            <ArrowLeft className="h-4 w-4" /> {t('ideaV2.toIdea')}
           </button>,
         )}
         {renderPromptModal()}
@@ -924,10 +925,10 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 className="flex items-center gap-2 font-display text-xl font-bold">
-                <BookOpen className="h-5 w-5 text-primary" /> Шаг 2: синопсис готов
+                <BookOpen className="h-5 w-5 text-primary" /> {t('ideaV2.step2SynopsisReady')}
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Модель: <span className="font-semibold text-foreground" data-testid="idea-v2-result-model">{FABLE_MODEL_LABEL}</span>
+                {t('common.model')} <span className="font-semibold text-foreground" data-testid="idea-v2-result-model">{FABLE_MODEL_LABEL}</span>
               </p>
             </div>
           </div>
@@ -935,25 +936,25 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           <div className={`mt-4 ${SYNOPSIS_TEXT_CLS}`} data-testid="idea-v2-result-text">
             {String(project.synopsis).trim()}
           </div>
-          <p className="mt-3 text-xs text-muted-foreground">Синопсис сохранён в проекте. «Продолжить» — принять его и разбить сезон на серии (шаг 3).</p>
+          <p className="mt-3 text-xs text-muted-foreground">{t('ideaV2.synopsisSaved')}</p>
           {inputDirty && (
-            <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-result-stale">Идея, жанры, язык или число эпизодов изменились — вернитесь на шаг 1 и нажмите «Продолжить», чтобы перегенерировать синопсис.</p>
+            <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-result-stale">{t('ideaV2.synopsisStale')}</p>
           )}
           {locked && <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="idea-v2-locked"><Lock className="h-3.5 w-3.5" /> {t('ideaV2.lockedHint')}</p>}
           {!inputDirty && !locked && (
             <div className="mt-5 rounded-lg border border-border/70 bg-muted/30 px-4 py-3" data-testid="idea-v2-synopsis-refine">
-              <label htmlFor="idea-v2-synopsis-refine-input" className="text-xs font-semibold text-foreground">Что изменить в синопсисе?</label>
+              <label htmlFor="idea-v2-synopsis-refine-input" className="text-xs font-semibold text-foreground">{t('ideaV2.synopsisRefineLabel')}</label>
               <textarea
                 id="idea-v2-synopsis-refine-input"
                 value={refineText}
                 onChange={(e) => onRefineChange(e.target.value)}
-                placeholder={canInstruct ? 'Например: сделай ставки выше, добавь романтическую линию, перенеси действие в 90-е...' : lockHint('prompt_instruct_edit')}
+                placeholder={canInstruct ? t('ideaV2.synopsisRefinePlaceholder') : lockHint('prompt_instruct_edit')}
                 rows={2}
                 disabled={generating || !canInstruct}
                 className="mt-2 w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
                 data-testid="idea-v2-synopsis-refine-input"
               />
-              <p className="mt-1.5 text-[11px] text-muted-foreground">Правка уйдёт диалогом: модель видит прежний синопсис и все ранние правки. «Превью» — посмотреть/сохранить промпт, «Изменить» — отправить.</p>
+              <p className="mt-1.5 text-[11px] text-muted-foreground">{t('ideaV2.refineNote', { what: t('ideaV2.refineWhat.synopsis'), preview: t('ideaV2.preview'), change: t('ideaV2.change') })}</p>
               <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
                 {previewBtn('synopsis', false, 'idea-v2-synopsis-refine-preview', !refineText.trim())}
                 <GatedButton
@@ -964,24 +965,24 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                   className={`${btnMain} flex-shrink-0`}
                   data-testid="idea-v2-synopsis-refine-edit"
                 >
-                  <Pencil className="h-3.5 w-3.5" /> Изменить{costTag(V2_COSTS.synopsis)}
+                  <Pencil className="h-3.5 w-3.5" /> {t('ideaV2.change')}{costTag(V2_COSTS.synopsis)}
                 </GatedButton>
               </div>
             </div>
           )}
           {error && <div className="mt-4">{errorBox}</div>}
-          {canceled === 'synopsis' && <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">Генерация отменена.</p>}
+          {canceled === 'synopsis' && <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">{t('ideaV2.scriptCanceled')}</p>}
         </div>
         {stepFooter(
           'idea-v2-result-footer',
           locked ? null : <div className="flex flex-wrap items-center gap-2">
             {previewBtn('plot', true, 'idea-v2-result-plot-preview', inputDirty)}
             <button onClick={continueFromSynopsis} disabled={generating || inputDirty} className={btnPrimary} data-testid="idea-v2-result-continue">
-              Продолжить{costTag(V2_COSTS.plot)} <ArrowRight className="h-4 w-4" />
+              {t('common.continue')}{costTag(V2_COSTS.plot)} <ArrowRight className="h-4 w-4" />
             </button>
           </div>,
           <button onClick={() => goStep('idea')} disabled={!stepClickable.idea} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground disabled:opacity-50" data-testid="idea-v2-result-back">
-            <ArrowLeft className="h-4 w-4" /> К идее
+            <ArrowLeft className="h-4 w-4" /> {t('ideaV2.toIdea')}
           </button>,
         )}
         {renderPromptModal()}
@@ -996,23 +997,23 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
         {stepsBar}
         <div className={cardCls} style={cardStyle} data-testid="idea-v2-plot-pregen">
           <h2 className="flex items-center gap-2 font-display text-xl font-bold">
-            <ListOrdered className="h-5 w-5 text-primary" /> Шаг 3: {t('ideaV2.seasonPlotStep').toLowerCase()}
+            <ListOrdered className="h-5 w-5 text-primary" /> {t('ideaV2.step3')} {t('ideaV2.seasonPlotStep').toLowerCase()}
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Модель: <span className="font-semibold text-foreground" data-testid="idea-v2-model">{FABLE_MODEL_LABEL}</span> · {episodes} эп.
+            {t('common.model')} <span className="font-semibold text-foreground" data-testid="idea-v2-model">{FABLE_MODEL_LABEL}</span> · {t('ideaV2.episodesShort', { n: episodes })}
           </p>
           <div className="mt-4 rounded-lg border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground" data-testid="idea-v2-plot-empty">
             {t('ideaV2.plotEmpty')}
           </div>
           {error && <div className="mt-4">{errorBox}</div>}
-          {canceled === 'plot' && <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">Генерация сюжета сезона отменена.</p>}
+          {canceled === 'plot' && <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">{t('ideaV2.plotCanceled')}</p>}
         </div>
         {stepFooter(
           'idea-v2-plot-footer',
           <div className="flex flex-wrap items-center gap-2">
             {previewBtn('plot', true, 'idea-v2-plot-generate-preview')}
             <button onClick={() => generate('plot', true)} disabled={generating || !hasSynopsis} className={btnPrimary} data-testid="idea-v2-plot-generate">
-              <Wand2 className="h-4 w-4" /> Сгенерировать{costTag(V2_COSTS.plot)}
+              <Wand2 className="h-4 w-4" /> {t('ideaV2.generate')}{costTag(V2_COSTS.plot)}
             </button>
           </div>,
           <button onClick={() => goStep('synopsis')} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground" data-testid="idea-v2-plot-back">
@@ -1032,10 +1033,10 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
         {stepsBar}
         <div className={cardCls} style={cardStyle} data-testid="idea-v2-plot-result">
           <h2 className="flex items-center gap-2 font-display text-xl font-bold">
-            <ListOrdered className="h-5 w-5 text-primary" /> Шаг 3: {t('ideaV2.seasonPlotStep').toLowerCase()}
+            <ListOrdered className="h-5 w-5 text-primary" /> {t('ideaV2.step3')} {t('ideaV2.seasonPlotStep').toLowerCase()}
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Модель: <span className="font-semibold text-foreground" data-testid="idea-v2-result-model">{FABLE_MODEL_LABEL}</span>
+            {t('common.model')} <span className="font-semibold text-foreground" data-testid="idea-v2-result-model">{FABLE_MODEL_LABEL}</span>
             {episodesList && <> · {t('ideaV2.plotParsedCount', { n: episodesList.length, total: episodes })}</>}
           </p>
 
@@ -1058,12 +1059,12 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           )}
 
           {inputDirty && (
-            <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-plot-stale">Идея, жанры, язык или число эпизодов изменились — вернитесь на шаг 1 и нажмите «Продолжить», чтобы перегенерировать синопсис и сюжет.</p>
+            <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-plot-stale">{t('ideaV2.plotStale')}</p>
           )}
           {locked && <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="idea-v2-locked"><Lock className="h-3.5 w-3.5" /> {t('ideaV2.lockedHint')}</p>}
           {!inputDirty && !locked && (
             <div className="mt-5 rounded-lg border border-border/70 bg-muted/30 px-4 py-3" data-testid="idea-v2-plot-refine">
-              <label htmlFor="idea-v2-plot-refine-input" className="text-xs font-semibold text-foreground">Что изменить в сюжете сезона?</label>
+              <label htmlFor="idea-v2-plot-refine-input" className="text-xs font-semibold text-foreground">{t('ideaV2.plotRefineLabel')}</label>
               <textarea
                 id="idea-v2-plot-refine-input"
                 value={plotRefineText}
@@ -1074,7 +1075,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                 className="mt-2 w-full resize-y rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
                 data-testid="idea-v2-plot-refine-input"
               />
-              <p className="mt-1.5 text-[11px] text-muted-foreground">Правка уйдёт диалогом: модель видит прежний сюжет и все ранние правки. «{t('ideaV2.preview')}» — посмотреть/сохранить промпт, «{t('ideaV2.change')}» — отправить.</p>
+              <p className="mt-1.5 text-[11px] text-muted-foreground">{t('ideaV2.refineNote', { what: t('ideaV2.refineWhat.plot'), preview: t('ideaV2.preview'), change: t('ideaV2.change') })}</p>
               <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
                 {previewBtn('plot', false, 'idea-v2-plot-refine-preview', !plotRefineText.trim())}
                 <GatedButton
@@ -1091,7 +1092,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             </div>
           )}
           {error && <div className="mt-4">{errorBox}</div>}
-          {canceled === 'plot' && <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">Генерация отменена.</p>}
+          {canceled === 'plot' && <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">{t('ideaV2.scriptCanceled')}</p>}
         </div>
         {stepFooter(
           'idea-v2-plot-result-footer',
@@ -1116,23 +1117,23 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       {screen === 'choose' && (
         <div className="mx-auto max-w-2xl text-center" data-testid="idea-v2-choose">
           <h2 className="flex items-center justify-center gap-2 font-display text-2xl font-bold">
-            <Sparkles className="h-6 w-6 text-primary" /> Новый проект v2.0 — Шаг 1: идея
+            <Sparkles className="h-6 w-6 text-primary" /> {t('ideaV2.step1Title')}
           </h2>
           <p className="mx-auto mt-2 max-w-xl text-sm text-muted-foreground">
-            Выберите, с чего начать. Опишите свою идею словами или соберите набор жанров — и ИИ придумает историю.
+            {t('ideaV2.step1Intro')}
           </p>
           <div className="mt-8 grid gap-4 text-left sm:grid-cols-2">
             <button type="button" onClick={() => chooseMode('idea')} disabled={locked} className="group disabled:opacity-50 flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-5 text-left transition hover:border-primary/60" data-testid="idea-v2-choose-idea">
               <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary/10 text-primary"><Lightbulb className="h-6 w-6" /></div>
-              <div className="font-display text-lg font-semibold">Своя идея</div>
-              <p className="text-sm text-muted-foreground">Опишите замысел своими словами — от одной фразы до нескольких предложений. ИИ развернёт её в синопсис сезона.</p>
-              <span className="mt-1 inline-flex items-center gap-1 text-sm font-semibold text-primary">Описать идею <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" /></span>
+              <div className="font-display text-lg font-semibold">{t('ideaV2.ownIdea')}</div>
+              <p className="text-sm text-muted-foreground">{t('ideaV2.ownIdeaDesc')}</p>
+              <span className="mt-1 inline-flex items-center gap-1 text-sm font-semibold text-primary">{t('ideaV2.describeIdea')} <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" /></span>
             </button>
             <button type="button" onClick={() => chooseMode('genres')} disabled={locked} className="group disabled:opacity-50 flex flex-col items-start gap-3 rounded-xl border border-border bg-card p-5 text-left transition hover:border-primary/60" data-testid="idea-v2-choose-genres">
               <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary/10 text-primary"><Tags className="h-6 w-6" /></div>
-              <div className="font-display text-lg font-semibold">Собрать из жанров</div>
-              <p className="text-sm text-muted-foreground">Нет готовой идеи? Выберите один или несколько жанров — ИИ придумает оригинальный сюжет на их основе.</p>
-              <span className="mt-1 inline-flex items-center gap-1 text-sm font-semibold text-primary">Выбрать жанры <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" /></span>
+              <div className="font-display text-lg font-semibold">{t('ideaV2.fromGenres')}</div>
+              <p className="text-sm text-muted-foreground">{t('ideaV2.fromGenresDesc')}</p>
+              <span className="mt-1 inline-flex items-center gap-1 text-sm font-semibold text-primary">{t('ideaV2.pickGenres')} <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" /></span>
             </button>
           </div>
         </div>
@@ -1141,7 +1142,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
       {screen === 'input' && (
         <div className={cardCls} style={cardStyle} data-testid="idea-v2-input-screen">
           <h2 className="flex items-center gap-2 font-display text-xl font-bold">
-            {mode === 'idea' ? <><Lightbulb className="h-5 w-5 text-primary" /> Своя идея</> : <><Tags className="h-5 w-5 text-primary" /> Собрать из жанров</>}
+            {mode === 'idea' ? <><Lightbulb className="h-5 w-5 text-primary" /> {t('ideaV2.ownIdea')}</> : <><Tags className="h-5 w-5 text-primary" /> {t('ideaV2.fromGenres')}</>}
           </h2>
 
           {mode === 'idea' ? (
@@ -1149,14 +1150,14 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
               value={idea}
               onChange={(e) => onIdeaChange(e.target.value)}
               readOnly={locked}
-              placeholder="Например: молодая смотрительница маяка на северном острове находит дневник своей пропавшей предшественницы…"
+              placeholder={t('ideaV2.ideaPlaceholder')}
               rows={5}
               className="mt-4 w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
               data-testid="idea-v2-input"
             />
           ) : (
             <div className="mt-4">
-              <p className="mb-2 text-xs font-medium text-muted-foreground">Выберите один или несколько жанров:</p>
+              <p className="mb-2 text-xs font-medium text-muted-foreground">{t('ideaV2.pickGenresLabel')}</p>
               <div className="flex flex-wrap gap-2" data-testid="idea-v2-genres">
                 {GENRES.map((g) => {
                   const on = genres.includes(g.id)
@@ -1175,12 +1176,12 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
                   )
                 })}
               </div>
-              <p className="mb-2 mt-5 text-xs font-medium text-muted-foreground">Пожелания (необязательно):</p>
+              <p className="mb-2 mt-5 text-xs font-medium text-muted-foreground">{t('ideaV2.wishesLabel')}</p>
               <textarea
                 value={wishes}
                 onChange={(e) => onWishesChange(e.target.value)}
                 readOnly={locked}
-                placeholder="Опишите пожелания к сюжету, тону, героям… (необязательно)"
+                placeholder={t('ideaV2.wishesPlaceholder')}
                 rows={3}
                 maxLength={2000}
                 className="w-full resize-none rounded-lg border border-input bg-background px-4 py-3 text-sm outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
@@ -1224,14 +1225,13 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           </div>
 
           <p className="mt-4 text-sm text-muted-foreground">
-            Отправляется в: <span className="font-semibold text-foreground" data-testid="idea-v2-model">{FABLE_MODEL_LABEL}</span>.
-            «Продолжить» сразу запустит генерацию синопсиса сезона на 7–10 предложений (предыстория, герой, главный хук и концовка) — под выбранный язык и количество эпизодов.
-            «Превью» — посмотреть и при необходимости отредактировать/сохранить промпт перед отправкой.
+            {t('ideaV2.sentTo')} <span className="font-semibold text-foreground" data-testid="idea-v2-model">{FABLE_MODEL_LABEL}</span>.
+            {t('ideaV2.step1Outro')}
           </p>
 
           {locked && <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-muted-foreground" data-testid="idea-v2-locked"><Lock className="h-3.5 w-3.5" /> {t('ideaV2.lockedHint')}</p>}
           {canceled === 'synopsis' && (
-            <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">Генерация отменена. Её можно запустить снова на шаге синопсиса.</p>
+            <p className="mt-3 text-xs text-amber-500" data-testid="idea-v2-canceled">{t('ideaV2.canceledRestart')}</p>
           )}
         </div>
       )}
@@ -1245,12 +1245,12 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
             className={btnPrimary}
             data-testid="idea-v2-generate"
           >
-            {savingInput ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />} Продолжить{costTag(V2_COSTS.synopsis)}
+            {savingInput ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowRight className="h-4 w-4" />} {t('common.continue')}{costTag(V2_COSTS.synopsis)}
           </button>
         </div>,
         hasSynopsis && !inputDirty ? (
           <button onClick={() => goStep('synopsis')} className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-foreground" data-testid="idea-v2-input-to-synopsis">
-            К готовому синопсису <ArrowRight className="h-4 w-4" />
+            {t('ideaV2.toReadySynopsis')} <ArrowRight className="h-4 w-4" />
           </button>
         ) : null,
       )}
