@@ -33,18 +33,19 @@ const MODEL = "anthropic/claude-opus-5";
  * Model used for SCRIPT generation (season structure, episode scripts, full story, scene breakdown).
  * Per user decision all script/plot writing is done by Claude Opus 5 via WaveSpeed. Anthropic models
  * REQUIRE `max_tokens` on every request (always sent by the chat/stream helpers below); they are NOT a
- * reasoning-family model in the OpenAI sense (isReasoningModel → false), so they take `temperature` + `max_tokens`.
+ * reasoning-family model in the OpenAI sense (isReasoningModel → false); they take `max_tokens` ONLY — the
+ * gateway rejects a non-default `temperature` / `top_p` / `top_k` (HTTP 400), so none is ever sent.
  * The model may wrap JSON answers in ```json fences — safeJsonParse strips them.
  */
 export const SCRIPT_MODEL = "anthropic/claude-opus-5";
 /**
- * EPISODE SCRIPTS are also written by Claude Opus 5 (same model as SCRIPT_MODEL). Uses `temperature` +
- * `max_tokens`; the large budget keeps the shooting-script JSON from truncating.
+ * EPISODE SCRIPTS are also written by Claude Opus 5 (same model as SCRIPT_MODEL). Uses `max_tokens` only
+ * (default sampling); the large budget keeps the shooting-script JSON from truncating.
  */
 export const EPISODE_SCRIPT_MODEL = "anthropic/claude-opus-5";
 /** Completion budget for one episode script on EPISODE_SCRIPT_MODEL. */
 export const EPISODE_SCRIPT_MAX_TOKENS = 32000;
-/** Sampling temperature for episode scripts. */
+/** Sampling temperature for episode scripts — kept for callers; NOT forwarded to anthropic/ models (default sampling only). */
 export const EPISODE_SCRIPT_TEMPERATURE = 0.7;
 
 /**
@@ -56,6 +57,23 @@ export function isReasoningModel(model: string): boolean {
   return /(^|\/)(gpt-6|gpt-5|o\d)/.test(model);
 }
 
+/**
+ * Anthropic models on WaveSpeed (claude-opus-5 — "Claude Fable 5.1" in the UI) accept ONLY the DEFAULT
+ * sampling: the gateway rejects any request carrying `temperature`, `top_p` or `top_k` with
+ * HTTP 400 "claude-opus-5 does not accept a non-default temperature, top_p or top_k. Remove them."
+ * (extended thinking additionally requires the default temperature). So for every anthropic/ model the
+ * helpers below send `max_tokens` only — `opts.temperature` is accepted by callers for compatibility but
+ * never forwarded; top_p / top_k are never sent anywhere. Other non-reasoning models keep the old behaviour.
+ */
+export function usesDefaultSamplingOnly(model: string): boolean {
+  return model.startsWith("anthropic/");
+}
+
+/** Completion-budget + sampling params for a non-reasoning model (default sampling only for anthropic/). */
+function samplingParams(model: string, temperature: number | undefined, budget: number): Record<string, unknown> {
+  return usesDefaultSamplingOnly(model) ? { max_tokens: budget } : { temperature: temperature ?? 0.85, max_tokens: budget };
+}
+
 /** Default reasoning effort for SCRIPT generation (chat() and background responses). */
 export const SCRIPT_REASONING_EFFORT: "low" | "medium" | "high" = "medium";
 
@@ -65,7 +83,8 @@ export let lastChatUsage: { model: string; promptTokens: number; completionToken
 export type ChatOptions = {
   /** Model override (default gpt-4o). Use SCRIPT_MODEL for long-form script writing. */
   model?: string;
-  /** Sampling temperature — ignored (omitted) for reasoning models, which only accept the default. */
+  /** Sampling temperature — ignored (omitted) for reasoning models AND for anthropic/ models (claude-opus-5
+   *  accepts only the default temperature / top_p / top_k — see usesDefaultSamplingOnly). */
   temperature?: number;
   /** Completion budget: sent as `max_tokens` for gpt-4o, as `max_completion_tokens` for reasoning models
    *  (where reasoning tokens count toward it — give scripts a large budget). */
@@ -165,7 +184,7 @@ export async function chat(
       // Reasoning models: no temperature, `max_completion_tokens`, explicit reasoning effort.
       ...(reasoning
         ? { max_completion_tokens: budget, reasoning_effort: opts?.reasoningEffort ?? SCRIPT_REASONING_EFFORT }
-        : { temperature: opts?.temperature ?? 0.85, max_tokens: budget }),
+        : samplingParams(model, opts?.temperature, budget)),
       ...thinkingParams(model, budget),
       ...(opts?.json ? { response_format: { type: "json_object" } } : {}),
     },
@@ -288,7 +307,7 @@ export async function streamChatText(
             ],
       ...(reasoning
         ? { max_completion_tokens: budget, reasoning_effort: opts?.reasoningEffort ?? SCRIPT_REASONING_EFFORT }
-        : { temperature: opts?.temperature ?? 0.85, max_tokens: budget }),
+        : samplingParams(model, opts?.temperature, budget)),
       ...thinkingParams(model, budget),
       ...(opts?.json ? { response_format: { type: "json_object" } } : {}),
       stream_options: { include_usage: true },

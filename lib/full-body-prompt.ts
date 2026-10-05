@@ -20,6 +20,7 @@ import {
   FULL_BODY_CLOTHING_RULE,
   NEUTRAL_BACKGROUND_LINE,
   isChildAppearance,
+  isAnimalAppearance,
   type CharacterRefKind,
 } from "@/lib/visual-style";
 
@@ -56,6 +57,7 @@ function parseAgeNumber(age?: string | null): number | null {
  * gender inferred from the appearance) or a safe "late 20s" default when the age is missing/unparseable.
  */
 export function adultAgeClause(age: string | null | undefined, appearance = "", genderNoun?: "woman" | "man" | null): string | null {
+  if (isAnimalAppearance(appearance)) return null; // an animal / non-human character — no human sex/age wording at all
   if (isChildAppearance(appearance)) return null; // a real child keeps child proportions/wording
   // Stage 125: an explicit gender noun (from Character.gender / the resolver) overrides the text heuristic.
   const noun = genderNoun ?? detectGenderNoun(appearance);
@@ -85,6 +87,7 @@ export function withAdultAge(who: string, age: string | null | undefined, appear
 // "fully grown adult" wording. It returns null for adults / unknown so the adult clause owns that case.
 // ---------------------------------------------------------------------------------------------------
 export function childAgeClause(age: string | null | undefined, appearance = ""): string | null {
+  if (isAnimalAppearance(appearance)) return null; // non-human — no human age wording
   const n = parseAgeNumber(age);
   const statedMinor = n !== null && n < 18;
   if (!isChildAppearance(appearance) && !statedMinor) return null; // an adult / unknown — not this clause's job
@@ -171,6 +174,10 @@ function genderAssertClause(noun: "woman" | "man", age: string | null | undefine
  * can't be resolved. CROWD groups are handled by the caller (their group wording is kept as-is).
  */
 export function withForcedGender(who0: string, age: string | null | undefined, appearance: string, gender: string | null | undefined, role?: string | null, name?: string | null): string {
+  // An animal / non-human character (a dog, a cat, a horse…) never gets the human sex assertion, the adult-age
+  // noun or the gender-lock: "This is an adult WOMAN… a fully grown adult woman… <dog description>" made the
+  // image model render a woman AND the dog. Its own description is used as is.
+  if (isAnimalAppearance(appearance)) return who0;
   const noun = resolveGenderNoun(gender, role, appearance, name);
   // Stage 151: withExplicitAge always states the age — an adult clause ("A fully grown adult woman, 34
   // years old …") for adults, or an age-appropriate child/minor clause ("A child, 8 years old. …") for

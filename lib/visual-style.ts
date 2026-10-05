@@ -153,6 +153,21 @@ export function isChildAppearance(appearance: string): boolean {
     || /\b(?:boy|girl)\b/.test(a) && !/\b(?:girlfriend|boyfriend|cowboy|cowgirl|playboy|tomboy)\b/.test(a);
 }
 
+/**
+ * Heuristic: does the character text describe an ANIMAL / non-human (a dog, cat, horse, bird, creature…)
+ * rather than a person? Observed failure: a dog character got the human gender/age prefix ("young adult
+ * woman dog" — "she/her" in its description matched the female heuristic) and the image model drew a
+ * woman AND a dog. Non-human characters must never receive human sex/age wording. The human markers
+ * ("man", "woman", "person", "girl"…) win when BOTH appear (e.g. "a woman walking her dog" is a person).
+ * Exported for unit tests.
+ */
+export function isAnimalAppearance(text: string): boolean {
+  const a = ` ${String(text ?? "").toLowerCase()} `;
+  const human = /(?:^|[^a-zа-яё])(?:man|woman|men|women|person|people|human|boy|girl|lady|guy|child|kid|teenager|мужчин|женщин|человек|парень|девушк|мальчик|девочк|ребён|ребен|подросток)(?![a-zа-яё])/;
+  const animal = /(?:^|[^a-zа-яё])(?:dog|puppy|hound|mutt|cat|kitten|horse|pony|wolf|fox|bear|lion|tiger|bird|parrot|crow|raven|owl|rabbit|hare|deer|cow|goat|sheep|pig|rat|mouse|monkey|dragon|creature|beast|animal)(?![a-zа-яё])|(?:^|[^a-zа-яё])(?:пёс|пес|собак|щен|кот|кош|котён|котен|лошад|кон[ьяе]|волк|лис|медвед|лев|тигр|птиц|попуга|ворон|сов[аы]|кролик|за[яй]ц|олен|коров|коз[аы]|овц|свинь|крыс|мыш|обезьян|дракон|существ|зверь|животн)/;
+  return animal.test(a) && !human.test(a);
+}
+
 /** Proportions block appropriate to the character's stated age / build. */
 export function fullBodyProportionsFor(appearance: string): string {
   return isChildAppearance(appearance) ? FULL_BODY_PROPORTIONS_CHILD : FULL_BODY_PROPORTIONS;

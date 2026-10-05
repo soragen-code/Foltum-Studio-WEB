@@ -9,7 +9,7 @@ import { prisma } from "@/lib/db";
 import { generateImage, GenerationCanceledError, WAVESPEED_GPT_IMAGE_25_FLARE_T2I } from "@/lib/providers/image-provider";
 import { uploadRemoteToS3 } from "@/lib/s3-upload";
 import { updateJob, completeJob, failJob, isCancelRequested, markCanceled } from "@/lib/jobs";
-import { VISUAL_STYLE, NEUTRAL_BACKGROUND_LINE, REFERENCE_ASPECT_RATIO, VISUAL_STYLE_ID } from "@/lib/visual-style";
+import { VISUAL_STYLE, NEUTRAL_BACKGROUND_LINE, REFERENCE_ASPECT_RATIO, VISUAL_STYLE_ID, isAnimalAppearance } from "@/lib/visual-style";
 import { runWithPromptContext } from "@/lib/prompt-log";
 import { episodeRefsV2From, type EpisodeRefV2 } from "@/lib/idea-v2";
 import { patchEpisodeRefV2 } from "@/lib/episode-refs-v2-store";
@@ -24,9 +24,14 @@ const FACE_REF_LINE =
   "IMPORTANT: a reference photo of a real person is provided. Preserve that person's facial identity and features (face shape, eyes, nose, mouth, skin tone, hair) so the character clearly looks like them; adapt only clothing, pose, and styling to match the description and visual style.";
 
 /** Финальный промпт image-модели: стиль + кадрирование по типу рефа + (опц.) удержание лица + EN-промпт пользователя. */
-export function episodeRefImagePromptV2(ref: Pick<EpisodeRefV2, "kind" | "prompt" | "setting" | "userRefUrl">): string {
+export function episodeRefImagePromptV2(ref: Pick<EpisodeRefV2, "kind" | "prompt" | "setting" | "userRefUrl"> & Partial<Pick<EpisodeRefV2, "label">>): string {
+  // A non-human character (a dog, a cat, a horse…) gets an animal sheet: the human "ONE fictional adult" framing
+  // made the image model add a person next to the animal ("young adult woman dog").
+  const animal = ref.kind === "character" && isAnimalAppearance(`${ref.prompt} ${ref.label ?? ""}`);
   const framing =
-    ref.kind === "character"
+    animal
+      ? `Animal character reference sheet image: ONE animal — exactly the species/breed described below — shown full-body from nose to tail and paws, standing in a calm neutral pose, facing the camera, whole body in frame. NO human, NO person, NO hands, NO owner anywhere in the frame — the animal alone. ${NEUTRAL_BACKGROUND_LINE}`
+      : ref.kind === "character"
       ? `Character reference sheet image: ONE fictional adult (or child if stated) shown full-length head to toe, standing upright in a neutral pose, facing the camera, wearing the exact everyday wardrobe this character wears in the episode as described below. Face fully visible and head uncovered: any helmet, mask, respirator, goggles or gloves are NOT worn — held in a hand or hanging on the belt if mentioned. ${NEUTRAL_BACKGROUND_LINE}`
       : ref.kind === "location"
         ? `Location reference plate: wide establishing photograph of the place, ${ref.setting === "EXT" ? "exterior" : ref.setting === "INT" ? "interior" : "the setting"}, no people, no text.`
