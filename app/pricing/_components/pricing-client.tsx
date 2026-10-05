@@ -6,6 +6,7 @@ import { Check, Coins, Crown, Sparkles, Zap, ShoppingCart, Loader2 } from 'lucid
 import { motion } from 'framer-motion'
 import { toast } from 'sonner'
 import { useTranslation } from '@/lib/i18n/context'
+import { CREDIT_PACKAGES, creditsMultiplierForTier } from '@/lib/credit-packages'
 
 // Подписки открывают ДОСТУП К ФУНКЦИЯМ и НЕ дают кредиты — кредиты покупаются отдельными пакетами.
 const plans = [
@@ -52,11 +53,8 @@ const plans = [
   },
 ]
 
-const creditPacks = [
-  { id: 'mini', credits: 300, price: '$19.99' },
-  { id: 'plus', credits: 800, price: '$49.99' },
-  { id: 'max', credits: 3000, price: '$99.99' },
-]
+// Base packs come from the server catalog (lib/wayforpay.ts); Studio users see x2 credits at the same price.
+const creditPacks = CREDIT_PACKAGES.map((p) => ({ id: p.id, credits: p.credits, price: `$${p.amount.toFixed(2)}` }))
 
 function postToWayForPay(action: string, fields: Record<string, any>) {
   const form = document.createElement('form')
@@ -84,8 +82,13 @@ function postToWayForPay(action: string, fields: Record<string, any>) {
   form.submit()
 }
 
-export function PricingClient({ currentTier = null }: { currentTier?: string | null } = {}) {
+export function PricingClient({
+  currentTier = null,
+  effectiveTier = null,
+}: { currentTier?: string | null; effectiveTier?: string | null } = {}) {
   const { t } = useTranslation()
+  const creditsMultiplier = creditsMultiplierForTier(effectiveTier)
+  const isStudioCredits = creditsMultiplier > 1
   const [credits, setCredits] = useState(0)
   const [buying, setBuying] = useState<string | null>(null)
 
@@ -260,24 +263,35 @@ export function PricingClient({ currentTier = null }: { currentTier?: string | n
             {t('pricing.creditsRate')}
           </p>
           <div className="mx-auto grid max-w-[600px] gap-4 sm:grid-cols-3">
-            {creditPacks.map((pack) => (
+            {creditPacks.map((pack) => {
+              const shownCredits = pack.credits * creditsMultiplier
+              return (
               <button
                 key={pack.id}
                 onClick={() => handleBuyCredits(pack.id)}
                 disabled={buying === pack.id}
-                className="rounded-xl border border-border bg-card p-4 text-center transition hover:border-primary/30 hover:bg-card/80 disabled:opacity-50"
+                className="relative rounded-xl border border-border bg-card p-4 text-center transition hover:border-primary/30 hover:bg-card/80 disabled:opacity-50"
                 style={{ boxShadow: 'var(--shadow-sm)' }}
               >
-                <div className="mb-1 font-mono text-2xl font-bold text-primary">{pack.credits}</div>
-                <div className="text-xs text-muted-foreground">{t('pricing.packUnit', { credits: pack.credits, seconds: pack.credits / 10 })}</div>
+                {isStudioCredits && (
+                  <span className="absolute right-2 top-2 rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-semibold text-red-400">
+                    {t('pricing.studioX2Badge')}
+                  </span>
+                )}
+                <div className="mb-1 font-mono text-2xl font-bold text-primary">{shownCredits}</div>
+                <div className="text-xs text-muted-foreground">{t('pricing.packUnit', { credits: shownCredits, seconds: shownCredits / 10 })}</div>
                 <div className="mt-2 flex items-center justify-center gap-1 text-sm font-semibold">
                   {buying === pack.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShoppingCart className="h-3 w-3" />}
                   {pack.price}
                 </div>
               </button>
-            ))}
+              )
+            })}
           </div>
-          <p className="mx-auto mt-4 max-w-[600px] text-center text-xs text-muted-foreground">
+          <p className="mx-auto mt-3 max-w-[600px] text-center text-xs text-muted-foreground">
+            {isStudioCredits ? t('pricing.studioX2Active') : t('pricing.studioX2Hint')}
+          </p>
+          <p className="mx-auto mt-2 max-w-[600px] text-center text-xs text-muted-foreground">
             {t('pricing.footnote')}
           </p>
         </div>

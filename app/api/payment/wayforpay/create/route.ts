@@ -9,8 +9,10 @@ import {
   getMerchantAccount,
   getMerchantDomain,
   getProduct,
+  creditsForPackage,
   buildPurchaseSignature,
 } from "@/lib/wayforpay";
+import { effectiveTier } from "@/lib/entitlements";
 
 export async function POST(request: Request) {
   const limited = rateLimitByIp(request, "payment:create", RATE_LIMITS.payment);
@@ -31,6 +33,16 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unknown product" }, { status: 400 });
     }
 
+    // Credits are resolved by the user's EFFECTIVE tier at purchase time (Studio => x2, same price) and
+    // frozen into Payment.credits — the callback grants exactly this value, never the base catalog number.
+    const tierAtPurchase = effectiveTier(user);
+    const grantedCredits =
+      product.kind === "credits" ? (creditsForPackage(product.id, tierAtPurchase) ?? product.credits) : product.credits;
+    const productName =
+      product.kind === "credits" && grantedCredits !== product.credits
+        ? `${grantedCredits} credits pack (Studio x2)`
+        : product.name;
+
     const orderReference = `FS-${user.id.slice(0, 8)}-${Date.now()}`;
     const orderDate = Math.floor(Date.now() / 1000);
 
@@ -39,10 +51,10 @@ export async function POST(request: Request) {
         orderReference,
         userId: user.id,
         productId: product.id,
-        productName: product.name,
+        productName,
         amount: product.amount,
         currency: WFP_CURRENCY,
-        credits: product.credits,
+        credits: grantedCredits,
         kind: product.kind,
         tier: product.tier ?? null,
         status: "pending",
@@ -63,7 +75,7 @@ export async function POST(request: Request) {
       ? `${fwdProto}://${fwdHost}`
       : (process.env.NEXTAUTH_URL ?? "https://www.foltum-studio.com");
 
-    const productNames = [product.name];
+    const productNames = [productName];
     const productCounts = [1];
     const productPrices = [product.amount];
 

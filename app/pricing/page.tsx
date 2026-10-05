@@ -1,7 +1,7 @@
 import { auth } from '@/auth'
 import { redirect } from 'next/navigation'
 import { prisma } from '@/lib/db'
-import { hasActiveSubscription } from '@/lib/entitlements'
+import { hasActiveSubscription, effectiveTier } from '@/lib/entitlements'
 import { PricingClient } from './_components/pricing-client'
 
 export default async function PricingPage() {
@@ -18,6 +18,8 @@ export default async function PricingPage() {
     : null
   const active = hasActiveSubscription(user ?? undefined)
   const currentTier = active ? (user?.subscriptionTier ?? null) : null
+  // Effective tier (admins => studio) drives the x2 credit-pack display.
+  const tier = effectiveTier(user ?? undefined)
 
-  return <PricingClient currentTier={currentTier} />
+  return <PricingClient currentTier={currentTier} effectiveTier={tier} />
 }

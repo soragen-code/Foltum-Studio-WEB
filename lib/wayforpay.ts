@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { CREDIT_PACKAGES } from "./credit-packages";
 
 /**
  * WayForPay integration helpers.
@@ -61,14 +62,25 @@ export const WFP_PRODUCTS: Record<string, WfpProduct> = {
   pro: { id: "pro", name: "Foltum Studio — Pro (access plan)", amount: 99, credits: 0, kind: "subscription", tier: "pro" },
   studio: { id: "studio", name: "Foltum Studio — Studio (access plan)", amount: 299, credits: 0, kind: "subscription", tier: "studio" },
   // One-off credit packs
-  mini: { id: "mini", name: "300 credits pack", amount: 19.99, credits: 300, kind: "credits" },
-  plus: { id: "plus", name: "800 credits pack", amount: 49.99, credits: 800, kind: "credits" },
-  max: { id: "max", name: "3000 credits pack", amount: 99.99, credits: 3000, kind: "credits" },
+  // `credits` here is the BASE amount (from lib/credit-packages.ts); see creditsForPackage() for the tier-aware value.
+  ...Object.fromEntries(
+    CREDIT_PACKAGES.map((p) => [p.id, { id: p.id, name: `${p.credits} credits pack`, amount: p.amount, credits: p.credits, kind: "credits" as const }]),
+  ),
 };
 
 export function getProduct(id: string): WfpProduct | null {
   return WFP_PRODUCTS[id] ?? null;
 }
+
+// Tier-aware credit-pack helpers live in lib/credit-packages.ts (client-safe, no secrets) and are re-exported here.
+export {
+  CREDIT_PACKAGE_IDS,
+  CREDIT_PACKAGES,
+  STUDIO_CREDITS_MULTIPLIER,
+  creditsMultiplierForTier,
+  creditsForPackage,
+} from "./credit-packages";
+export type { CreditPackageId } from "./credit-packages";
 
 /**
  * Signature for a Purchase request.
