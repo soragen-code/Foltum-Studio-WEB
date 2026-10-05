@@ -111,14 +111,23 @@ export default async function AdminDramasPage({
                       <td className="px-4 py-2 font-mono text-xs text-muted-foreground">{startIndex + i + 1}</td>
                       <td className="px-4 py-2">
                         <div className="flex items-center gap-3">
-                          {cover ? (
-                            // eslint-disable-next-line @next/next/no-img-element
-                            <img src={cover} alt="" className="h-10 w-7 shrink-0 rounded object-cover" loading="lazy" />
-                          ) : (
-                            <div className="h-10 w-7 shrink-0 rounded bg-muted" />
-                          )}
+                          <Link href={`/admin/dramas/${row.id}`} className="shrink-0" aria-label={t('admin.dramas.open')}>
+                            {cover ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={cover} alt="" className="h-10 w-7 shrink-0 rounded object-cover" loading="lazy" />
+                            ) : (
+                              <div className="h-10 w-7 shrink-0 rounded bg-muted" />
+                            )}
+                          </Link>
                           <div className="min-w-0">
-                            <div className="truncate font-medium" title={row.name}>{row.name}</div>
+                            <Link
+                              href={`/admin/dramas/${row.id}`}
+                              className="block truncate font-medium hover:underline"
+                              title={row.name}
+                              data-testid="admin-drama-open"
+                            >
+                              {row.name}
+                            </Link>
                             <div className="truncate font-mono text-[11px] text-muted-foreground">
                               {row.id}
                               {row.isTest ? <span className="ml-2 rounded bg-muted px-1.5 py-0.5 font-sans text-[10px] uppercase">{t('admin.dramas.test')}</span> : null}

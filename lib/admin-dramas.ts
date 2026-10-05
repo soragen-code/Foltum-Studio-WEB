@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { DRAFT_V2_STAGES } from "@/lib/idea-v2";
+import { DRAFT_V2_STAGES, episodeFinalV2From, parseSeasonPlotV2, type EpisodeFinalV2 } from "@/lib/idea-v2";
+import { pickProjectCoverV2 } from "@/lib/project-cover";
 
 /**
  * /admin/dramas — список ВСЕХ проектов (драм) всех пользователей, отсортированный по числу
@@ -108,5 +109,71 @@ export async function getAdminDramas(opts: { page: number; per: DramasPageSize }
     page,
     pages,
     per,
+  };
+}
+
+/* ───────────── /admin/dramas/[id] — список собранных серий драмы для плеера ───────────── */
+
+export type AdminDramaEpisode = {
+  n: number;
+  videoUrl: string;
+  musicUrl: string | null;
+  updatedAt: string | null;
+  /** Краткое описание серии из сюжета сезона (первые ~160 символов), если есть. */
+  summary: string | null;
+};
+
+export type AdminDramaDetail = {
+  id: string;
+  name: string;
+  ownerEmail: string;
+  ownerName: string | null;
+  episodeCount: number | null;
+  cover: string | null;
+  episodes: AdminDramaEpisode[]; // только status === 'done' с videoUrl, по возрастанию n
+};
+
+export async function getAdminDramaDetail(id: string): Promise<AdminDramaDetail | null> {
+  const p = await prisma.project.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      name: true,
+      episodeCount: true,
+      episodeFinalV2: true,
+      episodeRefsV2: true,
+      seasonPlotV2: true,
+      user: { select: { email: true, name: true } },
+    },
+  });
+  if (!p) return null;
+
+  const plot = parseSeasonPlotV2(p.seasonPlotV2);
+  const summaryOf = (n: number): string | null => {
+    const text = plot?.find((e) => e.n === n)?.text;
+    if (!text) return null;
+    const oneLine = text.replace(/\s+/g, " ").trim();
+    return oneLine.length > 160 ? oneLine.slice(0, 157).trimEnd() + "…" : oneLine;
+  };
+
+  const map = p.episodeFinalV2 && typeof p.episodeFinalV2 === "object" && !Array.isArray(p.episodeFinalV2)
+    ? (p.episodeFinalV2 as Record<string, unknown>)
+    : {};
+  const episodes: AdminDramaEpisode[] = Object.keys(map)
+    .map((k) => Number(k))
+    .filter((n) => Number.isInteger(n) && n > 0)
+    .sort((a, b) => a - b)
+    .map((n) => ({ n, final: episodeFinalV2From(map, n) }))
+    .filter((x): x is { n: number; final: EpisodeFinalV2 & { videoUrl: string } } => !!x.final && x.final.status === "done" && !!x.final.videoUrl)
+    .map(({ n, final }) => ({ n, videoUrl: final.videoUrl, musicUrl: final.musicUrl ?? null, updatedAt: final.updatedAt ?? null, summary: summaryOf(n) }));
+
+  return {
+    id: p.id,
+    name: p.name,
+    ownerEmail: p.user.email,
+    ownerName: p.user.name ?? null,
+    episodeCount: p.episodeCount,
+    cover: pickProjectCoverV2(p.episodeRefsV2),
+    episodes,
   };
 }
