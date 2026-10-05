@@ -118,6 +118,9 @@ export function Header({ projectName = null, projectId = null }: { projectName?:
                         {locale === lc && <Check className="h-4 w-4 text-primary" />}
                       </button>
                     ))}
+                    <p className="px-3 pb-1 pt-0.5 text-[10px] leading-snug text-muted-foreground" data-testid="header-locale-note">
+                      {t('common.languageNote')}
+                    </p>
                   </div>
                   <button
                     onClick={() => signOut({ redirectTo: '/login' })}

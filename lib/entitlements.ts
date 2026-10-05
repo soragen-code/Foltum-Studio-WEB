@@ -42,17 +42,17 @@ export const FEATURE_MIN_TIER: Record<Feature, Tier> = {
 };
 
 /** Human-readable labels for UI / pricing (RU + EN). */
-export const FEATURE_LABELS: Record<Feature, { ru: string; en: string }> = {
-  auto_generate: { ru: "Автоматическая генерация сериала", en: "Automatic series generation" },
-  prompt_instruct_edit: { ru: "Правки промптом", en: "Edits by instruction" },
-  manual_mode: { ru: "Ручной режим", en: "Manual mode" },
-  manual_prompt_edit: { ru: "Правка промптов в ручном режиме", en: "Prompt editing in manual mode" },
-  prompt_view: { ru: "Просмотр промптов генерации", en: "View generation prompts" },
-  prompt_edit: { ru: "Редактирование промптов генерации", en: "Edit generation prompts" },
-  own_references: { ru: "Свои референсы персонажей и локаций", en: "Own character & location references" },
+export const FEATURE_LABELS: Record<Feature, { ru: string; en: string; uk: string }> = {
+  auto_generate: { ru: "Автоматическая генерация сериала", en: "Automatic series generation", uk: "Автоматична генерація серіалу" },
+  prompt_instruct_edit: { ru: "Правки промптом", en: "Edits by instruction", uk: "Правки промптом" },
+  manual_mode: { ru: "Ручной режим", en: "Manual mode", uk: "Ручний режим" },
+  manual_prompt_edit: { ru: "Правка промптов в ручном режиме", en: "Prompt editing in manual mode", uk: "Правка промптів у ручному режимі" },
+  prompt_view: { ru: "Просмотр промптов генерации", en: "View generation prompts", uk: "Перегляд промптів генерації" },
+  prompt_edit: { ru: "Редактирование промптов генерации", en: "Edit generation prompts", uk: "Редагування промптів генерації" },
+  own_references: { ru: "Свои референсы персонажей и локаций", en: "Own character & location references", uk: "Власні референси персонажів і локацій" },
 };
 
-/** Display name of a tier (same in RU/EN). */
+/** Display name of a tier (same in RU/EN/UK). */
 export const TIER_NAMES: Record<Tier, string> = { free: "Free", basic: "Basic", pro: "Pro", studio: "Studio" };
 
 /** Minimal shape of the user needed to evaluate entitlements. */

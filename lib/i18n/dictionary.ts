@@ -1426,6 +1426,23 @@ const uk: Dict = {
 
 export const DICTIONARIES: Record<Locale, Dict> = { ru, en, uk }
 
+/** BCP-47 tag per UI locale — for Intl formatting (dates, numbers). */
+export const DATE_LOCALES: Record<Locale, string> = { ru: 'ru-RU', en: 'en-US', uk: 'uk-UA' }
+
+// Dev-time guard: every locale must carry exactly the `ru` key set (the dict is Record<string,string>, so TS can't check it).
+if (process.env.NODE_ENV !== 'production') {
+  const ruKeys = new Set(Object.keys(ru))
+  for (const lc of LOCALES) {
+    if (lc === 'ru') continue
+    const keys = new Set(Object.keys(DICTIONARIES[lc]))
+    const missing = [...ruKeys].filter((k) => !keys.has(k))
+    const extra = [...keys].filter((k) => !ruKeys.has(k))
+    if (missing.length || extra.length) {
+      console.warn(`[i18n] locale "${lc}" key mismatch vs ru — missing: ${missing.join(', ') || '—'}; extra: ${extra.join(', ') || '—'}`)
+    }
+  }
+}
+
 /** Interpolate {placeholder} tokens with the provided params. */
 export function interpolate(text: string, params?: Record<string, string | number>): string {
   if (!params) return text

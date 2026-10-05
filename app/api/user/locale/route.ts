@@ -19,7 +19,7 @@ export async function GET() {
   }
 }
 
-// PATCH { locale: "ru" | "en" } — persist the current user's UI language.
+// PATCH { locale: "ru" | "en" | "uk" } — persist the current user's UI language.
 export async function PATCH(req: Request) {
   try {
     const session = await auth()

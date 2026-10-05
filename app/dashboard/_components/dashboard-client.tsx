@@ -8,6 +8,7 @@ import { Header } from '@/components/header'
 import { Film, Plus, Clapperboard, Clock, ChevronRight, Sparkles, Zap, Crown, Trash2, Loader2, Wand2, Lock } from 'lucide-react'
 import { motion } from 'framer-motion'
 import { useTranslation } from '@/lib/i18n/context'
+import { DATE_LOCALES } from '@/lib/i18n/dictionary'
 import { useFeature, GatedButton } from '@/components/entitlements-context'
 
 interface Project {
@@ -265,7 +266,7 @@ export function DashboardClient() {
                     </div>
                     <div className="mt-3 flex items-center gap-1 text-xs text-muted-foreground">
                       <Clock className="h-3 w-3" />
-                      {t('dashboard.created', { date: project?.createdAt ? new Date(project.createdAt).toLocaleDateString(locale === 'ru' ? 'ru-RU' : 'en-US', { timeZone: 'UTC' }) : '' })}
+                      {t('dashboard.created', { date: project?.createdAt ? new Date(project.createdAt).toLocaleDateString(DATE_LOCALES[locale] ?? 'en-US', { timeZone: 'UTC' }) : '' })}
                     </div>
                   </Link>
                   <div className="flex flex-wrap items-center justify-end gap-2 px-5 pb-4">
