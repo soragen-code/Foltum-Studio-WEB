@@ -2,12 +2,14 @@ export const dynamic = "force-dynamic";
 import { NextResponse } from 'next/server'
 import { auth } from '@/auth'
 import { prisma } from '@/lib/db'
-import { isDraftProjectV2 } from '@/lib/idea-v2'
+import { isDraftProjectV2, IDEA_V2_JOB_TYPES, ACTIVE_JOB_STATUSES } from '@/lib/idea-v2'
 
 /**
- * POST /api/projects/[id]/discard — удаляет проект ТОЛЬКО если он ещё черновик (сюжет сезона не утверждён).
- * Вызывается с клиента при уходе со страницы проекта (navigator.sendBeacon / fetch keepalive), поэтому
- * безопасен к запоздалым вызовам: утверждённый проект никогда не удаляется. Owner-only.
+ * POST /api/projects/[id]/discard — удаляет проект ТОЛЬКО если он ещё черновик (синопсис не готов: стадия
+ * idea/logline_v2 или synopsis_v2 с пустым синопсисом). Вызывается с клиента при уходе со страницы проекта
+ * (navigator.sendBeacon / fetch keepalive), поэтому безопасен к запоздалым вызовам: проект с готовым синопсисом
+ * никогда не удаляется. Пока крутится фоновая задача синопсиса/сюжета (вкладку закрыли во время генерации) —
+ * тоже не удаляем (busy): задача допишет синопсис, и проект останется. Owner-only.
  */
 export async function POST(
   _request: Request,
@@ -22,10 +24,15 @@ export async function POST(
 
     const project = await prisma.project.findFirst({
       where: { id, userId: user.id },
-      select: { id: true, stage: true, newFlow: true, seasonPlotV2: true },
+      select: { id: true, stage: true, newFlow: true, synopsis: true, seasonPlotV2: true },
     })
     if (!project) return NextResponse.json({ ok: true, discarded: false })
     if (!isDraftProjectV2(project)) return NextResponse.json({ ok: true, discarded: false })
+    const busy = await prisma.generationJob.findFirst({
+      where: { projectId: project.id, type: { in: [...IDEA_V2_JOB_TYPES] }, status: { in: [...ACTIVE_JOB_STATUSES] } },
+      select: { id: true },
+    })
+    if (busy) return NextResponse.json({ ok: true, discarded: false, busy: true })
 
     await prisma.$transaction(async (tx) => {
       await tx.generationJob.deleteMany({ where: { projectId: project.id } })

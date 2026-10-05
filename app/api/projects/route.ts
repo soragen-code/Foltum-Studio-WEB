@@ -6,10 +6,10 @@ import { parseBody, createProjectSchema } from '@/lib/validations'
 import { legacyTierToPower, powerToLegacyTier, DEFAULT_POWER_TIER } from '@/lib/power-tier'
 import { PLACEHOLDER_PROJECT_NAME } from '@/lib/project-name'
 import { pickProjectCover } from '@/lib/project-cover'
-import { DRAFT_V2_STAGES } from '@/lib/idea-v2'
+import { DRAFT_V2_WHERE, IDEA_V2_JOB_TYPES, ACTIVE_JOB_STATUSES } from '@/lib/idea-v2'
 import { denyFeature } from '@/lib/feature-gate'
 
-// Черновики (сюжет сезона не утверждён) не сохраняются: скрыты из списка, а брошенные дольше этого срока удаляются.
+// Черновики (синопсис ещё не готов) не сохраняются: скрыты из списка, а брошенные дольше этого срока удаляются.
 const STALE_DRAFT_MS = 2 * 60 * 60 * 1000
 
 export async function GET() {
@@ -21,17 +21,24 @@ export async function GET() {
     const user = await prisma.user.findUnique({ where: { email: session.user.email } })
     if (!user) return NextResponse.json({ projects: [] }, { status: 401 })
 
-    // Черновики v2 (stage idea/logline_v2/synopsis_v2) не сохраняются: обычно их удаляет discard при уходе
-    // со страницы, а брошенные (закрытая вкладка, обрыв) — подчищаем здесь. GenerationJob без FK → явно.
-    const draftWhere = { userId: user.id, newFlow: true, stage: { in: [...DRAFT_V2_STAGES] } }
+    // Черновики v2 (stage idea/logline_v2, либо synopsis_v2 без синопсиса) не сохраняются: обычно их удаляет
+    // discard при уходе со страницы, а брошенные (закрытая вкладка, обрыв) — подчищаем здесь. Проект с готовым
+    // синопсисом — не черновик, сохраняется. Проекты с активной фоновой задачей синопсиса/сюжета не трогаем.
+    // GenerationJob без FK → явно.
+    const draftWhere = { userId: user.id, ...DRAFT_V2_WHERE }
     try {
       const stale = await prisma.project.findMany({
         where: { ...draftWhere, updatedAt: { lt: new Date(Date.now() - STALE_DRAFT_MS) } },
         select: { id: true },
       })
       if (stale.length) {
-        const ids = stale.map((p) => p.id)
-        await prisma.$transaction([
+        const busy = await prisma.generationJob.findMany({
+          where: { projectId: { in: stale.map((p) => p.id) }, type: { in: [...IDEA_V2_JOB_TYPES] }, status: { in: [...ACTIVE_JOB_STATUSES] } },
+          select: { projectId: true },
+        })
+        const busyIds = new Set(busy.map((j) => j.projectId))
+        const ids = stale.map((p) => p.id).filter((id) => !busyIds.has(id))
+        if (ids.length) await prisma.$transaction([
           prisma.generationJob.deleteMany({ where: { projectId: { in: ids } } }),
           prisma.project.deleteMany({ where: { id: { in: ids }, ...draftWhere } }),
         ])

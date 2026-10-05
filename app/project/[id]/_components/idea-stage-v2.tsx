@@ -201,12 +201,27 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   const [inputSaved, setInputSaved] = useState(false)
   const [savingInput, setSavingInput] = useState(false)
 
+  // Только что сгенерированный результат (из завершённой job) — показывается сразу, пока `project` не подтянется
+  // через onRefresh: без этого между завершением задачи и ответом /api/projects/[id] результат «пропадал» на секунду.
+  // Снимается эффектом ниже, когда project уже содержит этот же текст (`freshOut`). Новый синопсис обнуляет сюжет (бэкенд его стирает).
+  const [freshOut, setFreshOut] = useState<{ synopsis: string; plot: string }>({ synopsis: '', plot: '' })
+  const projectSynopsis = String(project?.synopsis ?? '').trim()
+  const projectPlot = String(project?.seasonPlotV2 ?? '').trim()
+  useEffect(() => {
+    setFreshOut((f) => {
+      const synopsis = f.synopsis && f.synopsis === projectSynopsis ? '' : f.synopsis
+      const plot = f.plot && f.plot === projectPlot ? '' : f.plot
+      return synopsis === f.synopsis && plot === f.plot ? f : { synopsis, plot }
+    })
+  }, [projectSynopsis, projectPlot])
+  useEffect(() => { setFreshOut({ synopsis: '', plot: '' }) }, [project?.id])
+
   // ─── Данные проекта
-  const stage = project?.stage
-  const savedSynopsis = String(project?.synopsis ?? '').trim()
+  const stage = freshOut.plot ? SEASON_PLOT_V2_STAGE : freshOut.synopsis ? SYNOPSIS_V2_STAGE : project?.stage
+  const savedSynopsis = freshOut.synopsis || projectSynopsis
   const hasSynopsis = (stage === SYNOPSIS_V2_STAGE || stage === SEASON_PLOT_V2_STAGE) && !!savedSynopsis && !downstreamReset
   // Шаг 3: сюжет сезона по сериям (Project.seasonPlotV2) — есть только на стадии season_plot_v2 (правка синопсиса его сбрасывает).
-  const savedPlot = String(project?.seasonPlotV2 ?? '').trim()
+  const savedPlot = freshOut.plot || (freshOut.synopsis ? '' : projectPlot)
   const hasPlot = stage === SEASON_PLOT_V2_STAGE && hasSynopsis && !!savedPlot
   // Сюжет сезона утверждён → шаги 1–3 только для чтения; редактируются лишь сценарии серий (страница эпизода).
   const locked = stage === SEASON_PLOT_V2_STAGE && !!savedPlot
@@ -355,6 +370,8 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
         setPlotRefineText(''); setPlotRefineEn(''); setPlotBase(''); setPlotTurns([]); lastPlotRefineRef.current = ''
       }
       setInputDirty(false); setInputSaved(true); setDownstreamReset(false)
+      // Результат — сразу на экран (см. `freshOut`): не ждём onRefresh, иначе результат мигает/пропадает.
+      if (fresh) setFreshOut((f) => (k === 'plot' ? { ...f, plot: fresh } : { synopsis: fresh, plot: '' }))
       setView(k)
       onRefresh()
     } else if (res.job.status === 'canceled') {
@@ -936,7 +953,7 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
           </div>
 
           <div className={`mt-4 ${SYNOPSIS_TEXT_CLS}`} data-testid="idea-v2-result-text">
-            {String(project.synopsis).trim()}
+            {savedSynopsis}
           </div>
           <p className="mt-3 text-xs text-muted-foreground">{t('ideaV2.synopsisSaved')}</p>
           {inputDirty && (

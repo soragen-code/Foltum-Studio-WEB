@@ -17,9 +17,10 @@ import { GenerateLocked } from '@/components/generate-locked'
 export function ProjectWizard({ project: initialProject, entitlements = NO_ENTITLEMENTS }: { project: any; entitlements?: Entitlements }) {
   const [project, setProject] = useState(initialProject)
 
-  // Черновик (сюжет сезона не утверждён) не сохраняется: при уходе со страницы — закрытие вкладки,
-  // переход на дашборд, размонтирование — просим сервер удалить проект (он сам проверит, что это черновик).
-  // Ref читается в момент ухода, чтобы учитывать свежий stage после onRefresh.
+  // Черновик (синопсис ещё не готов: стадия идеи/логлайна) не сохраняется: при уходе со страницы — закрытие вкладки,
+  // переход на дашборд, размонтирование — просим сервер удалить проект (он сам проверит, что это черновик и что
+  // по нему не крутится фоновая генерация синопсиса/сюжета). С готовым синопсисом проект сохраняется.
+  // Ref читается в момент ухода, чтобы учитывать свежий stage/synopsis после onRefresh.
   const isDraftRef = useRef(isDraftProjectV2(project))
   isDraftRef.current = isDraftProjectV2(project)
   const projectId: string | undefined = project?.id
