@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useSession, signOut } from 'next-auth/react'
-import { Coins, Film, LogOut, User, CreditCard, Crown, Languages, Check } from 'lucide-react'
+import { Coins, Film, LogOut, User, CreditCard, Crown, Languages, Check, ShieldCheck } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { hasActiveSubscription } from '@/lib/entitlements'
@@ -51,6 +51,17 @@ export function Header({ projectName = null, projectId = null }: { projectName?:
 
         {session?.user ? (
           <div className="flex items-center gap-3">
+            {/* Admin / test account only (session.user.isAdmin from auth.ts ← lib/admin.ts). Owner-facing, not localized. */}
+            {sessionUser?.isAdmin ? (
+              <Link
+                href="/admin"
+                className="flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-3 py-1.5 text-sm font-semibold text-primary transition hover:bg-primary/20"
+                data-testid="header-admin-link"
+              >
+                <ShieldCheck className="h-4 w-4" />
+                Админ
+              </Link>
+            ) : null}
             {activeSub ? (
               <Link
                 href="/pricing"

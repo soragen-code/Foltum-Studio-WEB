@@ -14,7 +14,7 @@ export const dynamic = 'force-dynamic'
 export default async function ManualPage() {
   const session = await auth()
   if (!session?.user) redirect('/login')
-  const user = await prisma.user.findUnique({ where: { email: session.user.email! }, select: { subscriptionTier: true, subscriptionExpiresAt: true } })
+  const user = await prisma.user.findUnique({ where: { email: session.user.email! }, select: { email: true, subscriptionTier: true, subscriptionExpiresAt: true } })
   if (!canUse(user, 'manual_mode')) return <ManualLocked />
   return <ManualClient />
 }

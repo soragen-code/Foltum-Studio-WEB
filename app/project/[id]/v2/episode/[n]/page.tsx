@@ -20,7 +20,7 @@ export default async function EpisodeV2Page({ params }: { params: Promise<{ id: 
   if (!session?.user) redirect('/login')
   const { id, n: nRaw } = await params
 
-  const user = await prisma.user.findUnique({ where: { email: session.user.email! }, select: { id: true, subscriptionTier: true, subscriptionExpiresAt: true } })
+  const user = await prisma.user.findUnique({ where: { email: session.user.email! }, select: { id: true, email: true, subscriptionTier: true, subscriptionExpiresAt: true } })
   if (!user) redirect('/login')
   // Матрица доступов по тарифу (Basic/Pro/Studio) — считается на сервере, клиент читает через useEntitlements().
   const entitlements = computeEntitlements(user)

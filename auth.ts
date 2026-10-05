@@ -3,6 +3,7 @@ import CredentialsProvider from 'next-auth/providers/credentials'
 import { PrismaAdapter } from '@auth/prisma-adapter'
 import { prisma } from '@/lib/db'
 import bcrypt from 'bcryptjs'
+import { isAdminEmail } from '@/lib/admin'
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   trustHost: true,
@@ -60,6 +61,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
               subscriptionExpiresAt: true,
               credits: true,
               locale: true,
+              email: true,
             },
           })
           if (dbUser) {
@@ -69,6 +71,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
               : null
             ;(token as any).credits = dbUser.credits ?? 0
             ;(token as any).locale = dbUser.locale ?? 'ru'
+            // Admin / test account flag (lib/admin.ts) — drives the «Админ» header button and /admin access.
+            ;(token as any).isAdmin = isAdminEmail(dbUser.email)
           }
         } catch {
           // Never break auth if the read fails — the session keeps its previous values.
@@ -84,6 +88,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         u.subscriptionExpiresAt = (token as any).subscriptionExpiresAt ?? null
         u.credits = (token as any).credits ?? 0
         u.locale = (token as any).locale ?? 'ru'
+        u.isAdmin = Boolean((token as any).isAdmin)
       }
       return session
     },

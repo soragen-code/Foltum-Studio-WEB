@@ -69,7 +69,7 @@ export async function POST(request: Request) {
     if (limited) return limited;
 
     // Feature gate: uploading a real face photo ("own_references") requires an active Studio subscription.
-    const gateUser = await prisma.user.findUnique({ where: { id: session.user.id }, select: { subscriptionTier: true, subscriptionExpiresAt: true } });
+    const gateUser = await prisma.user.findUnique({ where: { id: session.user.id }, select: { email: true, subscriptionTier: true, subscriptionExpiresAt: true } });
     const denied = requireFeature(gateUser, "own_references");
     if (denied) return NextResponse.json(denied, { status: 403 });
 

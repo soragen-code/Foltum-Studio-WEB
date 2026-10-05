@@ -13,7 +13,7 @@ export default async function PricingPage() {
   const user = email
     ? await prisma.user.findUnique({
         where: { email },
-        select: { subscriptionTier: true, subscriptionExpiresAt: true },
+        select: { email: true, subscriptionTier: true, subscriptionExpiresAt: true },
       })
     : null
   const active = hasActiveSubscription(user ?? undefined)

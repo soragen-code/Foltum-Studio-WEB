@@ -6,7 +6,9 @@
  * Basic is the entry ticket; Pro/Studio unlock the premium features below on top of it.
  *
  * Add a new capability by extending `Feature` and `FEATURE_MIN_TIER` (and `FEATURE_LABELS` for UI).
+ * Admin / test accounts (lib/admin.ts) bypass every gate — pass `email` in `EntitlementUser` for that.
  */
+import { isAdminEmail } from "@/lib/admin";
 
 export type Feature =
   | "auto_generate" // create projects & run the automatic v2 pipeline (idea → synopsis → plot → episodes); Basic+ only
@@ -59,6 +61,8 @@ export const TIER_NAMES: Record<Tier, string> = { free: "Free", basic: "Basic", 
 export type EntitlementUser = {
   subscriptionTier?: string | null;
   subscriptionExpiresAt?: Date | string | null;
+  /** Optional — when present, admin / test accounts (lib/admin.ts) bypass every gate. */
+  email?: string | null;
 };
 
 function tierRank(tier: string | null | undefined): number {
@@ -84,6 +88,8 @@ export function hasActiveSubscription(user: EntitlementUser | null | undefined):
 
 /** True when the user has an active subscription whose tier is high enough for `feature`. */
 export function canUse(user: EntitlementUser | null | undefined, feature: Feature): boolean {
+  // Admin / test account: everything is available regardless of subscription.
+  if (isAdminEmail(user?.email)) return true;
   const required = FEATURE_MIN_TIER[feature];
   if (required === "free") return true;
   if (!hasActiveSubscription(user)) return false;
@@ -92,6 +98,7 @@ export function canUse(user: EntitlementUser | null | undefined, feature: Featur
 
 /** Effective tier of the user ("free" when there is no active subscription). */
 export function effectiveTier(user: EntitlementUser | null | undefined): Tier {
+  if (isAdminEmail(user?.email)) return "studio";
   if (!hasActiveSubscription(user)) return "free";
   const t = user!.subscriptionTier as Tier;
   return TIER_ORDER.includes(t) ? t : "free";
