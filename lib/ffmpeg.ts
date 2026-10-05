@@ -54,6 +54,11 @@ async function runFfmpeg(args: string[], label: string, opts?: { cwd?: string })
   }
 }
 
+/** Public thin wrapper over the internal runFfmpeg (same flags, 32 MB buffer, 10 min timeout, stderr tail on error). */
+export async function runFfmpegPlain(args: string[], label: string): Promise<string> {
+  return runFfmpeg(args, label);
+}
+
 /**
  * Stage 46B — run ffmpeg with `-progress pipe:1` and report REAL render progress (0–100 % of
  * `totalSec`) through `onPct`. Used for the final episode render so the job bar shows how far the

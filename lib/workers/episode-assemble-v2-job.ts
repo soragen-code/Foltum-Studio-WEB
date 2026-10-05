@@ -2,8 +2,9 @@
  * Фоновый воркер потока v2 (вкладка «Сцены», кнопка «Собрать эпизод»): склеивает видео всех сцен серии
  * в порядке index в один финальный mp4 (H.264 + AAC, 1080×1920, 24 fps) через ffmpeg-static и грузит в S3.
  * Клипы перекодируются единообразно (scale/pad + fps + stereo 44.1k; клип без звука получает тишину),
- * звук каждого клипа подгоняется точно под длину его видео (apad+atrim) и получает короткие фейды на стыках,
- * затем concat-фильтр — надёжно для клипов с разными параметрами.
+ * звук каждого клипа подгоняется точно под длину его видео (apad+atrim) и получает короткие фейды на стыках.
+ * Двухэтапно (низкая пиковая память, короткие процессы): каждый клип нормализуется отдельным ffmpeg, затем
+ * склейка concat demuxer'ом с -c copy; музыка — финальным проходом только по аудио (видео копируется).
  * Музыка: клипы Seedance генерируются БЕЗ музыки (блок AUDIO в sceneVideoV2Prompt), а при склейке под всю серию
  * подкладывается ОДИН фоновый трек ACE-Step 1.5 (теги настроения — LLM по сценарию серии): тихо (MUSIC_VOLUME),
  * с приглушением под реплики/звук сцены (sidechaincompress) и фейдами в начале/конце. Если музыка не сгенерировалась —
@@ -15,7 +16,7 @@ import path from "path";
 import { prisma } from "@/lib/db";
 import { uploadBufferToS3 } from "@/lib/s3-upload";
 import { completeJob, failJob, heartbeatJob, updateJob } from "@/lib/jobs";
-import { downloadToFile, mapWithConcurrency, probeMedia, runFfmpegWithProgress } from "@/lib/ffmpeg";
+import { downloadToFile, mapWithConcurrency, probeMedia, runFfmpegPlain, runFfmpegWithProgress } from "@/lib/ffmpeg";
 import {
   allSceneVideosReady, episodeScenesV2From, episodeScriptV2From,
   EPISODE_MUSIC_FALLBACK_TAGS_V2, episodeMusicTagsV2SystemPrompt, episodeMusicTagsV2UserPrompt, normalizeEpisodeMusicTagsV2,
@@ -37,6 +38,37 @@ const MUSIC_VOLUME = 0.25;
 /** Фейды музыки в начале и в конце серии (с). */
 const MUSIC_FADE_IN_SEC = 1.5;
 const MUSIC_FADE_OUT_SEC = 2.5;
+/** Сколько клипов нормализуется параллельно (каждый — отдельный процесс ffmpeg). */
+const NORMALIZE_CONCURRENCY = 2;
+
+/**
+ * ЭТАП 1: аргументы ffmpeg для нормализации ОДНОГО клипа в единый формат (1080×1920, 24 fps, yuv420p, H.264 crf 20,
+ * AAC 192k stereo 44.1k, одинаковый timescale) — чтобы склейка шла concat demuxer'ом с -c copy.
+ * Видео обрезается до длины видео клипа; звук подгоняется ТОЧНО под неё (apad + atrim) — иначе склейка сдвигает весь
+ * дальнейший звук относительно видео. Короткие fade-in/out на стыках (без них звук клипа обрывается щелчком);
+ * клип без звука получает тишину (anullsrc) без фейдов.
+ */
+export function normalizeClipArgs(input: string, inf: { videoDuration?: number; duration?: number; hasAudio?: boolean }, dest: string): string[] {
+  const d = inf.videoDuration || inf.duration || 0;
+  const silent = !inf.hasAudio;
+  const args = ["-i", input];
+  if (silent) args.push("-f", "lavfi", "-t", String(Math.max(0.1, d || 5)), "-i", "anullsrc=r=44100:cl=stereo");
+  const vTrim = d > 0 ? `trim=0:${d.toFixed(3)},setpts=PTS-STARTPTS,` : "";
+  const aTrim = d > 0 ? `apad,atrim=0:${d.toFixed(3)},asetpts=PTS-STARTPTS,` : "";
+  const fadeD = Math.min(AUDIO_FADE_SEC, d > 0 ? d / 2 : AUDIO_FADE_SEC);
+  const aFade = d > 0 && !silent
+    ? `afade=t=in:st=0:d=${fadeD.toFixed(3)}:curve=qsin,afade=t=out:st=${Math.max(0, d - fadeD).toFixed(3)}:d=${fadeD.toFixed(3)}:curve=qsin,`
+    : "";
+  const graph =
+    `[0:v]${vTrim}scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${FPS},format=yuv420p[v];` +
+    `[${silent ? "1:a" : "0:a:0"}]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,${aTrim}${aFade}asetpts=PTS-STARTPTS[a]`;
+  args.push(
+    "-filter_complex", graph, "-map", "[v]", "-map", "[a]",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p", "-r", String(FPS), "-video_track_timescale", "12288",
+    "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", "-movflags", "+faststart", dest,
+  );
+  return args;
+}
 
 /** Теги настроения для ACE-Step по сценарию серии (LLM); при любой ошибке — нейтральный кинематографичный fallback. */
 async function episodeMusicTags(projectId: string, episode: number): Promise<string> {
@@ -97,68 +129,63 @@ export async function runEpisodeAssembleV2Job(jobId: string, projectId: string, 
     // Один фоновый трек на всю серию (ACE-Step 1.5). Ошибка музыки не валит склейку.
     await updateJob(jobId, { progress: 25, message: "Generating episode music..." });
     const music = totalSec > 0 ? await prepareEpisodeMusic(projectId, episode, totalSec, dir) : null;
-    await updateJob(jobId, { progress: 30, message: "Stitching clips..." });
+    await updateJob(jobId, { progress: 30, message: "Normalizing clips..." });
 
-    // Входы: клипы, затем по одному anullsrc на клип без звука.
-    const args: string[] = [];
-    for (const f of files) args.push("-i", f);
-    const silentIdx = new Map<number, number>();
-    infos.forEach((inf, i) => {
-      if (!inf.hasAudio) {
-        silentIdx.set(i, files.length + silentIdx.size);
-        args.push("-f", "lavfi", "-t", String(Math.max(0.1, inf.videoDuration || inf.duration || 5)), "-i", "anullsrc=r=44100:cl=stereo");
-      }
+    // Двухэтапный конвейер (вместо одного гигантского filter_complex, который декодировал ВСЕ клипы 1080p разом
+    // и падал по OOM / SIGKILL 600с-таймера): ЭТАП 1 — каждый клип нормализуется ОТДЕЛЬНЫМ коротким процессом
+    // (память на один клип); ЭТАП 2 — склейка concat demuxer -c copy, музыка — финальным проходом только по аудио.
+    const out = path.join(dir, "episode.mp4");
+    const joined = music ? path.join(dir, "joined.mp4") : out;
+    const single = files.length === 1;
+    let done = 0;
+    const normFiles = await mapWithConcurrency(files, NORMALIZE_CONCURRENCY, async (f, i) => {
+      const dest = single ? joined : path.join(dir, `clip_norm_${String(i).padStart(3, "0")}.mp4`);
+      await runFfmpegPlain(normalizeClipArgs(f, infos[i], dest), `v2 normalize clip ${i + 1}/${files.length}`);
+      done++;
+      void updateJob(jobId, { progress: 30 + Math.round((done / files.length) * 50), message: `Normalizing clips ${done}/${files.length}...` });
+      return dest;
     });
-    const parts: string[] = [];
-    const concatIn: string[] = [];
-    infos.forEach((inf, i) => {
-      const d = inf.videoDuration || inf.duration;
-      const vTrim = d > 0 ? `trim=0:${d.toFixed(3)},setpts=PTS-STARTPTS,` : "";
-      parts.push(`[${i}:v]${vTrim}scale=${W}:${H}:force_original_aspect_ratio=decrease,pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${FPS},format=yuv420p[v${i}]`);
-      const aSrc = silentIdx.has(i) ? `${silentIdx.get(i)}:a` : `${i}:a:0`;
-      // Звук выравнивается ТОЧНО по длине видео клипа (apad + atrim): если дорожка короче/длиннее картинки,
-      // concat без этого сдвигает весь дальнейший звук относительно видео («музыка не совпадает»).
-      const aTrim = d > 0 ? `apad,atrim=0:${d.toFixed(3)},asetpts=PTS-STARTPTS,` : "";
-      // Короткий fade-in/out на стыках: музыка/атмосфера каждого клипа генерируется отдельно, без фейдов
-      // на монтажной склейке она обрывается щелчком. Клипы с тишиной фейды не меняют.
-      const fadeD = Math.min(AUDIO_FADE_SEC, d > 0 ? d / 2 : AUDIO_FADE_SEC);
-      const aFade = d > 0 && !silentIdx.has(i)
-        ? `afade=t=in:st=0:d=${fadeD.toFixed(3)}:curve=qsin,afade=t=out:st=${Math.max(0, d - fadeD).toFixed(3)}:d=${fadeD.toFixed(3)}:curve=qsin,`
-        : "";
-      parts.push(`[${aSrc}]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,${aTrim}${aFade}asetpts=PTS-STARTPTS[a${i}]`);
-      concatIn.push(`[v${i}][a${i}]`);
-    });
+
+    if (!single) {
+      await updateJob(jobId, { progress: 85, message: "Stitching clips..." });
+      const listPath = path.join(dir, "concat.txt");
+      const escape = (p: string) => p.replace(/'/g, "'\\''");
+      await fs.writeFile(listPath, normFiles.map((c) => `file '${escape(c)}'`).join("\n") + "\n");
+      await runFfmpegPlain(
+        ["-f", "concat", "-safe", "0", "-i", listPath, "-map", "0:v:0", "-map", "0:a:0", "-c", "copy", "-movflags", "+faststart", joined],
+        "v2 episode concat (copy)",
+      );
+    }
+
     if (music) {
-      // Музыка — последний вход (после anullsrc). Трек подгоняется под длину серии (-stream_loop на случай короткого трека +
-      // apad/atrim), приглушается (MUSIC_VOLUME), фейды на входе/выходе и ducking под звук клипов (sidechaincompress:
-      // сайдчейн — склеенная дорожка сцен), затем amix без нормализации, длина — по дорожке сцен.
-      const musicIdx = files.length + silentIdx.size;
-      args.push("-stream_loop", "-1", "-i", music.file);
+      // Музыка: трек подгоняется под длину серии (-stream_loop на случай короткого трека + apad/atrim), приглушается
+      // (MUSIC_VOLUME), фейды на входе/выходе и ducking под звук клипов (sidechaincompress: сайдчейн — склеенная дорожка
+      // сцен [0:a] joined.mp4), затем amix без нормализации, длина — по дорожке сцен. Видео копируется без перекодирования.
       const T = totalSec.toFixed(3);
       const fadeIn = Math.min(MUSIC_FADE_IN_SEC, totalSec / 2);
       const fadeOut = Math.min(MUSIC_FADE_OUT_SEC, totalSec / 2);
-      parts.push(`${concatIn.join("")}concat=n=${files.length}:v=1:a=1[vout][acat]`);
-      parts.push(`[acat]asplit=2[acat1][acat2]`);
-      parts.push(
-        `[${musicIdx}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,apad,atrim=0:${T},asetpts=PTS-STARTPTS,` +
-        `volume=${MUSIC_VOLUME},afade=t=in:st=0:d=${fadeIn.toFixed(3)}:curve=qsin,afade=t=out:st=${Math.max(0, totalSec - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}:curve=qsin[mus]`,
+      const graph = [
+        `[0:a]asplit=2[acat1][acat2]`,
+        `[1:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo,apad,atrim=0:${T},asetpts=PTS-STARTPTS,` +
+          `volume=${MUSIC_VOLUME},afade=t=in:st=0:d=${fadeIn.toFixed(3)}:curve=qsin,afade=t=out:st=${Math.max(0, totalSec - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}:curve=qsin[mus]`,
+        `[mus][acat1]sidechaincompress=threshold=0.04:ratio=4:attack=120:release=600:makeup=1[musd]`,
+        `[acat2][musd]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]`,
+      ].join(";");
+      let lastPct = -1;
+      await runFfmpegWithProgress(
+        [
+          "-i", joined, "-stream_loop", "-1", "-i", music.file,
+          "-filter_complex", graph, "-map", "0:v:0", "-map", "[aout]",
+          "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2", "-movflags", "+faststart", out,
+        ],
+        "v2 episode music mix",
+        totalSec,
+        (pct) => {
+          const p = 85 + Math.round(pct * 0.07);
+          if (p !== lastPct) { lastPct = p; void updateJob(jobId, { progress: p, message: `Mixing music ${pct}%...` }); }
+        },
       );
-      parts.push(`[mus][acat1]sidechaincompress=threshold=0.04:ratio=4:attack=120:release=600:makeup=1[musd]`);
-      parts.push(`[acat2][musd]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]`);
-    } else {
-      parts.push(`${concatIn.join("")}concat=n=${files.length}:v=1:a=1[vout][aout]`);
     }
-    const out = path.join(dir, "episode.mp4");
-    args.push(
-      "-filter_complex", parts.join(";"), "-map", "[vout]", "-map", "[aout]",
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
-      "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", out,
-    );
-    let lastPct = -1;
-    await runFfmpegWithProgress(args, "v2 episode assemble", totalSec, (pct) => {
-      const p = 30 + Math.round(pct * 0.6);
-      if (p !== lastPct) { lastPct = p; void updateJob(jobId, { progress: p, message: `Stitching ${pct}%...` }); }
-    });
 
     await updateJob(jobId, { progress: 92, message: "Uploading final video..." });
     const url = await uploadBufferToS3(await fs.readFile(out), `media/public/episode-${projectId}-${episode}-${Date.now()}.mp4`, "video/mp4");
