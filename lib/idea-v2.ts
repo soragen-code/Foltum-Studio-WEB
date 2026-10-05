@@ -151,6 +151,18 @@ export function normalizeEpisodesCount(value: unknown): number {
 }
 
 /**
+ * Жёсткая директива языка вывода — первой строкой system синопсиса / сюжета / сценария v2.
+ * Нужна потому, что идея, пожелания и все правки уходят в модель уже переведёнными на английский,
+ * а одна строка «OUTPUT LANGUAGE» в самом конце правил (и после блока continuity у сценария) модель
+ * нередко игнорировала — текст приходил на английском вместо выбранного на странице идеи языка.
+ * `what` — что именно пишем ("synopsis" | "season plot" | "episode script").
+ */
+export function v2OutputLanguageDirective(language: string, what: string): string {
+  const lang = normalizeSynopsisLanguage(language);
+  return `OUTPUT LANGUAGE: ${lang}. Write the ENTIRE ${what} in ${lang} — every sentence of prose, action and dialogue. The instructions, the input and any edit requests below are in English, but that is NOT a reason to answer in English: the response language is ${lang} and only ${lang} (if ${lang} is not English, do not output English text other than fixed labels like INT./EXT. or episode numbers).`;
+}
+
+/**
  * System-правила синопсиса v2 (английский; `<N>` — количество эпизодов, `<Language>` — язык вывода).
  * Текст — один-в-один от продюсера; подстановки делает synopsisV2SystemPrompt.
  */
@@ -185,7 +197,7 @@ OUTPUT LANGUAGE: write the synopsis in <Language>.`;
 export function synopsisV2SystemPrompt(input: SynopsisV2Input): string {
   const n = normalizeEpisodesCount(input.episodesCount);
   const lang = normalizeSynopsisLanguage(input.synopsisLanguage);
-  return SYNOPSIS_V2_RULES.replace(/<N>/g, String(n)).replace(/<Language>/g, lang);
+  return `${v2OutputLanguageDirective(lang, "synopsis")}\n\n${SYNOPSIS_V2_RULES.replace(/<N>/g, String(n)).replace(/<Language>/g, lang)}`;
 }
 
 /**
@@ -544,7 +556,7 @@ export interface SeasonPlotV2Input {
 export function seasonPlotV2SystemPrompt(input: SeasonPlotV2Input): string {
   const n = normalizeEpisodesCount(input.episodesCount);
   const lang = normalizeSynopsisLanguage(input.synopsisLanguage);
-  return SEASON_PLOT_V2_RULES.replace(/<N>/g, String(n)).replace(/<Language>/g, lang);
+  return `${v2OutputLanguageDirective(lang, "season plot")}\n\n${SEASON_PLOT_V2_RULES.replace(/<N>/g, String(n)).replace(/<Language>/g, lang)}`;
 }
 
 /** Первый user сюжета — синопсис как есть. */
@@ -680,9 +692,11 @@ export interface EpisodeScriptV2Input {
 }
 
 export function episodeScriptV2SystemPrompt(input: EpisodeScriptV2Input): string {
-  const base = EPISODE_SCRIPT_V2_RULES.replace(/<Language>/g, normalizeSynopsisLanguage(input.synopsisLanguage));
+  const lang = normalizeSynopsisLanguage(input.synopsisLanguage);
+  const base = `${v2OutputLanguageDirective(lang, "episode script")}\n\n${EPISODE_SCRIPT_V2_RULES.replace(/<Language>/g, lang)}`;
   const cont = (input.continuity ?? "").trim();
-  return cont ? `${base}\n\n${cont}` : base;
+  // Блок continuity уходит ПОСЛЕ правил; язык повторяем ещё раз в конце, чтобы директива не «утонула».
+  return cont ? `${base}\n\n${cont}\n\nOUTPUT LANGUAGE (reminder): ${lang}.` : base;
 }
 
 export const EPISODE_SCRIPT_V2_CONTEXT_NOTE =

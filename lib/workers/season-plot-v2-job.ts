@@ -20,6 +20,7 @@ import {
   normalizeSynopsisLanguage,
   normalizeEpisodesCount,
   parseSeasonPlotV2,
+  SYNOPSIS_LANGUAGE_CODES,
   type V2Msg,
 } from "@/lib/idea-v2";
 import { resolveV2Messages, trailingAssistantPrefill, splitForLog } from "@/lib/workers/logline-v2-job";
@@ -91,7 +92,9 @@ async function runSeasonPlotV2JobImpl(jobId: string, projectId: string, params: 
     await updateJob(jobId, { progress: 90, message: "Saving season plot..." });
     await prisma.project.update({
       where: { id: projectId },
-      data: { seasonPlotV2: plot, episodeCount: episodesCount, synopsisApproved: true, stage: SEASON_PLOT_V2_STAGE },
+      // language — язык, выбранный на странице идеи (пришёл с клиента): сценарии/референсы/шот-листы
+      // читают Project.language, поэтому фиксируем его здесь, чтобы сюжет и сценарий были на одном языке.
+      data: { seasonPlotV2: plot, episodeCount: episodesCount, synopsisApproved: true, stage: SEASON_PLOT_V2_STAGE, language: SYNOPSIS_LANGUAGE_CODES[synopsisLanguage] },
     });
     await completeJob(jobId, { plot, episodeCount: episodesCount, parsedEpisodes: episodes?.length ?? 0 }, "Season plot ready");
   } catch (err: any) {

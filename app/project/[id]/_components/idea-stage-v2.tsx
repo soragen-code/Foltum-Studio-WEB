@@ -264,7 +264,9 @@ export function IdeaStageV2({ project, onRefresh }: { project: any; onRefresh: (
   // Стоимость шага в кредитах — показывается на каждой кнопке генерации (списывается сервером при старте job).
   const costTag = (n: number) => <span className="ml-0.5 whitespace-nowrap text-[11px] font-normal opacity-80" data-testid="idea-v2-cost">· {t('ideaV2.costCredits', { n })}</span>
   useEffect(() => {
-    const saved = loadLang(project.id) ?? (savedSynopsis ? langFromCode(project?.language) : null)
+    // Язык: если синопсис уже сохранён — приоритет у Project.language (его пишут воркеры синопсиса/сюжета,
+    // по нему же генерируются сценарии), иначе localStorage, иначе язык интерфейса.
+    const saved = (savedSynopsis ? langFromCode(project?.language) : null) ?? loadLang(project.id)
     setSynopsisLang(saved ?? langFromLocale(locale))
     // Количество эпизодов: сохранённое в проекте (воркер синопсиса пишет Project.episodeCount) приоритетнее localStorage.
     const fromProject = typeof project?.episodeCount === 'number' ? normalizeEpisodesCount(project.episodeCount) : null
