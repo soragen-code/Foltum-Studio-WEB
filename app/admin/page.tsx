@@ -8,6 +8,7 @@ import { ADMIN_TZ, PERIODS, PERIOD_LABEL_KEYS, formatMoney, getAdminStats, type 
 import { TIER_NAMES } from '@/lib/entitlements'
 import { serverT, sessionLocale } from '@/lib/i18n/server'
 import { DATE_LOCALES } from '@/lib/i18n/dictionary'
+import { AdminTabs } from './_components/admin-tabs'
 
 export const dynamic = 'force-dynamic'
 
@@ -50,6 +51,8 @@ export default async function AdminPage() {
           <h1 className="font-display text-3xl font-bold tracking-tight">{t('admin.title')}</h1>
           <p className="text-xs text-muted-foreground">{t('admin.dataAt', { date: fmtDateTime(s.generatedAt), tz: ADMIN_TZ })}</p>
         </div>
+
+        <AdminTabs active="stats" labels={{ stats: t('admin.tab.stats'), dramas: t('admin.tab.dramas') }} />
 
         {/* ── Сводка ── */}
         <section className="mt-6 grid grid-cols-2 gap-4 md:grid-cols-4" data-testid="admin-summary">
