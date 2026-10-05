@@ -3,8 +3,9 @@
 /**
  * Client-side i18n: a React context that holds the current UI locale and a `t()` translator.
  *
- * The initial locale comes from the logged-in user's session (User.locale, threaded through auth.ts),
- * falling back to "ru". Changing the language persists to the DB (PATCH /api/user/locale) and updates
+ * The initial locale is resolved on the server (app/layout.tsx → lib/i18n/request-locale.ts: session User.locale,
+ * else `ui_locale` cookie, else "ru") and passed as `initialLocale`, so SSR and the first client render already
+ * match — no flash on reload. The session value is still adopted once it hydrates (e.g. right after login). Changing the language persists to the DB (PATCH /api/user/locale) and updates
  * the provider state immediately so all text switches without a reload.
  */
 
@@ -35,6 +36,8 @@ export function LocaleProvider({ children, initialLocale }: { children: React.Re
   const setLocale = useCallback(async (l: Locale) => {
     setUserTouched(true)
     setLocaleState(l)
+    try { document.cookie = `ui_locale=${l}; path=/; max-age=31536000; samesite=lax` } catch { /* no document */ }
+    try { document.documentElement.lang = l } catch { /* no document */ }
     try {
       await fetch('/api/user/locale', {
         method: 'PATCH',

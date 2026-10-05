@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useSession, signOut } from 'next-auth/react'
-import { Coins, Film, LogOut, User, CreditCard, Crown, Languages, Check, ShieldCheck } from 'lucide-react'
+import { Coins, Film, LogOut, User, CreditCard, Crown, Languages, ShieldCheck } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
 import { hasActiveSubscription } from '@/lib/entitlements'
@@ -100,7 +100,7 @@ export function Header({ projectName = null, projectId = null }: { projectName?:
                 <motion.div
                   initial={{ opacity: 0, y: -8 }}
                   animate={{ opacity: 1, y: 0 }}
-                  className="absolute right-0 top-full mt-2 w-48 rounded-lg border border-border bg-card p-1"
+                  className="absolute right-0 top-full mt-2 w-56 rounded-lg border border-border bg-card p-1"
                   style={{ boxShadow: 'var(--shadow-lg)' }}
                 >
                   <div className="border-b border-border px-3 py-2 text-xs text-muted-foreground">
@@ -113,25 +113,29 @@ export function Header({ projectName = null, projectId = null }: { projectName?:
                   >
                     <CreditCard className="h-4 w-4" /> {t('nav.plansCredits')}
                   </Link>
-                  {/* Language switcher — persists to User.locale via PATCH /api/user/locale and switches the UI instantly. */}
-                  <div className="border-t border-border pt-1 mt-1">
-                    <div className="flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground">
-                      <Languages className="h-3.5 w-3.5" /> {t('common.language')}
+                  {/* Language — one compact setting row right under «Plans & credits». Persists to User.locale
+                      (PATCH /api/user/locale + ui_locale cookie) and switches the UI instantly. */}
+                  <div
+                    className="flex items-center justify-between gap-2 rounded-md px-3 py-2 text-sm"
+                    title={t('common.languageNote')}
+                    data-testid="header-language-setting"
+                  >
+                    <span className="flex items-center gap-2"><Languages className="h-4 w-4" /> {t('common.language')}</span>
+                    <div className="flex overflow-hidden rounded-md border border-border text-xs">
+                      {LOCALES.map((lc) => (
+                        <button
+                          key={lc}
+                          type="button"
+                          onClick={() => { setLocale(lc) }}
+                          aria-pressed={locale === lc}
+                          title={LOCALE_LABELS[lc]}
+                          className={`px-2 py-1 font-medium uppercase transition ${locale === lc ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
+                          data-testid={`header-locale-${lc}`}
+                        >
+                          {lc}
+                        </button>
+                      ))}
                     </div>
-                    {LOCALES.map((lc) => (
-                      <button
-                        key={lc}
-                        onClick={() => { setLocale(lc) }}
-                        className="flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-sm hover:bg-muted"
-                        data-testid={`header-locale-${lc}`}
-                      >
-                        <span>{LOCALE_LABELS[lc]}</span>
-                        {locale === lc && <Check className="h-4 w-4 text-primary" />}
-                      </button>
-                    ))}
-                    <p className="px-3 pb-1 pt-0.5 text-[10px] leading-snug text-muted-foreground" data-testid="header-locale-note">
-                      {t('common.languageNote')}
-                    </p>
                   </div>
                   <button
                     onClick={() => signOut({ redirectTo: '/login' })}

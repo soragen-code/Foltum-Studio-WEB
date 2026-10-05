@@ -5,6 +5,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { ChunkLoadErrorHandler } from '@/components/chunk-load-error-handler'
 import { Providers } from '@/components/providers'
 import { SiteFooter } from '@/components/site-footer'
+import { resolveRequestLocale } from '@/lib/i18n/request-locale'
 
 export const dynamic = "force-dynamic";
 
@@ -32,13 +33,17 @@ export const viewport = {
   userScalable: false,
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
+  // UI locale is resolved on the server (User.locale from the session, else the `ui_locale` cookie, else "ru")
+  // and handed to LocaleProvider as the initial value — the very first HTML is already in the right language,
+  // so a reload never flashes Russian before switching.
+  const locale = await resolveRequestLocale()
   return (
-    <html lang="en" className="dark" suppressHydrationWarning>
+    <html lang={locale} className="dark" suppressHydrationWarning>
       <head>
         <script src="https://apps.abacus.ai/chatllm/appllm-lib.js" />
       </head>
@@ -49,7 +54,7 @@ export default function RootLayout({
           enableSystem={false}
           disableTransitionOnChange
         >
-          <Providers>
+          <Providers initialLocale={locale}>
             {children}
             {/* Site-wide legal footer (Stage 97): rendered once here so it appears at the
                 end of the page flow on EVERY route — public, authenticated app and legal
