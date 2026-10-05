@@ -1393,11 +1393,11 @@ export function matchSceneRefsByText(shot: Partial<EpisodeShotV2>, refs: Episode
 export function storyboardV2PromptKey(shots: EpisodeShotV2[], refs?: EpisodeRefV2[], visualStyle?: string, previousEnding?: string): string {
   const refList = (refs ?? []).filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
   const src = JSON.stringify([
-    "v7", // bump: REFERENCE LOCK — панели не источник внешности/одежды, только референс
+    "v8", // bump: текст гардероба персонажей из промпта референса в блоке References + усиленный WARDROBE LOCK
     visualStyle ?? "",
     previousEnding ?? "",
     shots.map((s) => [s.index, shotFrameText(s) || s.action || ""]),
-    refList.map((r) => [r.id, r.kind, r.label, r.imageUrl]),
+    refList.map((r) => [r.id, r.kind, r.label, r.imageUrl, r.kind === "character" ? r.prompt ?? "" : ""]),
   ]);
   let h1 = 0x811c9dc5, h2 = 0x1000193;
   for (let i = 0; i < src.length; i++) {
@@ -1466,7 +1466,8 @@ export function buildReferenceLockV2(refList: EpisodeRefV2[], first: number, uni
         `If ${text} names a garment itself (overalls, uniform, jacket, coat, dress, suit, etc.), IGNORE that word and keep the reference wardrobe. ` +
         (unit === "frame"
           ? `If the storyboard panel shows different clothing, hair or a different-looking person than the reference image, the REFERENCE IMAGE WINS — the panel is a layout sketch only, never a source of appearance or wardrobe. `
-          : `Panels are never a source of appearance or wardrobe for later panels — go back to the reference image for every panel. `) +
+          : `Panels are never a source of appearance or wardrobe for later panels — go back to the reference image for every panel. ` +
+            `Before drawing any panel, look at each character's reference image and copy the clothing garment by garment (type, cut, colour, material, footwear, accessories); every panel shows the character in EXACTLY that outfit — never a different outfit, never a generic or sketch wardrobe, never a costume implied by the panel text. `) +
         `Never cover the face unless ${text} explicitly says so.\n`
       : "") +
     (locs.length
@@ -1480,6 +1481,16 @@ export function buildReferenceLockV2(refList: EpisodeRefV2[], first: number, uni
   );
 }
 
+/** Промпт референса персонажа одной строкой (≈350 символов) для текстового якоря гардероба на листе-сториборде. */
+export function storyboardRefWardrobeTextV2(prompt: unknown, max = 350): string {
+  const t = String(prompt ?? "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const at = Math.max(cut.lastIndexOf(", "), cut.lastIndexOf(". "), cut.lastIndexOf("; "));
+  return (at > max * 0.6 ? cut.slice(0, at) : cut).trim();
+}
+
 export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRefV2[], opts?: { visualStyle?: string; previousEnding?: string }): string {
   const n = shots.length;
   const cols = 5;
@@ -1488,9 +1499,14 @@ export function buildStoryboardV2Prompt(shots: EpisodeShotV2[], refs?: EpisodeRe
   const refList = (refs ?? []).filter((r) => r && typeof r.imageUrl === "string" && r.imageUrl);
   const refLabel = (r: EpisodeRefV2) => stripRefKindPrefixV2(r.label).replace(/\s+/g, " ").trim();
   const lockBlock = buildReferenceLockV2(refList, 1, "panel");
+  // Персонажи: к метке добавляется текстовое описание внешности/гардероба из промпта самого референса — модель
+  // листа видит и картинку, и слова, по которым эта картинка сгенерирована (одежда на панелях = одежда референса).
   const refsBlock = refList.length
     ? `References:\n` +
-      refList.map((r, i) => `Image ${i + 1} - ${refLabel(r)}`).join("\n") +
+      refList.map((r, i) => {
+        const w = r.kind === "character" ? storyboardRefWardrobeTextV2(r.prompt) : "";
+        return `Image ${i + 1} - ${refLabel(r)}` + (w ? `. Appearance & wardrobe (must match Image ${i + 1} exactly): ${w}` : "");
+      }).join("\n") +
       `\n` + lockBlock +
       `\n`
     : "";
@@ -1663,6 +1679,7 @@ export function sceneVideoV2Prompt(
     `ACTIONS:\n${scene.action.trim()}`,
   ];
   if (end) blocks.push(`END:\n${end}`);
+  if (sceneHasDialogueV2(scene)) blocks.push(SCENE_VIDEO_SPEECH_TIMING_BLOCK_V2);
   blocks.push(SCENE_VIDEO_AUDIO_BLOCK_V2);
   return blocks.join("\n\n");
 }
@@ -1673,13 +1690,61 @@ export function sceneVideoV2Prompt(
  * музыка внутри отдельных клипов при склейке рвалась бы на стыках и спорила бы с общим треком.
  */
 export const SCENE_VIDEO_AUDIO_BLOCK_V2 =
-  "AUDIO:\nOnly the natural, diegetic sound of the scene (room tone and ambience, footsteps, cloth, props, breathing) and the characters' spoken lines exactly as written in ACTIONS. NO background music, NO soundtrack, NO score, NO musical stingers or jingles of any kind — the episode's music is added separately in the edit.";
+  "AUDIO:\nOnly the natural, diegetic sound of the scene (room tone and ambience, footsteps, cloth, props, breathing) and the characters' spoken lines exactly as written in ACTIONS. " +
+  "ABSOLUTELY NO MUSIC OF ANY KIND: no background music, no score, no soundtrack, no humming or singing, no radio, TV or speakers playing music, no musical stingers, no rhythmic beat or drone — even if the scene is emotional, romantic, tense or set in a place where music would normally play. " +
+  "The ONLY sounds are room tone/ambience, foley and the spoken lines — the episode's music is added separately in the edit.";
+
+/**
+ * Есть ли в тексте шота/сцены реплики (прямая речь): кавычки любого типа или глаголы речи. Используется для
+ * обрезки тишины при склейке (только диалоговые клипы), блока SPEECH TIMING в промпте видео и расчёта длительности.
+ */
+export function sceneHasDialogueV2(s: { action?: string | null; frame?: string | null } | null | undefined): boolean {
+  const t = `${s?.action ?? ""}`;
+  if (!t.trim()) return false;
+  if (/["“”«»„]([^"“”«»„]{2,})["“”«»]/.test(t)) return true;
+  if (/\b(says?|said|asks?|asked|whispers?|shouts?|yells?|replies|replied|answers?|mutters?|murmurs?|snaps|tells?|cries out|calls? out|speaks?)\b/i.test(t)) return true;
+  if (/\b(говорит|сказал|сказала|спрашивает|шепчет|кричит|отвечает|бормочет|произносит|каже|питає|шепоче|кричить|відповідає)\b/i.test(t)) return true;
+  return false;
+}
+
+/** Слова внутри кавычек (все реплики) и число реплик. */
+function quotedSpeechStatsV2(text: string): { words: number; lines: number } {
+  const re = /["“”«»„]([^"“”«»„]{2,})["“”«»]/g;
+  let words = 0, lines = 0;
+  for (const m of text.matchAll(re)) { lines++; words += m[1].trim().split(/\s+/).filter(Boolean).length; }
+  return { words, lines };
+}
+
+/** Нижняя граница длительности видео сцены (минимум Seedance I2V). */
+export const SCENE_VIDEO_MIN_DURATION_SEC_V2 = 4;
+
+/**
+ * Длительность видео сцены по шоту: для шотов с репликами оценивается время речи (слова / 2.5 + 1.2 с, +0.5 с за
+ * каждую дополнительную реплику) и шот только УКОРАЧИВАЕТСЯ до неё (не длиннее durationSec шот-листа, не короче 4 с —
+ * минимум Seedance). Шоты без реплик и шоты без кавычек в тексте остаются как в шот-листе. Правила шот-листа не меняются.
+ */
+export function sceneDurationSecV2(shot: { action?: string | null; durationSec?: number | null }): number {
+  const base = Number.isFinite(Number(shot?.durationSec)) && Number(shot!.durationSec) > 0 ? Number(shot!.durationSec) : 5;
+  if (!sceneHasDialogueV2(shot)) return base;
+  const { words, lines } = quotedSpeechStatsV2(`${shot?.action ?? ""}`);
+  if (!lines) return base;
+  const est = words / 2.5 + 1.2 + Math.max(0, lines - 1) * 0.5;
+  return Math.max(SCENE_VIDEO_MIN_DURATION_SEC_V2, Math.min(base, Math.round(est)));
+}
+
+/** Блок SPEECH TIMING промпта видео: речь начинается сразу, без мёртвого хвоста; говорящий вне кадра → голос за кадром. */
+export const SCENE_VIDEO_SPEECH_TIMING_BLOCK_V2 =
+  "SPEECH TIMING:\nThe first spoken word starts within the first 0.3 s of the clip — no silent pause, no breath, glance or gesture before speaking. Lines follow each other immediately with no dead air between them. " +
+  "The clip ends right after the last word or the last described action — no idle tail, no lingering silent reaction. " +
+  "If the speaker is not in frame (reaction shot of the listener, over-the-shoulder, back to camera, speaker out of view), the line is delivered as OFF-SCREEN voice (voice-over): it is clearly heard at full presence while the on-screen character's lips do not move.";
 
 /** Финальный ролик серии (Project.episodeFinalV2["<n>"]): склейка видео всех сцен по index + фоновая музыка. */
 export interface EpisodeFinalV2 {
   videoUrl?: string;
   /** Фоновый музыкальный трек серии (ACE-Step 1.5), подмешанный в videoUrl; пусто — склейка без музыки. */
   musicUrl?: string;
+  /** Причина, по которой серия собрана без музыки (ACE-Step не ответил); пусто — музыка на месте. */
+  musicError?: string;
   status?: EpisodeSceneStatusV2;
   error?: string;
   updatedAt?: string;
@@ -1688,7 +1753,7 @@ export interface EpisodeFinalV2 {
 export function episodeFinalV2From(map: unknown, n: number): EpisodeFinalV2 | null {
   const v = map && typeof map === "object" ? (map as Record<string, any>)[String(n)] : null;
   if (!v || typeof v !== "object") return null;
-  return { videoUrl: optStr(v.videoUrl), musicUrl: optStr(v.musicUrl), status: sceneStatus(v.status), error: optStr(v.error), updatedAt: optStr(v.updatedAt) };
+  return { videoUrl: optStr(v.videoUrl), musicUrl: optStr(v.musicUrl), musicError: optStr(v.musicError), status: sceneStatus(v.status), error: optStr(v.error), updatedAt: optStr(v.updatedAt) };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

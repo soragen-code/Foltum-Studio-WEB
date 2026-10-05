@@ -16,7 +16,7 @@ import { REFERENCE_ASPECT_RATIO, VISUAL_STYLE } from "@/lib/visual-style";
 import { runWithPromptContext } from "@/lib/prompt-log";
 import { translateBlocksToEnglish, translateRefLabelsToEnglish } from "@/lib/translate-en";
 import {
-  buildSceneFrameV2Prompt, episodeRefsV2From, episodeScenesV2From, episodeShotsV2From, episodeStoryboardV2From, matchSceneRefsByText, selectStoryboardV2Refs, shotFrameText,
+  buildSceneFrameV2Prompt, episodeRefsV2From, episodeScenesV2From, episodeShotsV2From, episodeStoryboardV2From, matchSceneRefsByText, sceneDurationSecV2, selectStoryboardV2Refs, shotFrameText,
   type EpisodeRefV2, type EpisodeSceneV2, type EpisodeShotV2,
 } from "@/lib/idea-v2";
 import { patchEpisodeSceneV2, setEpisodeScenesV2 } from "@/lib/episode-scenes-v2-store";
@@ -148,7 +148,8 @@ async function runImpl(jobId: string, projectId: string, { episode }: EpisodeSce
         const id = `scene-${s.index}`;
         const p = prev.get(id);
         return {
-          id, index: s.index, shotId: s.id, ...prepared[i], durationSec: s.durationSec,
+          // Длительность видео: диалоговые шоты укорачиваются до времени речи (не короче 4 с, не длиннее шот-листа).
+          id, index: s.index, shotId: s.id, ...prepared[i], durationSec: sceneDurationSecV2(s),
           firstFrameStatus: "pending", videoStatus: "idle",
           promptOverride: p && p.shotId === s.id ? p.promptOverride ?? null : null,
         };

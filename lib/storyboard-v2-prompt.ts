@@ -41,9 +41,14 @@ export async function ensureStoryboardV2AutoPrompt(projectId: string, episode: n
   if (cached) return { autoPrompt: cached, cached: true, inputs };
 
   // Промпт — только English: «Фрейм» шотов (RU) переводится слово в слово; метки рефов — одним пакетом.
+  // Промпты референсов-персонажей (текстовый якорь гардероба в блоке References) — English по построению;
+  // если правились вручную на кириллице — переводятся.
   const [shotsEn, refsEn, prevEndingEn] = await Promise.all([
     Promise.all(inputs.shots.map(async (sh) => { const fr = shotFrameText(sh) || sh.action; return { ...sh, frame: (await translateToEnglish(fr)) || fr }; })),
-    translateRefLabelsToEnglish(inputs.refs),
+    translateRefLabelsToEnglish(inputs.refs).then((rs) => Promise.all(rs.map(async (r) => {
+      if (r.kind !== "character" || !/[\u0400-\u04FF]/.test(String(r.prompt ?? ""))) return r;
+      return { ...r, prompt: (await translateToEnglish(r.prompt)) || r.prompt };
+    }))),
     inputs.previousEnding ? translateToEnglish(inputs.previousEnding).then((t) => t || inputs.previousEnding) : Promise.resolve(""),
   ]);
   const autoPrompt = buildStoryboardV2Prompt(shotsEn, refsEn, { visualStyle: VISUAL_STYLE, previousEnding: prevEndingEn });

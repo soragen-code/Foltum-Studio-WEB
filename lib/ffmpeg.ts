@@ -280,6 +280,107 @@ export async function probeMedia(file: string): Promise<MediaInfo> {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Silence detection + per-clip trim (v2 assembly: dead tails / gaps between dialogue replies)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SilenceInterval { start: number; end: number }
+
+/**
+ * Silent intervals of the first audio stream (ffmpeg `silencedetect`, parsed from stderr).
+ * An unterminated `silence_start` runs to the end of the audio (`totalSec` when known, else the
+ * last `time=` stamp). Returns [] when the file has no audio or ffmpeg fails.
+ */
+export async function detectSilence(
+  file: string,
+  opts: { noiseDb?: number; minSec?: number; totalSec?: number } = {},
+): Promise<SilenceInterval[]> {
+  const noiseDb = opts.noiseDb ?? -35;
+  const minSec = opts.minSec ?? 0.3;
+  let out = "";
+  try {
+    const { stderr } = await execFileAsync(getFfmpegPath(), [
+      "-hide_banner", "-nostdin", "-i", file, "-map", "0:a:0",
+      "-af", `silencedetect=noise=${noiseDb}dB:d=${minSec}`, "-f", "null", "-",
+    ], { maxBuffer: 8 * 1024 * 1024 });
+    out = stderr ?? "";
+  } catch (err: any) {
+    out = String(err?.stderr ?? "");
+    if (!/silence_start/.test(out)) return [];
+  }
+  const res: SilenceInterval[] = [];
+  let open: number | null = null;
+  for (const line of out.split(/\r?\n/)) {
+    const s = line.match(/silence_start:\s*(-?\d+(?:\.\d+)?)/);
+    if (s) { open = Math.max(0, Number(s[1])); continue; }
+    const e = line.match(/silence_end:\s*(-?\d+(?:\.\d+)?)/);
+    if (e && open !== null) { res.push({ start: open, end: Math.max(open, Number(e[1])) }); open = null; }
+  }
+  if (open !== null) {
+    let total = opts.totalSec ?? 0;
+    if (!(total > 0)) {
+      const stamps = [...out.matchAll(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/g)];
+      const last = stamps[stamps.length - 1];
+      if (last) total = Number(last[1]) * 3600 + Number(last[2]) * 60 + Number(last[3]);
+    }
+    if (total > open) res.push({ start: open, end: total });
+  }
+  return res;
+}
+
+export interface ClipTrim { start: number; end: number }
+
+export interface ClipTrimOptions {
+  /** The shot contains spoken lines — only such clips get their silent lead/tail cut. */
+  dialogue: boolean;
+  /** Cut the silent lead-in too (the clip answers the previous dialogue clip → the reply must start right after the cut). */
+  trimLead: boolean;
+  leadMarginSec?: number;
+  tailMarginSec?: number;
+  /** Never leave a clip shorter than this. */
+  minKeepSec?: number;
+  /** Ignore trims that save less than this. */
+  minGainSec?: number;
+}
+
+/**
+ * Trim range [start, end] of a clip based on its silence map. Non-dialogue clips are never trimmed.
+ * Tail: a silence that reaches the end of the clip is cut back to its start + margin. Lead: a silence
+ * that starts at 0 (≥0.4 s) is cut to its end − margin. The kept length never drops below minKeepSec
+ * (less trimming / no trimming instead).
+ */
+export function computeClipTrim(
+  inf: { videoDuration?: number; duration?: number },
+  silences: SilenceInterval[],
+  opts: ClipTrimOptions,
+): ClipTrim {
+  const total = inf.videoDuration || inf.duration || 0;
+  const full = { start: 0, end: total };
+  if (!opts.dialogue || !(total > 0) || !silences.length) return full;
+  const leadMargin = opts.leadMarginSec ?? 0.15;
+  const tailMargin = opts.tailMarginSec ?? 0.2;
+  const minKeep = opts.minKeepSec ?? 2.0;
+  const minGain = opts.minGainSec ?? 0.3;
+  const EPS = 0.05;
+  let start = 0;
+  let end = total;
+
+  const tail = silences.find((s) => s.end >= total - EPS && s.start > 0);
+  if (tail) {
+    const cand = Math.max(tail.start + tailMargin, minKeep);
+    if (cand < end && end - cand >= minGain) end = cand;
+  }
+  if (opts.trimLead) {
+    const lead = silences.find((s) => s.start <= EPS && s.end - s.start >= 0.4);
+    if (lead) {
+      const cand = Math.max(0, lead.end - leadMargin);
+      if (cand >= minGain && end - cand >= minKeep) start = cand;
+    }
+  }
+  if (end - start < minKeep) return total >= minKeep ? { start: 0, end: Math.min(total, Math.max(end, minKeep)) } : full;
+  return { start: Number(start.toFixed(3)), end: Number(end.toFixed(3)) };
+}
+
 export interface SceneClipInput {
   videoUrl: string;
   /** Separate voiceover (e.g. uploaded audio). Takes priority over the clip's own audio. */
