@@ -49,6 +49,7 @@ const plans = [
       'pricing.feat.allPro',
       'pricing.feat.promptViewEdit',
       'pricing.feat.ownRefs',
+      'pricing.feat.studioX2Credits',
     ],
   },
 ]
@@ -220,7 +221,10 @@ export function PricingClient({
                 </div>
                 <ul className="mt-4 space-y-2">
                   {(plan.features ?? []).map((f: string) => (
-                    <li key={f} className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <li
+                      key={f}
+                      className={`flex items-center gap-2 text-sm ${f === 'pricing.feat.studioX2Credits' ? 'font-medium text-red-400' : 'text-muted-foreground'}`}
+                    >
                       <Check className="h-4 w-4 text-primary" />
                       {t(f)}
                     </li>
